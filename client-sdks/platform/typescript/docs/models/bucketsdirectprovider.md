@@ -9,12 +9,9 @@ let value: BucketsDirectProvider = {
   provider: "openai",
   providerEndpoint: null,
   keyFingerprint: "<value>",
-  availableProviderModelIds: [
-    "<value 1>",
-    "<value 2>",
-    "<value 3>",
-  ],
-  verifiedAt: new Date("2024-03-23T02:09:43.731Z"),
+  credentialStatus: "unknown",
+  credentialCheckedAt: null,
+  catalogObservedAt: new Date("2025-02-14T15:28:31.832Z"),
 };
 ```
 
@@ -25,5 +22,6 @@ let value: BucketsDirectProvider = {
 | `provider`                                                                                    | [models.BucketsProvider](../models/bucketsprovider.md)                                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `providerEndpoint`                                                                            | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `keyFingerprint`                                                                              | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `availableProviderModelIds`                                                                   | *string*[]                                                                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `verifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialStatus`                                                                            | [models.BucketsCredentialStatus](../models/bucketscredentialstatus.md)                        | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialCheckedAt`                                                                         | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `catalogObservedAt`                                                                           | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

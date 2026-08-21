@@ -107,6 +107,8 @@ export type Available = {
   timeSeries: Array<TimeSery>;
   customers: Array<Customer>;
   models: Array<GetProjectAiUsageModel>;
+  customersTruncated: boolean;
+  modelsTruncated: boolean;
 };
 
 export const GetProjectAiUsageReason = {
@@ -290,6 +292,8 @@ export const Available$inboundSchema: z.ZodType<Available, unknown> = z.object({
   timeSeries: z.array(z.lazy(() => TimeSery$inboundSchema)),
   customers: z.array(z.lazy(() => Customer$inboundSchema)),
   models: z.array(z.lazy(() => GetProjectAiUsageModel$inboundSchema)),
+  customersTruncated: z.boolean(),
+  modelsTruncated: z.boolean(),
 });
 
 export function availableFromJSON(

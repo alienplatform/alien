@@ -17,9 +17,27 @@ export type ExternalAIBindingProvider = ClosedEnum<
   typeof ExternalAIBindingProvider
 >;
 
+export const ExternalAIBindingCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type ExternalAIBindingCredentialStatus = ClosedEnum<
+  typeof ExternalAIBindingCredentialStatus
+>;
+
+export const AccessStatus = {
+  Verified: "verified",
+  Denied: "denied",
+} as const;
+export type AccessStatus = ClosedEnum<typeof AccessStatus>;
+
 export type RequiredModelCoverage = {
   publicModelId: string;
-  available: boolean;
+  available: boolean | null;
+  accessStatus: AccessStatus | null;
+  accessObservedAt: Date | null;
 };
 
 export type ExternalAIBinding = {
@@ -28,9 +46,12 @@ export type ExternalAIBinding = {
   providerEndpoint: string | null;
   providerClientId: string | null;
   keyFingerprint: string;
-  availableProviderModelIds: Array<string>;
+  credentialRevision: number;
+  credentialStatus: ExternalAIBindingCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogProviderModelIds: Array<string> | null;
+  catalogObservedAt: Date | null;
   requiredModelCoverage: Array<RequiredModelCoverage>;
-  verifiedAt: Date;
   updatedAt: Date;
 };
 
@@ -40,12 +61,25 @@ export const ExternalAIBindingProvider$inboundSchema: z.ZodEnum<
 > = z.enum(ExternalAIBindingProvider);
 
 /** @internal */
+export const ExternalAIBindingCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof ExternalAIBindingCredentialStatus
+> = z.enum(ExternalAIBindingCredentialStatus);
+
+/** @internal */
+export const AccessStatus$inboundSchema: z.ZodEnum<typeof AccessStatus> = z
+  .enum(AccessStatus);
+
+/** @internal */
 export const RequiredModelCoverage$inboundSchema: z.ZodType<
   RequiredModelCoverage,
   unknown
 > = z.object({
   publicModelId: z.string(),
-  available: z.boolean(),
+  available: z.nullable(z.boolean()),
+  accessStatus: z.nullable(AccessStatus$inboundSchema),
+  accessObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function requiredModelCoverageFromJSON(
@@ -68,11 +102,18 @@ export const ExternalAIBinding$inboundSchema: z.ZodType<
   providerEndpoint: z.nullable(z.string()),
   providerClientId: z.nullable(z.string()),
   keyFingerprint: z.string(),
-  availableProviderModelIds: z.array(z.string()),
+  credentialRevision: z.int(),
+  credentialStatus: ExternalAIBindingCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogProviderModelIds: z.nullable(z.array(z.string())),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
   requiredModelCoverage: z.array(
     z.lazy(() => RequiredModelCoverage$inboundSchema),
   ),
-  verifiedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   updatedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 

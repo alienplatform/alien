@@ -67,6 +67,8 @@ const value: operations.Available = {
     },
   ],
   models: [],
+  customersTruncated: true,
+  modelsTruncated: true,
 };
 ```
 

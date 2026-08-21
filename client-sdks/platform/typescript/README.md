@@ -254,6 +254,8 @@ run();
 * [getExternalAIBinding](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
 * [putExternalAIBinding](docs/sdks/deploymentgroups/README.md#putexternalaibinding) - Connect or rotate an external AI provider key
 * [deleteExternalAIBinding](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
+* [createExternalAIModelCheck](docs/sdks/deploymentgroups/README.md#createexternalaimodelcheck) - Queue an explicit external model access check
+* [getExternalAIModelCheck](docs/sdks/deploymentgroups/README.md#getexternalaimodelcheck) - Get an external model access check
 
 ### [Deployments](docs/sdks/deployments/README.md)
 
@@ -368,8 +370,11 @@ run();
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+* [previewModelsImpact](docs/sdks/projects/README.md#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
 * [setCapabilities](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
 * [configureDeployments](docs/sdks/projects/README.md#configuredeployments) - Enable deployments for a Project.
+* [getAiProviderHeaders](docs/sdks/projects/README.md#getaiproviderheaders) - Get static headers added to AI requests for each provider.
+* [configureAiProviderHeaders](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
 * [configureModels](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
 * [configureKeys](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
@@ -520,6 +525,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGetInfo`](docs/sdks/deployment/README.md#getinfo) - Get deployment information for the deployment portal. Accepts both deployment-scoped and deployment-group-scoped API keys. Returns project information, package status/outputs, and either deployment or deployment group details depending on the token type. Poll this endpoint to check if packages are ready.
 - [`deploymentGroupsCreateDeploymentGroup`](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 - [`deploymentGroupsCreateDeploymentGroupToken`](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
+- [`deploymentGroupsCreateExternalAIModelCheck`](docs/sdks/deploymentgroups/README.md#createexternalaimodelcheck) - Queue an explicit external model access check
 - [`deploymentGroupsCreateFirstPartyDeploymentSession`](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
 - [`deploymentGroupsDeleteDeploymentGroup`](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 - [`deploymentGroupsDeleteExternalAIBinding`](docs/sdks/deploymentgroups/README.md#deleteexternalaibinding) - Revoke the external AI connection
@@ -528,6 +534,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentGroupsGetDeploymentGroup`](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
 - [`deploymentGroupsGetDeploymentGroupByExternalId`](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 - [`deploymentGroupsGetExternalAIBinding`](docs/sdks/deploymentgroups/README.md#getexternalaibinding) - Get external AI connection state
+- [`deploymentGroupsGetExternalAIModelCheck`](docs/sdks/deploymentgroups/README.md#getexternalaimodelcheck) - Get an external model access check
 - [`deploymentGroupsListDeploymentGroups`](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 - [`deploymentGroupsPutExternalAIBinding`](docs/sdks/deploymentgroups/README.md#putexternalaibinding) - Connect or rotate an external AI provider key
 - [`deploymentGroupsSetDeploymentGroupExternalId`](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
@@ -611,6 +618,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
+- [`projectsConfigureAiProviderHeaders`](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
 - [`projectsConfigureBuckets`](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 - [`projectsConfigureDeployments`](docs/sdks/projects/README.md#configuredeployments) - Enable deployments for a Project.
 - [`projectsConfigureKeys`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
@@ -622,6 +630,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
+- [`projectsGetAiProviderHeaders`](docs/sdks/projects/README.md#getaiproviderheaders) - Get static headers added to AI requests for each provider.
 - [`projectsGetAiUsage`](docs/sdks/projects/README.md#getaiusage)
 - [`projectsGetCapabilityOverview`](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 - [`projectsGetDeploymentLinkSetup`](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
@@ -629,6 +638,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
+- [`projectsPreviewModelsImpact`](docs/sdks/projects/README.md#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
 - [`projectsSetCapabilities`](docs/sdks/projects/README.md#setcapabilities) - Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
 - [`projectsUpdate`](docs/sdks/projects/README.md#update) - Update a project.
 - [`projectsUpdateGcpOAuthProvider`](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.

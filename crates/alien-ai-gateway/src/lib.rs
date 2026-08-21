@@ -24,8 +24,8 @@ pub use router::{
     ObservedModelAvailability, ObservedModels,
 };
 pub use usage::{
-    parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,
-    AiUsageOutcome, AiUsageProvider,
+    parse_ai_token_usage, AiGatewayRequestTiming, AiTokenUsage, AiUsageClientApi, AiUsageEvent,
+    AiUsageObserver, AiUsageOutcome, AiUsageProvider,
 };
 
 use std::net::{Ipv4Addr, SocketAddr};

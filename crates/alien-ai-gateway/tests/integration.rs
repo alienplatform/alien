@@ -82,6 +82,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             azure_endpoint: None,
             cred: aws_cred(),
             upstream_base_override: Some(aws_upstream.base_url()),
+            additional_headers: Default::default(),
         },
         GatewayRoute {
             name: "azllm".to_string(),
@@ -91,6 +92,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             azure_endpoint: Some(azure_upstream.base_url()),
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("test-azure-token")),
             upstream_base_override: Some(azure_upstream.base_url()),
+            additional_headers: Default::default(),
         },
     ];
 
@@ -183,6 +185,7 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
         azure_endpoint: None,
         cred: aws_cred(),
         upstream_base_override: Some(upstream.base_url()),
+        additional_headers: Default::default(),
     }];
     let base = serve(build_router(routes)).await;
     let client = reqwest::Client::new();
@@ -227,6 +230,7 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
         azure_endpoint: None,
         cred: aws_cred(),
         upstream_base_override: Some(upstream.base_url()),
+        additional_headers: Default::default(),
     }];
     let base = serve(build_router(routes)).await;
     let client = reqwest::Client::new();

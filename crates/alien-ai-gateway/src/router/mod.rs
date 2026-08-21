@@ -12,8 +12,8 @@ use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
 use axum::{
     body::{Body, Bytes},
-    extract::{DefaultBodyLimit, FromRequest, Path, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    extract::{DefaultBodyLimit, Extension, FromRequest, Path, Request, State},
+    http::{header, HeaderMap, HeaderName, HeaderValue, StatusCode},
     response::{IntoResponse, Json, Response},
     routing::{get, post},
     Router,
@@ -23,8 +23,8 @@ use serde_json::{json, Value};
 use crate::creds::{AmbientCred, AnthropicApiKeyCred, OpenAiApiKeyCred};
 use crate::error::{ErrorData, Result};
 use crate::usage::{
-    observe_gateway_error, observe_response, AiUsageClientApi, AiUsageContext, AiUsageObserver,
-    AiUsageProvider,
+    observe_gateway_error, observe_response, AiGatewayRequestTiming, AiUsageClientApi,
+    AiUsageContext, AiUsageObserver, AiUsageProvider,
 };
 
 mod bedrock;
@@ -102,6 +102,74 @@ pub struct GatewayRoute {
     /// host (the per-protocol path is still appended). Lets tests aim a binding at a
     /// mock upstream.
     pub upstream_base_override: Option<String>,
+    /// Validated static headers attached to every upstream request.
+    ///
+    /// The inner map is intentionally opaque so callers cannot bypass the
+    /// gateway-owned header checks in [`GatewayRoute::with_additional_headers`].
+    pub additional_headers: AdditionalHeaders,
+}
+
+#[derive(Default)]
+pub struct AdditionalHeaders(HeaderMap);
+
+impl GatewayRoute {
+    /// Attach validated static headers to every upstream request on this route.
+    pub fn with_additional_headers(
+        mut self,
+        headers: impl IntoIterator<Item = (String, String)>,
+    ) -> Result<Self> {
+        for (name, value) in headers {
+            let normalized = name.to_ascii_lowercase();
+            if is_reserved_additional_header(&normalized) {
+                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding: self.name,
+                    message: format!("header `{name}` is managed by the AI gateway"),
+                }));
+            }
+            let name = HeaderName::from_bytes(normalized.as_bytes())
+                .into_alien_error()
+                .context(ErrorData::BindingConfigInvalid {
+                    binding: self.name.clone(),
+                    message: format!("header name `{name}` is invalid"),
+                })?;
+            let value = HeaderValue::from_str(&value).into_alien_error().context(
+                ErrorData::BindingConfigInvalid {
+                    binding: self.name.clone(),
+                    message: format!("header `{name}` has an invalid value"),
+                },
+            )?;
+            self.additional_headers.0.insert(name, value);
+        }
+        Ok(self)
+    }
+}
+
+fn is_reserved_additional_header(name: &str) -> bool {
+    matches!(
+        name,
+        "accept"
+            | "authorization"
+            | "connection"
+            | "content-length"
+            | "content-type"
+            | "cookie"
+            | "host"
+            | "proxy-authorization"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+            | "x-api-key"
+            | "api-key"
+            | "anthropic-version"
+            | "anthropic-beta"
+            | "x-amz-content-sha256"
+            | "x-amz-date"
+            | "x-amz-security-token"
+            | "x-amz-target"
+            | "x-goog-api-key"
+    ) || name.starts_with("x-forwarded-")
+        || name.starts_with("x-alien-")
 }
 
 /// Build the only static-key route supported by the gateway. The provider and
@@ -119,6 +187,7 @@ pub fn route_from_direct_anthropic(
         azure_endpoint: None,
         cred: AmbientCred::AnthropicApiKey(AnthropicApiKeyCred::new(api_key)?),
         upstream_base_override: None,
+        additional_headers: AdditionalHeaders::default(),
     })
 }
 
@@ -137,6 +206,7 @@ pub fn route_from_direct_openai(
         azure_endpoint: None,
         cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(api_key)?),
         upstream_base_override: None,
+        additional_headers: AdditionalHeaders::default(),
     })
 }
 
@@ -194,6 +264,7 @@ pub fn route_from_direct_databricks(
         azure_endpoint: None,
         cred: AmbientCred::OpenAiApiKey(OpenAiApiKeyCred::new(access_token)?),
         upstream_base_override: Some(upstream.to_string().trim_end_matches('/').to_string()),
+        additional_headers: AdditionalHeaders::default(),
     })
 }
 
@@ -327,7 +398,7 @@ fn observed_from_available(available_models: AvailableModels) -> ObservedModels 
 /// on the caller's own provider account — so `byo/<id>` is accepted as an alias
 /// for the bare catalog id, and the payload is normalized so downstream routing,
 /// availability checks, and usage reporting all see one spelling.
-fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
+fn parse_model_request(body: &[u8]) -> Result<(Value, String, String)> {
     let mut payload: Value =
         serde_json::from_slice(body)
             .into_alien_error()
@@ -343,6 +414,7 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
             })
         })?
         .to_string();
+    let requested_model = model.clone();
     let model = match model.strip_prefix("byo/") {
         Some(bare) => {
             let bare = bare.to_string();
@@ -351,7 +423,7 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String)> {
         }
         None => model,
     };
-    Ok((payload, model))
+    Ok((payload, requested_model, model))
 }
 
 /// Stream a successful provider reply unchanged. Provider error bodies are not safe to
@@ -459,19 +531,15 @@ fn cloud_usage_provider(cloud: Platform) -> AiUsageProvider {
 /// scaffolding lives here once.
 pub(crate) async fn sign_and_execute(
     client: &reqwest::Client,
-    cred: &AmbientCred,
+    route: &GatewayRoute,
     url: &str,
     service: &str,
     body: Vec<u8>,
     extra_headers: &[(&str, &str)],
 ) -> Result<reqwest::Response> {
-    let mut builder = client
+    let mut req = client
         .post(url)
-        .header(header::CONTENT_TYPE, "application/json");
-    for (name, value) in extra_headers {
-        builder = builder.header(*name, *value);
-    }
-    let mut req = builder
+        .header(header::CONTENT_TYPE, "application/json")
         .body(body)
         .build()
         .into_alien_error()
@@ -480,7 +548,22 @@ pub(crate) async fn sign_and_execute(
             // this message and a bare one cannot be traced back to a path.
             message: format!("could not build the upstream request to {url}"),
         })?;
-    cred.authorize(&mut req, service).await?;
+    req.headers_mut().extend(route.additional_headers.0.clone());
+    for (name, value) in extra_headers {
+        req.headers_mut().insert(
+            HeaderName::from_bytes(name.as_bytes())
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: format!("could not build protocol header name `{name}`"),
+                })?,
+            HeaderValue::from_str(value)
+                .into_alien_error()
+                .context(ErrorData::Other {
+                    message: format!("could not build protocol header `{name}`"),
+                })?,
+        );
+    }
+    route.cred.authorize(&mut req, service).await?;
     client
         .execute(req)
         .await
@@ -493,12 +576,14 @@ pub(crate) async fn sign_and_execute(
 async fn proxy_chat_completions(
     state: State<Arc<AppState>>,
     binding: Path<String>,
+    timing: Option<Extension<AiGatewayRequestTiming>>,
     headers: HeaderMap,
     body: ProxyBody,
 ) -> Result<Response> {
     proxy(
         state,
         binding,
+        timing.map(|Extension(timing)| timing),
         headers,
         body,
         ClientApi::OpenAiChatCompletions,
@@ -509,10 +594,19 @@ async fn proxy_chat_completions(
 async fn proxy_messages(
     state: State<Arc<AppState>>,
     binding: Path<String>,
+    timing: Option<Extension<AiGatewayRequestTiming>>,
     headers: HeaderMap,
     body: ProxyBody,
 ) -> Result<Response> {
-    proxy(state, binding, headers, body, ClientApi::AnthropicMessages).await
+    proxy(
+        state,
+        binding,
+        timing.map(|Extension(timing)| timing),
+        headers,
+        body,
+        ClientApi::AnthropicMessages,
+    )
+    .await
 }
 
 /// Proxy a Chat Completions or Messages request after binding the HTTP path to
@@ -521,17 +615,34 @@ async fn proxy_messages(
 async fn proxy(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
+    gateway_timing: Option<AiGatewayRequestTiming>,
     headers: HeaderMap,
     ProxyBody(body): ProxyBody,
     client_api: ClientApi,
 ) -> Result<Response> {
+    let (mut payload, requested_model, model) = parse_model_request(&body)?;
+    let usage_context = |binding: &str,
+                         provider,
+                         public_model: &str,
+                         provider_model: &str,
+                         client_api,
+                         provider_region| {
+        AiUsageContext::new(
+            binding,
+            provider,
+            public_model,
+            provider_model,
+            client_api,
+            provider_region,
+        )
+        .with_gateway_timing(gateway_timing.clone())
+        .with_requested_model(&requested_model)
+    };
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
             binding: binding.clone(),
         })
     })?;
-
-    let (mut payload, model) = parse_model_request(&body)?;
 
     // Cloud-scoped resolution: Claude ids appear once per cloud, so a first-match
     // resolve would always land on another cloud's entry and fail the cloud filter.
@@ -540,7 +651,7 @@ async fn proxy(
             let provider_model = ai_catalog::resolve_direct_anthropic(&model)
                 .map(|resolved| resolved.upstream_id)
                 .unwrap_or(model.as_str());
-            let descriptor = AiUsageContext::new(
+            let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::Anthropic,
                 &model,
@@ -565,7 +676,7 @@ async fn proxy(
             return observe_result(response, state.usage_observer.as_ref(), descriptor);
         }
         GatewayTarget::DirectOpenAi => {
-            let descriptor = AiUsageContext::new(
+            let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::OpenAi,
                 &model,
@@ -593,7 +704,7 @@ async fn proxy(
             let direct = match ensure_direct_databricks_client_api(&model, &binding, client_api) {
                 Ok(direct) => direct,
                 Err(error) => {
-                    let descriptor = AiUsageContext::new(
+                    let descriptor = usage_context(
                         &binding,
                         AiUsageProvider::Databricks,
                         &model,
@@ -605,7 +716,7 @@ async fn proxy(
                 }
             };
             let provider_model = direct.upstream_id;
-            let descriptor = AiUsageContext::new(
+            let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::Databricks,
                 &model,
@@ -619,14 +730,7 @@ async fn proxy(
             let response = match client_api {
                 ClientApi::OpenAiChatCompletions => {
                     let path = format!("/serving-endpoints/{provider_model}/invocations");
-                    proxy_direct_openai(
-                        &state.client,
-                        route,
-                        payload,
-                        provider_model,
-                        &path,
-                    )
-                    .await
+                    proxy_direct_openai(&state.client, route, payload, provider_model, &path).await
                 }
                 ClientApi::AnthropicMessages => {
                     proxy_direct_anthropic_at(
@@ -659,7 +763,7 @@ async fn proxy(
             binding: binding.clone(),
         })
     })?;
-    let descriptor = AiUsageContext::new(
+    let descriptor = usage_context(
         &binding,
         cloud_usage_provider(cloud),
         &model,
@@ -720,15 +824,8 @@ async fn proxy(
                     message: "could not re-serialize the rewritten request body".to_string(),
                 })?;
         let (url, aws_service) = upstream_target(route, cm.provider_api)?;
-        let upstream = sign_and_execute(
-            &state.client,
-            &route.cred,
-            &url,
-            aws_service,
-            upstream_body,
-            &[],
-        )
-        .await?;
+        let upstream =
+            sign_and_execute(&state.client, route, &url, aws_service, upstream_body, &[]).await?;
         forward_response(upstream).await
     }
     .await;
@@ -744,15 +841,33 @@ async fn proxy(
 async fn proxy_responses(
     State(state): State<Arc<AppState>>,
     Path(binding): Path<String>,
+    timing: Option<Extension<AiGatewayRequestTiming>>,
     ProxyBody(body): ProxyBody,
 ) -> Result<Response> {
+    let gateway_timing = timing.map(|Extension(timing)| timing);
+    let (mut payload, requested_model, model) = parse_model_request(&body)?;
+    let usage_context = |binding: &str,
+                         provider,
+                         public_model: &str,
+                         provider_model: &str,
+                         client_api,
+                         provider_region| {
+        AiUsageContext::new(
+            binding,
+            provider,
+            public_model,
+            provider_model,
+            client_api,
+            provider_region,
+        )
+        .with_gateway_timing(gateway_timing.clone())
+        .with_requested_model(&requested_model)
+    };
     let route = state.routes.get(&binding).ok_or_else(|| {
         AlienError::new(ErrorData::UnknownBinding {
             binding: binding.clone(),
         })
     })?;
-
-    let (mut payload, model) = parse_model_request(&body)?;
 
     // The Responses table implies AWS; the binding's cloud must still match so a
     // GCP/Azure binding doesn't forward to an AWS endpoint it has no credential for.
@@ -767,7 +882,7 @@ async fn proxy_responses(
             }));
         }
         GatewayTarget::DirectOpenAi => {
-            let descriptor = AiUsageContext::new(
+            let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::OpenAi,
                 &model,
@@ -794,7 +909,7 @@ async fn proxy_responses(
             ) {
                 Ok(direct) => direct.upstream_id.to_string(),
                 Err(error) => {
-                    let descriptor = AiUsageContext::new(
+                    let descriptor = usage_context(
                         &binding,
                         AiUsageProvider::Databricks,
                         &model,
@@ -806,7 +921,7 @@ async fn proxy_responses(
                 }
             };
             payload["model"] = Value::String(provider_model.clone());
-            let descriptor = AiUsageContext::new(
+            let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::Databricks,
                 &model,
@@ -834,7 +949,7 @@ async fn proxy_responses(
             binding: binding.clone(),
         })
     })?;
-    let descriptor = AiUsageContext::new(
+    let descriptor = usage_context(
         &binding,
         cloud_usage_provider(cloud),
         &model,
@@ -868,7 +983,7 @@ async fn proxy_responses(
             binding: binding.clone(),
         })
     })?;
-    let descriptor = AiUsageContext::new(
+    let descriptor = usage_context(
         &binding,
         cloud_usage_provider(cloud),
         &model,
@@ -896,7 +1011,7 @@ async fn proxy_responses(
         let url = format!("{}{}", base.trim_end_matches('/'), target.path);
         let upstream = sign_and_execute(
             &state.client,
-            &route.cred,
+            route,
             &url,
             "bedrock-mantle",
             upstream_body,
@@ -1144,7 +1259,7 @@ async fn proxy_direct_anthropic_at(
     if !betas.is_empty() {
         extra_headers.push(("anthropic-beta", betas.as_str()));
     }
-    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &extra_headers).await?;
+    let upstream = sign_and_execute(client, route, &url, "", body, &extra_headers).await?;
     forward_response(upstream).await
 }
 
@@ -1166,7 +1281,7 @@ async fn proxy_direct_openai(
         .as_deref()
         .unwrap_or("https://api.openai.com");
     let url = format!("{}{}", base.trim_end_matches('/'), path);
-    let upstream = sign_and_execute(client, &route.cred, &url, "", body, &[]).await?;
+    let upstream = sign_and_execute(client, route, &url, "", body, &[]).await?;
     forward_response(upstream).await
 }
 
@@ -1319,6 +1434,7 @@ mod tests {
             azure_endpoint: None,
             cred: test_aws_cred(),
             upstream_base_override: Some(upstream.to_string()),
+            additional_headers: AdditionalHeaders::default(),
         }
     }
 
@@ -1331,6 +1447,7 @@ mod tests {
             azure_endpoint: None,
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
+            additional_headers: AdditionalHeaders::default(),
         }
     }
 
@@ -1349,6 +1466,60 @@ mod tests {
         .expect("direct Databricks route");
         route.upstream_base_override = Some(upstream.to_string());
         route
+    }
+
+    #[test]
+    fn additional_headers_reject_gateway_and_credential_headers() {
+        for name in [
+            "authorization",
+            "X-Api-Key",
+            "x-amz-date",
+            "x-goog-api-key",
+            "x-forwarded-for",
+            "x-alien-external-id",
+        ] {
+            let error = match direct_openai_route("http://localhost")
+                .with_additional_headers([(name.to_string(), "value".to_string())])
+            {
+                Ok(_) => panic!("reserved header `{name}` must be rejected"),
+                Err(error) => error,
+            };
+            assert!(error.to_string().contains("managed by the AI gateway"));
+        }
+    }
+
+    #[tokio::test]
+    async fn additional_headers_are_forwarded_to_the_provider() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(POST)
+                    .path("/v1/responses")
+                    .header("x-partner-id", "partner-123")
+                    .header("user-agent", "alien-customer/1.0")
+                    .header("authorization", "Bearer sk-test");
+                then.status(200)
+                    .header("content-type", "application/json")
+                    .body(r#"{"id":"resp_1","usage":{"input_tokens":1,"output_tokens":1}}"#);
+            })
+            .await;
+        let route = direct_openai_route(&server.base_url())
+            .with_additional_headers([
+                ("x-partner-id".to_string(), "partner-123".to_string()),
+                ("user-agent".to_string(), "alien-customer/1.0".to_string()),
+            ])
+            .expect("valid additional headers");
+        let url = serve(build_router(vec![route])).await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/responses"))
+            .json(&json!({"model": "gpt-4.1-mini", "input": "hi"}))
+            .send()
+            .await
+            .expect("proxy request");
+
+        assert_eq!(response.status(), 200);
+        mock.assert_async().await;
     }
 
     #[tokio::test]
@@ -1601,7 +1772,7 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/chat/completions"))
-            .json(&json!({ "model": "gpt-4.1-mini", "messages": [] }))
+            .json(&json!({ "model": "byo/gpt-4.1-mini", "messages": [] }))
             .send()
             .await
             .expect("proxy response");
@@ -1614,6 +1785,7 @@ mod tests {
             .recv_timeout(Duration::from_secs(1))
             .expect("completed usage observation");
         assert_eq!(event.provider, AiUsageProvider::OpenAi);
+        assert_eq!(event.requested_model, "byo/gpt-4.1-mini");
         assert_eq!(event.public_model, "gpt-4.1-mini");
         assert_eq!(event.client_api, AiUsageClientApi::OpenAiChatCompletions);
         assert_eq!(event.outcome, AiUsageOutcome::Success);
@@ -1849,6 +2021,7 @@ mod tests {
             azure_endpoint: Some(endpoint.to_string()),
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("t")),
             upstream_base_override: None,
+            additional_headers: AdditionalHeaders::default(),
         }
     }
 

@@ -9,10 +9,9 @@ let value: RegistryDirectProvider = {
   provider: "openai",
   providerEndpoint: "<value>",
   keyFingerprint: "<value>",
-  availableProviderModelIds: [
-    "<value 1>",
-  ],
-  verifiedAt: new Date("2026-04-17T01:52:37.799Z"),
+  credentialStatus: "valid",
+  credentialCheckedAt: new Date("2025-01-04T20:57:47.612Z"),
+  catalogObservedAt: new Date("2024-05-10T01:32:07.078Z"),
 };
 ```
 
@@ -23,5 +22,6 @@ let value: RegistryDirectProvider = {
 | `provider`                                                                                    | [models.RegistryProvider](../models/registryprovider.md)                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `providerEndpoint`                                                                            | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `keyFingerprint`                                                                              | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `availableProviderModelIds`                                                                   | *string*[]                                                                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `verifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialStatus`                                                                            | [models.RegistryCredentialStatus](../models/registrycredentialstatus.md)                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialCheckedAt`                                                                         | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `catalogObservedAt`                                                                           | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

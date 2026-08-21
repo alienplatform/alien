@@ -12,14 +12,15 @@ let value: ExternalAIBindingState = {
     providerEndpoint: "<value>",
     providerClientId: "<id>",
     keyFingerprint: "<value>",
-    availableProviderModelIds: [
+    credentialRevision: 957154,
+    credentialStatus: "pending",
+    credentialCheckedAt: new Date("2025-09-22T19:00:03.377Z"),
+    catalogProviderModelIds: [
       "<value 1>",
-      "<value 2>",
-      "<value 3>",
     ],
+    catalogObservedAt: new Date("2024-11-19T15:50:33.963Z"),
     requiredModelCoverage: [],
-    verifiedAt: new Date("2026-10-17T13:05:17.905Z"),
-    updatedAt: new Date("2025-09-22T19:00:03.377Z"),
+    updatedAt: new Date("2024-01-04T17:07:00.104Z"),
   },
 };
 ```

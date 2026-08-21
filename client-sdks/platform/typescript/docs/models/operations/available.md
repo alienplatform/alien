@@ -55,6 +55,8 @@ let value: Available = {
     },
   ],
   models: [],
+  customersTruncated: true,
+  modelsTruncated: true,
 };
 ```
 
@@ -69,3 +71,5 @@ let value: Available = {
 | `timeSeries`                                                                             | [operations.TimeSery](../../models/operations/timesery.md)[]                             | :heavy_check_mark:                                                                       | N/A                                                                                      |
 | `customers`                                                                              | [operations.Customer](../../models/operations/customer.md)[]                             | :heavy_check_mark:                                                                       | N/A                                                                                      |
 | `models`                                                                                 | [operations.GetProjectAiUsageModel](../../models/operations/getprojectaiusagemodel.md)[] | :heavy_check_mark:                                                                       | N/A                                                                                      |
+| `customersTruncated`                                                                     | *boolean*                                                                                | :heavy_check_mark:                                                                       | N/A                                                                                      |
+| `modelsTruncated`                                                                        | *boolean*                                                                                | :heavy_check_mark:                                                                       | N/A                                                                                      |
