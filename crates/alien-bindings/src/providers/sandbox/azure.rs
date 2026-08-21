@@ -15,9 +15,11 @@ use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxSession, SandboxSessionState,
 };
-use alien_azure_clients::azure::sandbox_data_plane::{CreateSandbox, SandboxDataPlaneApi};
+use alien_azure_clients::azure::sandbox_data_plane::{
+    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+};
 use alien_client_core::ErrorData as ClientErrorData;
-use alien_core::{Platform, SandboxCapabilities};
+use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, ContextError};
 
 /// A Sandbox backed by the Azure ADC data plane.
@@ -27,6 +29,8 @@ pub struct AzureSandbox {
     sandbox_group: String,
     /// Catalog disk image every session is created from, from the declaration.
     disk_image: String,
+    /// Outbound policy every session is created with, from the declaration.
+    egress: SandboxEgress,
     /// Session ceilings, in the data plane's own units.
     cpu: String,
     memory: String,
@@ -38,6 +42,7 @@ impl AzureSandbox {
         client: std::sync::Arc<dyn SandboxDataPlaneApi>,
         sandbox_group: String,
         disk_image: String,
+        egress: SandboxEgress,
         cpu: String,
         memory: String,
     ) -> Self {
@@ -45,6 +50,7 @@ impl AzureSandbox {
             client,
             sandbox_group,
             disk_image,
+            egress,
             cpu,
             memory,
         }
@@ -105,6 +111,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+        let asked = egress_policy(&self.egress);
         let sandbox = self
             .client
             .create_sandbox(
@@ -114,6 +121,7 @@ impl Sandbox for AzureSandbox {
                     cpu: self.cpu.clone(),
                     memory: self.memory.clone(),
                     environment: request.env,
+                    egress: asked.clone(),
                 },
             )
             .await
@@ -122,6 +130,31 @@ impl Sandbox for AzureSandbox {
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing.
         let _ = request.session_id;
+
+        // A restriction that did not take effect is worse than one that was never asked for: the
+        // caller believes the sandbox is contained. The response says what the sandbox is running
+        // under, so this is checked rather than assumed, and a sandbox that came up without the
+        // policy is deleted rather than handed back.
+        if let Some(asked) = &asked {
+            if !policy_holds(asked, sandbox.egress_policy.as_ref()) {
+                // The delete's own failure is carried rather than returned: it would replace the
+                // finding that matters — that the sandbox is not contained — with a delete error.
+                let deleted = match self.accept_delete(&sandbox.id).await {
+                    Ok(()) => "it was deleted".to_string(),
+                    Err(error) => format!("deleting it also failed: {error}"),
+                };
+                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
+                    binding_name: "sandbox".to_string(),
+                    env_var: "ALIEN_BINDING_SANDBOX".to_string(),
+                    reason: format!(
+                        "the sandbox was created asking for {} but came up with {}, so {deleted} \
+                         rather than handed back",
+                        describe(Some(asked)),
+                        describe(sandbox.egress_policy.as_ref())
+                    ),
+                }));
+            }
+        }
 
         Ok(SandboxSession {
             session_id: sandbox.id,
@@ -150,8 +183,13 @@ impl Sandbox for AzureSandbox {
 
     async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         if let Some(id) = request.session_id.as_deref() {
-            if let Some(existing) = self.get(id).await? {
-                return Ok(existing);
+            // A session on its way out is not one to reconnect to: the id will not run again, and
+            // handing it back trades an error now for a command that never lands.
+            match self.get(id).await? {
+                Some(existing) if existing.state != SandboxSessionState::Terminated => {
+                    return Ok(existing)
+                }
+                _ => {}
             }
         }
 
@@ -434,6 +472,76 @@ fn checked_path(operation: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
+/// The policy a declared mode is created with.
+///
+/// `Full` inspection is what makes a `Deny` default mean no outbound access: under `Partial`,
+/// `Legacy` and `None`, non-HTTP traffic is allowed through whatever the default action says, so
+/// the sandbox would carry a `deny` label and a live network. `allow` sends no policy at all —
+/// the data plane's default is already open, and `Full` there would block the non-HTTP traffic
+/// `allow` promises.
+fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
+    let bounded = |host_rules| {
+        Some(EgressPolicy {
+            default_action: DENY.to_string(),
+            host_rules,
+            traffic_inspection: Some(FULL_INSPECTION.to_string()),
+        })
+    };
+
+    match egress {
+        SandboxEgress::Allow => None,
+        // Written as a rule as well as a default, because Microsoft documents `Partial`
+        // inspection as evaluating only traffic a rule matches and never states that `Full`
+        // differs. A policy holding no rule at all is the one shape where "deny" could mean
+        // nothing, and this is one rule to be out of it.
+        SandboxEgress::Deny => bounded(vec![EgressHostRule {
+            pattern: EVERY_HOST.to_string(),
+            action: DENY.to_string(),
+        }]),
+        SandboxEgress::AllowDomains { domains } => bounded(
+            domains
+                .iter()
+                .map(|domain| EgressHostRule {
+                    pattern: domain.clone(),
+                    action: ALLOW.to_string(),
+                })
+                .collect(),
+        ),
+    }
+}
+
+/// Whether the sandbox is running the policy it was created with.
+///
+/// A subset check rather than equality: the data plane may return the policy normalised or carry
+/// fields this client does not model, and failing every create over a reordered list would push
+/// whoever hits it into removing the check. What is compared is what containment rests on — the
+/// default action, the inspection mode, and every host the declaration named.
+fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool {
+    let Some(effective) = effective else {
+        return false;
+    };
+
+    effective.default_action == asked.default_action
+        && effective.traffic_inspection.as_deref() == Some(FULL_INSPECTION)
+        && asked
+            .host_rules
+            .iter()
+            .all(|rule| effective.host_rules.contains(rule))
+}
+
+/// The effective policy, short enough to read in an error.
+fn describe(effective: Option<&EgressPolicy>) -> String {
+    match effective {
+        None => "no policy at all".to_string(),
+        Some(policy) => format!(
+            "default action '{}' under {} inspection with {} host rules",
+            policy.default_action,
+            policy.traffic_inspection.as_deref().unwrap_or("unstated"),
+            policy.host_rules.len()
+        ),
+    }
+}
+
 /// The data plane's own lifecycle vocabulary, in ours.
 ///
 /// An unrecognised state is an error rather than a default, because every default here is a lie
@@ -454,6 +562,15 @@ fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionS
         })),
     }
 }
+
+/// The data plane's own words for the two actions and the one inspection mode that blocks
+/// non-HTTP traffic.
+const DENY: &str = "Deny";
+const ALLOW: &str = "Allow";
+const FULL_INSPECTION: &str = "Full";
+
+/// The host pattern that matches everything, so `deny` is a rule rather than only a default.
+const EVERY_HOST: &str = "*";
 
 /// The one operation a repeat could run twice.
 const RUN_COMMAND: &str = "sandbox.runCommand";
@@ -521,6 +638,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "ubuntu".to_string(),
+            SandboxEgress::Allow,
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
@@ -541,6 +659,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    egress_policy: None,
                     state: Some("Running".to_string()),
                 })
             });
@@ -549,6 +668,7 @@ mod tests {
             std::sync::Arc::new(client),
             "grp".to_string(),
             "my-toolchain".to_string(),
+            SandboxEgress::Allow,
             "1000m".to_string(),
             "2048Mi".to_string(),
         );
@@ -569,6 +689,7 @@ mod tests {
         client.expect_get_sandbox().returning(|_, id| {
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: id.to_string(),
+                egress_policy: None,
                 state: Some("Running".to_string()),
             })
         });
@@ -716,6 +837,7 @@ mod tests {
             }
             Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                 id: sandbox_id.to_string(),
+                egress_policy: None,
                 state: Some("Running".to_string()),
             })
         }
@@ -775,6 +897,7 @@ mod tests {
             client,
             "grp".to_string(),
             "ubuntu".to_string(),
+            SandboxEgress::Allow,
             "1000m".to_string(),
             "2048Mi".to_string(),
         )
@@ -1072,6 +1195,7 @@ mod tests {
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    egress_policy: None,
                     state: Some(state.clone()),
                 })
             });
@@ -1096,6 +1220,7 @@ mod tests {
             client.expect_get_sandbox().times(1).returning(move |_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    egress_policy: None,
                     state: state.clone(),
                 })
             });
@@ -1121,6 +1246,7 @@ mod tests {
             .returning(|_, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
                     id: "s1".to_string(),
+                    egress_policy: None,
                     state: Some("Creating".to_string()),
                 })
             });
@@ -1139,5 +1265,209 @@ mod tests {
             SandboxSessionState::Starting,
             "a sandbox still being created is not one a command can reach"
         );
+    }
+
+    fn running(id: &str, egress: Option<EgressPolicy>) -> alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+        alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+            id: id.to_string(),
+            egress_policy: egress,
+            state: Some("Running".to_string()),
+        }
+    }
+
+    fn sandbox_denying(client: MockSandboxDataPlaneApi, egress: SandboxEgress) -> AzureSandbox {
+        AzureSandbox::new(
+            std::sync::Arc::new(client),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            egress,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+        )
+    }
+
+    /// What each declared mode is created with.
+    ///
+    /// The inspection mode is the half that is easy to leave out and impossible to notice: under
+    /// anything but `Full` a `Deny` default still lets every non-HTTP protocol out, so a sandbox
+    /// would carry the label and none of the containment. `allow` must send no policy, because
+    /// `Full` would block the traffic `allow` promises.
+    #[tokio::test]
+    async fn each_declared_mode_is_created_with_the_policy_that_realises_it() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, request| {
+                let policy = request.egress.expect("deny must send a policy");
+                assert_eq!(policy.default_action, "Deny");
+                assert_eq!(
+                    policy.traffic_inspection.as_deref(),
+                    Some("Full"),
+                    "only Full inspection blocks non-HTTP traffic"
+                );
+                assert_eq!(
+                    policy.host_rules,
+                    vec![EgressHostRule {
+                        pattern: "*".to_string(),
+                        action: "Deny".to_string(),
+                    }],
+                    "deny is written as a rule too, so it does not rest on how the proxy treats a \
+                     policy with no rules"
+                );
+                Ok(running("s1", Some(policy)))
+            });
+        sandbox_denying(client, SandboxEgress::Deny)
+            .create(CreateSessionRequest::default())
+            .await
+            .expect("deny should create");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, request| {
+                let policy = request.egress.expect("allowDomains must send a policy");
+                assert_eq!(policy.default_action, "Deny", "anything unlisted is denied");
+                assert_eq!(policy.traffic_inspection.as_deref(), Some("Full"));
+                assert_eq!(
+                    policy.host_rules,
+                    vec![EgressHostRule {
+                        pattern: "api.example.com".to_string(),
+                        action: "Allow".to_string(),
+                    }]
+                );
+                Ok(running("s1", Some(policy)))
+            });
+        sandbox_denying(
+            client,
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()],
+            },
+        )
+        .create(CreateSessionRequest::default())
+        .await
+        .expect("allowDomains should create");
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, request| {
+                assert!(
+                    request.egress.is_none(),
+                    "an open sandbox sends no policy: Full inspection would block non-HTTP traffic"
+                );
+                Ok(running("s1", None))
+            });
+        sandbox_denying(client, SandboxEgress::Allow)
+            .create(CreateSessionRequest::default())
+            .await
+            .expect("allow should create");
+    }
+
+    /// A restriction that did not take effect is the failure this whole path exists to prevent,
+    /// so the sandbox is deleted rather than returned with a `deny` label and a live network.
+    #[tokio::test]
+    async fn a_sandbox_that_came_up_without_its_policy_is_deleted_rather_than_handed_back() {
+        for came_up_with in [
+            None,
+            // The default action alone: every non-HTTP protocol still leaves.
+            Some(EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: Vec::new(),
+                traffic_inspection: Some("Partial".to_string()),
+            }),
+            // Inspected, and open.
+            Some(EgressPolicy {
+                default_action: "Allow".to_string(),
+                host_rules: Vec::new(),
+                traffic_inspection: Some("Full".to_string()),
+            }),
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let effective = came_up_with.clone();
+            client
+                .expect_create_sandbox()
+                .times(1)
+                .returning(move |_, _| Ok(running("s1", effective.clone())));
+            client
+                .expect_delete_sandbox()
+                .withf(|_, id| id == "s1")
+                .times(1)
+                .returning(|_, _| Ok(()));
+
+            let error = sandbox_denying(client, SandboxEgress::Deny)
+                .create(CreateSessionRequest::default())
+                .await
+                .expect_err("a sandbox without its policy must not be handed back");
+
+            assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+        }
+    }
+
+    /// A host the declaration named that the sandbox is not running is the same failure as a
+    /// missing policy: the caller believes traffic to it is allowed and it is not, or worse, the
+    /// list came back holding something else.
+    #[tokio::test]
+    async fn a_missing_host_rule_fails_the_create() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_create_sandbox().times(1).returning(|_, _| {
+            Ok(running(
+                "s1",
+                Some(EgressPolicy {
+                    default_action: "Deny".to_string(),
+                    host_rules: vec![EgressHostRule {
+                        pattern: "elsewhere.example.com".to_string(),
+                        action: "Allow".to_string(),
+                    }],
+                    traffic_inspection: Some("Full".to_string()),
+                }),
+            ))
+        });
+        client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+
+        let error = sandbox_denying(
+            client,
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()],
+            },
+        )
+        .create(CreateSessionRequest::default())
+        .await
+        .expect_err("a host the declaration named must be in the effective policy");
+
+        assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+    }
+
+    /// A session that is going away is not one to reconnect to.
+    ///
+    /// `get_or_create` hands back whatever `get` finds, and the id of a deleting sandbox will not
+    /// run again — so the caller would receive a handle whose every command lands on nothing.
+    #[tokio::test]
+    async fn a_terminated_session_is_replaced_rather_than_reconnected_to() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .times(1)
+            .returning(|_, id| Ok(running(id, None)).map(|mut sandbox: alien_azure_clients::azure::sandbox_data_plane::Sandbox| {
+                sandbox.state = Some("Deleting".to_string());
+                sandbox
+            }));
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(running("fresh", None)));
+
+        let session = sandbox_with(client)
+            .get_or_create(CreateSessionRequest {
+                session_id: Some("going-away".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect("a new session should be created");
+
+        assert_eq!(session.session_id, "fresh");
     }
 }

@@ -42,6 +42,35 @@ const SERVICE_NAME: &str = "sandboxDataPlane";
 /// callers can rely on everywhere, and a body that never grows past it here.
 const MAX_FILE_BYTES: usize = 32 * 1024 * 1024;
 
+/// An egress policy as the data plane takes and reports it.
+///
+/// Only the fields a sandbox needs: the audit log, header transforms and URL rewrites are part of
+/// the same object and none of them are policy Alien can express.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressPolicy {
+    /// `Allow` or `Deny`, applied to anything no rule matches. The data plane's own default is
+    /// `Allow`, so a policy that omits it is an open sandbox.
+    pub default_action: String,
+    /// Host patterns and what to do with them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub host_rules: Vec<EgressHostRule>,
+    /// `Full`, `Partial`, `Legacy` or `None`. Only `Full` blocks non-HTTP traffic, so only `Full`
+    /// makes a `Deny` default mean no outbound access.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub traffic_inspection: Option<String>,
+}
+
+/// One host pattern and the action it carries.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressHostRule {
+    /// Host pattern, such as `api.example.com`.
+    pub pattern: String,
+    /// `Allow` or `Deny`.
+    pub action: String,
+}
+
 /// What a sandbox is created from.
 ///
 /// A struct rather than a parameter list because the data plane keeps adding create-time fields
@@ -58,6 +87,9 @@ pub struct CreateSandbox {
     /// Variables placed in the sandbox. It inherits nothing, so a variable exists only if it is
     /// sent here.
     pub environment: BTreeMap<String, String>,
+    /// Outbound policy, applied from the moment the sandbox starts. Absent leaves the data
+    /// plane's own default, which is open.
+    pub egress: Option<EgressPolicy>,
 }
 
 /// The create body.
@@ -75,6 +107,10 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         body["environment"] = serde_json::json!(request.environment);
     }
 
+    if let Some(egress) = &request.egress {
+        body["egressPolicy"] = serde_json::json!(egress);
+    }
+
     body
 }
 
@@ -84,6 +120,10 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 pub struct Sandbox {
     /// Sandbox id within its group
     pub id: String,
+    /// The policy the sandbox is actually running under, which is the only way to tell that the
+    /// one that was asked for took effect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub egress_policy: Option<EgressPolicy>,
     /// `Creating`, `Running`, `Stopping`, `Stopped`, `Suspended`, `Resuming` or `Deleting`.
     ///
     /// Optional because the name is only as good as the SDK it was read from: a field name that
@@ -652,11 +692,24 @@ mod tests {
             cpu: "1000m".to_string(),
             memory: "2048Mi".to_string(),
             environment: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+            egress: Some(EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![EgressHostRule {
+                    pattern: "api.example.com".to_string(),
+                    action: "Allow".to_string(),
+                }],
+                traffic_inspection: Some("Full".to_string()),
+            }),
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");
         assert_eq!(body["sourcesRef"]["diskImage"]["name"], "ubuntu");
         assert_eq!(body["resources"]["cpu"], "1000m");
+        // camelCase, because the data plane ignores a field it cannot name and creates an open
+        // sandbox instead of refusing the body.
+        assert_eq!(body["egressPolicy"]["defaultAction"], "Deny");
+        assert_eq!(body["egressPolicy"]["trafficInspection"], "Full");
+        assert_eq!(body["egressPolicy"]["hostRules"][0]["pattern"], "api.example.com");
 
         let bare = create_body(&CreateSandbox::default());
         assert!(

@@ -1908,6 +1908,7 @@ impl BindingsProviderApi for BindingsProvider {
                     Arc::new(client),
                     group,
                     disk_image,
+                    azure_binding.egress,
                     DEFAULT_AZURE_CPU.to_string(),
                     DEFAULT_AZURE_MEMORY.to_string(),
                 ));
@@ -2251,7 +2252,8 @@ mod tests {
                     "dataPlaneEndpoint":"https://management.swedencentral.azuredevcompute.io",
                     "region":"swedencentral",
                     "resourceGroup":"rg",
-                    "diskImage":"my-toolchain"}"#
+                    "diskImage":"my-toolchain",
+                    "egress":{"mode":"deny"}}"#
                     .to_string(),
             ),
         ]);

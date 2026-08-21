@@ -11,7 +11,7 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxCode};
+use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxCode, SandboxEgress};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -28,6 +28,29 @@ pub struct AzureSandboxEmitter;
 /// the management grant is scoped to the real one.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
     resource_prefix_template(&ctx.resource_id)
+}
+
+/// The declared outbound policy, in the shape the binding carries.
+///
+/// The sandbox is created with it rather than a setup resource enforcing it — Azure's proxy takes
+/// the policy at create — so the declaration has to survive as far as the binding intact.
+fn egress(sandbox: &Sandbox) -> Expression {
+    match &sandbox.egress {
+        SandboxEgress::Deny => expr::object([("mode", Expression::String("deny".to_string()))]),
+        SandboxEgress::Allow => expr::object([("mode", Expression::String("allow".to_string()))]),
+        SandboxEgress::AllowDomains { domains } => expr::object([
+            ("mode", Expression::String("allowDomains".to_string())),
+            (
+                "domains",
+                Expression::from(
+                    domains
+                        .iter()
+                        .map(|domain| Expression::String(domain.clone()))
+                        .collect::<Vec<_>>(),
+                ),
+            ),
+        ]),
+    }
 }
 
 /// The catalog image name a declaration asks for, or a refusal.
@@ -91,6 +114,71 @@ impl TfEmitter for AzureSandboxEmitter {
             ("region", expr::raw("var.azure_location")),
             ("resourceGroup", expr::raw("var.azure_resource_group_name")),
             ("diskImage", Expression::String(disk_image)),
+            ("egress", egress(sandbox)),
         ])))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, SandboxSessionPolicy, Stack, StackSettings};
+    use indexmap::IndexMap;
+
+    fn binding_for(egress: SandboxEgress) -> String {
+        let stack = Stack::new("acme".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(egress)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let resource = stack.resources.get("agents").expect("the sandbox is in the stack");
+        let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource,
+            resource_id: "agents",
+            platform: alien_core::Platform::Azure,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+        };
+
+        AzureSandboxEmitter
+            .emit_binding_ref(&ctx)
+            .expect("the binding renders")
+            .expect("an Azure sandbox has a binding")
+            .to_string()
+    }
+
+    /// The declared mode has to reach the binding, whole.
+    ///
+    /// Azure applies the policy at create rather than through a setup resource, so the binding is
+    /// the only carrier: a mode that stops here leaves every session created under the data
+    /// plane's own default, which is open. A hostname list fails twice over — the mode without the
+    /// domains denies everything, and the domains without the mode are ignored.
+    #[test]
+    fn the_binding_carries_the_declared_egress() {
+        let denied = binding_for(SandboxEgress::Deny);
+        assert!(denied.contains(r#""deny""#), "{denied}");
+
+        let listed = binding_for(SandboxEgress::AllowDomains {
+            domains: vec!["api.example.com".to_string()],
+        });
+        assert!(listed.contains(r#""allowDomains""#), "{listed}");
+        assert!(listed.contains("api.example.com"), "{listed}");
+
+        let open = binding_for(SandboxEgress::Allow);
+        assert!(open.contains(r#""allow""#), "{open}");
     }
 }

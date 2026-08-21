@@ -132,7 +132,10 @@ pub enum SandboxEgress {
     ///
     /// Link-local carries the same exception as `Deny`.
     Allow,
-    /// Outbound access only to the listed hostnames. No backend expresses this yet.
+    /// Outbound access only to the listed hostnames.
+    ///
+    /// Azure alone expresses it: its egress proxy matches on host pattern. The others filter by
+    /// CIDR or carry a single switch, and both would approximate the list rather than keep it.
     #[serde(rename_all = "camelCase")]
     AllowDomains {
         /// Hostnames the sandbox may reach
@@ -233,8 +236,8 @@ impl SandboxCapabilities {
                 preview: false,
                 suspend_resume: false,
                 snapshot: false,
-                domain_egress_rules: false,
-                egress_deny: false,
+                domain_egress_rules: true,
+                egress_deny: true,
                 enforced_limits: false,
                 process_limit: false,
                 session_lifetime: false,
@@ -862,10 +865,12 @@ mod tests {
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
         assert!(azure.files, "every backend moves files");
         assert!(gcp.files);
-        // The Azure binding renders neither an egress policy nor a ceiling, so a declaration of
-        // either is refused rather than accepted and dropped.
-        assert!(!azure.domain_egress_rules);
-        assert!(!azure.egress_deny);
+        // Azure is the only backend whose egress policy matches on host pattern, and the only
+        // one where `deny` and a hostname list are the same object.
+        assert!(azure.domain_egress_rules);
+        assert!(azure.egress_deny);
+        // The data plane takes no ceiling, so a declaration of one is refused rather than
+        // accepted and dropped.
         assert!(!azure.enforced_limits);
         // Azure the cloud has snapshot, preview and resume; the binding provider returns
         // unsupported for all three. What a caller can reach is what the set describes.
@@ -908,11 +913,11 @@ mod tests {
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
     }
 
-    /// No backend expresses a hostname allowlist: AWS and Kubernetes match CIDRs, and the Azure
-    /// binding renders no egress policy at all. Accepting one anywhere would leave a stack
+    /// Azure matches on hostname; AWS and Kubernetes match CIDRs, and Local and GCP have a
+    /// switch rather than a filter. Accepting a hostname list on those four would leave a stack
     /// reading as restricted while the sandbox reaches the whole internet.
     #[test]
-    fn a_hostname_allowlist_is_refused_on_every_backend() {
+    fn a_hostname_allowlist_is_refused_everywhere_it_would_be_approximated() {
         let sandbox = sandbox_with(
             SandboxEgress::AllowDomains {
                 domains: vec!["example.com".to_string()],
@@ -922,19 +927,25 @@ mod tests {
 
         for platform in [
             Platform::Aws,
-            Platform::Azure,
             Platform::Gcp,
             Platform::Kubernetes,
             Platform::Local,
         ] {
             let error = sandbox
                 .validate_for_platform(platform)
-                .expect_err("no backend expresses a hostname allowlist");
+                .expect_err("only Azure expresses a hostname allowlist");
             assert_eq!(
                 error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
                 "on {platform:?}"
             );
         }
+
+        assert!(
+            SandboxCapabilities::for_platform(Platform::Azure)
+                .expect("supported")
+                .domain_egress_rules,
+            "Azure's egress policy matches on host pattern"
+        );
     }
 
     /// `deny` is the declaration that carries a security promise, so a backend that cannot keep
@@ -957,7 +968,7 @@ mod tests {
                 .expect("deny is enforced here");
         }
 
-        // Declares no ceilings, so the only thing left for Azure to refuse is the egress mode.
+        // Declares no ceilings, which Azure refuses for its own reason, so this isolates egress.
         let egress_only = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "alpine:3.20".to_string(),
@@ -969,15 +980,9 @@ mod tests {
             })
             .build();
 
-        let error = egress_only
+        egress_only
             .validate_for_platform(Platform::Azure)
-            .expect_err("the Azure binding renders no egress policy, so deny cannot be kept");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error.message.contains("egressDeny"),
-            "names the capability: {}",
-            error.message
-        );
+            .expect("Azure creates the sandbox under a Deny policy with full inspection");
     }
 
     /// Ceilings are rejected per-platform where unsupported — rejected when *declared*. With
