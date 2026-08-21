@@ -23,9 +23,12 @@ use mockall::automock;
 /// Data-plane API version, from the SDK's `ApiVersion.V2026_02_01_PREVIEW`.
 pub const API_VERSION: &str = "2026-02-01-preview";
 
-/// Scope the data plane is signed for. Distinct from ARM's, which is why a token minted for
-/// `management.azure.com` fails here in a way that looks like a permissions problem.
-const ADC_SCOPE: &str = "https://management.azuredevcompute.io/.default";
+/// Scope the data plane is signed for, from the SDK's `DATA_PLANE_SCOPE` in `_helpers.py`.
+///
+/// It is neither ARM's scope nor the endpoint's own host: the sandbox data plane sits on the
+/// dynamic-sessions audience while answering at `azuredevcompute.io`. A token minted for either
+/// host fails here as a 401 that reads like a missing role assignment.
+const ADC_SCOPE: &str = "https://dynamicsessions.io/.default";
 
 /// A sandbox as the data plane reports it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -282,7 +285,7 @@ mod tests {
     #[test]
     fn the_pinned_wire_contract_matches_what_the_sdk_ships() {
         assert_eq!(API_VERSION, "2026-02-01-preview");
-        assert_eq!(ADC_SCOPE, "https://management.azuredevcompute.io/.default");
+        assert_eq!(ADC_SCOPE, "https://dynamicsessions.io/.default");
     }
 
     /// The data-plane path has no `providers/Microsoft.App` segment; borrowing ARM's shape here
