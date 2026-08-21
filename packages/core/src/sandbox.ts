@@ -33,8 +33,8 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  *
  * Capabilities are not uniform. Call `capabilities()` on the binding and branch, or handle the
  * typed error — an unsupported capability never silently succeeds. Notably GCP cannot
- * reconnect to a session (its session id is scoped to one Cloud Run instance), Azure has no
- * file transfer, and no platform supports a hostname egress allowlist.
+ * reconnect to a session (its session id is scoped to one Cloud Run instance), the Azure
+ * binding implements no file transfer, and no binding renders a hostname egress allowlist.
  *
  * Limits are enforced ceilings, not scheduling hints, and are validated when the stack is
  * planned. A platform that cannot enforce them rejects the sandbox rather than ignoring them.
