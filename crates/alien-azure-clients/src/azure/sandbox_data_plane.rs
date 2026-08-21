@@ -55,10 +55,48 @@ pub struct EgressPolicy {
     /// Host patterns and what to do with them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub host_rules: Vec<EgressHostRule>,
+    /// Match-and-act rules, which this client never sends and has to read: a rule here can permit
+    /// what the host patterns denied, and a policy field nobody models is one nobody checks.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<EgressRule>,
     /// `Full`, `Partial`, `Legacy` or `None`. Only `Full` blocks non-HTTP traffic, so only `Full`
     /// makes a `Deny` default mean no outbound access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic_inspection: Option<String>,
+}
+
+/// A match-and-act rule, in the two parts containment turns on: what it matches, and what it does.
+///
+/// The wire object also carries header transforms and URL rewrites. Neither is policy Alien can
+/// express, and modelling them would only add fields to keep in step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressRule {
+    /// What the rule matches. Absent means the data plane sent a rule this client cannot read,
+    /// which is treated as unknown rather than as matching nothing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub r#match: Option<EgressRuleMatch>,
+    /// `Allow`, `Deny`, `Transform` or `Rewrite`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub action: Option<EgressRuleAction>,
+}
+
+/// The host a rule matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressRuleMatch {
+    /// Host pattern the rule applies to.
+    #[serde(default)]
+    pub host: String,
+}
+
+/// What a rule does when it matches.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EgressRuleAction {
+    /// `Allow`, `Deny`, `Transform` or `Rewrite`.
+    #[serde(rename = "type", default)]
+    pub action_type: String,
 }
 
 /// One host pattern and the action it carries.
@@ -698,6 +736,7 @@ mod tests {
                     pattern: "api.example.com".to_string(),
                     action: "Allow".to_string(),
                 }],
+                rules: Vec::new(),
                 traffic_inspection: Some("Full".to_string()),
             }),
         });
@@ -726,5 +765,22 @@ mod tests {
             serde_json::from_str(r#"{"id":"s1","state":"Stopped"}"#).expect("deserializes");
 
         assert_eq!(sandbox.state.as_deref(), Some("Stopped"));
+    }
+
+    /// A rule this client does not send still has to be read back: an `Allow` here permits what
+    /// the host patterns denied, and a field nobody models is a field nobody checks.
+    #[test]
+    fn an_effective_policy_carries_the_rules_it_was_not_sent() {
+        let policy: EgressPolicy = serde_json::from_str(
+            r#"{"defaultAction":"Deny","trafficInspection":"Full",
+                "rules":[{"match":{"host":"*"},"action":{"type":"Allow"}}]}"#,
+        )
+        .expect("deserializes");
+
+        assert_eq!(policy.rules.len(), 1);
+        assert_eq!(
+            policy.rules[0].action.as_ref().map(|action| action.action_type.as_str()),
+            Some("Allow")
+        );
     }
 }

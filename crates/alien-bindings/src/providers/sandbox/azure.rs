@@ -16,7 +16,8 @@ use crate::traits::{
     SandboxSession, SandboxSessionState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
+    CreateSandbox, EgressHostRule, EgressPolicy, EgressRule, EgressRuleAction, EgressRuleMatch,
+    SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
@@ -137,6 +138,8 @@ impl Sandbox for AzureSandbox {
         // policy is deleted rather than handed back.
         if let Some(asked) = &asked {
             if !policy_holds(asked, sandbox.egress_policy.as_ref()) {
+                // Deleting is safe to do unconditionally here: Azure allocates the id, so the
+                // one in this response was minted by this call and belongs to no other caller.
                 // The delete's own failure is carried rather than returned: it would replace the
                 // finding that matters — that the sandbox is not contained — with a delete error.
                 let deleted = match self.accept_delete(&sandbox.id).await {
@@ -483,6 +486,7 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     let bounded = |host_rules| {
         Some(EgressPolicy {
             default_action: DENY.to_string(),
+            rules: Vec::new(),
             host_rules,
             traffic_inspection: Some(FULL_INSPECTION.to_string()),
         })
@@ -512,13 +516,24 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
 
 /// Whether the sandbox is running the policy it was created with.
 ///
-/// A subset check rather than equality: the data plane may return the policy normalised or carry
-/// fields this client does not model, and failing every create over a reordered list would push
-/// whoever hits it into removing the check. What is compared is what containment rests on — the
-/// default action, the inspection mode, and every host the declaration named.
+/// Not equality — the data plane may return the policy normalised, and failing every create over a
+/// reordered list would push whoever hits it into removing the check. Not a subset either, which
+/// is the same mistake pointing outward: a permission the sandbox holds and the declaration never
+/// asked for is exactly what this is looking for. So both directions, on the two things that can
+/// permit traffic: nothing may allow a host the declaration did not name, in either list.
+///
+/// A group-scoped policy can add an entry nobody sent here, which is why the rules list is read at
+/// all — it is never written.
 fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool {
     let Some(effective) = effective else {
         return false;
+    };
+
+    let allowed = |host: &str| {
+        asked
+            .host_rules
+            .iter()
+            .any(|rule| rule.action == ALLOW && rule.pattern == host)
     };
 
     effective.default_action == asked.default_action
@@ -527,6 +542,18 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
             .host_rules
             .iter()
             .all(|rule| effective.host_rules.contains(rule))
+        && effective
+            .host_rules
+            .iter()
+            .all(|rule| rule.action != ALLOW || allowed(&rule.pattern))
+        // An advanced rule is refused outright rather than matched host by host: this client
+        // never sends one, so an `Allow` here came from somewhere else, and `Transform` and
+        // `Rewrite` reach a host by rewriting the request rather than by naming it.
+        && effective.rules.iter().all(|rule| {
+            rule.action
+                .as_ref()
+                .is_some_and(|action| action.action_type == DENY)
+        })
 }
 
 /// The effective policy, short enough to read in an error.
@@ -534,10 +561,11 @@ fn describe(effective: Option<&EgressPolicy>) -> String {
     match effective {
         None => "no policy at all".to_string(),
         Some(policy) => format!(
-            "default action '{}' under {} inspection with {} host rules",
+            "default action '{}' under {} inspection, {} host rules and {} match rules",
             policy.default_action,
             policy.traffic_inspection.as_deref().unwrap_or("unstated"),
-            policy.host_rules.len()
+            policy.host_rules.len(),
+            policy.rules.len()
         ),
     }
 }
@@ -1375,12 +1403,14 @@ mod tests {
             // The default action alone: every non-HTTP protocol still leaves.
             Some(EgressPolicy {
                 default_action: "Deny".to_string(),
+                rules: Vec::new(),
                 host_rules: Vec::new(),
                 traffic_inspection: Some("Partial".to_string()),
             }),
             // Inspected, and open.
             Some(EgressPolicy {
                 default_action: "Allow".to_string(),
+                rules: Vec::new(),
                 host_rules: Vec::new(),
                 traffic_inspection: Some("Full".to_string()),
             }),
@@ -1417,6 +1447,7 @@ mod tests {
                 "s1",
                 Some(EgressPolicy {
                     default_action: "Deny".to_string(),
+                    rules: Vec::new(),
                     host_rules: vec![EgressHostRule {
                         pattern: "elsewhere.example.com".to_string(),
                         action: "Allow".to_string(),
@@ -1469,5 +1500,88 @@ mod tests {
             .expect("a new session should be created");
 
         assert_eq!(session.session_id, "fresh");
+    }
+
+    /// A permission the declaration never asked for fails the create as surely as a missing one.
+    ///
+    /// The check looks outward as well as inward: an `Allow` the sandbox holds and the caller did
+    /// not name is the whole failure this path exists to catch, and a group-scoped policy is a
+    /// documented way for one to appear.
+    #[tokio::test]
+    async fn a_permission_nobody_asked_for_fails_the_create() {
+        let asked_for = || SandboxEgress::AllowDomains {
+            domains: vec!["api.example.com".to_string()],
+        };
+        let declared = EgressHostRule {
+            pattern: "api.example.com".to_string(),
+            action: "Allow".to_string(),
+        };
+
+        for came_up_with in [
+            // A second host, allowed.
+            EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![
+                    declared.clone(),
+                    EgressHostRule {
+                        pattern: "exfil.example.com".to_string(),
+                        action: "Allow".to_string(),
+                    },
+                ],
+                rules: Vec::new(),
+                traffic_inspection: Some("Full".to_string()),
+            },
+            // Everything, through the list this client never writes.
+            EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![declared.clone()],
+                rules: vec![EgressRule {
+                    r#match: Some(EgressRuleMatch {
+                        host: "*".to_string(),
+                    }),
+                    action: Some(EgressRuleAction {
+                        action_type: "Allow".to_string(),
+                    }),
+                }],
+                traffic_inspection: Some("Full".to_string()),
+            },
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let effective = came_up_with.clone();
+            client
+                .expect_create_sandbox()
+                .times(1)
+                .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
+            client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+
+            let error = sandbox_denying(client, asked_for())
+                .create(CreateSessionRequest::default())
+                .await
+                .expect_err("a permission nobody asked for must fail the create");
+
+            assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+        }
+
+        // The same policy without the extra permission creates normally, so the rule above is
+        // refusing the addition rather than refusing everything.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_create_sandbox().times(1).returning(move |_, _| {
+            Ok(running(
+                "s1",
+                Some(EgressPolicy {
+                    default_action: "Deny".to_string(),
+                    host_rules: vec![EgressHostRule {
+                        pattern: "api.example.com".to_string(),
+                        action: "Allow".to_string(),
+                    }],
+                    rules: Vec::new(),
+                    traffic_inspection: Some("Full".to_string()),
+                }),
+            ))
+        });
+        sandbox_denying(client, asked_for())
+            .create(CreateSessionRequest::default())
+            .await
+            .expect("the policy that was asked for should create");
     }
 }
