@@ -42,6 +42,8 @@ use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 use chrono::Utc;
 
+const AWS_LAMBDA_ACTIVE_MAX_POLLS: u32 = 60;
+
 /// Generates the full, prefixed AWS resource name.
 fn get_aws_worker_name(prefix: &str, name: &str) -> String {
     format!("{}-{}", prefix, name)
@@ -570,7 +572,7 @@ impl AwsWorkerController {
                 "Worker not yet active, retrying"
             );
             Ok(HandlerAction::Stay {
-                max_times: Some(20),
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
                 suggested_delay: Some(Duration::from_secs(3)),
             })
         }
@@ -2460,7 +2462,7 @@ impl AwsWorkerController {
             || result.last_update_status.as_deref() == Some("InProgress")
         {
             Ok(HandlerAction::Stay {
-                max_times: Some(20),
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         } else {
@@ -2612,7 +2614,7 @@ impl AwsWorkerController {
             || result.last_update_status.as_deref() == Some("InProgress")
         {
             Ok(HandlerAction::Stay {
-                max_times: Some(20),
+                max_times: Some(AWS_LAMBDA_ACTIVE_MAX_POLLS),
                 suggested_delay: Some(Duration::from_secs(5)),
             })
         } else {
@@ -4858,7 +4860,10 @@ mod tests {
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
     use std::collections::HashMap;
-    use std::sync::Arc;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     use alien_aws_clients::acm::{ImportCertificateResponse, MockAcmApi};
     use alien_aws_clients::apigatewayv2::{
@@ -5735,6 +5740,67 @@ mod tests {
         let outputs = executor.outputs().unwrap();
         let function_outputs = outputs.downcast_ref::<WorkerOutputs>().unwrap();
         assert!(function_outputs.public_endpoints.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_function_creation_allows_slow_aws_activation() {
+        let worker = function_private_ingress();
+        let worker_name = format!("test-{}", worker.id);
+        let status_checks = Arc::new(AtomicUsize::new(0));
+
+        let mut mock_lambda = MockLambdaApi::new();
+        let worker_name_for_create = worker_name.clone();
+        mock_lambda
+            .expect_create_function()
+            .returning(move |_| Ok(create_successful_function_response(&worker_name_for_create)));
+
+        let worker_name_for_get = worker_name.clone();
+        let status_checks_for_mock = Arc::clone(&status_checks);
+        mock_lambda
+            .expect_get_function_configuration()
+            .times(22)
+            .returning(move |_, _| {
+                if status_checks_for_mock.fetch_add(1, Ordering::SeqCst) < 21 {
+                    return Ok(FunctionConfiguration {
+                        function_name: Some(worker_name_for_get.clone()),
+                        function_arn: Some(format!(
+                            "arn:aws:lambda:us-east-1:123456789012:function:{}",
+                            worker_name_for_get
+                        )),
+                        state: Some("Pending".to_string()),
+                        last_update_status: Some("InProgress".to_string()),
+                        kms_key_arn: None,
+                    });
+                }
+
+                Ok(create_successful_function_response(&worker_name_for_get))
+            });
+
+        let mock_provider = setup_mock_service_provider(Arc::new(mock_lambda), None, None);
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(worker)
+            .controller(AwsWorkerController::default())
+            .platform(Platform::Aws)
+            .service_provider(mock_provider)
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        // Step directly so the test exercises the retry budget without sleeping for every
+        // production polling delay.
+        for _ in 0..30 {
+            executor
+                .step()
+                .await
+                .expect("slow AWS activation should remain within the polling window");
+            if executor.status() == ResourceStatus::Running {
+                break;
+            }
+        }
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        assert_eq!(status_checks.load(Ordering::SeqCst), 22);
     }
 
     /// Test that verifies correct worker configuration parameters
