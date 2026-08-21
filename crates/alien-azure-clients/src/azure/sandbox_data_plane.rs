@@ -152,8 +152,8 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         body["egressPolicy"] = serde_json::json!(egress);
     }
 
-    // `Memory` rather than `Disk`: a memory suspend is what makes resume fast, and a sandbox that
-    // suspended to disk loses the process state a session exists to keep.
+    // `Memory` is the SDK's own default for `auto_suspend_mode`, and the mode a session wants:
+    // what `Disk` does differently is not documented, so the default stands rather than a guess.
     if let Some(seconds) = request.idle_suspend_seconds {
         body["lifecycle"] = serde_json::json!({
             "autoSuspendPolicy": { "enabled": true, "interval": seconds, "mode": "Memory" }

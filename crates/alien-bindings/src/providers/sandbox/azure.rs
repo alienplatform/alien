@@ -321,7 +321,9 @@ impl Sandbox for AzureSandbox {
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
         // Accepted, not completed — the same contract the AWS backend follows. A caller that
-        // needs the session to have stopped polls `get` for `Suspended`.
+        // needs the session to have stopped polls `get` for `Suspended`. Suspending an
+        // already-stopped session, which a caller racing the idle policy cannot avoid, answers
+        // 409 and is reported retryable rather than as a refusal.
         self.client
             .stop_sandbox(&self.sandbox_group, session_id)
             .await
@@ -592,7 +594,11 @@ fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionS
     match state {
         Some("Running") => Ok(SandboxSessionState::Running),
         Some("Creating" | "Resuming") => Ok(SandboxSessionState::Starting),
-        Some("Stopping" | "Stopped" | "Suspended") => Ok(SandboxSessionState::Suspended),
+        // `Idle` is where the SDK contradicts itself: it declares `Idle` as a reason a sandbox
+        // stopped, and then waits for a *state* of `Idle` after a stop. Accepted as suspended
+        // either way — the alternative is that the state auto-suspend produces is the one state
+        // this refuses to read.
+        Some("Stopping" | "Stopped" | "Suspended" | "Idle") => Ok(SandboxSessionState::Suspended),
         Some("Deleting") => Ok(SandboxSessionState::Terminated),
         other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "azure".to_string(),
@@ -1244,6 +1250,7 @@ mod tests {
             ("Stopping", SandboxSessionState::Suspended),
             ("Stopped", SandboxSessionState::Suspended),
             ("Suspended", SandboxSessionState::Suspended),
+            ("Idle", SandboxSessionState::Suspended),
             ("Deleting", SandboxSessionState::Terminated),
         ] {
             let mut client = MockSandboxDataPlaneApi::new();
