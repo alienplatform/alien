@@ -253,6 +253,16 @@ pub trait StackCompatibilityCheck: Send + Sync {
 
     /// Compare old and new stacks for compatibility
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult>;
+
+    /// Compare stacks with the deployment settings that govern derived state.
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        self.check(old_stack, new_stack).await
+    }
 }
 
 /// Modifies the stack to ensure successful deployment.

@@ -129,6 +129,7 @@ fn management_differs_outside_gates(
     old_management: &ManagementPermissions,
     new_management: &ManagementPermissions,
     gated: &GatedContributions,
+    allow_email_heartbeat_migration: bool,
 ) -> bool {
     match (old_management, new_management) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
@@ -137,13 +138,14 @@ fn management_differs_outside_gates(
             ManagementPermissions::Extend(new_profile),
         ) => {
             profiles_differ_outside_gates(old_profile, new_profile, gated)
-                && !is_email_heartbeat_registration_migration(
-                    old_stack,
-                    new_stack,
-                    old_profile,
-                    new_profile,
-                    gated,
-                )
+                && !(allow_email_heartbeat_migration
+                    && is_email_heartbeat_registration_migration(
+                        old_stack,
+                        new_stack,
+                        old_profile,
+                        new_profile,
+                        gated,
+                    ))
         }
         (
             ManagementPermissions::Override(old_profile),
@@ -203,64 +205,86 @@ impl StackCompatibilityCheck for PermissionProfilesUnchangedCheck {
     }
 
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult> {
-        let mut errors = Vec::new();
-        let mut warnings = Vec::new();
+        check_permission_profiles(old_stack, new_stack, false)
+    }
 
-        let gated = gated_contributions(old_stack, new_stack);
-
-        // Check if permission profiles have been added, removed, or modified
-        let old_profiles = &old_stack.permissions.profiles;
-        let new_profiles = &new_stack.permissions.profiles;
-
-        // Check for removed profiles
-        for (profile_name, _) in old_profiles {
-            if !new_profiles.contains_key(profile_name) {
-                errors.push(format!(
-                    "Permission profile '{}' was removed from the stack",
-                    profile_name
-                ));
-            }
-        }
-
-        // Check for modified or added profiles
-        for (profile_name, new_profile) in new_profiles {
-            if let Some(old_profile) = old_profiles.get(profile_name) {
-                // Profile exists in both - check if it was modified
-                if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
-                    errors.push(format!(
-                        "Permission profile '{}' was modified",
-                        profile_name
-                    ));
-                }
-            } else {
-                // Profile is new
-                warnings.push(format!(
-                    "New permission profile '{}' was added",
-                    profile_name
-                ));
-            }
-        }
-
-        // Check management permissions
-        if management_differs_outside_gates(
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        config: &alien_core::DeploymentConfig,
+    ) -> Result<CheckResult> {
+        check_permission_profiles(
             old_stack,
             new_stack,
-            old_stack.management(),
-            new_stack.management(),
-            &gated,
-        ) {
-            errors.push("Management permissions configuration was modified".to_string());
-        }
+            config.stack_settings.heartbeats.is_enabled(),
+        )
+    }
+}
 
-        if errors.is_empty() {
-            if warnings.is_empty() {
-                Ok(CheckResult::success())
-            } else {
-                Ok(CheckResult::with_warnings(warnings))
+fn check_permission_profiles(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    allow_email_heartbeat_migration: bool,
+) -> Result<CheckResult> {
+    let mut errors = Vec::new();
+    let mut warnings = Vec::new();
+
+    let gated = gated_contributions(old_stack, new_stack);
+
+    // Check if permission profiles have been added, removed, or modified
+    let old_profiles = &old_stack.permissions.profiles;
+    let new_profiles = &new_stack.permissions.profiles;
+
+    // Check for removed profiles
+    for (profile_name, _) in old_profiles {
+        if !new_profiles.contains_key(profile_name) {
+            errors.push(format!(
+                "Permission profile '{}' was removed from the stack",
+                profile_name
+            ));
+        }
+    }
+
+    // Check for modified or added profiles
+    for (profile_name, new_profile) in new_profiles {
+        if let Some(old_profile) = old_profiles.get(profile_name) {
+            // Profile exists in both - check if it was modified
+            if profiles_differ_outside_gates(old_profile, new_profile, &gated) {
+                errors.push(format!(
+                    "Permission profile '{}' was modified",
+                    profile_name
+                ));
             }
         } else {
-            Ok(CheckResult::failed_with_warnings(errors, warnings))
+            // Profile is new
+            warnings.push(format!(
+                "New permission profile '{}' was added",
+                profile_name
+            ));
         }
+    }
+
+    // Check management permissions
+    if management_differs_outside_gates(
+        old_stack,
+        new_stack,
+        old_stack.management(),
+        new_stack.management(),
+        &gated,
+        allow_email_heartbeat_migration,
+    ) {
+        errors.push("Management permissions configuration was modified".to_string());
+    }
+
+    if errors.is_empty() {
+        if warnings.is_empty() {
+            Ok(CheckResult::success())
+        } else {
+            Ok(CheckResult::with_warnings(warnings))
+        }
+    } else {
+        Ok(CheckResult::failed_with_warnings(errors, warnings))
     }
 }
 
@@ -535,17 +559,17 @@ mod tests {
         let old_stack = stack_with_management(&["storage/heartbeat"]);
         let new_stack = stack_with_management(&["email/heartbeat", "storage/heartbeat"]);
 
-        let migration = PermissionProfilesUnchangedCheck
-            .check(&old_stack, &new_stack)
-            .await
-            .expect("check should run");
+        let migration =
+            check_permission_profiles(&old_stack, &new_stack, true).expect("check should run");
         assert!(migration.success, "{:?}", migration.errors);
 
-        let removal = PermissionProfilesUnchangedCheck
-            .check(&new_stack, &old_stack)
-            .await
-            .expect("check should run");
+        let removal =
+            check_permission_profiles(&new_stack, &old_stack, true).expect("check should run");
         assert!(!removal.success);
+
+        let explicit_grant_with_heartbeats_disabled =
+            check_permission_profiles(&old_stack, &new_stack, false).expect("check should run");
+        assert!(!explicit_grant_with_heartbeats_disabled.success);
     }
 
     #[tokio::test]
