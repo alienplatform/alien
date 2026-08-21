@@ -415,7 +415,7 @@ mod tests {
     use alien_core::{
         ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
         AzureServiceBusNamespace, AzureStorageAccount, CapacityGroup, ComputeCluster, Container,
-        ContainerCode, DeploymentModel, EnvironmentVariablesSnapshot, ExternalBindings,
+        ContainerCode, DeploymentModel, Email, EnvironmentVariablesSnapshot, ExternalBindings,
         HeartbeatsMode, KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
         KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
         KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
@@ -452,6 +452,37 @@ mod tests {
             .allow_frozen_changes(false)
             .external_bindings(ExternalBindings::default())
             .build()
+    }
+
+    #[tokio::test]
+    async fn email_heartbeat_permission_is_added_to_management() {
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                Email::new("mail".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(
+                stack,
+                &stack_state,
+                &deployment_config_for_management_permission_test(),
+            )
+            .await
+            .expect("management permission mutation should succeed");
+
+        let permissions = result_stack
+            .management()
+            .profile()
+            .expect("auto management profile should be generated");
+        assert!(permissions
+            .0
+            .get("*")
+            .expect("global management permissions")
+            .iter()
+            .any(|permission| permission.id() == "email/heartbeat"));
     }
 
     #[tokio::test]

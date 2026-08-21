@@ -4,7 +4,8 @@
 use super::helpers::render_built_ins;
 use alien_cloudformation::{CfRegistry, RegistrationMode};
 use alien_core::{
-    import::EmitContext, AwsEmailImportData, Email, EmailEvents, EmailInbound, Platform, Queue,
+    import::EmitContext, permissions::ManagementPermissions, AwsEmailImportData, Email,
+    EmailEvents, EmailInbound, PermissionProfile, Platform, Queue, RemoteStackManagement,
     ResourceLifecycle, ResourceRef, Stack, StackSettings, Storage,
 };
 use indexmap::IndexMap;
@@ -26,6 +27,13 @@ fn email_stack() -> Stack {
         .build();
 
     Stack::new("email".to_string())
+        .management(ManagementPermissions::extend(
+            PermissionProfile::new().global(["email/heartbeat"]),
+        ))
+        .add(
+            RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
         .add(mailbox, ResourceLifecycle::Frozen)
         .add(mail_events, ResourceLifecycle::Frozen)
         .add(email, ResourceLifecycle::Frozen)
@@ -160,6 +168,29 @@ fn aws_email_renders_ses_infrastructure() {
             "ses:DescribeActiveReceiptRuleSet",
             "ses:SetActiveReceiptRuleSet"
         ])
+    );
+
+    let management_has_receipt_rule_health_permission = resources
+        .as_object()
+        .expect("resources map")
+        .iter()
+        .filter(|(name, _)| name.starts_with("ManagementRoleManagementPolicy"))
+        .flat_map(|(_, resource)| {
+            resource["Properties"]["PolicyDocument"]["Statement"]
+                .as_array()
+                .into_iter()
+                .flatten()
+        })
+        .any(|statement| {
+            statement["Action"].as_array().is_some_and(|actions| {
+                actions
+                    .iter()
+                    .any(|action| action == "ses:DescribeActiveReceiptRuleSet")
+            })
+        });
+    assert!(
+        management_has_receipt_rule_health_permission,
+        "the remote management role must be able to run the Email health controller"
     );
     let activator_code = resources["MailerRuleSetActivatorFunction"]["Properties"]["Code"]
         ["ZipFile"]
