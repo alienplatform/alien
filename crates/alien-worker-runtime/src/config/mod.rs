@@ -44,6 +44,9 @@ pub enum LogExporter {
         headers: HashMap<String, String>,
         /// Service name for resource identification
         service_name: String,
+        /// Whether to use a recognized top-level JSON `level` as OTLP severity.
+        #[serde(default)]
+        parse_application_levels: bool,
     },
 }
 
@@ -211,6 +214,9 @@ impl LogExporter {
             endpoint,
             headers: otlp_headers_from_env_vars(env_vars),
             service_name,
+            parse_application_levels: env_vars
+                .get(alien_core::ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS)
+                .is_some_and(|value| value.eq_ignore_ascii_case("true")),
         }
     }
 
@@ -220,12 +226,14 @@ impl LogExporter {
                 endpoint,
                 mut headers,
                 service_name,
+                parse_application_levels,
             } => {
                 headers.extend(otlp_headers_from_env_vars(runtime_secrets));
                 LogExporter::Otlp {
                     endpoint,
                     headers,
                     service_name,
+                    parse_application_levels,
                 }
             }
             LogExporter::None => LogExporter::None,
@@ -239,12 +247,14 @@ impl LogExporter {
                 endpoint,
                 headers,
                 service_name,
+                parse_application_levels,
             } => Some(otlp::OtlpConfig {
                 endpoint: endpoint.clone(),
                 headers: headers.clone(),
                 service_name: service_name.clone(),
                 service_version: std::env::var("OTEL_SERVICE_VERSION")
                     .unwrap_or_else(|_| env!("CARGO_PKG_VERSION").to_string()),
+                parse_application_levels: *parse_application_levels,
             }),
         }
     }

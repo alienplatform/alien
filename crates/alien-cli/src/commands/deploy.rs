@@ -1109,6 +1109,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         domains: None,
                         external_bindings: None,
                         kubernetes: None,
+                        logs: None,
+                        public_endpoints: None,
                     };
 
                         let create_response = sdk_client

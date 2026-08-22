@@ -9,6 +9,7 @@ import { DeploymentModelSchema } from "./deployment-model-schema.js";
 import { DomainSettingsSchema } from "./domain-settings-schema.js";
 import { HeartbeatsModeSchema } from "./heartbeats-mode-schema.js";
 import { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
+import { LogSettingsSchema } from "./log-settings-schema.js";
 import { NetworkSettingsSchema } from "./network-settings-schema.js";
 import { TelemetryModeSchema } from "./telemetry-mode-schema.js";
 import { UpdatesModeSchema } from "./updates-mode-schema.js";
@@ -27,7 +28,7 @@ get "domains"(){
                 return z.union([DomainSettingsSchema, z.null()]).optional()
               },
 "externalBindings": z.object({
-
+    
     }).describe("External bindings for pre-existing infrastructure.\nAllows using existing resources (MinIO, Redis, shared Container Apps\nEnvironment, etc.) instead of having Alien provision them.\nRequired for Kubernetes platform, optional for cloud platforms.").nullish(),
 get "heartbeats"(){
                 return HeartbeatsModeSchema.describe("How heartbeat health checks are handled.").optional()
@@ -35,13 +36,16 @@ get "heartbeats"(){
 get "kubernetes"(){
                 return z.union([KubernetesSettingsSchema, z.null()]).optional()
               },
+get "logs"(){
+                return z.union([LogSettingsSchema, z.null()]).optional()
+              },
 get "network"(){
                 return z.union([NetworkSettingsSchema, z.null()]).optional()
               },
 "publicEndpoints": z.object({
-
+    
     }).catchall(z.object({
-
+    
     }).catchall(z.string())).describe("Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.\n\nThis is intended for adopted Machines deployments whose DNS and certificates remain\ncustomer-owned. The platform passes these URLs to the runtime without creating or\nreplacing DNS records or certificates.").nullish(),
 get "telemetry"(){
                 return TelemetryModeSchema.describe("How telemetry (logs, metrics, traces) is handled.").optional()

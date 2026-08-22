@@ -18,6 +18,8 @@ use alien_core::{
 };
 use std::collections::HashMap;
 
+const LOG_LEVEL_CONDITION: &str = "ParseApplicationLevelsEnabled";
+
 fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
     let base = || {
         Stack::new("matrix-stack".to_string()).inputs(vec![gate_input(
@@ -234,7 +236,7 @@ fn assert_gated_render(resource_type: &str, stack: &Stack, settings: StackSettin
     );
 
     let payload = registration_payload(&template);
-    let mut answers = HashMap::from([(condition_name, false)]);
+    let mut answers = HashMap::from([(condition_name, false), (LOG_LEVEL_CONDITION, false)]);
     // A fixture that declares a network puts its conditions in the payload too. They are the
     // deploy-time answers the fixture asks for, not the gate under test.
     answers.extend(network_answers());
@@ -299,7 +301,10 @@ fn a_gated_vault_renders_conditionally() {
     let payload = registration_payload(&template);
     let accepted = resolve(
         &payload,
-        &HashMap::from([("InputFixtureEnabledIsTrue", true)]),
+        &HashMap::from([
+            ("InputFixtureEnabledIsTrue", true),
+            (LOG_LEVEL_CONDITION, false),
+        ]),
         Declined::Removed,
     )
     .expect("payload resolves");

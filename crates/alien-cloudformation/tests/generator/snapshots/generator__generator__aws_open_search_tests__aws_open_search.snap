@@ -20,6 +20,7 @@ Metadata:
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
+      - ParseApplicationLevels
     ParameterLabels:
       HeartbeatsMode:
         default: Heartbeats
@@ -27,6 +28,8 @@ Metadata:
         default: Image account ID
       ManagingRoleArn:
         default: Management role ARN
+      ParseApplicationLevels:
+        default: Parse JSON log levels
       TelemetryMode:
         default: Telemetry
       UpdatesMode:
@@ -68,6 +71,18 @@ Parameters:
     AllowedValues:
     - "off"
     - "on"
+  ParseApplicationLevels:
+    Type: String
+    Description: Use a recognized top-level JSON level field as log severity while preserving the raw body.
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+Conditions:
+  ParseApplicationLevelsEnabled:
+    Fn::Equals:
+    - Ref: ParseApplicationLevels
+    - 'true'
 Resources:
   ExecutionSaRole:
     Type: AWS::IAM::Role
@@ -305,6 +320,12 @@ Outputs:
           Ref: TelemetryMode
         heartbeats:
           Ref: HeartbeatsMode
+        logs:
+          parseApplicationLevels:
+            Fn::If:
+            - ParseApplicationLevelsEnabled
+            - true
+            - false
         network:
           Ref: AWS::NoValue
     Description: Deployment registration settings JSON.
