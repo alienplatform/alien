@@ -25,10 +25,10 @@ use crate::traits::{
 use alien_core::bindings::GcpSandboxBinding;
 use alien_core::sandbox_process::{self, ProcessFrame, ProcessStream, FRAME_CHANNEL_DEPTH};
 use alien_core::{Platform, SandboxCapabilities};
+use alien_error::AlienError;
 
 /// Longest session id the launcher is asked to take, which is also a container name.
 const MAX_SESSION_ID: usize = 63;
-use alien_error::AlienError;
 
 /// How much of one command's output is kept before the terminal frame reports truncation.
 const OUTPUT_CAP: usize = 8 * 1024 * 1024;

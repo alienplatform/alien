@@ -301,11 +301,15 @@ pub enum ErrorData {
     },
 
     /// A command run inside a sandbox did not complete.
+    ///
+    /// Visibility is inherited for the reason `SandboxUnreachable` gives below: what this wraps is
+    /// often a cloud client's error carrying the response text of the call that failed, and
+    /// `into_external` reads only the outermost flag — so a fixed `false` here would publish it.
     #[error(
         code = "SANDBOX_COMMAND_FAILED",
         message = "Sandbox command failed ({failure}): {reason}",
         retryable = "false",
-        internal = "false",
+        internal = "inherit",
         http_status_code = 400
     )]
     SandboxCommandFailed {
@@ -323,7 +327,7 @@ pub enum ErrorData {
     /// behind if deleting it also failed.
     #[error(
         code = "SANDBOX_NOT_AS_DECLARED",
-        message = "Sandbox session '{session_id}' came up without its declared {restriction}: {reason}",
+        message = "Sandbox session '{session_id}' does not carry its declared {restriction}, so it cannot be used; create a new session. {reason}",
         retryable = "false",
         internal = "false",
         http_status_code = 502

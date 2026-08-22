@@ -22,7 +22,7 @@ use hcl::expr::Expression;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AzureSandboxEmitter;
 
-/// The group name the runtime controller creates and the data plane addresses.
+/// The group name the data plane is addressed by.
 ///
 /// Derived rather than emitted as a resource: both sides compute it from the same prefix and id,
 /// so there is nothing to look up and nothing to keep in step. The prefix must be the resolved
@@ -74,12 +74,15 @@ fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
         // A tag is the shape that gets through unnoticed: `ubuntu:24.04` has no slash, renders
         // into the customer's module, plans and applies, and fails at the first session.
         SandboxCode::Image { image }
-            if image.contains('/') || image.contains(':') || image.contains('@') =>
+            if image.trim().is_empty()
+                || image.contains('/')
+                || image.contains(':')
+                || image.contains('@') =>
         {
             Err(unsupported(format!(
                 "Azure creates a sandbox from a public catalog disk image, so code.image must be \
-                 a bare catalog name such as 'ubuntu' — '{image}' carries a registry path, tag or \
-                 digest, which the data plane has nowhere to put"
+                 a bare catalog name such as 'ubuntu'; '{image}' is empty or carries a registry \
+                 path, tag or digest, which the data plane has nowhere to put"
             )))
         }
         SandboxCode::Image { image } => Ok(image.clone()),
@@ -91,8 +94,8 @@ fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
 
 impl TfEmitter for AzureSandboxEmitter {
     fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // Deliberately empty: see the module note. A group created here would sit idle until a
-        // session asked for one, and the controller would have to reconcile against it anyway.
+        // Deliberately empty: see the module note. A group emitted here would sit idle until a
+        // session asked for one, and it is addressed by name rather than by reference.
         Ok(TfFragment::default())
     }
 

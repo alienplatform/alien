@@ -76,9 +76,17 @@ pub struct EgressPolicy {
 ///
 /// The wire object also carries header transforms and URL rewrites. Neither is policy Alien can
 /// express, and modelling them would only add fields to keep in step.
+/// Every field the SDK's own model reads, and nothing beyond it.
+///
+/// `deny_unknown_fields` rather than a catch-all: an exception list or a second host on a rule
+/// this client reads as a plain deny is reach the declaration never named, and a field that
+/// deserializes into nothing is one no containment check can weigh.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EgressRule {
+    /// Rule name, which carries no policy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// What the rule matches. Absent means the data plane sent a rule this client cannot read,
     /// which is treated as unknown rather than as matching nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -88,27 +96,45 @@ pub struct EgressRule {
     pub action: Option<EgressRuleAction>,
 }
 
-/// The host a rule matches.
+/// What a rule matches on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EgressRuleMatch {
     /// Host pattern the rule applies to.
     #[serde(default)]
     pub host: String,
+    /// Path prefix the rule narrows to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// HTTP methods the rule narrows to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub methods: Option<Vec<String>>,
 }
 
 /// What a rule does when it matches.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EgressRuleAction {
     /// `Allow`, `Deny`, `Transform` or `Rewrite`.
     #[serde(rename = "type", default)]
     pub action_type: String,
+    /// Host a `Rewrite` sends the request to instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<String>,
+    /// Path a `Rewrite` sends the request to instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Scheme a `Rewrite` sends the request over instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheme: Option<String>,
+    /// Headers a `Transform` sets, inserts or removes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub headers: Option<Vec<serde_json::Value>>,
 }
 
 /// One host pattern and the action it carries.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct EgressHostRule {
     /// Host pattern, such as `api.example.com`.
     pub pattern: String,
@@ -449,10 +475,13 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .build()?;
 
         let signed = self.base.sign_request(request, &token).await?;
-        let response = self
-            .base
-            .execute_request(signed, "ExecuteShellCommand", sandbox_id)
-            .await?;
+        // The body is the command, which is where a caller puts a token it wants the session to
+        // have.
+        let response = alien_client_core::redact_request_body(
+            self.base
+                .execute_request(signed, "ExecuteShellCommand", sandbox_id)
+                .await,
+        )?;
         Self::parse(response, "ExecuteShellCommand").await
     }
 
@@ -911,5 +940,29 @@ mod tests {
             .await;
         client.resume_sandbox("grp", "s1").await.expect("resume is accepted");
         resume.assert_async().await;
+    }
+
+    /// A key this client cannot read on a *rule* fails the parse, as it does on the policy.
+    ///
+    /// An exception list on a rule that otherwise reads as a plain deny is reach the declaration
+    /// never named, and a field that deserializes into nothing is one no check can weigh.
+    #[test]
+    fn an_unreadable_key_on_a_rule_fails_the_parse() {
+        for policy in [
+            r#"{"defaultAction":"Deny","hostRules":[{"pattern":"*","action":"Deny","exceptions":["x"]}]}"#,
+            r#"{"defaultAction":"Deny","rules":[{"action":{"type":"Deny","exceptHosts":["x"]}}]}"#,
+            r#"{"defaultAction":"Deny","rules":[{"match":{"host":"*","exceptPorts":[443]}}]}"#,
+        ] {
+            serde_json::from_str::<EgressPolicy>(policy)
+                .expect_err("a rule carrying an unreadable key must not parse");
+        }
+
+        // The documented surface still parses, so the rule above refuses additions rather than
+        // everything.
+        serde_json::from_str::<EgressPolicy>(
+            r#"{"defaultAction":"Deny","rules":[{"name":"r","match":{"host":"*","path":"/","methods":["GET"]},
+                "action":{"type":"Rewrite","host":"h","path":"/p","scheme":"https","headers":[]}}]}"#,
+        )
+        .expect("every field the SDK models must still parse");
     }
 }
