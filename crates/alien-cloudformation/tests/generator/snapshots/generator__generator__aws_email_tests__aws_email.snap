@@ -84,6 +84,56 @@ Conditions:
     - Ref: ParseApplicationLevels
     - 'true'
 Resources:
+  ManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-management
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowManagingRole
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: ManagingRoleArn
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:PrincipalArn:
+                Ref: ManagingRoleArn
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: management
+      - Key: resource-type
+        Value: management
+  ManagementRoleManagementPolicy1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - ses:DescribeActiveReceiptRuleSet
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: EmailHeartbeat
+        - Sid: ReadOwnManagementRole
+          Effect: Allow
+          Action: iam:GetRole
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
   Mailbox:
     Type: AWS::S3::Bucket
     Properties:
@@ -481,6 +531,16 @@ Outputs:
   DeploymentResources:
     Value:
       Fn::ToJsonString:
+      - id: management
+        type: remote-stack-management
+        importData:
+          roleName:
+            Ref: ManagementRole
+          roleArn:
+            Fn::GetAtt:
+            - ManagementRole
+            - Arn
+          managementPermissionsApplied: true
       - id: mailbox
         type: storage
         importData:
