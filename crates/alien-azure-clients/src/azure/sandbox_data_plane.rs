@@ -334,6 +334,10 @@ impl AzureSandboxDataPlaneClient {
     }
 
     /// A bodyless POST that moves a sandbox between states.
+    ///
+    /// Sent once. A transition that took effect and lost its response would be repeated, and the
+    /// repeat refused for the state the first one produced — reporting a failure for work that
+    /// succeeded. The wait above this re-issues a resume itself, with the state in front of it.
     async fn lifecycle_action(
         &self,
         group: &str,
@@ -350,7 +354,7 @@ impl AzureSandboxDataPlaneClient {
         let request = AzureRequestBuilder::new(Method::POST, url).build()?;
         let signed = self.base.sign_request(request, &token).await?;
         self.base
-            .execute_request(signed, operation, sandbox_id)
+            .execute_request_once(signed, operation, sandbox_id)
             .await?;
         Ok(())
     }
@@ -687,6 +691,24 @@ mod tests {
             read.hits() > 1,
             "a read is safe to repeat and must keep its retry: {} attempt(s)",
             read.hits()
+        );
+
+        // A state transition is not safe to repeat either. If the stop takes effect and its
+        // response is lost, the repeat is refused for the state the first one produced — and the
+        // caller is told a session it did suspend is still awake.
+        let stop = server.mock(|when, then| {
+            when.method(httpmock::Method::POST).path_contains("/stop");
+            then.status(503).body("{}");
+        });
+        client
+            .stop_sandbox("grp", "s1")
+            .await
+            .expect_err("an unavailable data plane fails the stop");
+
+        assert_eq!(
+            stop.hits(),
+            1,
+            "a transition that may already have happened must not be sent twice"
         );
     }
 
