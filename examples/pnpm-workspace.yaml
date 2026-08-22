@@ -1,6 +1,7 @@
 packages:
   - byob-storage-ts
   - ai-quickstart-ts
+  - ai-chatbot-ts
   - basic-worker-ts
   - basic-worker-rs
   - remote-worker-ts
