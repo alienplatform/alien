@@ -20,7 +20,6 @@ use alien_core::{
 use std::collections::HashMap;
 
 const GATE_CONDITION: &str = "InputFilesEnabledIsTrue";
-const LOG_LEVEL_CONDITION: &str = "ParseApplicationLevelsEnabled";
 const BUCKET_ID: &str = "Files";
 
 fn gate() -> alien_core::StackInputDefinition {
@@ -227,7 +226,7 @@ fn a_declined_bucket_leaves_no_registration_entry() {
 
     let accepted = resolve(
         &payload,
-        &HashMap::from([(GATE_CONDITION, true), (LOG_LEVEL_CONDITION, false)]),
+        &HashMap::from([(GATE_CONDITION, true)]),
         Declined::Removed,
     )
     .expect("payload survives when the gate is on");
@@ -239,7 +238,7 @@ fn a_declined_bucket_leaves_no_registration_entry() {
 
     let declined = resolve(
         &payload,
-        &HashMap::from([(GATE_CONDITION, false), (LOG_LEVEL_CONDITION, false)]),
+        &HashMap::from([(GATE_CONDITION, false)]),
         Declined::Removed,
     )
     .expect("payload survives when the gate is off");
@@ -255,15 +254,15 @@ fn a_declined_bucket_leaves_no_registration_entry() {
     );
 }
 
-/// Ungated stacks gain no resource-gating conditions.
+/// Ungated stacks gain no conditions: opt-in means no `.enabled(...)`, so no gating.
 #[test]
-fn an_ungated_storage_stack_gains_no_resource_conditions() {
+fn an_ungated_storage_stack_gains_no_conditions() {
     let template = render(&ungated_stack(), "ungated storage stack");
 
     assert!(
-        template.conditions.len() == 1 && template.conditions.contains_key(LOG_LEVEL_CONDITION),
-        "only the standard log setting condition belongs in the template: {:?}",
-        template.conditions,
+        template.conditions.is_empty(),
+        "nothing is gated, so no condition belongs in the template: {:?}",
+        template.conditions
     );
     for (id, resource) in template.resources.iter() {
         assert_eq!(

@@ -4,8 +4,8 @@
 //! parsing, signal handling, panic hooks, or the Windows service shim.
 
 use crate::error::{ErrorData, Result};
-use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::access_requests::AccessRequestSyncLoop;
+use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::operations_exec::OperationsExecLoop;
 use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
@@ -607,8 +607,7 @@ mod windows_entry {
     /// parameters — they ride these statics instead. Only one operator runs per
     /// process, so a single slot per hook is sufficient.
     static INIT_HOOK: std::sync::Mutex<Option<InitHook>> = std::sync::Mutex::new(None);
-    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> =
-        std::sync::Mutex::new(None);
+    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> = std::sync::Mutex::new(None);
     static ACCESS_REQUEST_LOOP_HOOK: std::sync::Mutex<Option<AccessRequestSyncLoopHook>> =
         std::sync::Mutex::new(None);
     static OPERATIONS_EXEC_LOOP_HOOK: std::sync::Mutex<Option<OperationsExecLoopHook>> =
@@ -622,10 +621,12 @@ mod windows_entry {
     ) -> ! {
         *INIT_HOOK.lock().expect("init hook lock") = Some(init_hook);
         *DEBUG_LOOP_HOOK.lock().expect("debug loop hook lock") = Some(debug_loop_hook);
-        *ACCESS_REQUEST_LOOP_HOOK.lock().expect("access-request loop hook lock") =
-            Some(access_request_loop_hook);
-        *OPERATIONS_EXEC_LOOP_HOOK.lock().expect("operations-exec loop hook lock") =
-            Some(operations_exec_loop_hook);
+        *ACCESS_REQUEST_LOOP_HOOK
+            .lock()
+            .expect("access-request loop hook lock") = Some(access_request_loop_hook);
+        *OPERATIONS_EXEC_LOOP_HOOK
+            .lock()
+            .expect("operations-exec loop hook lock") = Some(operations_exec_loop_hook);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .expect("failed to start service dispatcher");
         std::process::exit(0);

@@ -26,7 +26,6 @@ struct OtlpServerState {
     db: Arc<OperatorDb>,
     namespace: Option<String>,
     collector_token: Option<String>,
-    parse_application_levels: bool,
 }
 
 /// OTLP response
@@ -47,7 +46,6 @@ pub async fn start_otlp_server(
     db: Arc<OperatorDb>,
     namespace: Option<String>,
     collector_token: Option<String>,
-    parse_application_levels: bool,
     sandbox_broker: Option<axum::Router>,
     cancel: CancellationToken,
 ) -> crate::error::Result<()> {
@@ -66,7 +64,6 @@ pub async fn start_otlp_server(
             db,
             namespace,
             collector_token,
-            parse_application_levels,
         });
 
     // The sandbox broker shares this server because the chart already exposes this port through
@@ -178,12 +175,7 @@ async fn ingest_collector_logs(
         })
     })?;
 
-    let (count, otlp) = collector_records_to_otlp(
-        &body,
-        namespace,
-        &deployment_id,
-        state.parse_application_levels,
-    )?;
+    let (count, otlp) = collector_records_to_otlp(&body, namespace, &deployment_id)?;
     state.db.store_telemetry("logs", &otlp).await?;
     Ok(count)
 }
@@ -221,7 +213,6 @@ mod tests {
                 db,
                 None,
                 None,
-                false,
                 None,
                 server_cancel,
             )

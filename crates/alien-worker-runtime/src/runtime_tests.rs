@@ -4,8 +4,7 @@ use std::sync::Arc;
 
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TRANSPORT,
-    ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_worker_protocol::{ControlGrpcServer, WaitUntilGrpcServer};
 use tokio::process::Command;
@@ -149,7 +148,6 @@ async fn normal_shutdown_stops_listener_and_child_before_returning() {
 #[test]
 fn command_push_token_is_runtime_only() {
     assert!(runtime_only_env(ENV_ALIEN_COMMANDS_TOKEN));
-    assert!(runtime_only_env(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS));
     assert!(runtime_only_env(ENV_ALIEN_RUNTIME_SECRETS));
     assert!(!runtime_only_env("USER_SECRET"));
 }
