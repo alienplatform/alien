@@ -2026,6 +2026,15 @@ impl BindingsProviderApi for BindingsProvider {
             SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
             #[cfg(not(feature = "local"))]
             SandboxBinding::Local(_) => Err(not_built("local")),
+            // The binding type exists so Agent Platform declarations can be written and emitted,
+            // but the runtime loader for that backend is not wired yet.
+            SandboxBinding::GcpAgentPlatform(_) => {
+                Err(AlienError::new(ErrorData::OperationNotSupported {
+                    operation: "load_sandbox(gcp-agent-platform)".to_string(),
+                    reason: "no runtime loader for the Agent Platform sandbox backend yet"
+                        .to_string(),
+                }))
+            }
         }
     }
 }

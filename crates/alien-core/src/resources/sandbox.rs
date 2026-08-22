@@ -342,6 +342,46 @@ impl SandboxCapabilities {
         }
     }
 
+    /// What the GCP Agent Platform sandbox backend supports.
+    ///
+    /// Not what `for_platform(Platform::Gcp)` returns: that reports the Cloud Run backend, which
+    /// is the registered one. This row is measured against the Agent Platform backend and takes
+    /// effect only once it replaces Cloud Run as the registered GCP backend — at which point it
+    /// becomes the body of the `Platform::Gcp` arm above.
+    pub fn gcp_agent_platform() -> Self {
+        Self {
+            // Agent file operations move over the session envelope.
+            files: true,
+            // Reaching a session across processes needs a stable session generation, and that
+            // wiring is not in place; flipping this true before it lands would promise a
+            // guarantee the backend does not yet keep.
+            reconnect: false,
+            // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
+            preview: false,
+            // `:pause` and `:resume` preserve the running container.
+            suspend_resume: true,
+            // A session's state can be captured and used to create another.
+            snapshot: true,
+            // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
+            domain_egress_rules: false,
+            // A declared `deny` blocks both routed egress and DNS.
+            egress_deny: true,
+            // The declared ceilings are enforced, but by terminating the session on breach rather
+            // than by refusing the allocation — a caller reading `true` should expect the session
+            // to die, not a clean error at the point of the request.
+            enforced_limits: true,
+            // No ceiling on process count is observed.
+            process_limit: false,
+            // `ttl` maps to a session `expireTime` the platform terminates at.
+            session_lifetime: true,
+            // No PID-namespace isolation between the command and anything supervising it.
+            supervisor_pid_namespace: false,
+            // No separate supervisor identity: the command is not run under a different identity
+            // than the process supervising it.
+            supervisor_isolation: false,
+        }
+    }
+
     /// Returns a typed error if the named capability is absent on this platform.
     pub fn require(&self, capability: SandboxCapability, platform: Platform) -> Result<()> {
         let available = match capability {
@@ -1030,6 +1070,48 @@ mod tests {
         );
         assert!(aws.supervisor_isolation, "AWS setuids the command off the supervisor");
         assert!(!gcp.supervisor_isolation, "Cloud Run runs the command as the workload itself");
+    }
+
+    /// The Agent Platform row, each value against the behaviour it was measured from. `reconnect`
+    /// is the tripwire: it stays `false` until a stable session generation is wired to reach a
+    /// session across processes, and whoever wires that has to flip this test and the field
+    /// together. This row is deliberately not what `for_platform(Platform::Gcp)` returns — that is
+    /// still Cloud Run — so it is asserted directly.
+    #[test]
+    fn gcp_agent_platform_row_matches_measured_backend() {
+        let row = SandboxCapabilities::gcp_agent_platform();
+
+        assert!(row.files, "agent file ops move over the session envelope");
+        assert!(
+            !row.reconnect,
+            "cross-process reconnect needs a session generation that is not wired yet"
+        );
+        assert!(!row.preview, "the only ingress is :execute; no port-scoped capability");
+        assert!(row.suspend_resume, ":pause and :resume preserve the container");
+        assert!(row.snapshot, "session state can be captured and restored into a new session");
+        assert!(
+            !row.domain_egress_rules,
+            "VPC and DNS peering is not a hostname allowlist"
+        );
+        assert!(row.egress_deny, "a declared deny blocks both egress and DNS");
+        assert!(
+            row.enforced_limits,
+            "ceilings are enforced, by terminating the session on breach"
+        );
+        assert!(!row.process_limit, "no process-count ceiling is observed");
+        assert!(row.session_lifetime, "ttl maps to a session expireTime");
+        assert!(!row.supervisor_pid_namespace, "no PID-namespace isolation");
+        assert!(
+            !row.supervisor_isolation,
+            "the command is not run under a separate supervisor identity"
+        );
+
+        // The registered GCP backend is still Cloud Run, so the swap has not happened.
+        let live = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+        assert_ne!(
+            live, row,
+            "the Agent Platform row must not silently become the live GCP row before cutover"
+        );
     }
 
     #[test]

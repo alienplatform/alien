@@ -54,8 +54,8 @@ pub use queue::{
     LocalQueueBinding, PubSubQueueBinding, QueueBinding, ServiceBusQueueBinding, SqsQueueBinding,
 };
 pub use sandbox::{
-    AwsSandboxBinding, AzureSandboxBinding, GcpSandboxBinding, KubernetesSandboxBinding,
-    LocalSandboxBinding, SandboxBinding,
+    AwsSandboxBinding, AzureSandboxBinding, GcpAgentPlatformSandboxBinding, GcpSandboxBinding,
+    KubernetesSandboxBinding, LocalSandboxBinding, SandboxBinding,
 };
 pub use service_account::{
     AwsServiceAccountBinding, AzureServiceAccountBinding, GcpServiceAccountBinding,
