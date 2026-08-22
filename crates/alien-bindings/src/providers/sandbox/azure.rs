@@ -711,13 +711,20 @@ impl AzureSandbox {
                             *resumed_here = true;
                         }
                         Err(error) => {
-                            warn!(session = %session_id, %error, "resume was refused; still waiting");
-                            refusal = Some(match &error.error {
+                            let failure = match &error.error {
                                 Some(ErrorData::SandboxCommandFailed { failure, .. }) => {
                                     failure.clone()
                                 }
                                 _ => error.code.clone(),
-                            });
+                            };
+                            // A refusal is the one answer that proves the session did not wake.
+                            // Anything else — a 5xx, a timeout, a dropped connection — leaves the
+                            // outcome unknown, and an unknown wake is one this call owns.
+                            if failure != "dataPlaneRefused" {
+                                *resumed_here = true;
+                            }
+                            warn!(session = %session_id, %error, "resume was refused; still waiting");
+                            refusal = Some(failure);
                         }
                     }
                 }
@@ -799,6 +806,11 @@ impl AzureSandbox {
         let Err(failed) = self.client.stop_sandbox(&self.sandbox_group, session_id).await else {
             return reason;
         };
+        // A session that is already gone is the state this was trying to reach, and reporting it
+        // as left awake sends an operator looking for a sandbox that does not exist.
+        if is_not_found(&failed) {
+            return reason;
+        }
 
         warn!(session = %session_id, error = %failed, "could not re-suspend a session this call woke");
         reason.context(ErrorData::SandboxCommandFailed {
@@ -3026,6 +3038,106 @@ mod tests {
         };
 
         assert_eq!(error.code, "INVALID_INPUT", "{error}");
+    }
+
+    /// A resume whose outcome is unknown is one this call owns.
+    ///
+    /// A 5xx or a dropped connection does not mean the POST failed to land: the session can wake
+    /// anyway. Treating that as "did not wake" leaves a sandbox this call put back on the network
+    /// under a policy the declaration forbids, with nothing coming back for it.
+    #[tokio::test]
+    async fn a_resume_that_may_have_landed_is_owned() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            let mut sandbox = running(id, None);
+            if reads <= 2 {
+                sandbox.state = Some("Stopped".to_string());
+            }
+            Ok(sandbox)
+        });
+        // The answer never arrived; the data plane may still have taken it.
+        client
+            .expect_resume_sandbox()
+            .returning(|_, _| Err(http_error(503, "GatewayTimeout")));
+        client
+            .expect_stop_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("woke-or-did-not")
+            .await
+            .expect_err("a session that came up uncontained is not a resumed session");
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A resume the data plane refused is not one this call woke.
+    ///
+    /// The other side of the same rule: a 4xx is an answer, so the session stayed asleep and
+    /// whatever woke it afterwards was someone else. Stopping it would end their work.
+    #[tokio::test]
+    async fn a_refused_resume_leaves_someone_elses_session_alone() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            let mut sandbox = running(id, None);
+            if reads <= 2 {
+                sandbox.state = Some("Stopped".to_string());
+            }
+            Ok(sandbox)
+        });
+        // Refused, so this call did not wake it — another revision did, between the polls.
+        client
+            .expect_resume_sandbox()
+            .returning(|_, _| Err(http_error(409, "SandboxNotStopped")));
+        client.expect_stop_sandbox().never();
+        client.expect_delete_sandbox().never();
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("someone-elses-session")
+            .await
+            .expect_err("a session without the declared policy must not be handed back");
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A session that vanished while it was being put back is not "left awake".
+    ///
+    /// The put-back exists to name a sandbox this call left running. One the data plane says is
+    /// gone has reached that state by another route, and reporting it sends an operator looking
+    /// for something that does not exist.
+    #[tokio::test]
+    async fn a_session_that_vanished_is_not_reported_as_left_awake() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            let mut sandbox = running(id, None);
+            if reads <= 2 {
+                sandbox.state = Some("Stopped".to_string());
+            }
+            Ok(sandbox)
+        });
+        client.expect_resume_sandbox().returning(|_, _| Ok(()));
+        client
+            .expect_stop_sandbox()
+            .times(1)
+            .returning(|_, _| Err(http_error(404, "SandboxNotFound")));
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("gone-by-then")
+            .await
+            .expect_err("the refusal still travels");
+
+        assert!(
+            !error.to_string().contains("sandboxLeftAwake"),
+            "a sandbox the data plane says is gone was not left awake: {error}"
+        );
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
     }
 
     /// A session being deleted is still running, so it must not take new work.
