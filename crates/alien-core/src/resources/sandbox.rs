@@ -628,6 +628,21 @@ impl Sandbox {
         // `allow` asks for no restriction, so a backend that ignores it fails loudly on the first
         // blocked connection. `deny` asks for one, and a backend that ignores it puts untrusted
         // code on the internet with nothing to notice — so only this direction is gated.
+        // An empty list is not a restriction anyone wrote down: it renders as a deny-all wearing
+        // an allowlist's label, which reads at a glance as the opposite of what it does.
+        if let SandboxEgress::AllowDomains { domains } = &self.egress {
+            if domains.is_empty() {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "egress.domains".to_string(),
+                    value: "[]".to_string(),
+                    reason: "an allowlist naming no domain denies everything; declare \
+                             egress: deny if that is what was meant"
+                        .to_string(),
+                }));
+            }
+        }
+
         if matches!(self.egress, SandboxEgress::Deny) {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
@@ -1382,5 +1397,33 @@ mod tests {
             "names the capability: {}",
             error.message
         );
+    }
+
+    /// An allowlist naming nothing is a deny-all wearing an allowlist's label.
+    ///
+    /// It renders as a `Deny` default with no rules — the shape the Azure provider adds a
+    /// catch-all to avoid — and a reader scanning the declaration sees "allowDomains" and reads
+    /// the opposite of what it does.
+    #[test]
+    fn an_allowlist_with_no_domains_is_refused() {
+        let declared = |domains: Vec<String>| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                })
+                .egress(SandboxEgress::AllowDomains { domains })
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build()
+                .validate_for_platform(Platform::Azure)
+        };
+
+        let error = declared(vec![]).expect_err("an empty allowlist must be refused");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+
+        declared(vec!["api.example.com".to_string()])
+            .expect("a named domain is what an allowlist is for");
     }
 }

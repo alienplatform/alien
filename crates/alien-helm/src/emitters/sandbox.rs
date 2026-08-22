@@ -58,23 +58,11 @@ impl HelmEmitter for SandboxEmitter {
                 })
             })?;
 
-        // A hostname list has no NetworkPolicy to render into — it matches CIDRs — so it is
-        // refused rather than widened to the `allow` rule, which would open every address the
-        // declaration meant to exclude.
-        if let SandboxEgress::AllowDomains { .. } = sandbox.egress {
-            return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: format!("helm emit sandbox '{}'", ctx.resource_id),
-                reason: "a Kubernetes NetworkPolicy matches addresses, not names, so a hostname \
-                         list has nothing to render into. Declare egress: deny, or deploy to \
-                         Azure, whose egress proxy matches on host pattern"
-                    .to_string(),
-            }));
-        }
 
         let mut fragment = HelmFragment::empty();
         fragment.extra_templates.insert(
             format!("sandbox-{}-networkpolicy.yaml", sandbox.id()),
-            network_policy(sandbox),
+            network_policy(sandbox, ctx.resource_id)?,
         );
         fragment
             .extra_templates
@@ -91,12 +79,21 @@ impl HelmEmitter for SandboxEmitter {
 /// because that needs a gateway validating a session-and-port capability and none exists. Under
 /// `deny`, `Egress` is listed with no rules — a listed policy type with no rule is how
 /// NetworkPolicy spells "none", where omitting the type would mean "unrestricted".
-fn network_policy(sandbox: &Sandbox) -> String {
+fn network_policy(sandbox: &Sandbox, resource_id: &str) -> Result<String> {
     let egress = match sandbox.egress {
         SandboxEgress::Deny => String::new(),
-        // `AllowDomains` never reaches here: the emitter refuses it rather than render it as the
-        // `allow` rule below, which permits every address the list meant to exclude.
-        SandboxEgress::Allow | SandboxEgress::AllowDomains { .. } => {
+        // Refused here rather than upstream, so the function that would render the permissive
+        // rule is the one that declines: a hostname list rendered as `allow` opens every address
+        // it was written to exclude.
+        SandboxEgress::AllowDomains { .. } => {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("generate the Helm chart for sandbox '{resource_id}'"),
+                reason: "a Kubernetes NetworkPolicy matches addresses, not names, so a hostname \
+                         list has nothing to render into. Declare egress: deny or egress: allow"
+                    .to_string(),
+            }));
+        }
+        SandboxEgress::Allow => {
             let excepts: String = ALWAYS_DENIED_CIDRS
                 .iter()
                 .map(|cidr| format!("            - {cidr}\n"))
@@ -112,7 +109,7 @@ fn network_policy(sandbox: &Sandbox) -> String {
         }
     };
 
-    format!(
+    Ok(format!(
         r#"apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -140,7 +137,7 @@ spec:
         id = sandbox.id(),
         label = LABEL_SANDBOX,
         agent_port = AGENT_PORT,
-    )
+    ))
 }
 
 /// Cluster-scoped RBAC for the session broker.

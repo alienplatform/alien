@@ -400,6 +400,7 @@ impl From<ProcessFrame> for CommandOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures::StreamExt;
     use alien_core::bindings::BindingValue;
 
     /// A fake launcher that rejects argv the real one rejects.
@@ -408,7 +409,7 @@ mod tests {
     /// is argument construction, and a mock of the launcher would be built from the same
     /// misunderstanding as the code.
     ///
-    /// `body` runs only after the argv passes `strict_launcher`'s checks. A fake that accepts
+    /// `body` runs only after the argv passes `STRICT_PRELUDE`'s checks. A fake that accepts
     /// anything is worse than none: it produced green tests for a `create` that sent
     /// `run --id <x>`, which the real launcher answers with `unknown flag: --id`.
     fn launcher(body: &str) -> (tempfile::TempDir, GcpSandbox) {
@@ -598,7 +599,7 @@ done
             .expect("a session environment is carried, not refused");
 
         // The stream has to be drained: dropping it undrained kills the child before it runs.
-        if let Ok(mut frames) = sandbox
+        let mut frames = sandbox
             .run_command(
                 "s1",
                 RunCommandRequest {
@@ -609,10 +610,8 @@ done
                 },
             )
             .await
-        {
-            use futures::StreamExt;
-            while frames.next().await.is_some() {}
-        }
+            .unwrap_or_else(|error| panic!("a command with variables is accepted: {error}"));
+        while frames.next().await.is_some() {}
 
         let argv = std::fs::read_to_string(&record).expect("launcher ran");
         let lines: Vec<&str> = argv.lines().collect();

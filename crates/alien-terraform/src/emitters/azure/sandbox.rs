@@ -1,13 +1,13 @@
 //! Azure Sandbox — a named group, and nothing built at setup.
 //!
-//! The ACA sandbox group is created at runtime, idempotently by name, because a group is cheap to
-//! create and pointless to hold open while no session wants one. So setup emits no Azure resource
-//! here; what it owes the runtime is the three names the data plane is addressed by, which the
+//! No sandbox controller is registered for Azure, and `create_or_update_sandbox_group` has no
+//! caller, so nothing here creates the group a session lives in — it has to exist already. Setup
+//! emits no Azure resource for the same reason it would not be useful to: a group is cheap to
+//! create by name and pointless to hold open while no session wants one.
+//!
+//! What this emitter contributes is the three names the data plane is addressed by, which the
 //! Azure client config does not carry: the group, the region that selects the per-region endpoint,
 //! and the resource group the data-plane path is scoped by.
-//!
-//! Nothing in this repository creates that group: `create_or_update_sandbox_group` has no caller,
-//! and the controller registry holds only the Local and Kubernetes sandbox controllers.
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
@@ -71,15 +71,20 @@ fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
     };
 
     match &sandbox.code {
-        SandboxCode::Image { image } if image.contains('/') => Err(unsupported(format!(
-            "Azure creates a sandbox from a public catalog disk image, so code.image must be a \
-             catalog name such as 'ubuntu', not the registry reference '{image}'"
-        ))),
+        // A tag is the shape that gets through unnoticed: `ubuntu:24.04` has no slash, renders
+        // into the customer's module, plans and applies, and fails at the first session.
+        SandboxCode::Image { image }
+            if image.contains('/') || image.contains(':') || image.contains('@') =>
+        {
+            Err(unsupported(format!(
+                "Azure creates a sandbox from a public catalog disk image, so code.image must be \
+                 a bare catalog name such as 'ubuntu' — '{image}' carries a registry path, tag or \
+                 digest, which the data plane has nowhere to put"
+            )))
+        }
         SandboxCode::Image { image } => Ok(image.clone()),
         SandboxCode::Source { .. } => Err(unsupported(
-            "Azure creates a sandbox from a prebuilt catalog disk image and cannot build one \
-             from source"
-                .to_string(),
+            "no sandbox backend builds an image from source yet".to_string(),
         )),
     }
 }
@@ -185,17 +190,22 @@ mod tests {
     /// domains denies everything, and the domains without the mode are ignored.
     #[test]
     fn the_binding_carries_the_declared_egress() {
+        // The key names are asserted, not just the values: `AzureSandboxBinding.egress` has no
+        // serde default, so a misspelled key here is a deserialization failure on the customer's
+        // cluster rather than a failure at emit.
         let denied = binding_for(SandboxEgress::Deny);
-        assert!(denied.contains(r#""deny""#), "{denied}");
+        assert!(denied.contains("egress = {"), "{denied}");
+        assert!(denied.contains(r#"mode = "deny""#), "{denied}");
 
         let listed = binding_for(SandboxEgress::AllowDomains {
             domains: vec!["api.example.com".to_string()],
         });
-        assert!(listed.contains(r#""allowDomains""#), "{listed}");
-        assert!(listed.contains("api.example.com"), "{listed}");
+        assert!(listed.contains(r#"mode = "allowDomains""#), "{listed}");
+        assert!(listed.contains("domains = ["), "{listed}");
+        assert!(listed.contains(r#""api.example.com""#), "{listed}");
 
         let open = binding_for(SandboxEgress::Allow);
-        assert!(open.contains(r#""allow""#), "{open}");
+        assert!(open.contains(r#"mode = "allow""#), "{open}");
     }
 
     /// The idle-suspend policy travels the same way, and only when it was declared.
@@ -205,7 +215,7 @@ mod tests {
     #[test]
     fn the_binding_carries_a_declared_idle_suspend_and_nothing_otherwise() {
         let declared = binding_with(SandboxEgress::Allow, Some(900));
-        assert!(declared.contains("900"), "{declared}");
+        assert!(declared.contains("idleSuspendSeconds = 900"), "{declared}");
 
         let undeclared = binding_with(SandboxEgress::Allow, None);
         assert!(

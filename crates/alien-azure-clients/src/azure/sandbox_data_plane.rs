@@ -12,8 +12,8 @@
 use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
-use std::collections::BTreeMap;
 use alien_error::{Context, IntoAlienError};
+use std::collections::BTreeMap;
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -63,6 +63,13 @@ pub struct EgressPolicy {
     /// makes a `Deny` default mean no outbound access.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub traffic_inspection: Option<String>,
+    /// Anything else the policy carries.
+    ///
+    /// Kept rather than dropped because this is a preview API whose surface Microsoft says may
+    /// change: a field that permits traffic and deserializes into nothing is one no containment
+    /// check can weigh, and silence is the wrong answer for a policy nobody can read whole.
+    #[serde(flatten)]
+    pub unmodelled: BTreeMap<String, serde_json::Value>,
 }
 
 /// A match-and-act rule, in the two parts containment turns on: what it matches, and what it does.
@@ -375,10 +382,11 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .build()?;
 
         let signed = self.base.sign_request(request, &token).await?;
-        let response = self
-            .base
-            .execute_request(signed, "CreateSandbox", group)
-            .await?;
+        // The create body carries the caller's environment variables, and a failure echoes the
+        // request into the error chain, which is serialized into durable state.
+        let response = alien_client_core::redact_request_body(
+            self.base.execute_request(signed, "CreateSandbox", group).await,
+        )?;
         Self::parse(response, "CreateSandbox").await
     }
 
@@ -524,7 +532,12 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .body_bytes(contents)
             .build()?;
         let signed = self.base.sign_request(request, &token).await?;
-        self.base.execute_request(signed, "WriteFile", sandbox_id).await?;
+        // The body is the file the caller asked to write.
+        alien_client_core::redact_request_body(
+            self.base
+                .execute_request(signed, "WriteFile", sandbox_id)
+                .await,
+        )?;
         Ok(())
     }
 
@@ -709,9 +722,21 @@ mod tests {
     /// invalid sequence and hand back a different file than the sandbox holds.
     #[tokio::test]
     async fn a_file_that_is_not_text_survives_both_directions() {
+        let bytes = BINARY.to_vec();
+
         let server = MockServer::start_async().await;
         let client = client_against(&server);
-        let bytes = BINARY.to_vec();
+        let written = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::PUT).matches(carries_binary);
+                then.status(200);
+            })
+            .await;
+        client
+            .write_file("grp", "s1", "image.png", bytes.clone())
+            .await
+            .expect("the write should succeed");
+        written.assert_async().await;
 
         let server = MockServer::start_async().await;
         let client = client_against(&server);
@@ -781,6 +806,7 @@ mod tests {
             environment: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
             egress: Some(EgressPolicy {
                 default_action: "Deny".to_string(),
+                unmodelled: Default::default(),
                 host_rules: vec![EgressHostRule {
                     pattern: "api.example.com".to_string(),
                     action: "Allow".to_string(),

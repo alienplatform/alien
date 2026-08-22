@@ -22,6 +22,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, ContextError};
+use tracing::warn;
 
 /// A Sandbox backed by the Azure ADC data plane.
 #[derive(Debug)]
@@ -90,12 +91,12 @@ impl AzureSandbox {
             });
         }
 
-        if operation == RUN_COMMAND {
+        if operation == RUN_COMMAND || operation == CREATE {
             return error.context(ErrorData::SandboxCommandFailed {
                 failure: "outcomeUnknown".to_string(),
                 reason: format!(
                     "{operation} did not complete against the Azure sandbox data plane, so \
-                     whether the command ran is unknown"
+                     whether it took effect is unknown"
                 ),
             });
         }
@@ -131,73 +132,75 @@ impl Sandbox for AzureSandbox {
                 },
             )
             .await
-            .map_err(|error| Self::failed("sandbox.create", error))?;
+            .map_err(|error| Self::failed(CREATE, error))?;
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
         // the requested one would hand back a handle that addresses nothing.
         let _ = request.session_id;
 
-        // A restriction that did not take effect is worse than one that was never asked for: the
-        // caller believes the sandbox is contained. The response says what the sandbox is running
-        // under, so this is checked rather than assumed, and a sandbox that came up without the
-        // policy is deleted rather than handed back.
-        if let Some(asked) = &asked {
-            if !policy_holds(asked, sandbox.egress_policy.as_ref()) {
-                // Deleting is safe to do unconditionally here: Azure allocates the id, so the
-                // one in this response was minted by this call and belongs to no other caller.
-                // The delete's own failure is carried rather than returned: it would replace the
-                // finding that matters — that the sandbox is not contained — with a delete error.
-                let deleted = match self.accept_delete(&sandbox.id).await {
-                    Ok(()) => "it was deleted".to_string(),
-                    Err(error) => format!("deleting it also failed: {error}"),
-                };
-                return Err(AlienError::new(ErrorData::BindingConfigInvalid {
-                    binding_name: "sandbox".to_string(),
-                    env_var: "ALIEN_BINDING_SANDBOX".to_string(),
+        // Everything past this point owns a sandbox the caller has no id for, so every failure
+        // deletes it. Azure allocates the id, so the one in this response was minted by this call.
+        match self.settle(&sandbox, asked.as_ref()).await {
+            Ok(session) => Ok(session),
+            Err(error) => Err(self.discard(&sandbox.id, error).await),
+        }
+    }
+
+    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
+        let sandbox = match self
+            .client
+            .get_sandbox(&self.sandbox_group, session_id)
+            .await
+        {
+            Ok(sandbox) => sandbox,
+            // A 404 is "gone", which is a valid answer. Anything else is a real failure and must
+            // not be flattened into None, or a throttle would read as an expired session.
+            Err(error) if is_not_found(&error) => return Ok(None),
+            Err(error) => return Err(Self::failed("sandbox.get", error)),
+        };
+
+        // Checked here as well as at create, because this is the path a reconnect takes: a
+        // session created under an older declaration outlives the change — Azure has no session
+        // ceiling, and an idle sandbox only suspends — so a caller holding its id would otherwise
+        // be handed a sandbox whose containment is whatever it was built with.
+        if let Some(asked) = egress_policy(&self.egress) {
+            if !policy_holds(&asked, sandbox.egress_policy.as_ref()) {
+                return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                    session_id: sandbox.id,
+                    restriction: "egress policy".to_string(),
                     reason: format!(
-                        "the sandbox was created asking for {} but came up with {}, so {deleted} \
-                         rather than handed back",
-                        describe(Some(asked)),
-                        describe(sandbox.egress_policy.as_ref())
+                        "it is running {} where the declaration asks for {}",
+                        describe(sandbox.egress_policy.as_ref()),
+                        describe(Some(&asked))
                     ),
                 }));
             }
         }
 
-        Ok(SandboxSession {
+        Ok(Some(SandboxSession {
             session_id: sandbox.id,
-            state: session_state("sandbox.create", sandbox.state.as_deref())?,
+            state: session_state("sandbox.get", sandbox.state.as_deref())?,
             generation: 1,
-        })
-    }
-
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
-        match self
-            .client
-            .get_sandbox(&self.sandbox_group, session_id)
-            .await
-        {
-            Ok(sandbox) => Ok(Some(SandboxSession {
-                session_id: sandbox.id,
-                state: session_state("sandbox.get", sandbox.state.as_deref())?,
-                generation: 1,
-            })),
-            // A 404 is "gone", which is a valid answer. Anything else is a real failure and must
-            // not be flattened into None, or a throttle would read as an expired session.
-            Err(error) if is_not_found(&error) => Ok(None),
-            Err(error) => Err(Self::failed("sandbox.get", error)),
-        }
+        }))
     }
 
     async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         if let Some(id) = request.session_id.as_deref() {
             // A session on its way out is not one to reconnect to: the id will not run again, and
             // handing it back trades an error now for a command that never lands.
-            match self.get(id).await? {
-                Some(existing) if existing.state != SandboxSessionState::Terminated => {
-                    return Ok(existing)
+            if let Some(existing) = self.get(id).await? {
+                match existing.state {
+                    SandboxSessionState::Terminated => {}
+                    // `create` returns a session that can take work, and reaching one someone
+                    // else started has to mean the same thing — an idle sandbox suspends itself,
+                    // so this is the ordinary resting state rather than an edge.
+                    SandboxSessionState::Suspended => {
+                        self.resume(id).await?;
+                        return self.await_running(id).await;
+                    }
+                    SandboxSessionState::Starting => return self.await_running(id).await,
+                    SandboxSessionState::Running => return Ok(existing),
                 }
-                _ => {}
             }
         }
 
@@ -283,7 +286,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
-        checked_path("sandbox.readFile", path)?;
+        let path = &checked_path("sandbox.readFile", path)?;
 
         self.client
             .read_file(&self.sandbox_group, session_id, path)
@@ -292,10 +295,16 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        // Checked before anything is written: partial application is the contract for a data
+        // plane that refuses midway, not for a path this process could have rejected first.
+        let files = files
+            .into_iter()
+            .map(|(path, contents)| Ok((checked_path("sandbox.writeFiles", &path)?, contents)))
+            .collect::<Result<Vec<_>>>()?;
+
         // One request per path, stopping at the first failure: the same partial application every
         // other backend performs, so a caller sees one contract rather than five.
         for (path, contents) in files {
-            checked_path("sandbox.writeFiles", &path)?;
 
             self.client
                 .write_file(&self.sandbox_group, session_id, &path, contents)
@@ -307,7 +316,7 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
-        checked_path("sandbox.mkdir", path)?;
+        let path = &checked_path("sandbox.mkdir", path)?;
 
         self.client
             .mkdir(&self.sandbox_group, session_id, path)
@@ -321,9 +330,7 @@ impl Sandbox for AzureSandbox {
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
         // Accepted, not completed — the same contract the AWS backend follows. A caller that
-        // needs the session to have stopped polls `get` for `Suspended`. Suspending an
-        // already-stopped session, which a caller racing the idle policy cannot avoid, answers
-        // 409 and is reported retryable rather than as a refusal.
+        // needs the session to have stopped polls `get` for `Suspended`.
         self.client
             .stop_sandbox(&self.sandbox_group, session_id)
             .await
@@ -347,9 +354,19 @@ impl Sandbox for AzureSandbox {
         // The delete is accepted, not completed: the client's own contract is "returns before it
         // is gone; confirm by polling to 404". Returning here would report containment while the
         // code is still running, which is the whole point of terminate.
+        // The client rather than `get`: teardown needs the 404 and nothing else, and reading a
+        // state it cannot parse would abort the poll for a session that is already going away —
+        // replacing a `deadlineExceeded` finding with a deserialization error on the one path
+        // where untrusted code is known to be running past its deadline.
         for _ in 0..TERMINATE_POLL_ATTEMPTS {
-            if self.get(session_id).await?.is_none() {
-                return Ok(());
+            match self
+                .client
+                .get_sandbox(&self.sandbox_group, session_id)
+                .await
+            {
+                Err(error) if is_not_found(&error) => return Ok(()),
+                Err(error) => return Err(Self::failed("sandbox.terminate", error)),
+                Ok(_) => {}
             }
             tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
         }
@@ -369,6 +386,104 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// Turns a freshly created sandbox into a session, or says why it is not one.
+    ///
+    /// Every check that can fail after the sandbox exists lives here, so `create` has one place
+    /// to delete from rather than a delete beside each `?`.
+    async fn settle(
+        &self,
+        sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+        asked: Option<&EgressPolicy>,
+    ) -> Result<SandboxSession> {
+        // A restriction that did not take effect is worse than one that was never asked for: the
+        // caller believes the sandbox is contained. The response says what the sandbox is running
+        // under, so this is checked rather than assumed.
+        if let Some(asked) = asked {
+            if !policy_holds(asked, sandbox.egress_policy.as_ref()) {
+                return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+                    session_id: sandbox.id.clone(),
+                    restriction: "egress policy".to_string(),
+                    reason: format!(
+                        "it came up with {} where the declaration asks for {}",
+                        describe(sandbox.egress_policy.as_ref()),
+                        describe(Some(asked))
+                    ),
+                }));
+            }
+        }
+
+        match session_state(CREATE, sandbox.state.as_deref())? {
+            SandboxSessionState::Running => Ok(SandboxSession {
+                session_id: sandbox.id.clone(),
+                state: SandboxSessionState::Running,
+                generation: 1,
+            }),
+            // `create` owes the caller a session that can already take work, so the wait happens
+            // here rather than in every caller.
+            _ => self.await_running(&sandbox.id).await,
+        }
+    }
+
+    /// Waits for a session to be able to take work.
+    async fn await_running(&self, session_id: &str) -> Result<SandboxSession> {
+        let deadline = std::time::Instant::now() + SESSION_READY_TIMEOUT;
+
+        loop {
+            let sandbox = self
+                .client
+                .get_sandbox(&self.sandbox_group, session_id)
+                .await
+                .map_err(|error| Self::failed("sandbox.create", error))?;
+
+            match session_state("sandbox.create", sandbox.state.as_deref())? {
+                SandboxSessionState::Running => {
+                    return Ok(SandboxSession {
+                        session_id: sandbox.id,
+                        state: SandboxSessionState::Running,
+                        generation: 1,
+                    })
+                }
+                // Only a session on its way up is worth waiting for. A terminated one never
+                // becomes runnable, and folding it into the timeout would report it a minute late
+                // as a slow boot.
+                SandboxSessionState::Starting | SandboxSessionState::Suspended => {}
+                SandboxSessionState::Terminated => {
+                    return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                        failure: "sessionTerminated".to_string(),
+                        reason: format!("session '{session_id}' is being deleted"),
+                    }))
+                }
+            }
+
+            if std::time::Instant::now() >= deadline {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "sessionNotReady".to_string(),
+                    reason: format!(
+                        "session '{session_id}' was still not running after {}s",
+                        SESSION_READY_TIMEOUT.as_secs()
+                    ),
+                }));
+            }
+            tokio::time::sleep(SESSION_READY_INTERVAL).await;
+        }
+    }
+
+    /// Deletes a sandbox the caller will never receive, keeping the reason it is being discarded.
+    ///
+    /// The delete's own failure must not replace that reason — it is the finding that matters —
+    /// but it must not vanish either: the session id is in the error, and a failed delete leaves
+    /// a sandbox only that id can find.
+    async fn discard(&self, session_id: &str, reason: AlienError<ErrorData>) -> AlienError<ErrorData> {
+        if let Err(error) = self.accept_delete(session_id).await {
+            warn!(
+                session = %session_id,
+                %error,
+                "could not delete a sandbox that was never handed to its caller"
+            );
+        }
+        reason
+    }
+
     /// Runs one shell string under the client-side guard.
     ///
     /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
@@ -460,7 +575,7 @@ fn bounded_shell(command: &[String], deadline: std::time::Duration) -> String {
 /// confinement there is, and it is a client-side rule rather than a guarantee. Relative only:
 /// Azure exposes no session root to rewrite an absolute path against, so accepting one would hand
 /// the caller the sandbox's whole filesystem instead of its own directory.
-fn checked_path(operation: &str, path: &str) -> Result<()> {
+fn checked_path(operation: &str, path: &str) -> Result<String> {
     let refused = |details: &str| {
         Err(AlienError::new(ErrorData::InvalidInput {
             operation_context: operation.to_string(),
@@ -474,20 +589,21 @@ fn checked_path(operation: &str, path: &str) -> Result<()> {
     if path.ends_with('/') {
         return refused("must not end in '/'");
     }
-    if path.is_empty() {
+    // A leading slash means "under the session's own root" on every other backend, so it means
+    // that here too: the alternative is that the one path shape portable code writes is the one
+    // shape the newest `files` backend refuses.
+    let relative = path.trim_start_matches('/');
+    if relative.is_empty() {
         return refused("is empty");
     }
-    if path.starts_with('/') {
-        return refused("must be relative to the sandbox's own directory");
-    }
-    if path.contains('\0') {
+    if relative.contains('\0') {
         return refused("contains a null byte");
     }
-    if path.split('/').any(|part| part == ".." || part.is_empty()) {
+    if relative.split('/').any(|part| part == ".." || part.is_empty()) {
         return refused("must not traverse");
     }
 
-    Ok(())
+    Ok(relative.to_string())
 }
 
 /// The policy a declared mode is created with.
@@ -501,6 +617,7 @@ fn egress_policy(egress: &SandboxEgress) -> Option<EgressPolicy> {
     let bounded = |host_rules| {
         Some(EgressPolicy {
             default_action: DENY.to_string(),
+            unmodelled: Default::default(),
             rules: Vec::new(),
             host_rules,
             traffic_inspection: Some(FULL_INSPECTION.to_string()),
@@ -544,31 +661,40 @@ fn policy_holds(asked: &EgressPolicy, effective: Option<&EgressPolicy>) -> bool 
         return false;
     };
 
-    let allowed = |host: &str| {
+    let asked_for = |host: &str| {
         asked
             .host_rules
             .iter()
-            .any(|rule| rule.action == ALLOW && rule.pattern == host)
+            .any(|rule| rule.action.eq_ignore_ascii_case(ALLOW) && rule.pattern == host)
     };
 
-    effective.default_action == asked.default_action
-        && effective.traffic_inspection.as_deref() == Some(FULL_INSPECTION)
-        && asked
-            .host_rules
-            .iter()
-            .all(|rule| effective.host_rules.contains(rule))
+    effective.default_action.eq_ignore_ascii_case(&asked.default_action)
         && effective
-            .host_rules
-            .iter()
-            .all(|rule| rule.action != ALLOW || allowed(&rule.pattern))
-        // An advanced rule is refused outright rather than matched host by host: this client
-        // never sends one, so an `Allow` here came from somewhere else, and `Transform` and
-        // `Rewrite` reach a host by rewriting the request rather than by naming it.
+            .traffic_inspection
+            .as_deref()
+            .is_some_and(|mode| mode.eq_ignore_ascii_case(FULL_INSPECTION))
+        && asked.host_rules.iter().all(|asked_rule| {
+            effective.host_rules.iter().any(|rule| {
+                rule.pattern == asked_rule.pattern
+                    && rule.action.eq_ignore_ascii_case(&asked_rule.action)
+            })
+        })
+        // A whitelist, not a blacklist: an action this client does not recognise is one it cannot
+        // weigh, and `Transform` and `Rewrite` reach a host by rewriting the request rather than
+        // by naming it. Only a plain deny, or an allow the declaration asked for, passes.
+        && effective.host_rules.iter().all(|rule| {
+            rule.action.eq_ignore_ascii_case(DENY)
+                || (rule.action.eq_ignore_ascii_case(ALLOW) && asked_for(&rule.pattern))
+        })
+        // This client never writes `rules`, so anything here came from elsewhere — a group-scoped
+        // policy, or an API that moved — and only an outright deny is readable as harmless.
         && effective.rules.iter().all(|rule| {
             rule.action
                 .as_ref()
-                .is_some_and(|action| action.action_type == DENY)
+                .is_some_and(|action| action.action_type.eq_ignore_ascii_case(DENY))
         })
+        // A field this client cannot read is a permission it cannot rule out.
+        && effective.unmodelled.is_empty()
 }
 
 /// The effective policy, short enough to read in an error.
@@ -598,7 +724,11 @@ fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionS
         // stopped, and then waits for a *state* of `Idle` after a stop. Accepted as suspended
         // either way — the alternative is that the state auto-suspend produces is the one state
         // this refuses to read.
-        Some("Stopping" | "Stopped" | "Suspended" | "Idle") => Ok(SandboxSessionState::Suspended),
+        // `Stopping` is still running, and reporting it suspended would answer the poll
+        // `suspend` documents while the sandbox is still up — the same early "it is contained"
+        // that `terminate` refuses by polling to a 404 rather than trusting the accepted call.
+        Some("Stopping") => Ok(SandboxSessionState::Running),
+        Some("Stopped" | "Suspended" | "Idle") => Ok(SandboxSessionState::Suspended),
         Some("Deleting") => Ok(SandboxSessionState::Terminated),
         other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "azure".to_string(),
@@ -619,8 +749,16 @@ const FULL_INSPECTION: &str = "Full";
 /// The host pattern that matches everything, so `deny` is a rule rather than only a default.
 const EVERY_HOST: &str = "*";
 
-/// The one operation a repeat could run twice.
+/// The two operations a repeat could perform twice.
+///
+/// `create` is a PUT to a collection with a server-minted id, so a second attempt makes a second
+/// sandbox — and with no enumeration verb, the first one has no id-holder and nothing to reap it.
 const RUN_COMMAND: &str = "sandbox.runCommand";
+const CREATE: &str = "sandbox.create";
+
+/// How long a session has to become able to take work, and how often that is checked.
+const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+const SESSION_READY_INTERVAL: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Whether the data plane understood the request and rejected it.
 ///
@@ -1101,31 +1239,34 @@ mod tests {
         client.expect_mkdir().never();
         let sandbox = sandbox_with(client);
 
-        for path in ["../etc/shadow", "/etc/shadow", "", "work/", "a//b", "a/../../b"] {
+        for path in ["../etc/shadow", "", "/", "work/", "a//b", "a/../../b", "/../escape"] {
             let error = sandbox
                 .read_file("s1", path)
                 .await
-                .expect_err("'{path}' must be refused");
+                .expect_err(&format!("'{path}' must be refused"));
             assert_eq!(error.code, "INVALID_INPUT", "{path}: {error}");
 
             sandbox
                 .write_files("s1", BTreeMap::from([(path.to_string(), vec![1u8])]))
                 .await
-                .expect_err("'{path}' must be refused on write too");
+                .expect_err(&format!("'{path}' must be refused on write too"));
             sandbox
                 .mkdir("s1", path)
                 .await
-                .expect_err("'{path}' must be refused on mkdir too");
+                .expect_err(&format!("'{path}' must be refused on mkdir too"));
         }
 
         // The same shapes, accepted: a rule that refuses everything would pass the loop above.
+        // An absolute path is one of them — it means "under the session's own root" on every
+        // other backend, and arrives at the data plane with the leading slash trimmed.
         let mut client = MockSandboxDataPlaneApi::new();
         client
             .expect_read_file()
-            .times(2)
+            .withf(|_, _, path| !path.starts_with('/'))
+            .times(3)
             .returning(|_, _, _| Ok(Vec::new()));
         let sandbox = sandbox_with(client);
-        for path in ["app.py", "src/app.py"] {
+        for path in ["app.py", "src/app.py", "/work/app.py"] {
             sandbox
                 .read_file("s1", path)
                 .await
@@ -1152,6 +1293,29 @@ mod tests {
             .expect("the read should succeed");
 
         assert_eq!(contents, b"print(1)\n");
+    }
+
+    /// One bad path fails the batch before anything is written.
+    ///
+    /// Partial application is the contract for a data plane that refuses midway — not for a path
+    /// this process could have refused before the first request.
+    #[tokio::test]
+    async fn a_batch_with_an_unusable_path_writes_nothing() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_write_file().never();
+
+        let error = sandbox_with(client)
+            .write_files(
+                "s1",
+                BTreeMap::from([
+                    ("a.txt".to_string(), vec![1u8]),
+                    ("b/../../escape".to_string(), vec![2u8]),
+                ]),
+            )
+            .await
+            .expect_err("a path that could escape must fail the batch");
+
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
     }
 
     /// Writing stops at the first failure rather than pressing on, which is what makes a partial
@@ -1247,7 +1411,8 @@ mod tests {
             ("Running", SandboxSessionState::Running),
             ("Creating", SandboxSessionState::Starting),
             ("Resuming", SandboxSessionState::Starting),
-            ("Stopping", SandboxSessionState::Suspended),
+            // Still up: a sandbox that has been asked to stop has not stopped.
+            ("Stopping", SandboxSessionState::Running),
             ("Stopped", SandboxSessionState::Suspended),
             ("Suspended", SandboxSessionState::Suspended),
             ("Idle", SandboxSessionState::Suspended),
@@ -1314,6 +1479,14 @@ mod tests {
                 })
             });
 
+        // Created as `Creating`, so the create waits: the trait owes the caller a session that
+        // can already take work, and returning one that cannot pushes the readiness poll into
+        // every caller.
+        client
+            .expect_get_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(running("s1", None)));
+
         let session = sandbox_with(client)
             .create(CreateSessionRequest {
                 session_id: None,
@@ -1323,11 +1496,7 @@ mod tests {
             .await
             .expect("the create should succeed");
 
-        assert_eq!(
-            session.state,
-            SandboxSessionState::Starting,
-            "a sandbox still being created is not one a command can reach"
-        );
+        assert_eq!(session.state, SandboxSessionState::Running);
     }
 
     fn running(id: &str, egress: Option<EgressPolicy>) -> alien_azure_clients::azure::sandbox_data_plane::Sandbox {
@@ -1439,6 +1608,7 @@ mod tests {
             // The default action alone: every non-HTTP protocol still leaves.
             Some(EgressPolicy {
                 default_action: "Deny".to_string(),
+                unmodelled: Default::default(),
                 rules: Vec::new(),
                 host_rules: Vec::new(),
                 traffic_inspection: Some("Partial".to_string()),
@@ -1446,6 +1616,7 @@ mod tests {
             // Inspected, and open.
             Some(EgressPolicy {
                 default_action: "Allow".to_string(),
+                unmodelled: Default::default(),
                 rules: Vec::new(),
                 host_rules: Vec::new(),
                 traffic_inspection: Some("Full".to_string()),
@@ -1468,7 +1639,7 @@ mod tests {
                 .await
                 .expect_err("a sandbox without its policy must not be handed back");
 
-            assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+            assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
         }
     }
 
@@ -1483,6 +1654,7 @@ mod tests {
                 "s1",
                 Some(EgressPolicy {
                     default_action: "Deny".to_string(),
+                    unmodelled: Default::default(),
                     rules: Vec::new(),
                     host_rules: vec![EgressHostRule {
                         pattern: "elsewhere.example.com".to_string(),
@@ -1504,7 +1676,7 @@ mod tests {
         .await
         .expect_err("a host the declaration named must be in the effective policy");
 
-        assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
     }
 
     /// A session that is going away is not one to reconnect to.
@@ -1557,6 +1729,7 @@ mod tests {
             // A second host, allowed.
             EgressPolicy {
                 default_action: "Deny".to_string(),
+                unmodelled: Default::default(),
                 host_rules: vec![
                     declared.clone(),
                     EgressHostRule {
@@ -1570,6 +1743,7 @@ mod tests {
             // Everything, through the list this client never writes.
             EgressPolicy {
                 default_action: "Deny".to_string(),
+                unmodelled: Default::default(),
                 host_rules: vec![declared.clone()],
                 rules: vec![EgressRule {
                     r#match: Some(EgressRuleMatch {
@@ -1595,7 +1769,7 @@ mod tests {
                 .await
                 .expect_err("a permission nobody asked for must fail the create");
 
-            assert_eq!(error.code, "BINDING_CONFIG_INVALID", "{error}");
+            assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
         }
 
         // The same policy without the extra permission creates normally, so the rule above is
@@ -1606,6 +1780,7 @@ mod tests {
                 "s1",
                 Some(EgressPolicy {
                     default_action: "Deny".to_string(),
+                    unmodelled: Default::default(),
                     host_rules: vec![EgressHostRule {
                         pattern: "api.example.com".to_string(),
                         action: "Allow".to_string(),
@@ -1679,5 +1854,130 @@ mod tests {
         .create(CreateSessionRequest::default())
         .await
         .expect("the create should succeed");
+    }
+
+    /// Reconnect is the path a stale policy survives on.
+    ///
+    /// Azure has no session ceiling and an idle sandbox only suspends, so one created under an
+    /// older declaration outlives the change. Checking only at create hands the caller a session
+    /// whose containment is whatever it was built with, under the label it has now.
+    #[tokio::test]
+    async fn a_reconnect_to_a_session_built_under_another_policy_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            // What an `allow` declaration built, before it was changed to `deny`.
+            Ok(running(id, None))
+        });
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .get("built-under-allow")
+            .await
+            .expect_err("a session without the declared policy must not be handed back");
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A create whose response cannot be read owns a sandbox the caller has no id for.
+    ///
+    /// Azure allocates the id and has no enumeration verb, so an abandoned sandbox has no
+    /// id-holder and nothing to reap it — it runs until someone finds it by hand.
+    #[tokio::test]
+    async fn a_create_that_cannot_be_read_deletes_what_it_made() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_create_sandbox().times(1).returning(|_, _| {
+            Ok(alien_azure_clients::azure::sandbox_data_plane::Sandbox {
+                id: "orphan".to_string(),
+                egress_policy: None,
+                state: Some("Hibernated".to_string()),
+            })
+        });
+        client
+            .expect_delete_sandbox()
+            .withf(|_, id| id == "orphan")
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let error = sandbox_with(client)
+            .create(CreateSessionRequest::default())
+            .await
+            .expect_err("an unreadable state must fail the create");
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+    }
+
+    /// The three shapes a permitting policy can arrive in that a looser check would pass.
+    #[tokio::test]
+    async fn a_policy_this_client_cannot_read_whole_fails_the_create() {
+        let declared = || SandboxEgress::Deny;
+        let catch_all = EgressHostRule {
+            pattern: "*".to_string(),
+            action: "Deny".to_string(),
+        };
+
+        for came_up_with in [
+            // A host rule carrying an action this client cannot weigh: `Transform` reaches a host
+            // by rewriting the request rather than by naming it.
+            EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![
+                    catch_all.clone(),
+                    EgressHostRule {
+                        pattern: "api.example.com".to_string(),
+                        action: "Transform".to_string(),
+                    },
+                ],
+                rules: Vec::new(),
+                unmodelled: Default::default(),
+                traffic_inspection: Some("Full".to_string()),
+            },
+            // A field this client does not model at all.
+            EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![catch_all.clone()],
+                rules: Vec::new(),
+                unmodelled: BTreeMap::from([(
+                    "bypassList".to_string(),
+                    serde_json::json!(["exfil.example.com"]),
+                )]),
+                traffic_inspection: Some("Full".to_string()),
+            },
+        ] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let effective = came_up_with.clone();
+            client
+                .expect_create_sandbox()
+                .times(1)
+                .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
+            client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+
+            let error = sandbox_denying(client, declared())
+                .create(CreateSessionRequest::default())
+                .await
+                .expect_err("a policy this client cannot read whole must fail the create");
+
+            assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+        }
+
+        // Case is the data plane's to choose: the same policy, normalised, still creates.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_create_sandbox().times(1).returning(|_, _| {
+            Ok(running(
+                "s1",
+                Some(EgressPolicy {
+                    default_action: "deny".to_string(),
+                    host_rules: vec![EgressHostRule {
+                        pattern: "*".to_string(),
+                        action: "deny".to_string(),
+                    }],
+                    rules: Vec::new(),
+                    unmodelled: Default::default(),
+                    traffic_inspection: Some("full".to_string()),
+                }),
+            ))
+        });
+        sandbox_denying(client, declared())
+            .create(CreateSessionRequest::default())
+            .await
+            .expect("a normalised echo of the same policy is the same policy");
     }
 }

@@ -26,8 +26,7 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
         SandboxEgress::AllowDomains { .. } => Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("terraform emit sandbox '{}'", sandbox.id()),
             reason: "the Cloud Run sandbox launcher takes a single egress switch, so a hostname \
-                     list has nothing to render into. Declare egress: deny, or deploy to Azure, \
-                     whose egress proxy matches on host pattern"
+                     list has nothing to render into. Declare egress: deny or egress: allow"
                 .to_string(),
         })),
     }

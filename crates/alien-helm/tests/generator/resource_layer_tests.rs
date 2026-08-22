@@ -191,8 +191,9 @@ fn a_hostname_allowlist_is_refused_rather_than_widened() {
     let error = try_render(&stack, StackSettings::default())
         .expect_err("a hostname list must be refused rather than approximated");
 
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     assert!(
-        error.to_string().contains("matches addresses, not names"),
-        "the refusal must name why: {error}"
+        error.to_string().contains("agent"),
+        "the refusal must name the sandbox it is about: {error}"
     );
 }

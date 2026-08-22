@@ -315,6 +315,28 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A session came up without a restriction its declaration asked for.
+    ///
+    /// Distinct from a refused call: the data plane accepted the request and answered, and what
+    /// it built is not what was asked for. The session id is carried because the caller never
+    /// receives one — this is the failure where an operator has to be able to find what was left
+    /// behind if deleting it also failed.
+    #[error(
+        code = "SANDBOX_NOT_AS_DECLARED",
+        message = "Sandbox session '{session_id}' came up without its declared {restriction}: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    SandboxNotAsDeclared {
+        /// Provider-scoped id of the session that was built
+        session_id: String,
+        /// What the declaration asked for, such as `egress policy`
+        restriction: String,
+        /// What the session came up with instead
+        reason: String,
+    },
+
     /// The sandbox agent could not be reached, or the connection dropped mid-response.
     ///
     /// Visibility is inherited rather than declared public: what this wraps is often the cloud
