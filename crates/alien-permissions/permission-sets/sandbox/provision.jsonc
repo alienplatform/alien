@@ -175,6 +175,33 @@
           }
         }
       }
+    ],
+    "gcp": [
+      {
+        // The durable parent (reasoningEngine) and release-owned template: create, delete, and the
+        // reads a resumed provision needs to adopt what an interrupted one left. No
+        // sandboxEnvironments verb — provisioning must not reach a live session.
+        "grant": {
+          "permissions": [
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.sandboxEnvironmentTemplates.delete",
+            "aiplatform.sandboxEnvironmentTemplates.get",
+            "aiplatform.sandboxEnvironmentTemplates.list",
+            "aiplatform.reasoningEngines.create",
+            "aiplatform.reasoningEngines.delete",
+            "aiplatform.reasoningEngines.get",
+            "aiplatform.reasoningEngines.list"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
     ]
   }
 }

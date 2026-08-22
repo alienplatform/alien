@@ -281,7 +281,12 @@ fn critical_e2e_provider_operations_are_declared() {
                 "lambda:DeleteMicrovmImage",
                 "lambda:ListMicrovmImageVersions",
             ],
-            gcp_permissions: &[],
+            gcp_permissions: &[
+                "aiplatform.sandboxEnvironmentTemplates.create",
+                "aiplatform.sandboxEnvironmentTemplates.delete",
+                "aiplatform.reasoningEngines.create",
+                "aiplatform.reasoningEngines.delete",
+            ],
             gcp_predefined_roles: &[],
             azure_actions: &[
                 "Microsoft.App/sandboxGroups/write",
@@ -295,7 +300,7 @@ fn critical_e2e_provider_operations_are_declared() {
             // grant that reaches inside a session and must stay in execute alone.
             permission_set_id: "sandbox/execute",
             aws_actions: &["lambda:CreateMicrovmAuthToken"],
-            gcp_permissions: &[],
+            gcp_permissions: &["aiplatform.sandboxEnvironments.execute"],
             gcp_predefined_roles: &[],
             azure_actions: &[],
             azure_data_actions: &[],
@@ -305,7 +310,13 @@ fn critical_e2e_provider_operations_are_declared() {
             // Session lifecycle without content access.
             permission_set_id: "sandbox/management",
             aws_actions: &["lambda:RunMicrovm", "lambda:TerminateMicrovm"],
-            gcp_permissions: &[],
+            gcp_permissions: &[
+                "aiplatform.sandboxEnvironments.create",
+                "aiplatform.sandboxEnvironments.delete",
+                "aiplatform.sandboxEnvironments.pause",
+                "aiplatform.sandboxEnvironments.resume",
+                "aiplatform.sandboxEnvironments.snapshot",
+            ],
             gcp_predefined_roles: &[],
             azure_actions: &[],
             azure_data_actions: &[],

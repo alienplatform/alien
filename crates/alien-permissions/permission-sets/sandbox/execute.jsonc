@@ -68,6 +68,24 @@
           }
         }
       }
+    ],
+    "gcp": [
+      {
+        // The one verb that runs code and reads files inside a live session, so it lives here
+        // alone — heartbeat, management and provision must never reach session content. No safe
+        // predefined role isolates it, so it is a residual custom-role permission.
+        "grant": {
+          "permissions": ["aiplatform.sandboxEnvironments.execute"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
     ]
   }
 }
