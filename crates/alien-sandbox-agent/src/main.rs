@@ -12,6 +12,7 @@ use alien_core::sandbox_capability::SandboxSessionIdentity;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_sandbox_agent::error::{ErrorData, Result};
 use alien_sandbox_agent::exec::ExecIdentity;
+use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -121,6 +122,7 @@ fn load_state() -> Result<AgentState> {
         authorization: load_authorization()?,
         exec_identity,
         output_cap,
+        jobs: JobRegistry::new(),
     })
 }
 

@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 use crate::error::ErrorData;
 use crate::exec::{self, ExecIdentity, ExecRequest, Frame, FRAME_CHANNEL_DEPTH};
 use crate::files;
+use crate::jobs::{JobOutcome, JobRegistry, JobSnapshot};
 use crate::paths::resolve_within_root;
 use alien_core::sandbox_capability::{SandboxOperationClass, SandboxSessionIdentity};
 use alien_core::sandbox_capability_token;
@@ -83,6 +84,8 @@ pub struct AgentState {
     pub exec_identity: ExecIdentity,
     /// Bytes of each stream kept before output is truncated
     pub output_cap: usize,
+    /// Detached jobs this session is running or retaining for later polls
+    pub jobs: JobRegistry,
 }
 
 /// Liveness and the version the agent speaks.
@@ -135,6 +138,90 @@ pub struct MkdirBody {
     pub path: String,
 }
 
+/// The id a started job answers to.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobStartResponse {
+    /// Identifier for later polls and cancellation
+    pub job_id: String,
+}
+
+/// Which job to poll, and from where.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobPollBody {
+    /// The job to read
+    pub job_id: String,
+    /// Return frames strictly after this sequence; absent returns from the first frame
+    #[serde(default)]
+    pub since_seq: Option<u64>,
+}
+
+/// A job's output so far, and how it ended once it has.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobPollResponse {
+    /// Whether the command is still running
+    pub running: bool,
+    /// Output frames after the polled sequence
+    pub frames: Vec<Frame>,
+    /// Exit code, present once a job has exited on its own
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Set when output was cut short by the output cap; present once a job has exited
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    /// How a job failed, present when it ended without exiting normally
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JobErrorBody>,
+}
+
+/// Why a job did not exit normally.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobErrorBody {
+    /// Machine-readable cause, e.g. `deadlineExceeded`
+    pub code: String,
+    /// Human-readable detail
+    pub message: String,
+}
+
+impl From<JobSnapshot> for JobPollResponse {
+    fn from(snapshot: JobSnapshot) -> Self {
+        match snapshot.outcome {
+            None => Self {
+                running: true,
+                frames: snapshot.frames,
+                exit_code: None,
+                truncated: None,
+                error: None,
+            },
+            Some(JobOutcome::Exited { code, truncated }) => Self {
+                running: false,
+                frames: snapshot.frames,
+                exit_code: Some(code),
+                truncated: Some(truncated),
+                error: None,
+            },
+            Some(JobOutcome::Failed { code, message }) => Self {
+                running: false,
+                frames: snapshot.frames,
+                exit_code: None,
+                truncated: None,
+                error: Some(JobErrorBody { code, message }),
+            },
+        }
+    }
+}
+
+/// Which job to cancel.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCancelBody {
+    /// The job to cancel
+    pub job_id: String,
+}
+
 /// The discriminating fields of an [`agent_platform`] envelope, read before its operation body.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -162,6 +249,9 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
         .route("/v1/mkdir", post(mkdir))
+        .route("/v1/jobs/start", post(job_start))
+        .route("/v1/jobs/poll", post(job_poll))
+        .route("/v1/jobs/cancel", post(job_cancel))
         // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
         // neither path nor method, so the one route it can reach carries every operation, chosen
         // by `op`. Placed before the body-limit layer so an envelope `writeFile` shares the same
@@ -314,6 +404,68 @@ async fn mkdir(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Starts a command as a detached job whose output is polled for rather than streamed.
+///
+/// The provider chooses this over `/v1/exec` when a command's deadline is longer than one proxied
+/// call can stay open. The command runs under the same deadline; only its lifetime is detached.
+async fn job_start(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<ExecRequest>,
+) -> std::result::Result<Json<JobStartResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    // Resolved here, as in `run_command`, so a refused directory answers with an error rather than a
+    // job whose first frame is a failure.
+    let working_directory = match &request.working_directory {
+        Some(path) => resolve_within_root(&state.session_root, path)?,
+        None => state.session_root.clone(),
+    };
+
+    let job_id = state
+        .jobs
+        .start(request, working_directory, state.exec_identity, state.output_cap)?;
+
+    Ok(Json(JobStartResponse { job_id }))
+}
+
+/// Returns a job's output after a sequence, and its ending once it has one.
+async fn job_poll(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<JobPollBody>,
+) -> std::result::Result<Json<JobPollResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    let snapshot = state.jobs.poll(&body.job_id, body.since_seq).ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::JobNotFound {
+            job_id: body.job_id.clone(),
+        }))
+    })?;
+
+    Ok(Json(JobPollResponse::from(snapshot)))
+}
+
+/// Cancels a job, killing its process group.
+async fn job_cancel(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<JobCancelBody>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    if !state.jobs.cancel(&body.job_id) {
+        return Err(ApiError::from(AlienError::new(ErrorData::JobNotFound {
+            job_id: body.job_id,
+        })));
+    }
+
+    Ok(Json(serde_json::json!({})))
+}
+
 /// The single endpoint the GCP Agent Platform can reach, dispatching by the envelope's `op`.
 ///
 /// The version is reconciled and the `op` resolved before any handler runs; each arm then hands
@@ -367,6 +519,21 @@ async fn agent_platform(
         "mkdir" => Ok(mkdir(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
             .await?
             .into_response()),
+        "jobStart" => Ok(
+            job_start(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "jobPoll" => Ok(
+            job_poll(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "jobCancel" => Ok(
+            job_cancel(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
         "health" => Ok(health(Query(HealthQuery { version: None })).await?.into_response()),
         other => Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
             reason: format!("unknown op '{other}'"),

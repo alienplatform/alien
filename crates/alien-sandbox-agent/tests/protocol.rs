@@ -14,6 +14,7 @@ use alien_core::sandbox_capability::{
 };
 use alien_core::sandbox_capability_token;
 use alien_sandbox_agent::exec::ExecIdentity;
+use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState, PROTOCOL_VERSION};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
@@ -40,6 +41,7 @@ struct Agent {
     base_url: String,
     keys: KeyPair,
     root: PathBuf,
+    state: Arc<AgentState>,
     _dir: TempDir,
 }
 
@@ -60,7 +62,10 @@ impl Agent {
             },
             exec_identity: test_identity(),
             output_cap: 1 << 20,
+            jobs: JobRegistry::new(),
         });
+
+        let served = Arc::clone(&state);
 
         let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
             .await
@@ -70,7 +75,7 @@ impl Agent {
         tokio::spawn(async move {
             axum::serve(
             listener,
-            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+            router(served).into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await
         .expect("serve");
@@ -80,6 +85,7 @@ impl Agent {
             base_url: format!("http://{address}"),
             keys,
             root,
+            state,
             _dir: dir,
         }
     }
@@ -417,6 +423,7 @@ async fn transport_authorization_needs_no_capability() {
         // image, and the caller here stands in for one arriving through the transport.
         exec_identity: ExecIdentity { uid: 60000, gid: 60000 },
         output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -764,4 +771,130 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         !root.join("work").exists(),
         "a refused envelope must not have done its work anyway"
     );
+}
+
+// --- Detached jobs: start, poll for output across calls, cancel ---
+//
+// A command longer than one proxied call can stay open runs as a job. These prove the endpoints
+// are wired to the same authorization and framing the streaming path uses, and that the
+// synchronous path is left untouched.
+
+/// A job runs to completion and its output is collected across polls, exactly as a provider that
+/// cannot hold one long call open would have to read it.
+#[tokio::test]
+async fn a_job_completes_and_its_output_is_polled_across_calls() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let started = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({
+            "v": 1,
+            "op": "jobStart",
+            "command": ["/bin/sh", "-c", "echo one; echo two"],
+            "deadlineMs": 10_000
+        }))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(started.status(), 200);
+    let job_id = started.json::<serde_json::Value>().await.expect("json")["jobId"]
+        .as_str()
+        .expect("a job id")
+        .to_string();
+
+    let mut collected = Vec::new();
+    let mut since: Option<u64> = None;
+    let mut running = true;
+    for _ in 0..200 {
+        let body = client
+            .post(format!("{}/", agent.base_url))
+            .bearer_auth(agent.capability())
+            .json(&json!({"v": 1, "op": "jobPoll", "jobId": job_id, "sinceSeq": since}))
+            .send()
+            .await
+            .expect("responds")
+            .json::<serde_json::Value>()
+            .await
+            .expect("json");
+
+        for frame in body["frames"].as_array().expect("frames array") {
+            if let Some(seq) = frame["seq"].as_u64() {
+                since = Some(since.map_or(seq, |s| s.max(seq)));
+            }
+            if let Some(data) = frame["data"].as_str() {
+                collected.push(
+                    String::from_utf8(BASE64.decode(data).expect("base64")).expect("utf8"),
+                );
+            }
+        }
+
+        if !body["running"].as_bool().expect("running is a bool") {
+            running = false;
+            assert_eq!(body["exitCode"], 0, "the job exited cleanly");
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+
+    assert!(!running, "the job must reach a terminal state within the poll budget");
+    let text: Vec<&str> = collected.iter().flat_map(|line| line.split_whitespace()).collect();
+    assert_eq!(text, vec!["one", "two"], "every line survives being polled");
+}
+
+/// The synchronous path is left as it was: an ordinary command over `/v1/exec` runs and returns
+/// without ever creating a job. The provider decides when to reach for a job; `exec` never does.
+#[tokio::test]
+async fn a_command_over_exec_creates_no_job() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 10_000}))
+        .send()
+        .await
+        .expect("responds");
+    assert_eq!(response.status(), 200);
+    let _ = response.text().await.expect("body");
+
+    assert!(
+        agent.state.jobs.is_empty(),
+        "the synchronous exec path must not create a job"
+    );
+}
+
+/// A poll for a job the session never held is a typed 404, not an empty running job the caller
+/// would wait on forever.
+#[tokio::test]
+async fn a_poll_for_an_unknown_job_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"v": 1, "op": "jobPoll", "jobId": "nonexistent", "sinceSeq": null}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 404);
+}
+
+/// The job endpoints refuse a request that carries no capability, like every other operation that
+/// can reach session contents.
+#[tokio::test]
+async fn starting_a_job_without_a_capability_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/v1/jobs/start", agent.base_url))
+        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 10_000}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 401);
+    assert!(agent.state.jobs.is_empty(), "a refused start creates no job");
 }
