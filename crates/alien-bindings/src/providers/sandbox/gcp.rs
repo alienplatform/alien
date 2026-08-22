@@ -25,6 +25,9 @@ use crate::traits::{
 use alien_core::bindings::GcpSandboxBinding;
 use alien_core::sandbox_process::{self, ProcessFrame, ProcessStream, FRAME_CHANNEL_DEPTH};
 use alien_core::{Platform, SandboxCapabilities};
+
+/// Longest session id the launcher is asked to take, which is also a container name.
+const MAX_SESSION_ID: usize = 63;
 use alien_error::AlienError;
 
 /// How much of one command's output is kept before the terminal frame reports truncation.
@@ -147,6 +150,33 @@ impl GcpSandbox {
     }
 
     /// Builds `sandbox exec <session> -- <command...>`.
+    /// A session id the launcher cannot read as one of its own options.
+    ///
+    /// The id is positional and `--allow-egress` is a flag on the same verb, so an id shaped like
+    /// a flag is an application asking to widen the egress its binding decided — and the argv is
+    /// built here, where a shell is not involved and quoting would not help.
+    fn checked_session_id(operation: &str, session_id: &str) -> Result<()> {
+        let usable = !session_id.is_empty()
+            && session_id.len() <= MAX_SESSION_ID
+            && session_id
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+            && session_id.starts_with(|c: char| c.is_ascii_alphanumeric());
+
+        if usable {
+            return Ok(());
+        }
+
+        Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: operation.to_string(),
+            details: format!(
+                "session id '{session_id}' must start with a letter or digit and hold only \
+                 letters, digits, '-' and '_', at most {MAX_SESSION_ID} characters"
+            ),
+            field_name: Some("sessionId".to_string()),
+        }))
+    }
+
     fn exec_arguments(&self, session_id: &str, command: &[String]) -> Vec<String> {
         let mut arguments = vec!["exec".to_string(), session_id.to_string(), "--".to_string()];
         arguments.extend(command.iter().cloned());
@@ -177,6 +207,7 @@ impl Sandbox for GcpSandbox {
         let session_id = request
             .session_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
+        Self::checked_session_id("sandbox.create", &session_id)?;
 
         // The id is positional and `--detach` is what makes this return: without it the launcher
         // stays attached and `control` waits out its deadline instead of handing back a session.
@@ -232,6 +263,7 @@ impl Sandbox for GcpSandbox {
         session_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
+        Self::checked_session_id("sandbox.runCommand", session_id)?;
         if request.command.is_empty() {
             return Err(self.failed("sandbox.runCommand", "command is empty"));
         }
@@ -293,6 +325,7 @@ impl Sandbox for GcpSandbox {
     }
 
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
+        Self::checked_session_id("sandbox.readFile", session_id)?;
         let path = self.checked_path(path, "sandbox.readFile")?;
         let command = vec!["/bin/cat".to_string(), path];
         self.control(
@@ -308,6 +341,7 @@ impl Sandbox for GcpSandbox {
     /// The cost is `ARG_MAX`: a file larger than roughly a megabyte needs a different transport,
     /// and fails loudly here rather than being silently truncated.
     async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        Self::checked_session_id("sandbox.writeFiles", session_id)?;
         for (path, contents) in files {
             let path = self.checked_path(&path, "sandbox.writeFiles")?;
             let encoded = BASE64.encode(&contents);
@@ -335,6 +369,7 @@ impl Sandbox for GcpSandbox {
     }
 
     async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
+        Self::checked_session_id("sandbox.mkdir", session_id)?;
         let path = self.checked_path(path, "sandbox.mkdir")?;
         let command = vec!["/bin/mkdir".to_string(), "-p".to_string(), path];
         self.control("sandbox.mkdir", &self.exec_arguments(session_id, &command))
@@ -365,6 +400,7 @@ impl Sandbox for GcpSandbox {
     }
 
     async fn terminate(&self, session_id: &str) -> Result<()> {
+        Self::checked_session_id("sandbox.terminate", session_id)?;
         self.control(
             "sandbox.terminate",
             &["delete".to_string(), session_id.to_string()],
@@ -737,5 +773,50 @@ done
             )
             .await
             .expect_err("a traversing path must be refused on write too");
+    }
+
+    /// A session id shaped like a launcher option never reaches the launcher.
+    ///
+    /// The id is positional and `--allow-egress` is a flag on the same verb, so an application
+    /// passing one as its session id would be asking for the egress its binding refused it — the
+    /// one setting the binding decides rather than the caller.
+    #[tokio::test]
+    async fn an_option_shaped_session_id_is_refused_before_the_launcher_runs() {
+        let (_dir, sandbox) = launcher("exit 0");
+
+        for id in [
+            "--allow-egress",
+            "-e",
+            "--env",
+            "",
+            "has space",
+            "semi;colon",
+            "-leading-dash",
+        ] {
+            let error = sandbox
+                .create(CreateSessionRequest {
+                    session_id: Some(id.to_string()),
+                    tenant_key: None,
+                    env: BTreeMap::new(),
+                })
+                .await
+                .expect_err(&format!("'{id}' must never reach the argv"));
+            assert_eq!(error.code, "INVALID_INPUT", "'{id}': {error}");
+
+            sandbox
+                .terminate(id)
+                .await
+                .expect_err(&format!("'{id}' must be refused on every verb that takes it"));
+        }
+
+        // The shape the launcher is actually given, and the one this binding generates.
+        sandbox
+            .create(CreateSessionRequest {
+                session_id: Some("sbx-7f3a_01".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect("an ordinary id is not refused");
     }
 }

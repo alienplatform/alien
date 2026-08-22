@@ -195,9 +195,11 @@ impl Sandbox for AzureSandbox {
                     // so this is the ordinary resting state rather than an edge.
                     SandboxSessionState::Suspended => {
                         self.resume(id).await?;
-                        return self.await_running(id).await;
+                        return self.await_running("sandbox.getOrCreate", id).await;
                     }
-                    SandboxSessionState::Starting => return self.await_running(id).await,
+                    SandboxSessionState::Starting => {
+                        return self.await_running("sandbox.getOrCreate", id).await
+                    }
                     SandboxSessionState::Running => return Ok(existing),
                 }
             }
@@ -419,12 +421,15 @@ impl AzureSandbox {
             }),
             // `create` owes the caller a session that can already take work, so the wait happens
             // here rather than in every caller.
-            _ => self.await_running(&sandbox.id).await,
+            _ => self.await_running(CREATE, &sandbox.id).await,
         }
     }
 
     /// Waits for a session to be able to take work.
-    async fn await_running(&self, session_id: &str) -> Result<SandboxSession> {
+    ///
+    /// The operation is the caller's, not this function's: a reconnect that waits is still a
+    /// reconnect, and reporting it as a create would mark a repeatable read unrepeatable.
+    async fn await_running(&self, operation: &str, session_id: &str) -> Result<SandboxSession> {
         let deadline = std::time::Instant::now() + SESSION_READY_TIMEOUT;
 
         loop {
@@ -432,9 +437,9 @@ impl AzureSandbox {
                 .client
                 .get_sandbox(&self.sandbox_group, session_id)
                 .await
-                .map_err(|error| Self::failed("sandbox.create", error))?;
+                .map_err(|error| Self::failed(operation, error))?;
 
-            match session_state("sandbox.create", sandbox.state.as_deref())? {
+            match session_state(operation, sandbox.state.as_deref())? {
                 SandboxSessionState::Running => {
                     return Ok(SandboxSession {
                         session_id: sandbox.id,
