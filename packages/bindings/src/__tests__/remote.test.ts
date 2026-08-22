@@ -91,6 +91,10 @@ function fakeRemoteAddon() {
     async postgres(): Promise<RawPostgresHandle> {
       throw new Error("unused")
     }
+
+    async sandbox(): Promise<never> {
+      throw new Error("unused")
+    }
   }
 
   class FakeRemoteBindingsHandle implements RawRemoteBindingsHandle {

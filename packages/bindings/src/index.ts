@@ -37,6 +37,9 @@ export const container = factories.container
 /** Resolve the Postgres binding named `name`. */
 export const postgres = factories.postgres
 
+/** Create an isolated environment for running untrusted code. */
+export const sandbox = factories.sandbox
+
 export {
   AlienError,
   BindingNotConfiguredError,
@@ -44,9 +47,11 @@ export {
   defineError,
   InvalidPostgresTlsConfigError,
   UnknownPostgresSslModeError,
+  UnknownSandboxValueError,
 } from "./errors.js"
 
 export type {
+  CommandFrame,
   Container,
   Key,
   KeyOptions,
@@ -65,6 +70,9 @@ export type {
   Queue,
   QueueMessage,
   RemoteStorage,
+  RunCommandOptions,
+  Sandbox,
+  SandboxSession,
   SignedUrlMethod,
   SignedUrlOptions,
   Storage,

@@ -82,7 +82,6 @@ pub(crate) async fn proxy_vertex_anthropic(
     if !betas.is_empty() {
         extra_headers.push(("anthropic-beta", betas.as_str()));
     }
-    let upstream =
-        sign_and_execute(client, &route.cred, &url, "", upstream_body, &extra_headers).await?;
+    let upstream = sign_and_execute(client, route, &url, "", upstream_body, &extra_headers).await?;
     forward_response(upstream).await
 }

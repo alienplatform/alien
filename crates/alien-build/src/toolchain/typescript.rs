@@ -709,7 +709,7 @@ impl Toolchain for TypeScriptToolchain {
                     build_output: None,
                 }));
             }
-            let files_to_package = vec![
+            let mut files_to_package = vec![
                 FileSpec {
                     host_path: artifact_path,
                     container_path: format!("./{artifact_filename}"),
@@ -733,6 +733,15 @@ impl Toolchain for TypeScriptToolchain {
                         build_output: None,
                     }));
                 }
+                // This bundle is plain JS, so nothing embeds the addon the way `--compile` does
+                // for a binary. Left unpackaged, the app resolves the copy baked into the worker
+                // base image, and a binding added after that image was published is missing at
+                // runtime in the cloud with no build-time signal.
+                files_to_package.push(FileSpec {
+                    host_path: bundled_addon,
+                    container_path: "./alien-bindings.node".to_string(),
+                    mode: Some(0o644),
+                });
             }
             return Ok(super::image_output_for_worker_files(
                 files_to_package,

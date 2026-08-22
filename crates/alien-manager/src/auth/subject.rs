@@ -102,6 +102,39 @@ pub enum Scope {
         deployment_id: String,
         capability: CommandCapability,
     },
+    /// Narrow, short-lived access to one telemetry capability for a project.
+    Telemetry {
+        project_id: String,
+        capability: TelemetryCapability,
+    },
+}
+
+/// A server-controlled source for gateway request diagnostics.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum GatewayLogSource {
+    /// AI Gateway request diagnostics.
+    AiGateway,
+    /// Encryption Gateway request diagnostics.
+    EncryptionGateway,
+}
+
+impl GatewayLogSource {
+    /// Stable OTLP attribute/header value for this source.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::AiGateway => "ai-gateway",
+            Self::EncryptionGateway => "encryption-gateway",
+        }
+    }
+}
+
+/// A telemetry-only operation granted to an authenticated caller.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum TelemetryCapability {
+    /// Write request diagnostic logs for one gateway source.
+    GatewayLogs { source: GatewayLogSource },
 }
 
 /// Operation a commands-only bearer may perform.
@@ -162,7 +195,8 @@ impl Scope {
             Scope::Project { project_id }
             | Scope::DeploymentGroup { project_id, .. }
             | Scope::Deployment { project_id, .. }
-            | Scope::Commands { project_id, .. } => Some(project_id),
+            | Scope::Commands { project_id, .. }
+            | Scope::Telemetry { project_id, .. } => Some(project_id),
         }
     }
 }
@@ -225,6 +259,8 @@ pub enum Role {
     DeploymentGroupDeployer,
     /// Inert outside command-specific authorization gates.
     CommandCapability,
+    /// Inert outside signal-specific telemetry authorization.
+    TelemetryCapability,
     /// Exact capability for resolving remote bindings for one deployment.
     ///
     /// This role is paired with [`Scope::Deployment`] and must not imply generic

@@ -253,6 +253,16 @@ pub trait StackCompatibilityCheck: Send + Sync {
 
     /// Compare old and new stacks for compatibility
     async fn check(&self, old_stack: &Stack, new_stack: &Stack) -> Result<CheckResult>;
+
+    /// Compare stacks with the deployment settings that govern derived state.
+    async fn check_with_config(
+        &self,
+        old_stack: &Stack,
+        new_stack: &Stack,
+        _config: &DeploymentConfig,
+    ) -> Result<CheckResult> {
+        self.check(old_stack, new_stack).await
+    }
 }
 
 /// Modifies the stack to ensure successful deployment.
@@ -338,6 +348,15 @@ impl PreflightRegistry {
         ));
         registry.add_compile_time_check(Box::new(compile_time::NetworkSettingsPlatformCheck));
         registry.add_compile_time_check(Box::new(compile_time::PublicSubnetsRequiredCheck));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_build_role_name::SandboxBuildRoleNameCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_host_required::SandboxHostRequiredCheck,
+        ));
+        registry.add_compile_time_check(Box::new(
+            compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
+        ));
         registry.add_compile_time_check(Box::new(compile_time::PermissionProfilesExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
@@ -434,6 +453,7 @@ impl PreflightRegistry {
         // These scan resource types to decide what to create, so they must see all
         // resources from Phase 2 (vault, etc.)
         registry.add_mutation(Box::new(mutations::AzureServiceActivationMutation));
+        registry.add_mutation(Box::new(mutations::GcpSandboxLauncherMutation));
         registry.add_mutation(Box::new(mutations::GcpServiceActivationMutation));
         registry.add_mutation(Box::new(mutations::AzureContainerAppsEnvironmentMutation));
         registry.add_mutation(Box::new(mutations::AzureServiceBusNamespaceMutation));

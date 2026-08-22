@@ -75,6 +75,7 @@ impl PreflightRunner {
         &self,
         old_stack: &Stack,
         new_stack: &Stack,
+        config: &DeploymentConfig,
     ) -> Result<PreflightSummary> {
         info!("Running stack compatibility checks");
 
@@ -84,14 +85,15 @@ impl PreflightRunner {
         for check in checks {
             debug!("Running compatibility check: {}", check.description());
 
-            let mut result = check.check(old_stack, new_stack).await.context(
-                ErrorData::StackCompatibilityCheckFailed {
+            let mut result = check
+                .check_with_config(old_stack, new_stack, config)
+                .await
+                .context(ErrorData::StackCompatibilityCheckFailed {
                     check_name: check.description().to_string(),
                     message: "Compatibility check execution failed".to_string(),
                     old_resource_id: None,
                     new_resource_id: None,
-                },
-            )?;
+                })?;
 
             result = result.with_check_metadata(check.code(), check.description());
 
@@ -413,7 +415,7 @@ impl PreflightRunner {
         if let Some(old_stack) = old_stack {
             if !setup_update_authorized {
                 let compatibility_summary = self
-                    .run_compatibility_checks(old_stack, &mutated_stack)
+                    .run_compatibility_checks(old_stack, &mutated_stack, config)
                     .await?;
                 all_results.extend(compatibility_summary.results);
             } else {

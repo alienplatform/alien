@@ -39,6 +39,7 @@ const PARAM_CERTIFICATE_ARN: &str = "CertificateArn";
 const PARAM_UPDATES_MODE: &str = "UpdatesMode";
 const PARAM_TELEMETRY_MODE: &str = "TelemetryMode";
 const PARAM_HEARTBEATS_MODE: &str = "HeartbeatsMode";
+const PARAM_PARSE_APPLICATION_LEVELS: &str = "ParseApplicationLevels";
 
 const CONDITION_NETWORK_CREATE_AZ2: &str = "NetworkCreateUseAz2";
 const CONDITION_NETWORK_CREATE_AZ3: &str = "NetworkCreateUseAz3";
@@ -48,6 +49,7 @@ const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
 const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 const CONDITION_HAS_DOMAIN_NAME: &str = "HasDomainName";
+const CONDITION_PARSE_APPLICATION_LEVELS: &str = "ParseApplicationLevelsEnabled";
 
 const OUTPUT_SOURCE_KIND: &str = "DeploymentSourceKind";
 const OUTPUT_DEPLOYMENT_ID: &str = "DeploymentId";
@@ -212,6 +214,15 @@ impl CloudFormationTarget {
 }
 
 /// Generate a CloudFormation template for a stack.
+/// Whether this template will actually emit a sandbox that demands named subnets.
+///
+/// The predicate answers a question about the stack; this answers it about the artifact. On a
+/// Kubernetes target the sandbox is skipped, so nothing forces subnets and withholding the mode
+/// would remove an install option while explaining it with a resource the template never carries.
+fn restricts_network_mode(stack: &Stack, target: CloudFormationTarget) -> bool {
+    alien_core::restricts_network_mode(stack, target.is_kubernetes())
+}
+
 pub fn generate_cloudformation_template(
     stack: &Stack,
     options: CloudFormationOptions<'_>,
@@ -266,6 +277,7 @@ pub fn generate_cloudformation_template(
         supports_custom_domain,
         access_only,
         !matches!(options.registration, RegistrationMode::OutputsFallback),
+        options.target,
     )?;
     add_stack_input_parameters(&mut template, &stack_inputs)?;
     add_supported_region_rule(&mut template, &options.registration);
@@ -278,6 +290,7 @@ pub fn generate_cloudformation_template(
             stack,
             &stack_settings,
             supports_custom_domain,
+            options.target,
         );
     }
     add_console_interface_metadata(
@@ -299,6 +312,17 @@ pub fn generate_cloudformation_template(
         if !ownership.should_emit_in_setup(resource.lifecycle) {
             continue;
         }
+        // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
+        // cloud infrastructure. Emitter lookup keys off the cloud the cluster runs in, so without
+        // this an EKS install would provision the MicroVM image, connector, security group and
+        // roles of the AWS backend it never uses, and register import data naming it. The
+        // Terraform generator refuses the same way; the two formats have to install the same
+        // thing from one declaration.
+        if options.target.is_kubernetes()
+            && resource_type.as_ref() == alien_core::Sandbox::RESOURCE_TYPE.as_ref()
+        {
+            continue;
+        }
         let emitter = options
             .registry
             .require(&resource_type, options.target.cloud_platform())?;
@@ -308,6 +332,7 @@ pub fn generate_cloudformation_template(
             resource,
             resource_id,
             platform: options.target.cloud_platform(),
+            targets_kubernetes: options.target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &names,
         };
@@ -930,6 +955,7 @@ fn add_standard_parameters(
     supports_custom_domain: bool,
     bindings_only: bool,
     uses_custom_registration: bool,
+    target: CloudFormationTarget,
 ) -> Result<()> {
     if uses_custom_registration {
         template.parameters.insert(
@@ -964,7 +990,7 @@ fn add_standard_parameters(
         ),
     );
 
-    add_network_parameters(template, settings.network.as_ref());
+    add_network_parameters(template, stack, settings.network.as_ref(), target);
     add_compute_parameters(template, stack, settings.compute.as_ref())?;
 
     if supports_custom_domain {
@@ -1029,21 +1055,55 @@ fn add_standard_parameters(
             false,
         ),
     );
+    template.parameters.insert(
+        PARAM_PARSE_APPLICATION_LEVELS.to_string(),
+        string_parameter(
+            "Use a recognized top-level JSON level field as log severity while preserving the raw body.",
+            Some(settings.parses_application_log_levels().to_string()),
+            Some(vec![CfExpression::from("false"), CfExpression::from("true")]),
+            false,
+        ),
+    );
     Ok(())
 }
 
-fn add_network_parameters(template: &mut CfTemplate, network: Option<&NetworkSettings>) {
+fn add_network_parameters(
+    template: &mut CfTemplate,
+    stack: &Stack,
+    network: Option<&NetworkSettings>,
+    target: CloudFormationTarget,
+) {
     let defaults = NetworkParameterDefaults::from_settings(network);
+    let mut modes = vec![
+        CfExpression::from("create-new"),
+        CfExpression::from("use-existing"),
+    ];
+    // A sandbox's egress connector must name subnets, and CloudFormation cannot resolve the
+    // account default VPC's. Withholding the value is what makes the answer unpickable: the
+    // parameter is checked before the transform runs, where a template Rule is not yet reached.
+    let restricted = restricts_network_mode(stack, target);
+    let description = if restricted {
+        "Choose create-new for a managed VPC, or use-existing for your VPC. A sandbox in this \
+         application routes session egress through a VPC connector when enabled, and that connector \
+         must name subnets."
+    } else {
+        modes.push(CfExpression::from("use-default"));
+        "Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC."
+    };
+    // The declared network and the sandbox's connector are read from different places, so a stack
+    // can ask for the account default while its sandbox forbids it. A default outside the allowed
+    // values is rejected by CreateStack as a malformed template, which reads as a broken vendor
+    // artifact rather than as the answer being unavailable.
+    let default_mode = match network_mode_default(network) {
+        "use-default" if restricted => "create-new",
+        mode => mode,
+    };
     template.parameters.insert(
         PARAM_NETWORK_MODE.to_string(),
         string_parameter(
-            "Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC.",
-            Some(network_mode_default(network).to_string()),
-            Some(vec![
-                CfExpression::from("create-new"),
-                CfExpression::from("use-existing"),
-                CfExpression::from("use-default"),
-            ]),
+            description,
+            Some(default_mode.to_string()),
+            Some(modes),
             false,
         ),
     );
@@ -1253,17 +1313,30 @@ fn add_standard_conditions(
     stack: &Stack,
     settings: &StackSettings,
     supports_custom_domain: bool,
+    target: CloudFormationTarget,
 ) {
+    template.conditions.insert(
+        CONDITION_PARSE_APPLICATION_LEVELS.to_string(),
+        equals_ref(PARAM_PARSE_APPLICATION_LEVELS, "true"),
+    );
     let has_created_network = stack_has_created_network(stack);
     if has_dynamic_aws_network_settings(settings.network.as_ref()) || has_created_network {
         template.conditions.insert(
             CONDITION_NETWORK_MODE_CREATE.to_string(),
             equals_ref(PARAM_NETWORK_MODE, "create-new"),
         );
-        template.conditions.insert(
-            CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
-            equals_ref(PARAM_NETWORK_MODE, "use-existing"),
-        );
+        // Without use-default there is nothing left for this to distinguish, and every branch it
+        // guarded has collapsed, so defining it would leave an unused condition behind.
+        //
+        // That this stays in step with whoever still references the condition is not left to
+        // reading: cfn-lint runs on every rendered template in these tests and fails both ways —
+        // W8001 for a condition defined and unused, an error for one referenced and undefined.
+        if !restricts_network_mode(stack, target) {
+            template.conditions.insert(
+                CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
+                equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+            );
+        }
     }
     if has_created_network {
         template.conditions.insert(
@@ -1388,7 +1461,8 @@ fn add_console_interface_metadata(
             "Parameters": [
                 PARAM_UPDATES_MODE,
                 PARAM_TELEMETRY_MODE,
-                PARAM_HEARTBEATS_MODE
+                PARAM_HEARTBEATS_MODE,
+                PARAM_PARSE_APPLICATION_LEVELS
             ]
         }));
     }
@@ -1449,6 +1523,11 @@ fn add_console_interface_metadata(
         insert_parameter_label(&mut parameter_labels, PARAM_UPDATES_MODE, "Updates");
         insert_parameter_label(&mut parameter_labels, PARAM_TELEMETRY_MODE, "Telemetry");
         insert_parameter_label(&mut parameter_labels, PARAM_HEARTBEATS_MODE, "Heartbeats");
+        insert_parameter_label(
+            &mut parameter_labels,
+            PARAM_PARSE_APPLICATION_LEVELS,
+            "Parse JSON log levels",
+        );
     }
 
     template.metadata.insert(
@@ -2045,7 +2124,21 @@ fn stack_settings_expression(
         ("updates", CfExpression::ref_(PARAM_UPDATES_MODE)),
         ("telemetry", CfExpression::ref_(PARAM_TELEMETRY_MODE)),
         ("heartbeats", CfExpression::ref_(PARAM_HEARTBEATS_MODE)),
-        ("network", network_expression(settings.network.as_ref())),
+        (
+            "logs",
+            CfExpression::object([(
+                "parseApplicationLevels",
+                CfExpression::if_(
+                    CONDITION_PARSE_APPLICATION_LEVELS,
+                    CfExpression::from(true),
+                    CfExpression::from(false),
+                ),
+            )]),
+        ),
+        (
+            "network",
+            network_expression(stack, settings.network.as_ref(), target),
+        ),
     ];
     if supports_custom_domain {
         values.push(("domains", domains_expression()));
@@ -2221,7 +2314,11 @@ fn cf_expression_from_json(value: Value) -> CfExpression {
     }
 }
 
-fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
+fn network_expression(
+    stack: &Stack,
+    network: Option<&NetworkSettings>,
+    target: CloudFormationTarget,
+) -> CfExpression {
     match network {
         None => CfExpression::no_value(),
         Some(
@@ -2245,9 +2342,8 @@ fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
                     CfExpression::ref_(PARAM_AVAILABILITY_ZONES),
                 ),
             ]),
-            CfExpression::if_(
-                CONDITION_NETWORK_MODE_USE_EXISTING,
-                CfExpression::object([
+            {
+                let byo = CfExpression::object([
                     ("type", CfExpression::from("byo-vpc-aws")),
                     ("vpc_id", CfExpression::ref_(PARAM_VPC_ID)),
                     (
@@ -2262,9 +2358,17 @@ fn network_expression(network: Option<&NetworkSettings>) -> CfExpression {
                         "security_group_ids",
                         CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
                     ),
-                ]),
-                CfExpression::object([("type", CfExpression::from("use-default"))]),
-            ),
+                ]);
+                if restricts_network_mode(stack, target) {
+                    byo
+                } else {
+                    CfExpression::if_(
+                        CONDITION_NETWORK_MODE_USE_EXISTING,
+                        byo,
+                        CfExpression::object([("type", CfExpression::from("use-default"))]),
+                    )
+                }
+            },
         ),
         Some(NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. }) => {
             CfExpression::no_value()

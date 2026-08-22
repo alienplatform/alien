@@ -407,6 +407,14 @@ fn build_router(app_state: AppState) -> Router {
         )
         .route("/kv-test/{binding_name}", post(handlers::kv::test_kv))
         .route(
+            "/sandbox-test/{binding_name}",
+            post(handlers::sandbox::test_sandbox),
+        )
+        .route(
+            "/sandbox-sessions/{binding_name}",
+            get(handlers::sandbox::sandbox_sessions),
+        )
+        .route(
             "/queue-test/{binding_name}",
             post(handlers::queue::test_queue),
         )

@@ -972,6 +972,22 @@ export type ImportSourceKubernetes = {
 
 export type ImportSourceKubernetesUnion = ImportSourceKubernetes | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type ImportSourceLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type ImportSourceLogsUnion = ImportSourceLogs | any;
+
 export const ImportSourceTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1156,6 +1172,7 @@ export type ImportSourceStackSettings = {
    */
   heartbeats?: ImportSourceHeartbeats | undefined;
   kubernetes?: ImportSourceKubernetes | any | null | undefined;
+  logs?: ImportSourceLogs | any | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws
     | ImportSourceNetworkByoVpcGcp
@@ -1165,6 +1182,16 @@ export type ImportSourceStackSettings = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3403,6 +3430,44 @@ export function importSourceKubernetesUnionToJSON(
 }
 
 /** @internal */
+export type ImportSourceLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const ImportSourceLogs$outboundSchema: z.ZodType<
+  ImportSourceLogs$Outbound,
+  ImportSourceLogs
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function importSourceLogsToJSON(
+  importSourceLogs: ImportSourceLogs,
+): string {
+  return JSON.stringify(
+    ImportSourceLogs$outboundSchema.parse(importSourceLogs),
+  );
+}
+
+/** @internal */
+export type ImportSourceLogsUnion$Outbound = ImportSourceLogs$Outbound | any;
+
+/** @internal */
+export const ImportSourceLogsUnion$outboundSchema: z.ZodType<
+  ImportSourceLogsUnion$Outbound,
+  ImportSourceLogsUnion
+> = z.union([z.lazy(() => ImportSourceLogs$outboundSchema), z.any()]);
+
+export function importSourceLogsUnionToJSON(
+  importSourceLogsUnion: ImportSourceLogsUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceLogsUnion$outboundSchema.parse(importSourceLogsUnion),
+  );
+}
+
+/** @internal */
 export const ImportSourceTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof ImportSourceTypeByoVnetAzure
 > = z.enum(ImportSourceTypeByoVnetAzure);
@@ -3640,6 +3705,7 @@ export type ImportSourceStackSettings$Outbound = {
   externalBindings?: ImportSourceExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
   kubernetes?: ImportSourceKubernetes$Outbound | any | null | undefined;
+  logs?: ImportSourceLogs$Outbound | any | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws$Outbound
     | ImportSourceNetworkByoVpcGcp$Outbound
@@ -3649,6 +3715,7 @@ export type ImportSourceStackSettings$Outbound = {
     | any
     | null
     | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3672,6 +3739,9 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   kubernetes: z.nullable(
     z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.any()]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => ImportSourceLogs$outboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => ImportSourceNetworkByoVpcAws$outboundSchema),
@@ -3681,6 +3751,9 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => ImportSourceNetworkCreate$outboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: ImportSourceTelemetry$outboundSchema.optional(),
   updates: ImportSourceUpdates$outboundSchema.optional(),

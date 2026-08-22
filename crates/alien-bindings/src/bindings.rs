@@ -2,7 +2,7 @@
 //!
 //! [`Bindings`] wraps a [`crate::provider::LazyEnvBindingsProvider`], giving application
 //! code a small, stable surface — `storage`, `kv`, `queue`, `vault`, `container`,
-//! `postgres` — instead of the full [`crate::traits::BindingsProviderApi`] used internally
+//! `postgres`, `sandbox` — instead of the full [`crate::traits::BindingsProviderApi`] used internally
 //! by the manager and controllers.
 
 use crate::error::Result;
@@ -12,7 +12,7 @@ use crate::refreshing::{
 };
 use crate::traits::{
     BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage,
-    Storage, Vault,
+    Sandbox, Storage, Vault,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -196,6 +196,14 @@ impl Bindings {
     /// connection pool rather than calling this per query.
     pub async fn postgres(&self, binding_name: &str) -> Result<Arc<dyn Postgres>> {
         self.provider.load_postgres(binding_name).await
+    }
+
+    /// Loads a linked sandbox for running untrusted code.
+    ///
+    /// No refreshing wrapper: a sandbox handle addresses a control plane rather than holding
+    /// data-plane credentials, and each session capability is minted per call.
+    pub async fn sandbox(&self, binding_name: &str) -> Result<Arc<dyn Sandbox>> {
+        self.provider.load_sandbox(binding_name).await
     }
 }
 

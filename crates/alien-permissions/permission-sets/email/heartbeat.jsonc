@@ -1,0 +1,22 @@
+{
+  "id": "email/heartbeat",
+  "description": "Allows readonly health checks for email receiving infrastructure",
+  "platforms": {
+    "aws": [
+      {
+        // SES v1 does not support resource-level scoping for receipt-rule inspection.
+        "grant": {
+          "actions": ["ses:DescribeActiveReceiptRuleSet"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"]
+          },
+          "resource": {
+            "resources": ["*"]
+          }
+        }
+      }
+    ]
+  }
+}

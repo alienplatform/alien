@@ -1,0 +1,677 @@
+---
+source: crates/alien-terraform/tests/generator/helpers.rs
+expression: buf
+---
+=== versions.tf ===
+terraform {
+  required_version = ">= 1.5.0"
+
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 5.0"
+    }
+    awscc = {
+      source  = "hashicorp/awscc"
+      version = ">= 1.0"
+    }
+    time = {
+      source  = "hashicorp/time"
+      version = ">= 0.9"
+    }
+    random = {
+      source  = "hashicorp/random"
+      version = ">= 3.6"
+    }
+  }
+}
+
+=== variables.tf ===
+variable "resource_prefix" {
+  type        = string
+  description = "Optional stable physical resource prefix. Leave empty to generate one."
+  default     = ""
+
+  validation {
+    condition     = var.resource_prefix == "" || (can(regex("^[a-z][a-z0-9-]{1,38}[a-z0-9]$", var.resource_prefix)) && length(regexall("--", var.resource_prefix)) == 0)
+    error_message = "resource_prefix must be 3-40 characters: lowercase letters, numbers, and hyphens; start with a letter; end with a letter or number; and not contain consecutive hyphens."
+  }
+}
+
+variable "name" {
+  type        = string
+  description = "Human-readable application name shown in setup and cloud IAM review metadata."
+}
+
+variable "token" {
+  type        = string
+  description = "Install token from the application setup page. This is the same token used by the deploy CLI --token flag."
+  sensitive   = true
+}
+
+variable "management_url" {
+  type        = string
+  description = "Optional management endpoint used by pull-style runtimes."
+  default     = ""
+}
+
+variable "deployment_model" {
+  type        = string
+  description = "How runtime updates are delivered after setup."
+  default     = "push"
+
+  validation {
+    condition     = contains(["push", "pull"], var.deployment_model)
+    error_message = "deployment_model must be one of: push, pull."
+  }
+}
+
+variable "advanced_settings_json" {
+  type        = string
+  description = "Advanced JSON-encoded deployment settings. Most installations should use the typed variables in this module instead."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "advanced_settings_overlay_json" {
+  type        = string
+  description = "JSON-encoded deployment settings merged over the package defaults. Use this for partial advanced-setting overrides that must preserve generated defaults such as compute selections."
+  default     = "{}"
+  sensitive   = true
+}
+
+variable "updates_mode" {
+  type        = string
+  description = "How application updates are delivered after setup."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["auto", "approval-required"], var.updates_mode)
+    error_message = "updates_mode must be one of: auto, approval-required."
+  }
+}
+
+variable "telemetry_mode" {
+  type        = string
+  description = "How logs, metrics, and traces are collected."
+  default     = "auto"
+
+  validation {
+    condition     = contains(["off", "auto", "approval-required"], var.telemetry_mode)
+    error_message = "telemetry_mode must be one of: off, auto, approval-required."
+  }
+}
+
+variable "heartbeats_mode" {
+  type        = string
+  description = "Whether runtime health checks are enabled."
+  default     = "on"
+
+  validation {
+    condition     = contains(["off", "on"], var.heartbeats_mode)
+    error_message = "heartbeats_mode must be one of: off, on."
+  }
+}
+
+variable "aws_region" {
+  type        = string
+  description = "AWS region used by the AWS provider."
+  default     = "us-east-1"
+}
+
+variable "managing_role_arn" {
+  type        = string
+  description = "ARN of the management identity allowed to assume setup-created roles."
+  default     = ""
+}
+
+variable "managing_account_id" {
+  type        = string
+  description = "AWS account ID that hosts application container images. Empty disables scoped cross-account image-pull grants."
+  default     = ""
+}
+
+variable "network_mode" {
+  type        = string
+  description = "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+  default     = "create-new"
+
+  validation {
+    condition     = contains(["create-new", "use-existing"], var.network_mode)
+    error_message = "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+  }
+}
+
+variable "vpc_cidr" {
+  type        = string
+  description = "CIDR for a newly-created network. Empty uses 10.42.0.0/16."
+  default     = ""
+}
+
+variable "availability_zones" {
+  type        = number
+  description = "Number of availability zones to use when creating a new network."
+  default     = 2
+}
+
+variable "vpc_id" {
+  type        = string
+  description = "Existing VPC ID. Required when network is use-existing."
+  default     = ""
+}
+
+variable "public_subnet_ids" {
+  type        = list(string)
+  description = "Existing public subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "private_subnet_ids" {
+  type        = list(string)
+  description = "Existing private subnet IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "security_group_ids" {
+  type        = list(string)
+  description = "Existing security group IDs. Required when network is use-existing."
+  default     = []
+}
+
+variable "unsupported_availability_zone_ids" {
+  type        = list(string)
+  description = "Availability Zone IDs to exclude when selecting EKS control-plane subnets. AWS publishes EKS-disallowed zones by ID, not by name, because AZ names are account-local — the same physical zone can be `us-east-1e` in one account and `us-east-1c` in another. The defaults cover the AZs AWS documents as not supporting EKS control plane today (see https://docs.aws.amazon.com/eks/latest/userguide/network-reqs.html); override per region when AWS deprecates more."
+  default = [
+    "use1-az3",
+    "usw1-az2",
+    "cac1-az3"
+  ]
+}
+
+=== providers.tf ===
+provider "aws" {
+  region = var.aws_region
+}
+
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
+data "aws_partition" "current" {}
+
+provider "awscc" {
+  region = var.aws_region
+}
+
+=== resource_prefix.tf ===
+resource "random_id" "resource_prefix" {
+  byte_length = 4
+}
+
+=== locals.tf ===
+locals {
+  resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
+  deployment_name              = var.name
+  deployment_platform          = "aws"
+  deployment_target            = "aws"
+  deployment_region            = data.aws_region.current.region
+  deployment_management_config = null
+  advanced_settings            = merge(jsondecode(var.advanced_settings_json), jsondecode(var.advanced_settings_overlay_json))
+  deployment_settings          = merge(local.advanced_settings, { deploymentModel = var.deployment_model, updates = var.updates_mode, telemetry = var.telemetry_mode, heartbeats = var.heartbeats_mode, network = jsondecode(var.network_mode == "create-new" ? jsonencode({ type = "create", cidr = var.vpc_cidr == "" ? null : var.vpc_cidr, availabilityZones = var.availability_zones }) : var.network_mode == "use-existing" ? jsonencode({ type = "byo-vpc-aws", vpcId = var.vpc_id, publicSubnetIds = var.public_subnet_ids, privateSubnetIds = var.private_subnet_ids, securityGroupIds = var.security_group_ids }) : jsonencode({ type = "use-default" })) })
+  deployment_resources = [
+    {
+      id   = "default-network"
+      type = "network"
+      importData = {
+        vpcId               = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
+        cidrBlock           = var.network_mode == "create-new" ? aws_vpc.default_network[0].cidr_block : null
+        internetGatewayId   = var.network_mode == "create-new" ? aws_internet_gateway.default_network[0].id : null
+        natGatewayId        = var.network_mode == "create-new" ? aws_nat_gateway.default_network[0].id : null
+        eipAllocationId     = var.network_mode == "create-new" ? aws_eip.default_network_nat[0].id : null
+        publicSubnetIds     = var.network_mode == "create-new" ? aws_subnet.default_network_public[*].id : var.network_mode == "use-existing" ? var.public_subnet_ids : []
+        privateSubnetIds    = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+        publicRouteTableId  = var.network_mode == "create-new" ? aws_route_table.default_network_public[0].id : null
+        privateRouteTableId = var.network_mode == "create-new" ? aws_route_table.default_network_private[0].id : null
+        securityGroupId     = var.network_mode == "create-new" ? aws_security_group.default_network_workload[0].id : var.network_mode == "use-existing" ? try(var.security_group_ids[0], null) : null
+        availabilityZones   = var.network_mode == "use-default" ? [] : slice(data.aws_availability_zones.available.names, 0, 2)
+        isByoVpc            = var.network_mode != "create-new"
+      }
+    },
+    {
+      id   = "agents"
+      type = "sandbox"
+      importData = {
+        previewPorts = []
+        egressConnectorArns = [
+          awscc_lambda_network_connector.agents.arn
+        ]
+        allowEgress     = false
+        imageIdentifier = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["ImageArn"]
+        imageArn        = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["ImageArn"]
+        imageVersion    = jsondecode(aws_cloudcontrolapi_resource.agents.properties)["LatestActiveImageVersion"]
+      }
+    }
+  ]
+}
+
+=== default_network.tf ===
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+resource "aws_vpc" "default_network" {
+  count                = var.network_mode == "create-new" ? 1 : 0
+  cidr_block           = var.vpc_cidr == "" ? "10.42.0.0/16" : var.vpc_cidr
+  enable_dns_support   = true
+  enable_dns_hostnames = true
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_internet_gateway" "default_network" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_subnet" "default_network_public" {
+  count                   = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id                  = aws_vpc.default_network[0].id
+  cidr_block              = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index)
+  availability_zone       = data.aws_availability_zones.available.names[count.index]
+  map_public_ip_on_launch = true
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_subnet" "default_network_private" {
+  count             = var.network_mode == "create-new" ? var.availability_zones : 0
+  vpc_id            = aws_vpc.default_network[0].id
+  cidr_block        = cidrsubnet(aws_vpc.default_network[0].cidr_block, 8, count.index + var.availability_zones)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_eip" "default_network_nat" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  domain = "vpc"
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_nat_gateway" "default_network" {
+  count         = var.network_mode == "create-new" ? 1 : 0
+  allocation_id = aws_eip.default_network_nat[0].id
+  subnet_id     = aws_subnet.default_network_public[0].id
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_route_table" "default_network_public" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.default_network[0].id
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_route_table" "default_network_private" {
+  count  = var.network_mode == "create-new" ? 1 : 0
+  vpc_id = aws_vpc.default_network[0].id
+
+  route {
+    cidr_block     = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.default_network[0].id
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+resource "aws_route_table_association" "default_network_public" {
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
+  subnet_id      = aws_subnet.default_network_public[count.index].id
+  route_table_id = aws_route_table.default_network_public[0].id
+}
+
+resource "aws_route_table_association" "default_network_private" {
+  count          = var.network_mode == "create-new" ? var.availability_zones : 0
+  subnet_id      = aws_subnet.default_network_private[count.index].id
+  route_table_id = aws_route_table.default_network_private[0].id
+}
+
+resource "aws_security_group" "default_network_workload" {
+  count       = var.network_mode == "create-new" ? 1 : 0
+  name_prefix = "${local.resource_prefix}-workload-"
+  description = "Private workload security group"
+  vpc_id      = aws_vpc.default_network[0].id
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    cidr_blocks = [
+      "0.0.0.0/0"
+    ]
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "default-network"
+    "resource-type" = "network"
+  }
+}
+
+=== agents.tf ===
+resource "aws_iam_role" "agents" {
+  name               = length(format("%s-%s", local.resource_prefix, "agents-build")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-build") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-build"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-build")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "aws_iam_role_policy" "agents" {
+  name   = "sandbox-image-build"
+  role   = aws_iam_role.agents.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }, { "Effect" = "Allow", "Action" = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource" = "*" }] })
+}
+
+resource "time_sleep" "agents_iam_propagation" {
+  create_duration = "30s"
+  triggers = {
+    "build_role"    = aws_iam_role.agents.unique_id
+    "operator_role" = aws_iam_role.agents_egress.unique_id
+  }
+  depends_on = [
+    aws_iam_role_policy.agents,
+    aws_iam_role_policy.agents_egress
+  ]
+}
+
+resource "aws_cloudcontrolapi_resource" "agents" {
+  depends_on = [
+    time_sleep.agents_iam_propagation
+  ]
+  type_name     = "AWS::Lambda::MicrovmImage"
+  desired_state = jsonencode({ "Name" = "${local.resource_prefix}-agents", "Description" = "Sandbox agents", "BaseImageArn" = "arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:microvm-image:al2023-1", "BaseImageVersion" = "1", "BuildRoleArn" = aws_iam_role.agents.arn, "CodeArtifact" = { "Uri" = "s3://acme-artifacts/agents/bundle.zip" }, "Logging" = { "Disabled" = true }, "EgressNetworkConnectors" = ["arn:${data.aws_partition.current.partition}:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS"], "CpuConfigurations" = [{ "Architecture" = "ARM_64" }], "Resources" = [{ "MinimumMemoryInMiB" = 2048 }], "AdditionalOsCapabilities" = [], "Hooks" = { "Port" = 8971, "MicrovmImageHooks" = { "Ready" = "ENABLED", "ReadyTimeoutInSeconds" = 120 }, "MicrovmHooks" = { "Run" = "ENABLED", "RunTimeoutInSeconds" = 30, "Resume" = "ENABLED", "ResumeTimeoutInSeconds" = 30 } }, "EnvironmentVariables" = [{ "Key" = "ALIEN_SANDBOX_ROOT", "Value" = "/sandbox" }, { "Key" = "ALIEN_SANDBOX_PORT", "Value" = "8971" }, { "Key" = "ALIEN_SANDBOX_AUTHORIZATION", "Value" = "transport" }, { "Key" = "ALIEN_SANDBOX_EXEC_UID", "Value" = "60000" }, { "Key" = "ALIEN_SANDBOX_EXEC_GID", "Value" = "60000" }], "Tags" = [{ "Key" = "managed-by", "Value" = "setup" }, { "Key" = "deployment", "Value" = local.resource_prefix }, { "Key" = "resource", "Value" = "agents" }, { "Key" = "resource-type", "Value" = "sandbox" }] })
+}
+
+resource "aws_iam_role" "agents_egress" {
+  name               = length(format("%s-%s", local.resource_prefix, "agents-egress")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-egress") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-egress"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-egress")), 0, 8))
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "aws_iam_role_policy" "agents_egress" {
+  name   = "sandbox-egress-connector"
+  role   = aws_iam_role.agents_egress.id
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "CreateENI", "Effect" = "Allow", "Action" = "ec2:CreateNetworkInterface", "Resource" = ["arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:subnet/*", "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:security-group/*"] }, { "Sid" = "TagENI", "Effect" = "Allow", "Action" = "ec2:CreateTags", "Resource" = "arn:${data.aws_partition.current.partition}:ec2:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:network-interface/*", "Condition" = { "StringEquals" = { "ec2:ManagedResourceOperator" = "network-connectors.lambda.amazonaws.com" } } }] })
+}
+
+resource "aws_security_group" "agents_egress" {
+  name_prefix = "${local.resource_prefix}-agents-egress-"
+  description = "Sandbox agents session egress"
+  vpc_id      = var.network_mode == "create-new" ? aws_vpc.default_network[0].id : var.network_mode == "use-existing" ? var.vpc_id : null
+
+  egress {
+    from_port = 0
+    to_port   = 0
+    protocol  = "-1"
+    cidr_blocks = [
+      "127.0.0.1/32"
+    ]
+  }
+
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
+  }
+}
+
+resource "awscc_lambda_network_connector" "agents" {
+  depends_on = [
+    time_sleep.agents_iam_propagation
+  ]
+  name          = "${local.resource_prefix}-agents"
+  operator_role = aws_iam_role.agents_egress.arn
+  configuration = {
+    "vpc_egress_configuration" = {
+      "associated_compute_resource_types" = [
+        "MicroVm"
+      ]
+      "network_protocol" = "IPv4"
+      "subnet_ids"       = var.network_mode == "create-new" ? aws_subnet.default_network_private[*].id : var.network_mode == "use-existing" ? var.private_subnet_ids : []
+      "security_group_ids" = [
+        aws_security_group.agents_egress.id
+      ]
+    }
+  }
+  tags = [
+    {
+      "key"   = "managed-by"
+      "value" = "setup"
+    },
+    {
+      "key"   = "deployment"
+      "value" = local.resource_prefix
+    },
+    {
+      "key"   = "resource"
+      "value" = "agents"
+    },
+    {
+      "key"   = "resource-type"
+      "value" = "sandbox"
+    }
+  ]
+}
+
+=== registration.tf ===
+resource "terraform_data" "deployment_registration" {
+  input = {
+    platform                    = local.deployment_platform
+    token                       = var.token
+    name                        = var.name
+    resource_prefix             = local.resource_prefix
+    setup_target                = ""
+    setup_import_format_version = 1
+    setup_fingerprint           = ""
+    setup_fingerprint_version   = 0
+    management_url              = var.management_url
+    management_config           = local.deployment_management_config
+    stack_settings              = local.deployment_settings
+    resources                   = local.deployment_resources
+    inputValues                 = {}
+  }
+  depends_on = [
+    aws_vpc.default_network,
+    aws_internet_gateway.default_network,
+    aws_subnet.default_network_public,
+    aws_subnet.default_network_private,
+    aws_eip.default_network_nat,
+    aws_nat_gateway.default_network,
+    aws_route_table.default_network_public,
+    aws_route_table.default_network_private,
+    aws_route_table_association.default_network_public,
+    aws_route_table_association.default_network_private,
+    aws_security_group.default_network_workload,
+    aws_iam_role.agents,
+    aws_iam_role_policy.agents,
+    time_sleep.agents_iam_propagation,
+    aws_cloudcontrolapi_resource.agents,
+    aws_iam_role.agents_egress,
+    aws_iam_role_policy.agents_egress,
+    aws_security_group.agents_egress,
+    awscc_lambda_network_connector.agents
+  ]
+}
+
+=== outputs.tf ===
+output "deployment_target" {
+  value       = "aws"
+  description = "Terraform module target."
+}
+
+output "deployment_resource_prefix" {
+  value       = local.resource_prefix
+  description = "Physical resource prefix."
+}
+
+output "deployment_platform" {
+  value       = local.deployment_platform
+  description = "Target platform."
+}
+
+output "deployment_region" {
+  value       = local.deployment_region
+  description = "Target cloud region or location."
+}
+
+output "deployment_setup_target" {
+  value       = ""
+  description = "Setup target."
+}
+
+output "deployment_setup_import_format_version" {
+  value       = 1
+  description = "Setup registration payload format version."
+}
+
+output "deployment_setup_fingerprint" {
+  value       = ""
+  description = "Setup compatibility fingerprint."
+}
+
+output "deployment_setup_fingerprint_version" {
+  value       = 0
+  description = "Setup fingerprint algorithm version."
+}
+
+output "deployment_management_config" {
+  value       = jsonencode(local.deployment_management_config)
+  description = "Deployment registration management configuration JSON."
+}
+
+output "deployment_stack_settings" {
+  value       = jsonencode(local.deployment_settings)
+  description = "Deployment registration settings JSON."
+  sensitive   = true
+}
+
+output "deployment_resources" {
+  value       = jsonencode(local.deployment_resources)
+  description = "Deployment registration resource metadata JSON."
+}
+
+=== README.md ===
+# Deployment setup - acme-sandbox-denied
+
+Target: `aws`.
+
+This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
+
+## Inputs
+
+Required:
+
+- `token`: install token from the setup page.
+- `name`: deployment name to include in the registration metadata.
+
+Common optional settings:
+
+- `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
+- `management_url`: optional management endpoint used by pull-style runtimes.
+- `deployment_model`: `push` or `pull`.
+- `updates_mode`: `auto` or `approval-required`.
+- `telemetry_mode`: `off`, `auto`, or `approval-required`.
+- `heartbeats_mode`: `off` or `on`.
+- `advanced_settings_json`: complete advanced deployment settings JSON. Most installs should keep the generated default.
+- `advanced_settings_overlay_json`: partial advanced settings merged over package defaults, preserving generated values such as compute selections.
+
+AWS settings:
+
+- `aws_region`: AWS region used by the provider.
+- `managing_role_arn`: management identity allowed to assume setup-created roles.
+- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+
+Network settings:
+
+- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.
+- `vpc_cidr`, `availability_zones`: used with `create-new`.
+- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
+
+## Run
+
+Use your organization's normal backend and approval workflow. A typical local review looks like:
+
+```bash
+export TF_VAR_name="acme-sandbox-denied"
+export TF_VAR_token="..."
+terraform init
+terraform validate
+terraform plan -out=tfplan
+terraform apply tfplan
+```
+
+## Registration
+
+This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.
+
+## Outputs
+
+- `deployment_management_config`: management endpoint and credential-boundary metadata.
+- `deployment_stack_settings`: deployment settings JSON assembled from typed variables, package defaults, and advanced-setting overlays.
+- `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
+- `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
+- `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.

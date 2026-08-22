@@ -169,7 +169,7 @@ async function $do(
     | UnexpectedClientError
     | SDKValidationError
   >(
-    M.json(200, models.ExternalAIBinding$inboundSchema),
+    M.json(202, models.ExternalAIBinding$inboundSchema),
     M.jsonErr([400, 403, 404, 409], errors.APIError$inboundSchema),
     M.jsonErr([500, 503], errors.APIError$inboundSchema),
     M.fail("4XX"),

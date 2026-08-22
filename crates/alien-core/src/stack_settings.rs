@@ -687,6 +687,18 @@ pub struct KubernetesTlsSecretRef {
     pub namespace: Option<String>,
 }
 
+/// Application log handling for a deployment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct LogSettings {
+    /// Normalize severity fields from supported structured application logs into
+    /// the OTLP severity fields. The original log body is preserved. Disabled by
+    /// default.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub parse_application_levels: bool,
+}
+
 /// User-customizable deployment settings specified at deploy time.
 ///
 /// These settings are provided by the customer via CloudFormation parameters,
@@ -723,6 +735,22 @@ pub struct StackSettings {
     /// declare portable requirements instead.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub compute: Option<ComputeSettings>,
+
+    /// Application log handling.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub logs: Option<LogSettings>,
+
+    /// Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+    ///
+    /// This is intended for adopted Machines deployments whose DNS and certificates remain
+    /// customer-owned. The platform passes these URLs to the runtime without creating or
+    /// replacing DNS records or certificates.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(
+        feature = "openapi",
+        schema(value_type = Option<HashMap<String, HashMap<String, String>>>)
+    )]
+    pub public_endpoints: Option<crate::PublicEndpointUrls>,
 
     /// Deployment model: push (Manager) or pull (Agent).
     /// Default: Push.
@@ -763,6 +791,15 @@ pub struct StackSettings {
     pub external_bindings: Option<crate::ExternalBindings>,
 }
 
+impl StackSettings {
+    /// Whether runtime log collectors should use explicit application log levels.
+    pub fn parses_application_log_levels(&self) -> bool {
+        self.logs
+            .as_ref()
+            .is_some_and(|logs| logs.parse_application_levels)
+    }
+}
+
 fn is_default_deployment_model(model: &DeploymentModel) -> bool {
     *model == DeploymentModel::default()
 }
@@ -782,6 +819,24 @@ fn is_default_heartbeats_mode(mode: &HeartbeatsMode) -> bool {
 #[cfg(test)]
 mod failure_domain_tests {
     use super::*;
+
+    #[test]
+    fn application_log_level_parsing_is_opt_in() {
+        let default_json = serde_json::to_value(StackSettings::default()).unwrap();
+        assert!(default_json.get("logs").is_none());
+
+        let settings = StackSettings {
+            logs: Some(LogSettings {
+                parse_application_levels: true,
+            }),
+            ..StackSettings::default()
+        };
+        assert!(settings.parses_application_log_levels());
+        assert_eq!(
+            serde_json::to_value(settings).unwrap()["logs"]["parseApplicationLevels"],
+            true
+        );
+    }
 
     #[test]
     fn old_compute_selection_deserializes_without_topology() {
@@ -885,5 +940,25 @@ mod failure_domain_tests {
             }),
         };
         assert_eq!(valid.validate(), Ok(()));
+    }
+
+    #[test]
+    fn machine_public_endpoints_round_trip_without_rewriting_urls() {
+        let settings: StackSettings = serde_json::from_value(serde_json::json!({
+            "publicEndpoints": {
+                "loader": {
+                    "api": "https://10m5el.compute.islo.ai",
+                    "shares": "https://shares.10m5el.compute.islo.ai",
+                    "webhooks": "https://webhooks.10m5el.compute.islo.ai"
+                }
+            }
+        }))
+        .expect("stack settings should deserialize");
+
+        assert_eq!(
+            serde_json::to_value(settings).expect("stack settings should serialize")
+                ["publicEndpoints"]["loader"]["shares"],
+            "https://shares.10m5el.compute.islo.ai"
+        );
     }
 }

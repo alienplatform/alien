@@ -40,6 +40,48 @@ Follow the [Quickstart](https://www.alien.dev/docs/quickstart) guide to build an
 
 Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 
+### CLI automation
+
+Every platform workflow has a non-interactive form. Link a directory once, then
+commands use that project unless `--project` is provided explicitly:
+
+```bash
+alien login
+alien projects list
+alien link --project my-project
+alien projects describe --json
+
+# Configure project capabilities.
+alien projects capabilities enable models \
+  --model byo/claude-opus-5 \
+  --provider anthropic
+
+# Create a least-privileged key and onboard a customer environment.
+alien api-keys create --for ai-gateway --description production-backend --json
+alien onboard acme --external-id customer_123 --setup-items models,keys --json
+
+# Print an executable request for the active environment.
+alien examples ai-gateway --protocol anthropic-messages
+
+# Search structured gateway diagnostics without writing a raw query.
+alien logs --source ai-gateway --status provider-error --provider anthropic --json
+
+# Inspect live rollout state without parsing the raw stack state.
+alien deployments status production/api
+alien deployments resources production/api --json
+alien deployments wait production/api --for ready --timeout 10m --json
+
+# Read privacy-safe aggregate usage.
+alien usage ai --range 7d --json
+```
+
+Resource detail commands accept `get`, `describe`, and `show`; list commands
+accept both `list` and `ls`. JSON mode never prompts and writes structured data
+to stdout, making the same CLI suitable for humans, scripts, and coding agents.
+The normalized resource view intentionally excludes resource configuration,
+internal controller state, environment variables, and arbitrary provider
+outputs.
+
 ## Features
 
 - **[AWS, GCP, and Azure support](https://www.alien.dev/docs/how-alien-works)** - Deploy to all major clouds. 

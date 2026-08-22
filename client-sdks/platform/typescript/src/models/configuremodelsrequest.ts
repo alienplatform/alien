@@ -33,7 +33,7 @@ export type ConfigureModelsRequestRequirement = {
 };
 
 export type ConfigureModelsRequest = {
-  allowedProviders: Array<ConfigureModelsRequestAllowedProvider>;
+  allowedProviders?: Array<ConfigureModelsRequestAllowedProvider> | undefined;
   requirements: Array<ConfigureModelsRequestRequirement>;
 };
 
@@ -76,7 +76,7 @@ export function configureModelsRequestRequirementToJSON(
 
 /** @internal */
 export type ConfigureModelsRequest$Outbound = {
-  allowedProviders: Array<string>;
+  allowedProviders?: Array<string> | undefined;
   requirements: Array<ConfigureModelsRequestRequirement$Outbound>;
 };
 
@@ -87,7 +87,7 @@ export const ConfigureModelsRequest$outboundSchema: z.ZodType<
 > = z.object({
   allowedProviders: z.array(
     ConfigureModelsRequestAllowedProvider$outboundSchema,
-  ),
+  ).optional(),
   requirements: z.array(
     z.lazy(() => ConfigureModelsRequestRequirement$outboundSchema),
   ),

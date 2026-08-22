@@ -174,6 +174,58 @@ export interface RawVaultHandle {
   listSecrets(): Promise<string[]>
 }
 
+/** One frame of a running command's output, as the addon returns it. */
+export interface RawCommandFrame {
+  kind: string
+  seq?: number
+  data?: Buffer
+  exitCode?: number
+  truncated?: boolean
+}
+
+/** Raw napi command stream, pulled one frame at a time. */
+export interface RawCommandStreamHandle {
+  next(): Promise<RawCommandFrame | null>
+  close(): Promise<void>
+}
+
+/** A live sandbox session, as the addon returns it. */
+export interface RawSandboxSession {
+  sessionId: string
+  state: string
+  generation: number
+}
+
+/** Raw napi sandbox handle. */
+export interface RawSandboxHandle {
+  capabilities(): string[]
+  create(
+    sessionId?: string | null,
+    tenantKey?: string | null,
+    env?: Record<string, string> | null,
+  ): Promise<RawSandboxSession>
+  get(sessionId: string): Promise<RawSandboxSession | null>
+  getOrCreate(
+    sessionId?: string | null,
+    tenantKey?: string | null,
+    env?: Record<string, string> | null,
+  ): Promise<RawSandboxSession>
+  list(): Promise<RawSandboxSession[]>
+  runCommand(
+    sessionId: string,
+    command: string[],
+    deadlineMs: number,
+    workingDirectory?: string | null,
+    env?: Record<string, string> | null,
+  ): Promise<RawCommandStreamHandle>
+  readFile(sessionId: string, path: string): Promise<Buffer>
+  writeFile(sessionId: string, path: string, contents: Buffer): Promise<void>
+  mkdir(sessionId: string, path: string): Promise<void>
+  suspend(sessionId: string): Promise<void>
+  resume(sessionId: string): Promise<void>
+  terminate(sessionId: string): Promise<void>
+}
+
 /** Raw napi bindings entry point. Construction validates the environment. */
 export interface RawBindingsHandle {
   storage(name: string): Promise<RawStorageHandle>
@@ -183,6 +235,7 @@ export interface RawBindingsHandle {
   vault(name: string): Promise<RawVaultHandle>
   container(name: string): Promise<RawContainerHandle>
   postgres(name: string): Promise<RawPostgresHandle>
+  sandbox(name: string): Promise<RawSandboxHandle>
 }
 
 /** Raw napi remote bindings entry point. */

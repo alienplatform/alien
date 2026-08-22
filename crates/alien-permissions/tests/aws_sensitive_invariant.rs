@@ -15,6 +15,13 @@ const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "codebuild:BatchGetBuilds",
     "logs:GetLogEvents",
     "logs:FilterLogEvents",
+    // A MicroVM auth token is the credential the sandbox agent protocol travels on, so holding
+    // one is access to session contents. Only sandbox/execute may mint them.
+    "lambda:CreateMicrovmAuthToken",
+    "lambda:CreateMicrovmShellAuthToken",
+    // Grantable in IAM without a matching API operation, and it attaches to a running session
+    // directly. Listed so no later edit can put it in an implicit-management set.
+    "lambda:ConnectMicrovm",
 ];
 
 #[test]

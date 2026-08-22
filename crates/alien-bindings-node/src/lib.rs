@@ -14,6 +14,7 @@ mod key;
 mod kv;
 mod postgres;
 mod queue;
+mod sandbox;
 #[cfg(feature = "platform-sdk")]
 mod remote_storage;
 mod storage;
@@ -31,6 +32,7 @@ pub use key::KeyHandle;
 pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
+pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxSessionJs};
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
 pub use storage::StorageHandle;
@@ -109,6 +111,14 @@ impl BindingsHandle {
         let inner = self.inner.clone();
         let vault = inner.vault(&name).await.map_err(map_alien_error)?;
         Ok(VaultHandle::new(vault))
+    }
+
+    /// Resolve the sandbox binding named `name`.
+    #[napi]
+    pub async fn sandbox(&self, name: String) -> napi::Result<SandboxHandle> {
+        let inner = self.inner.clone();
+        let sandbox = inner.sandbox(&name).await.map_err(map_alien_error)?;
+        Ok(SandboxHandle::new(sandbox))
     }
 
     /// Resolve the linked-container binding named `name`.

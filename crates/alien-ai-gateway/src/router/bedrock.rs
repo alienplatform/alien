@@ -253,8 +253,7 @@ pub(crate) async fn proxy_bedrock_anthropic(
         suffix
     );
 
-    let upstream =
-        sign_and_execute(client, &route.cred, &url, "bedrock", upstream_body, &[]).await?;
+    let upstream = sign_and_execute(client, route, &url, "bedrock", upstream_body, &[]).await?;
 
     let status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);

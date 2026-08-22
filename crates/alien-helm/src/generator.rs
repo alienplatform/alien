@@ -10,11 +10,11 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs, Container,
-    ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster, KubernetesClusterOutputs,
-    KubernetesClusterOwnership, KubernetesClusterProvider, Platform, RemoteStackManagementOutputs,
-    ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker,
-    WorkerCode,
+    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs,
+    Container, ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster,
+    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider, Platform,
+    RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs,
+    Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use indexmap::IndexMap;
@@ -106,6 +106,9 @@ pub struct OperatorManifestOptions<'a> {
     pub encryption_key: &'a str,
     pub image: &'a str,
     pub log_collector: Option<OperatorLogCollectorOptions<'a>>,
+    /// Optional deployment settings passed to the operator. Default settings
+    /// are omitted from the manifest.
+    pub stack_settings: Option<&'a StackSettings>,
     /// Names the Kubernetes objects and labels. Stable per app/project — the
     /// same across every customer install. (Formerly `release_name`.)
     pub project_name: &'a str,
@@ -252,6 +255,15 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     validate_runtime_encryption_key(options.encryption_key)?;
     validate_operator_options(&options)?;
 
+    let stack_settings_json = options
+        .stack_settings
+        .filter(|settings| **settings != StackSettings::default())
+        .map(to_stable_json)
+        .transpose()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize operator stack settings".to_string(),
+        })?;
+
     let base_name = sanitize_chart_name(options.project_name);
     let operator_name = format!("{base_name}-operator");
     let identity_pvc_name = format!("{operator_name}-identity");
@@ -299,14 +311,23 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
     // stays a namespaced Role. Both grant read-only + the access-request CRD.
     if cluster_wide {
-        docs.push(operator_clusterrole_doc(&operator_name, &labels, &crd_names));
+        docs.push(operator_clusterrole_doc(
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
             &operator_name,
             &labels,
         ));
     } else {
-        docs.push(operator_role_doc(namespace, &operator_name, &labels, &crd_names));
+        docs.push(operator_role_doc(
+            namespace,
+            &operator_name,
+            &labels,
+            &crd_names,
+        ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
     docs.push(operator_secret_doc(
@@ -334,6 +355,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         &environment_name_expr,
         options.label_selector,
         &labels,
+        stack_settings_json.as_deref(),
     ));
     if let Some(log_collector) = options.log_collector.as_ref() {
         let mut collector_labels = labels.clone();
@@ -883,6 +905,7 @@ fn operator_deployment_doc(
     environment_name: &str,
     label_selector: Option<&str>,
     labels: &BTreeMap<String, String>,
+    stack_settings_json: Option<&str>,
 ) -> String {
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
@@ -959,6 +982,9 @@ fn operator_deployment_doc(
             "COLLECTOR_TOKEN_FILE",
             "/etc/operator/secrets/collector-token",
         );
+    }
+    if let Some(stack_settings_json) = stack_settings_json {
+        append_env_value(&mut yaml, "STACK_SETTINGS", stack_settings_json);
     }
     append_env_value(
         &mut yaml,
@@ -1361,6 +1387,7 @@ impl ChartAnalysis {
                 resource: entry,
                 resource_id,
                 platform: Platform::Kubernetes,
+                targets_kubernetes: true,
                 stack_settings: &stack_settings,
                 names: &names,
             };
@@ -1467,6 +1494,11 @@ struct ServiceValue {
 fn to_stable_pretty_json<T: Serialize>(value: &T) -> alien_error::Result<String> {
     let value = serde_json::to_value(value).into_alien_error()?;
     serde_json::to_string_pretty(&sort_json_object_keys(value)).into_alien_error()
+}
+
+fn to_stable_json<T: Serialize>(value: &T) -> alien_error::Result<String> {
+    let value = serde_json::to_value(value).into_alien_error()?;
+    serde_json::to_string(&sort_json_object_keys(value)).into_alien_error()
 }
 
 fn sort_json_object_keys(value: serde_json::Value) -> serde_json::Value {
@@ -4029,6 +4061,7 @@ mod tests {
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
@@ -4051,6 +4084,33 @@ mod tests {
                 image: "fluent/fluent-bit:3.2",
                 token: "collector-secret",
             }),
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Observe,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("operator manifest should render")
+    }
+
+    fn operator_test_manifest_with_stack_settings() -> String {
+        let stack_settings = StackSettings {
+            logs: Some(alien_core::LogSettings {
+                parse_application_levels: true,
+            }),
+            ..Default::default()
+        };
+        generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            stack_settings: Some(&stack_settings),
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
@@ -4249,6 +4309,7 @@ mod tests {
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: Some("acme-prod"),
             install_namespace: Some("demo"),
@@ -4302,10 +4363,16 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme.dev")))
+                    .map(|g| {
+                        g.iter()
+                            .any(|x| x.as_str() == Some("accessrequests.acme.dev"))
+                    })
                     .unwrap_or(false)
             });
-        assert!(has_branded_rule, "RBAC must grant the branded access-request group");
+        assert!(
+            has_branded_rule,
+            "RBAC must grant the branded access-request group"
+        );
     }
 
     #[test]
@@ -4401,6 +4468,11 @@ mod tests {
         assert!(manifest.contains("COLLECTOR_TOKEN_FILE"));
         assert!(manifest.contains("collector-token"));
         assert!(manifest.contains("fluent/fluent-bit:3.2"));
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Deployment");
+        assert_eq!(operator_env_value(&deployment, "STACK_SETTINGS"), None);
         // The log collector tails pod log FILES on the node, not the API — but
         // the operator's own RBAC does grant `pods/log` for the on-demand `logs`
         // operation, so `pods/log` legitimately appears in the operator Role.
@@ -4450,6 +4522,22 @@ mod tests {
     }
 
     #[test]
+    fn operator_manifest_serializes_stack_settings_without_log_collector() {
+        let manifest = operator_test_manifest_with_stack_settings();
+        let docs = parse_manifest_docs(&manifest);
+        let deployment = docs_by_kind(&docs, "Deployment")
+            .into_iter()
+            .next()
+            .expect("operator manifest should include Deployment");
+
+        assert_eq!(
+            operator_env_value(&deployment, "STACK_SETTINGS"),
+            Some(r#"{"logs":{"parseApplicationLevels":true}}"#)
+        );
+        assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
+    }
+
+    #[test]
     fn operator_manifest_emits_label_selector_only_when_scoped() {
         // Default test scope has no label selector.
         let docs = parse_manifest_docs(&operator_test_manifest());
@@ -4474,6 +4562,7 @@ mod tests {
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: Some("acme-prod-eu"),
             install_namespace: Some("demo"),
@@ -4530,6 +4619,7 @@ mod tests {
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             // Ignored for Helm output — the value comes from .Values / .Release per install.
             environment_name: None,
@@ -4579,6 +4669,7 @@ mod tests {
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: None,
@@ -4599,6 +4690,7 @@ mod tests {
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: None,
             install_namespace: Some("demo"),
@@ -4617,6 +4709,7 @@ mod tests {
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
             image: "registry.example.com/operator:test",
             log_collector: None,
+            stack_settings: None,
             project_name: "my-saas",
             environment_name: Some("acme"),
             install_namespace: Some("demo"),

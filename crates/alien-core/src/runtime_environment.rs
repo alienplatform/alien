@@ -8,6 +8,9 @@ pub const ENV_OPERATOR_BASE_PLATFORM: &str = "OPERATOR_BASE_PLATFORM";
 pub const ENV_ALIEN_DEPLOYMENT_TYPE: &str = "ALIEN_DEPLOYMENT_TYPE";
 pub const ENV_ALIEN_LAMBDA_MODE: &str = "ALIEN_LAMBDA_MODE";
 pub const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
+/// Whether Alien capture boundaries should read explicit application log levels.
+pub const ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS: &str =
+    "ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS";
 pub const ENV_ALIEN_RUNTIME_SECRETS: &str = "ALIEN_RUNTIME_SECRETS";
 pub const ENV_ALIEN_SECRETS: &str = "ALIEN_SECRETS";
 /// Opaque deployment-managed revision that rolls workloads when referenced
@@ -458,6 +461,7 @@ pub fn is_runtime_environment_contract_name(name: &str) -> bool {
             | ENV_OPERATOR_BASE_PLATFORM
             | ENV_ALIEN_DEPLOYMENT_TYPE
             | ENV_ALIEN_LAMBDA_MODE
+            | ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS
             | ENV_ALIEN_RUNTIME_SEND_OTLP
             | ENV_ALIEN_TRANSPORT
             | ENV_AWS_ACCOUNT_ID

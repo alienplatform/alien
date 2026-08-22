@@ -9,15 +9,17 @@
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Key, Kv, PermissionProfile, Platform, Queue, ResourceLifecycle,
+    AzureStorageAccount, Key, Kv, Network, NetworkSettings, PermissionProfile, Platform, Queue,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy,
     ServiceAccount, Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 
 /// One gated fixture stack per policy-allowed resource type with a setup
-/// emitter. The resource under test is gated; auxiliary resources the type
-/// needs (Azure's resource group and storage account) are not.
-fn gated_fixture(resource_type: &str, platform: Platform) -> Option<Stack> {
+/// emitter, and the settings it renders under. The resource under test is
+/// gated; auxiliary resources the type needs (Azure's resource group and
+/// storage account, a sandbox's network) are not.
+fn gated_fixture(resource_type: &str, platform: Platform) -> Option<(Stack, StackSettings)> {
     let base = || -> StackBuilder {
         let builder = Stack::new("matrix-stack".to_string()).inputs(vec![gate_input(
             "fixtureEnabled",
@@ -80,9 +82,52 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<Stack> {
             ResourceLifecycle::Frozen,
             "fixtureEnabled",
         ),
+        // An AWS sandbox's egress connector needs private subnets, so the
+        // fixture declares the network the emitter refuses to render without.
+        "sandbox" => base()
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(sandbox_network())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add_enabled_when(
+                Sandbox::new("fixture".to_string())
+                    .code(SandboxCode::Image {
+                        image: "s3://matrix-artifacts/sandbox.zip".to_string(),
+                    })
+                    .limits(SandboxLimits {
+                        cpu: "1".to_string(),
+                        memory: "2Gi".to_string(),
+                        disk: "10Gi".to_string(),
+                        max_processes: None,
+                    })
+                    .egress(SandboxEgress::Deny)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+                "fixtureEnabled",
+            ),
         _ => return None,
     };
-    Some(stack.build())
+    let settings = StackSettings {
+        network: (resource_type == "sandbox").then(sandbox_network),
+        ..StackSettings::default()
+    };
+    Some((stack.build(), settings))
+}
+
+/// The network the sandbox fixture attaches its egress connector to. The
+/// `Network` resource and the stack settings must agree — the emitters read
+/// the resource, the variable block reads the settings.
+fn sandbox_network() -> NetworkSettings {
+    NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    }
 }
 
 fn target_for(platform: Platform) -> Option<TerraformTarget> {
@@ -97,11 +142,16 @@ fn target_for(platform: Platform) -> Option<TerraformTarget> {
 /// A declined fixture must leave no trace: its registration entry is spliced
 /// out and every one of its blocks carries the gate's count. Shared support
 /// blocks (custom roles, role definitions) may remain, unbound.
-fn assert_gated_render(resource_type: &str, platform: Platform, stack: &Stack) {
+fn assert_gated_render(
+    resource_type: &str,
+    platform: Platform,
+    stack: &Stack,
+    settings: StackSettings,
+) {
     let Some(target) = target_for(platform) else {
         return;
     };
-    let module = render(stack, target, StackSettings::default());
+    let module = render(stack, target, settings);
     assert_terraform_valid(
         &module,
         &format!("gating matrix {resource_type} on {platform:?}"),
@@ -138,8 +188,10 @@ fn assert_gated_render(resource_type: &str, platform: Platform, stack: &Stack) {
 
             // Every block that reads the gated resource's indexed address
             // must itself be gated, or the declined apply resolves an index
-            // into an empty list.
-            if block.contains("[0]") && !counted && !is_shared_support_block(header) {
+            // into an empty list. Every fixture names its gated resource
+            // `fixture`, so its address is what `[0]` has to be qualified by —
+            // an ungated auxiliary resource may carry a count of its own.
+            if block.contains(".fixture[0]") && !counted && !is_shared_support_block(header) {
                 panic!(
                     "{resource_type}/{platform:?}: `resource \"{header}` reads a gated \
                      address but carries no gate:\n{block}"
@@ -153,7 +205,7 @@ fn assert_gated_render(resource_type: &str, platform: Platform, stack: &Stack) {
     // resource, though, something must be counted.
     let reaches_into_the_resource = module
         .iter()
-        .any(|(name, contents)| name.ends_with(".tf") && contents.contains("[0]"));
+        .any(|(name, contents)| name.ends_with(".tf") && contents.contains(".fixture[0]"));
     assert!(
         gated_blocks > 0 || !reaches_into_the_resource,
         "{resource_type}/{platform:?}: the render indexes the gated resource but no block \
@@ -187,7 +239,9 @@ fn every_registered_emitter_is_policy_refused_or_renders_gated() {
             continue;
         }
         match gated_fixture(resource_type, platform) {
-            Some(stack) => assert_gated_render(resource_type, platform, &stack),
+            Some((stack, settings)) => {
+                assert_gated_render(resource_type, platform, &stack, settings)
+            }
             None => allowed_without_fixture.push(format!("{resource_type} ({platform:?})")),
         }
     }
@@ -259,9 +313,9 @@ fn a_gated_vault_renders_conditionally_on_every_cloud() {
         (Platform::Gcp, "enabled_gated_vault_gcp"),
         (Platform::Azure, "enabled_gated_vault_azure"),
     ] {
-        let stack = gated_fixture("vault", platform).expect("vault fixture");
+        let (stack, settings) = gated_fixture("vault", platform).expect("vault fixture");
         let target = target_for(platform).expect("cloud target");
-        let module = render(&stack, target, StackSettings::default());
+        let module = render(&stack, target, settings);
         assert_terraform_valid(&module, name);
         snapshot_module(name, &module);
     }

@@ -447,6 +447,32 @@ fn is_known_gcp_dataset_gap(permission: &str) -> bool {
 }
 
 /// Validate Azure actions in a permission set
+/// Actions on a service the upstream dataset has not published yet.
+///
+/// The dataset is a community mirror of Azure's provider operations, fetched at test time, and it
+/// lags a preview service by however long it takes someone to regenerate it. Without this the test
+/// fails on a day nobody touched a permission set — which is exactly what it did once
+/// `Microsoft.App/sandboxGroups` went missing from upstream.
+///
+/// Narrow on purpose: it applies only where the service is present and the action is not, so a
+/// typo in a published action is still caught, and an entry stops having any effect the moment
+/// upstream publishes the action.
+///
+/// What it gives up, measured rather than assumed: a typo *within* an allowlisted prefix is not
+/// caught — there is nothing to check it against. Those actions are covered instead by the Azure
+/// runtime and emitter tests, which exercise the strings the provider actually receives.
+const AZURE_UNPUBLISHED_ACTION_PREFIXES: &[&str] = &[
+    // Container Apps Sandboxes. In preview; the dataset carries `Microsoft.App` but none of these.
+    "microsoft.app/sandboxgroups",
+];
+
+fn is_unpublished_azure_action(action: &str) -> bool {
+    let action = action.to_lowercase();
+    AZURE_UNPUBLISHED_ACTION_PREFIXES
+        .iter()
+        .any(|prefix| action.starts_with(prefix))
+}
+
 fn validate_azure_actions(
     permission_set: &alien_core::PermissionSet,
     provider_operations_dataset: &HashMap<String, HashMap<String, bool>>,
@@ -487,6 +513,7 @@ fn validate_azure_actions(
                             "{} is a data action but was listed under actions",
                             action
                         )),
+                        None if is_unpublished_azure_action(action) => {}
                         None => invalid_actions.push(format!("{} (regular action)", action)),
                     },
                     None => {
@@ -516,6 +543,7 @@ fn validate_azure_actions(
                             "{} is a regular action but was listed under dataActions",
                             action
                         )),
+                        None if is_unpublished_azure_action(action) => {}
                         None => invalid_actions.push(format!("{} (data action)", action)),
                     },
                     None => {

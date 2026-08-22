@@ -31,6 +31,7 @@ fn render(stack: &Stack, description: &str) -> CfTemplate {
 }
 
 const QUEUE_CONDITION: &str = "InputQueueEnabledIsTrue";
+const LOG_LEVEL_CONDITION: &str = "ParseApplicationLevelsEnabled";
 
 fn gate_inputs() -> Vec<StackInputDefinition> {
     vec![gate_input(
@@ -179,14 +180,14 @@ fn a_gated_queue_is_created_only_when_the_deployer_says_yes() {
 fn declined_resources_leave_no_registration_entry() {
     let template = render(&stack(true), "gated queue");
 
-    let queue_on = HashMap::from([(QUEUE_CONDITION, true)]);
+    let queue_on = HashMap::from([(QUEUE_CONDITION, true), (LOG_LEVEL_CONDITION, false)]);
     assert_eq!(
         registration_entry_ids(&template, &queue_on),
         vec!["execution-sa".to_string(), "jobs".to_string()],
         "everything registers when the deployer says yes"
     );
 
-    let queue_off = HashMap::from([(QUEUE_CONDITION, false)]);
+    let queue_off = HashMap::from([(QUEUE_CONDITION, false), (LOG_LEVEL_CONDITION, false)]);
     assert_eq!(
         registration_entry_ids(&template, &queue_off),
         vec!["execution-sa".to_string()],
@@ -254,15 +255,15 @@ fn the_outputs_fallback_survives_every_resource_being_declined() {
     assert_eq!(parsed, serde_json::json!([]));
 }
 
-/// Ungated stacks gain no conditions: opt-in means no `.enabled(...)`, so no gating.
+/// Ungated stacks gain no resource-gating conditions.
 #[test]
-fn an_ungated_stack_gains_no_conditions() {
+fn an_ungated_stack_gains_no_resource_conditions() {
     let template = render(&stack(false), "ungated queue");
 
     assert!(
-        template.conditions.is_empty(),
-        "nothing is gated, so no condition belongs in the template: {:?}",
-        template.conditions
+        template.conditions.len() == 1 && template.conditions.contains_key(LOG_LEVEL_CONDITION),
+        "only the standard log setting condition belongs in the template: {:?}",
+        template.conditions,
     );
     assert!(
         template
@@ -272,7 +273,7 @@ fn an_ungated_stack_gains_no_conditions() {
         "no resource may carry a condition when nothing is gated"
     );
     assert_eq!(
-        registration_entry_ids(&template, &HashMap::new()),
+        registration_entry_ids(&template, &HashMap::from([(LOG_LEVEL_CONDITION, false)]),),
         vec!["execution-sa".to_string(), "jobs".to_string()],
     );
 }

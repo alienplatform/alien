@@ -27,8 +27,8 @@ use access::{ManagerResolverKind, RemoteBindingSource};
 
 #[cfg(test)]
 use access::{
-    DiscoveredManager, GeneratedManagerBindingResolver, ManagerBindingResolver,
-    authenticated_http_client, validate_manager_url, validate_platform_base_url,
+    authenticated_http_client, validate_manager_url, validate_platform_base_url, DiscoveredManager,
+    GeneratedManagerBindingResolver, ManagerBindingResolver,
 };
 
 const INITIAL_REFRESH_RETRY_DELAY_SECONDS: i64 = 5;

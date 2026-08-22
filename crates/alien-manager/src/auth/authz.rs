@@ -11,6 +11,7 @@ use crate::auth::Subject;
 use crate::traits::{
     deployment_store::{DeploymentGroupRecord, DeploymentRecord},
     release_store::ReleaseRecord,
+    TelemetrySignal,
 };
 use alien_commands::server::CommandAccessContext;
 use alien_core::CommandTarget;
@@ -99,12 +100,8 @@ pub trait Authz: Send + Sync {
     fn can_acquire_deployments(&self, subject: &Subject, deployments: &[DeploymentRecord]) -> bool;
 
     // -- Telemetry ingest --------------------------------------------------
-    /// Telemetry decisions take only the deployment ID. Authorization is a
-    /// scope check on the bearer (the validator already bound `Subject` to a
-    /// workspace and a `Scope::Deployment`); loading the full record was
-    /// historically required only because policy needed `deployment.id`, which
-    /// is the same string we already have in the `Subject`.
-    fn can_ingest_telemetry_for(&self, subject: &Subject, deployment_id: &str) -> bool;
+    /// Authorize an OTLP signal from the authenticated subject.
+    fn can_ingest_telemetry(&self, subject: &Subject, signal: TelemetrySignal) -> bool;
 
     // -- Registry proxy ----------------------------------------------------
     /// Push: caller has write access on the project carrying the repo.

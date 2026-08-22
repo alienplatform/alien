@@ -1,18 +1,18 @@
 //! Deployment REST API endpoints.
 
 use axum::{
-    Json, Router,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, request::Parts},
+    http::{request::Parts, HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    ContainerOutputs, DaemonOutputs, DeploymentModel, EnvironmentVariable, Platform,
-    PublicEndpointOutput, RESOURCE_PREFIX_ERROR_MESSAGE, StackSettings, StackState, WorkerOutputs,
-    import::ImportSourceKind, is_valid_resource_prefix,
+    import::ImportSourceKind, is_valid_resource_prefix, ContainerOutputs, DaemonOutputs,
+    DeploymentModel, EnvironmentVariable, Platform, PublicEndpointOutput, StackSettings,
+    StackState, WorkerOutputs, RESOURCE_PREFIX_ERROR_MESSAGE,
 };
 
 use crate::error::ErrorData;
@@ -21,7 +21,7 @@ use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentFilter, DeploymentRecord, TokenType,
 };
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 
 // --- Request / Response types ---
 
@@ -387,6 +387,10 @@ async fn create_deployment(
             return ErrorData::forbidden("Command credentials cannot create deployments")
                 .into_response();
         }
+        crate::auth::Scope::Telemetry { .. } => {
+            return ErrorData::forbidden("Telemetry credentials cannot create deployments")
+                .into_response();
+        }
     };
 
     // Verify deployment group exists
@@ -550,6 +554,10 @@ async fn list_deployments(
         }
         crate::auth::Scope::Commands { .. } => {
             return ErrorData::forbidden("Command credentials cannot list deployments")
+                .into_response();
+        }
+        crate::auth::Scope::Telemetry { .. } => {
+            return ErrorData::forbidden("Telemetry credentials cannot list deployments")
                 .into_response();
         }
     };
@@ -941,10 +949,8 @@ mod tests {
         let error = stack_settings_for_platform(Platform::Machines, Some(requested))
             .expect_err("machines deployments should reject pull mode");
 
-        assert!(
-            error
-                .to_string()
-                .contains("must use deploymentModel 'push'")
-        );
+        assert!(error
+            .to_string()
+            .contains("must use deploymentModel 'push'"));
     }
 }

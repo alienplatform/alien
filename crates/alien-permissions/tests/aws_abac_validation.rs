@@ -527,6 +527,7 @@ fn wildcard_action_allowed(
         || action_is_documented_aoss_control_plane_exception(permission_set_id, action)
         || action_is_documented_lambda_vpc_eni_exception(permission_set_id, action)
         || action_is_documented_ses_receipt_rule_exception(permission_set_id, action)
+        || action_is_documented_pass_network_connector_exception(permission_set_id, action)
         || (action_requires_service_name_condition(action)
             && has_condition_key(binding, "iam:AWSServiceName"))
         || (action_requires_tag_condition(action)
@@ -575,6 +576,20 @@ fn action_is_forced_wildcard_read(action: &str) -> bool {
 
 fn action_is_documented_cross_account_exception(action: &str) -> bool {
     matches!(action, "ecr:GetAuthorizationToken")
+}
+
+fn action_is_documented_pass_network_connector_exception(
+    permission_set_id: &str,
+    action: &str,
+) -> bool {
+    // Attaching a declared egress connector — to a session in `management`, to the image build in
+    // `provision` — is authorized as a separate pass action that AWS defines against no resource
+    // type and no condition key, so which connector a holder may attach cannot be bounded here.
+    action == "lambda:PassNetworkConnector"
+        && matches!(
+            permission_set_id,
+            "sandbox/management" | "sandbox/provision"
+        )
 }
 
 fn action_is_documented_aoss_control_plane_exception(
@@ -651,6 +666,7 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "ec2:AuthorizeSecurityGroupEgress"
             | "ec2:AuthorizeSecurityGroupIngress"
             | "ec2:CreateInternetGateway"
+            | "lambda:CreateMicrovmImage"
             | "ec2:CreateLaunchTemplate"
             | "ec2:CreateLaunchTemplateVersion"
             | "ec2:CreateNatGateway"
@@ -691,4 +707,206 @@ fn action_requires_tag_condition(action: &str) -> bool {
             | "events:PutRule"
             | "lambda:CreateFunction"
     )
+}
+
+/// Actions AWS authorizes against no resource type, so an ARN in the Resource element does not
+/// narrow the grant — it stops the statement matching at all, and the action is silently not
+/// granted. Only the sandbox family is listed. Other resource types grant the same
+/// no-resource-type actions on an ARN; each needs its own check of whether that dead grant is
+/// load-bearing before it is widened.
+const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] = &[
+    "lambda:ListMicrovmImages",
+    "lambda:CreateMicrovmImage",
+    // Narrowing this to an ARN does not tighten the grant, it stops the statement matching — and
+    // every session then fails to start.
+    "lambda:PassNetworkConnector",
+];
+
+/// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks
+/// whether an ARN is too narrow to work.
+///
+/// `lambda:CreateMicrovmImage` is the shape: an ARN there reads in review as the tighter of the
+/// two options while in fact granting nothing, so the build would fail the first time it ran.
+#[test]
+fn sandbox_actions_with_no_resource_type_are_granted_on_every_resource() {
+    let mut failures = Vec::new();
+    let mut granted: Vec<&str> = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.starts_with("sandbox/") {
+            continue;
+        }
+
+        let permission_set = get_permission_set(&permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+
+        for (statement_index, permission) in aws_permissions.iter().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+
+            for action in actions {
+                let Some(unscopable) = SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE
+                    .iter()
+                    .find(|candidate| **candidate == action.as_str())
+                else {
+                    continue;
+                };
+                granted.push(unscopable);
+
+                for binding in [
+                    permission.binding.stack.as_ref(),
+                    permission.binding.resource.as_ref(),
+                ]
+                .into_iter()
+                .flatten()
+                {
+                    if !binding.resources.iter().any(|resource| resource == "*") {
+                        failures.push(format!(
+                            "{permission_set_id}[{statement_index}] grants {action} on {:?}, but AWS authorizes it against no resource type — the statement would never match",
+                            binding.resources
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+
+    // Without this the test passes when a statement is deleted: nothing else asserts these
+    // actions are granted at all, so "no violations" and "nothing to check" look identical.
+    for action in SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE {
+        assert!(
+            granted.contains(action),
+            "{action} is listed as unscopable but no sandbox set grants it — drop it from the \
+             list or restore the grant"
+        );
+    }
+}
+
+/// `lambda:ListMicrovms` is authorized against no resource type, so it can only be granted on
+/// every resource in the account — and `sandbox/management` sits in the wildcard management
+/// profile of every deployment holding a sandbox. No sandbox operation needs it: a session is
+/// reached by id and proved to be this sandbox's by its own `imageArn`, and Lambda terminates a
+/// MicroVM nobody reaches. Nothing else asserts its absence, so a later edit could restore it
+/// with everything green.
+#[test]
+fn no_sandbox_set_can_enumerate_sessions() {
+    let mut inspected = 0;
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.starts_with("sandbox/") {
+            continue;
+        }
+        let permission_set =
+            get_permission_set(&permission_set_id).expect("missing permission set");
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+        inspected += 1;
+
+        for permission in aws_permissions {
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+            // A wildcard counts: `lambda:*` or `lambda:List*` grants the enumeration just as
+            // surely as naming it, and would read as unrelated breadth rather than as this.
+            assert!(
+                !actions.iter().any(|action| action == "lambda:ListMicrovms"
+                    || action == "lambda:*"
+                    || action == "lambda:List*"),
+                "{permission_set_id} would need an account-wide grant to enumerate: {actions:?}"
+            );
+        }
+    }
+
+    // Without this the test passes if the id prefix ever changes and it inspects nothing.
+    assert!(inspected > 0, "no sandbox permission set was inspected");
+}
+
+/// A sandbox session reads whatever role the MicroVM runs under straight from instance metadata,
+/// and no egress control reaches link-local to stop it. The binding refuses to name an execution
+/// role, but that is Alien's own code path — a workload holding this grant calls `RunMicrovm`
+/// against the AWS API directly. So the grant is the boundary, and passing any `${stackPrefix}-*`
+/// role would hand untrusted code the credentials of every service account in the stack.
+#[test]
+fn no_sandbox_set_can_pass_a_role_into_a_session() {
+    let mut inspected = 0;
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.starts_with("sandbox/") {
+            continue;
+        }
+        let permission_set =
+            get_permission_set(&permission_set_id).expect("missing permission set");
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+        inspected += 1;
+
+        for permission in aws_permissions {
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+            // Matched by shape rather than by two literals: `*` and `iam:Pass*` grant the same
+            // thing and would otherwise slip the pin entirely.
+            let passes_a_role = actions.iter().any(|action| {
+                action == "*"
+                    || action == "iam:*"
+                    || (action.starts_with("iam:Pass") && action.ends_with('*'))
+                    || action == "iam:PassRole"
+            });
+            if !passes_a_role {
+                continue;
+            }
+
+            // `provision` builds the image and never starts a session, so it may pass exactly one
+            // role: the build role both generators name `<prefix>-<sandbox>-build`. Anything
+            // wider is a path from provisioning to another role's data, because the build runs a
+            // customer-authored Dockerfile under whatever it is given.
+            assert_eq!(
+                permission_set_id, "sandbox/provision",
+                "{permission_set_id} could pass a role a session would read from metadata: \
+                 {actions:?}"
+            );
+            // Gathered across the whole set, not this statement: IAM unions a principal's
+            // statements, so a separate one granting RunMicrovm would leave this green while the
+            // holder could both pass a role and start a session under it.
+            let starts_a_session = aws_permissions.iter().any(|permission| {
+                permission.grant.actions.as_ref().is_some_and(|actions| {
+                    actions
+                        .iter()
+                        .any(|action| action == "lambda:RunMicrovm" || action == "lambda:*")
+                })
+            });
+            assert!(
+                !starts_a_session,
+                "a set that can both pass a role and start a session is the escalation itself"
+            );
+            for resources in [
+                permission.binding.stack.as_ref().map(|b| &b.resources),
+                permission.binding.resource.as_ref().map(|b| &b.resources),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for resource in resources {
+                    assert!(
+                        resource.ends_with("-build"),
+                        "{permission_set_id} passes roles beyond the build role: {resource}"
+                    );
+                }
+            }
+        }
+    }
+
+    assert!(inspected > 0, "no sandbox permission set was inspected");
 }

@@ -7,11 +7,13 @@ use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_aws_clients::bedrock::{BedrockApi, FoundationModelAvailability};
 use alien_core::{
-    ai_catalog, bindings::AiBinding, Ai, AiAccessTest, AiAvailabilityBlocker,
-    AiAvailabilityObservation, AiAvailabilitySource, AiHeartbeatData, AiHeartbeatStatus,
-    AiModelAvailability, AiModelAvailabilityObservation, AiOutputs, AwsBedrockAiHeartbeatData,
-    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ai_catalog::{self, ClientApi},
+    bindings::AiBinding,
+    Ai, AiAccessTest, AiAvailabilityBlocker, AiAvailabilityObservation, AiAvailabilitySource,
+    AiHeartbeatData, AiHeartbeatStatus, AiModelAvailability, AiModelAvailabilityObservation,
+    AiOutputs, AwsBedrockAiHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -58,7 +60,7 @@ fn classify_bedrock_availability(
     }
     AiModelAvailabilityObservation {
         public_model_id: model.public_id.to_string(),
-        client_apis: model.client_apis.to_vec(),
+        client_apis: ClientApi::ALL.to_vec(),
         availability: if !complete {
             AiModelAvailability::Unknown
         } else if blockers.is_empty() {
@@ -114,7 +116,7 @@ async fn observe_bedrock_availability(
         .into_iter()
         .map(|model| AiModelAvailabilityObservation {
             public_model_id: model.public_id.to_string(),
-            client_apis: model.client_apis.to_vec(),
+            client_apis: ClientApi::ALL.to_vec(),
             availability: AiModelAvailability::Unknown,
             // No blocker: nothing is wrong with the account, the control plane
             // simply cannot answer for a mantle-served model. The gateway's own
@@ -131,7 +133,7 @@ async fn observe_bedrock_availability(
             warn!(model = model.public_id, %error, "Bedrock availability observation failed");
             AiModelAvailabilityObservation {
                 public_model_id: model.public_id.to_string(),
-                client_apis: model.client_apis.to_vec(),
+                client_apis: ClientApi::ALL.to_vec(),
                 availability: AiModelAvailability::Unknown,
                 blockers: vec![AiAvailabilityBlocker::ObservationFailed],
                 access_test: AiAccessTest::NotChecked,

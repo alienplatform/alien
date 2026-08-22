@@ -22,6 +22,7 @@ pub struct ReleasesArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub enum ReleasesCmd {
     /// List releases, newest first
+    #[command(visible_alias = "list")]
     Ls {
         /// Project to list releases for (optional, uses linked project by default)
         #[arg(long)]
@@ -37,6 +38,7 @@ pub enum ReleasesCmd {
         json: bool,
     },
     /// Show a release and how far it has rolled out across deployments
+    #[command(visible_aliases = ["describe", "show"])]
     Get {
         /// Release ID (`rel_…`)
         id: String,

@@ -1077,6 +1077,14 @@ pub struct Container {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
 
+    /// Lets this container act as a sandbox supervisor and launch sandboxes.
+    ///
+    /// The service must also declare `launch_stage: Beta` or later — Cloud Run rejects the
+    /// field otherwise with `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not
+    /// supported in the declared launch stage`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sandbox_launcher: Option<bool>,
+
     /// List of environment variables to set in the container.
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1442,6 +1450,39 @@ pub struct BuildInfo {
     /// Output only. Source code location of the image.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source_location: Option<String>,
+}
+
+#[cfg(test)]
+mod sandbox_launcher_tests {
+    use super::*;
+
+    /// Cloud Run rejects `sandboxLauncher` unless the service declares BETA or later:
+    /// `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not supported in the declared
+    /// launch stage`. Verified against the live API, so the two travel together.
+    #[test]
+    fn sandbox_launcher_serializes_as_the_api_spells_it() {
+        let container = Container {
+            image: "us-docker.pkg.dev/cloudrun/container/hello".to_string(),
+            sandbox_launcher: Some(true),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&container).expect("serializes");
+        assert_eq!(json["sandboxLauncher"], serde_json::json!(true));
+    }
+
+    /// Absent rather than `false` when unset, so an ordinary container's request body is
+    /// unchanged and cannot trip the launch-stage precondition.
+    #[test]
+    fn an_ordinary_container_does_not_carry_the_field() {
+        let container = Container {
+            image: "img".to_string(),
+            ..Default::default()
+        };
+
+        let json = serde_json::to_value(&container).expect("serializes");
+        assert!(json.get("sandboxLauncher").is_none(), "{json}");
+    }
 }
 
 #[cfg(test)]

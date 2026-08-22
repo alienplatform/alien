@@ -21,6 +21,7 @@ import { NetworkHeartbeatDataSchema } from "./network-heartbeat-data-schema.js";
 import { PostgresHeartbeatDataSchema } from "./postgres-heartbeat-data-schema.js";
 import { QueueHeartbeatDataSchema } from "./queue-heartbeat-data-schema.js";
 import { RemoteStackManagementHeartbeatDataSchema } from "./remote-stack-management-heartbeat-data-schema.js";
+import { SandboxHeartbeatDataSchema } from "./sandbox-heartbeat-data-schema.js";
 import { ServiceAccountHeartbeatDataSchema } from "./service-account-heartbeat-data-schema.js";
 import { ServiceActivationHeartbeatDataSchema } from "./service-activation-heartbeat-data-schema.js";
 import { StorageHeartbeatDataSchema } from "./storage-heartbeat-data-schema.js";
@@ -137,6 +138,11 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
                 return KeyHeartbeatDataSchema
               },
 "resourceType": z.enum(["key"])
+    }), z.object({
+    get "data"(){
+                return SandboxHeartbeatDataSchema.describe("Content-free telemetry about a sandbox's sessions.\n\nNever anything from inside a session. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
+              },
+"resourceType": z.enum(["sandbox"])
     })])
 
 export type ResourceHeartbeatData = z.infer<typeof ResourceHeartbeatDataSchema>

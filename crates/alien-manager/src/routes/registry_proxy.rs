@@ -1114,6 +1114,13 @@ async fn validate_pull_access(
                 "Command credentials cannot access the registry proxy",
             ))
         }
+        Scope::Telemetry { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Telemetry credentials cannot access the registry proxy",
+            ))
+        }
         Scope::Deployment {
             project_id,
             deployment_id,
@@ -1707,6 +1714,13 @@ mod tests {
             binding_name: &str,
         ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::ServiceAccount>>
         {
+            Err(route_test_error(binding_name))
+        }
+
+        async fn load_sandbox(
+            &self,
+            binding_name: &str,
+        ) -> alien_bindings::error::Result<Arc<dyn alien_bindings::traits::Sandbox>> {
             Err(route_test_error(binding_name))
         }
     }

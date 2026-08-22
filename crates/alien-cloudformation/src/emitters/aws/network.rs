@@ -107,9 +107,8 @@ impl CfEmitter for AwsNetworkEmitter {
                         ("availabilityZones", availability_zone_names()),
                         ("isByoVpc", CfExpression::from(false)),
                     ]),
-                    CfExpression::if_(
-                        "NetworkModeUseExisting",
-                        CfExpression::object([
+                    {
+                        let byo = CfExpression::object([
                             ("vpcId", CfExpression::ref_("VpcId")),
                             (
                                 "publicSubnetIds",
@@ -125,14 +124,22 @@ impl CfEmitter for AwsNetworkEmitter {
                             ),
                             ("availabilityZones", CfExpression::list([])),
                             ("isByoVpc", CfExpression::from(true)),
-                        ]),
-                        CfExpression::object([
-                            ("publicSubnetIds", CfExpression::list([])),
-                            ("privateSubnetIds", CfExpression::list([])),
-                            ("availabilityZones", CfExpression::list([])),
-                            ("isByoVpc", CfExpression::from(true)),
-                        ]),
-                    ),
+                        ]);
+                        if alien_core::restricts_network_mode(ctx.stack, ctx.targets_kubernetes) {
+                            byo
+                        } else {
+                            CfExpression::if_(
+                                "NetworkModeUseExisting",
+                                byo,
+                                CfExpression::object([
+                                    ("publicSubnetIds", CfExpression::list([])),
+                                    ("privateSubnetIds", CfExpression::list([])),
+                                    ("availabilityZones", CfExpression::list([])),
+                                    ("isByoVpc", CfExpression::from(true)),
+                                ]),
+                            )
+                        }
+                    },
                 )
             }
             NetworkSettings::ByoVpcGcp { .. } | NetworkSettings::ByoVnetAzure { .. } => {

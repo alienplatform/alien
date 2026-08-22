@@ -26,8 +26,8 @@ use alien_core::{
     import::{EmitContext, CURRENT_SETUP_IMPORT_FORMAT_VERSION},
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
-    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Stack,
-    StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
+    NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
+    Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
     StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
@@ -207,12 +207,22 @@ pub fn generate_terraform_module(
             continue;
         }
 
+        // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
+        // cloud infrastructure. Emitter lookup keys off the cloud the cluster runs in, so
+        // without this an EKS install would provision the MicroVM image, connector, security
+        // group and roles of the AWS backend it never uses — and refuse `egress: allow`, which
+        // Kubernetes supports, with advice about a platform the customer did not choose.
+        if target.is_kubernetes() && resource_type.as_ref() == Sandbox::RESOURCE_TYPE.as_ref() {
+            continue;
+        }
+
         let emitter = options.registry.require(&resource_type, platform)?;
         let ctx = EmitContext {
             stack,
             resource,
             resource_id,
             platform,
+            targets_kubernetes: target.is_kubernetes(),
             stack_settings: &stack_settings,
             names: &labels,
         };
@@ -336,6 +346,21 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action");
+    // Cloud Control, for AWS APIs the main provider has not caught up with. Keyed off what was
+    // actually emitted, so a stack without one of those resources is unchanged.
+    // Keyed off the connector, not the image: the image is a Cloud Control resource from the
+    // `aws` provider, and only the connector still goes through `awscc`.
+    let include_awscc_provider = has_resource_type(
+        &per_resource,
+        crate::emitters::aws::sandbox::NETWORK_CONNECTOR_RESOURCE,
+    );
+    // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
+    // of its own, and a missing declaration fails at init rather than at plan.
+    let include_time_provider = gcp_iam_propagation_barrier.is_some()
+        || has_resource_type(
+            &per_resource,
+            crate::emitters::aws::sandbox::PROPAGATION_BARRIER_RESOURCE,
+        );
     let setup_only = stack
         .resources
         .values()
@@ -363,10 +388,11 @@ pub fn generate_terraform_module(
         render_body(versions_body(
             target,
             options.registration.as_ref(),
-            gcp_iam_propagation_barrier.is_some(),
+            include_time_provider,
             include_kubernetes_provider,
             include_helm_provider,
             include_azapi_provider,
+            include_awscc_provider,
         ))?,
     );
     files.insert(
@@ -382,6 +408,7 @@ pub fn generate_terraform_module(
             setup_only,
             &options.supported_aws_regions,
             &stack_inputs,
+            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
         )?)?,
     );
     files.insert(
@@ -391,6 +418,7 @@ pub fn generate_terraform_module(
             include_kubernetes_provider,
             include_helm_provider,
             include_azapi_provider,
+            include_awscc_provider,
         ))?,
     );
     files.insert(
@@ -1101,6 +1129,7 @@ fn versions_body(
     include_kubernetes_provider: bool,
     include_helm_provider: bool,
     include_azapi_provider: bool,
+    include_awscc_provider: bool,
 ) -> Body {
     let required_version = if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
@@ -1115,6 +1144,12 @@ fn versions_body(
     let mut provider_attrs: Vec<Structure> = Vec::new();
     if matches!(target.cloud_platform(), alien_core::Platform::Aws) {
         provider_attrs.push(attr("aws", provider_decl_attr("hashicorp/aws", ">= 5.0")));
+        if include_awscc_provider {
+            provider_attrs.push(attr(
+                "awscc",
+                provider_decl_attr("hashicorp/awscc", ">= 1.0"),
+            ));
+        }
         if matches!(target, TerraformTarget::Eks) {
             provider_attrs.push(attr("tls", provider_decl_attr("hashicorp/tls", ">= 4.0")));
         }
@@ -1305,6 +1340,7 @@ fn variables_body(
     setup_only: bool,
     supported_aws_regions: &[String],
     stack_inputs: &[StackInputDefinition],
+    needs_named_subnets: bool,
 ) -> Result<Body> {
     let mut blocks: Vec<Structure> = Vec::new();
     let advanced_settings_default = advanced_settings_default_json(target, stack_settings)?;
@@ -1394,12 +1430,7 @@ fn variables_body(
     if matches!(target.cloud_platform(), alien_core::Platform::Aws)
         && has_dynamic_aws_network_settings(stack_settings.network.as_ref())
     {
-        blocks.push(nested(variable_block(
-            "network_mode",
-            "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default.",
-            Some(Expression::String("create-new".to_string())),
-            false,
-        )));
+        blocks.push(nested(network_mode_variable_block(needs_named_subnets)));
         blocks.push(nested(variable_block(
             "vpc_cidr",
             "CIDR for a newly-created network. Empty uses 10.42.0.0/16.",
@@ -1963,6 +1994,63 @@ fn string_enum_variable_block(
     }
 }
 
+/// The `network_mode` description, which is also where the withheld value is explained.
+///
+/// A restricted sandbox routes session egress through a VPC connector that must name subnets, and
+/// the account default VPC's cannot be enumerated at setup.
+fn network_mode_description(needs_named_subnets: bool) -> &'static str {
+    if needs_named_subnets {
+        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+    } else {
+        "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
+    }
+}
+
+/// The `network_mode` variable, refusing the withheld mode at `terraform plan`.
+///
+/// CloudFormation withholds it from `AllowedValues`, where the console refuses it before anything
+/// is created. Without the same gate here the module plans cleanly and then fails at AWS on the
+/// connector, leaving the installer with a half-built stack.
+///
+/// The validation sits on this variable rather than a guard of its own: referencing another
+/// variable inside `validation` needs Terraform 1.9, and these modules declare 1.5.
+fn network_mode_variable_block(needs_named_subnets: bool) -> Block {
+    let mut body: Vec<Structure> = vec![
+        attr("type", expr::raw("string")),
+        attr(
+            "description",
+            Expression::String(network_mode_description(needs_named_subnets).to_string()),
+        ),
+        attr("default", Expression::String("create-new".to_string())),
+    ];
+
+    if needs_named_subnets {
+        body.push(Structure::Block(Block {
+            identifier: Identifier::sanitized("validation"),
+            labels: vec![],
+            body: Body::from(vec![
+                attr(
+                    "condition",
+                    expr::raw("contains([\"create-new\", \"use-existing\"], var.network_mode)"),
+                ),
+                attr(
+                    "error_message",
+                    Expression::String(
+                        "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+                            .to_string(),
+                    ),
+                ),
+            ]),
+        }));
+    }
+
+    Block {
+        identifier: Identifier::sanitized("variable"),
+        labels: vec![BlockLabel::String("network_mode".to_string())],
+        body: Body::from(body),
+    }
+}
+
 fn variable_block(
     name: &str,
     description: &str,
@@ -2183,6 +2271,7 @@ fn providers_body(
     include_kubernetes_provider: bool,
     include_helm_provider: bool,
     include_azapi_provider: bool,
+    include_awscc_provider: bool,
 ) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.cloud_platform() {
@@ -2208,6 +2297,25 @@ fn providers_body(
                 ],
                 body: Body::default(),
             }));
+            structures.push(Structure::Block(Block {
+                identifier: Identifier::sanitized("data"),
+                labels: vec![
+                    BlockLabel::String("aws_partition".to_string()),
+                    BlockLabel::String("current".to_string()),
+                ],
+                body: Body::default(),
+            }));
+            // awscc has no ambient default: declaring it in required_providers without a
+            // provider block makes `terraform plan` refuse the module outright. It also has to
+            // name the same region as the `aws` provider, or the image is built somewhere the
+            // binding will not look for it.
+            if include_awscc_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("awscc".to_string())],
+                    body: Body::from(vec![attr("region", expr::raw("var.aws_region"))]),
+                }));
+            }
         }
         alien_core::Platform::Gcp => {
             structures.push(Structure::Block(Block {
@@ -3119,7 +3227,13 @@ fn readme_md(
     if has_dynamic_aws_network_settings(stack_settings.network.as_ref())
         || has_dynamic_gcp_network_settings(stack_settings.network.as_ref())
     {
-        input_sections.push(readme_network_inputs(target));
+        input_sections.push(readme_network_inputs(
+            target,
+            // Not on a Kubernetes target: the sandbox is skipped there, so no connector exists
+            // to demand subnets and the restriction would explain itself with a resource the
+            // module does not contain.
+            alien_core::restricts_network_mode(stack, target.is_kubernetes()),
+        ));
     }
     if target.is_kubernetes() {
         input_sections.push(readme_kubernetes_inputs(
@@ -3223,8 +3337,13 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
     )
 }
 
-fn readme_network_inputs(target: TerraformTarget) -> String {
+/// The README's network section, which has to name the same modes `variables.tf` accepts.
+///
+/// An installer reads this and picks a value; documenting one the module refuses at plan makes
+/// the package contradict itself.
+fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
     match target.cloud_platform() {
+        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
         _ => String::new(),
@@ -3303,6 +3422,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,

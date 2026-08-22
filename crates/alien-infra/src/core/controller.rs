@@ -985,6 +985,12 @@ fn deserialize_controller_by_tag(
         "LocalComputeClusterController" => {
             deser!(crate::compute_cluster::LocalComputeClusterController)
         }
+        #[cfg(feature = "local")]
+        "LocalSandboxController" => deser!(crate::sandbox::LocalSandboxController),
+        #[cfg(feature = "kubernetes")]
+        "KubernetesSandboxController" => {
+            deser!(crate::sandbox::KubernetesSandboxController)
+        }
         #[cfg(feature = "kubernetes")]
         "KubernetesClusterController" => {
             deser!(crate::kubernetes_cluster::KubernetesClusterController)

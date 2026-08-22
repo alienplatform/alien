@@ -11,10 +11,10 @@ crate-type = ["rlib"]
 [features]
 default = ["all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
-gcp = ["object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
+aws = ["alien-core/sandbox-process", "object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
+gcp = ["alien-core/sandbox-process", "tokio/process", "object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
-kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "alien-client-config/kubernetes"]
+kubernetes = ["alien-core/sandbox-process", "dep:alien-k8s-clients", "dep:k8s-openapi", "dep:base64", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:base64", "dep:oci-client", "dep:turso", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa"]
@@ -38,7 +38,7 @@ url = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 chrono = { workspace = true, features = ["serde"] }
-reqwest = { workspace = true, features = ["rustls-tls-webpki-roots"] }
+reqwest = { workspace = true, features = ["stream", "rustls-tls-webpki-roots"] }
 alien-platform-api = { workspace = true, optional = true }
 alien-manager-api = { workspace = true, optional = true }
 tracing = { workspace = true }
@@ -68,7 +68,7 @@ alien-gcp-clients = { workspace = true, features = ["test-utils"] }
 alien-azure-clients = { workspace = true, features = ["test-utils"] }
 axum = { workspace = true, features = ["tokio", "http1", "json"] }
 dotenvy = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "test-util"] }
 tempfile = { workspace = true }
 temp-env = { workspace = true, features = ["async_closure"] }
 workspace_root = { workspace = true }

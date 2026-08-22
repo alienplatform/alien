@@ -90,7 +90,7 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         None,
         cancel,
     )
-        .await
+    .await
 }
 
 /// Full-control entry point. Binary callers that ship real pluggable-loop
@@ -149,6 +149,8 @@ pub async fn run_operator_with_cancel_and_loops(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
+    let otlp_parse_application_levels = config.parses_application_log_levels();
+    let sandbox_broker = sandbox_broker_router(&config).await;
     let otlp_cancel = cancel.clone();
     tokio::spawn(async move {
         if let Err(e) = otlp_server::start_otlp_server(
@@ -157,6 +159,8 @@ pub async fn run_operator_with_cancel_and_loops(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
+            otlp_parse_application_levels,
+            sandbox_broker,
             otlp_cancel,
         )
         .await
@@ -540,5 +544,27 @@ mod tests {
     fn process_exists(pid: u32) -> bool {
         // SAFETY: signal 0 performs an existence/permission check only.
         unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+    }
+}
+
+/// Builds the sandbox broker's routes, when this operator runs a Kubernetes deployment.
+///
+/// `None` everywhere else: the broker claims pods, so it exists only where there are pods to
+/// claim. A state it cannot build disables the broker rather than taking the operator down — a
+/// deployment with no sandbox is unaffected, and one with a sandbox reports it on first claim
+/// rather than by refusing to boot.
+async fn sandbox_broker_router(config: &config::OperatorConfig) -> Option<axum::Router> {
+    if config.platform != alien_core::Platform::Kubernetes {
+        return None;
+    }
+
+    let namespace = config.namespace.clone()?;
+
+    match alien_infra::BrokerState::in_cluster(namespace).await {
+        Ok(state) => Some(alien_infra::broker_router(state)),
+        Err(error) => {
+            tracing::warn!(error = %error, "sandbox broker disabled: no in-cluster Kubernetes client");
+            None
+        }
     }
 }

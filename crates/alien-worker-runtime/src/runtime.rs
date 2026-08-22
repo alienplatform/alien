@@ -13,8 +13,8 @@ use std::{collections::HashMap, process::Stdio, sync::Arc};
 use alien_bindings::BindingsProvider;
 use alien_core::{
     ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_CURRENT_WORKER_BINDING_NAME, ENV_ALIEN_DEPLOYMENT_ID,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT,
-    ENV_ALIEN_WORKER_GRPC_ADDRESS,
+    ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
 };
 use alien_error::{AlienError, Context};
 use alien_worker_protocol::{run_grpc_server, ControlGrpcServer, WaitUntilGrpcServer};
@@ -684,7 +684,12 @@ async fn start_application(
 }
 
 fn runtime_only_env(name: &str) -> bool {
-    matches!(name, ENV_ALIEN_RUNTIME_SECRETS | ENV_ALIEN_COMMANDS_TOKEN)
+    matches!(
+        name,
+        ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS
+            | ENV_ALIEN_RUNTIME_SECRETS
+            | ENV_ALIEN_COMMANDS_TOKEN
+    )
 }
 
 fn command_push_config(

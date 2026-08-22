@@ -270,6 +270,47 @@ fn critical_e2e_provider_operations_are_declared() {
             ],
             azure_predefined_roles: &[],
         },
+        OperationCoverage {
+            // Every AWS sandbox builds an image: run-microvm rejects the AWS-managed base
+            // ("Image ARN must contain a valid customer account ID"), so the build and its
+            // status reads are provision-time, not optional.
+            permission_set_id: "sandbox/provision",
+            aws_actions: &[
+                "lambda:CreateMicrovmImage",
+                "lambda:GetMicrovmImageBuild",
+                "lambda:DeleteMicrovmImage",
+                "lambda:ListMicrovmImageVersions",
+            ],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[
+                "Microsoft.App/sandboxGroups/write",
+                "Microsoft.App/sandboxGroups/delete",
+            ],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
+        OperationCoverage {
+            // The auth token is the credential the agent protocol travels on, so it is the one
+            // grant that reaches inside a session and must stay in execute alone.
+            permission_set_id: "sandbox/execute",
+            aws_actions: &["lambda:CreateMicrovmAuthToken"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &["Container Apps SandboxGroup Data Owner"],
+        },
+        OperationCoverage {
+            // Session lifecycle without content access.
+            permission_set_id: "sandbox/management",
+            aws_actions: &["lambda:RunMicrovm", "lambda:TerminateMicrovm"],
+            gcp_permissions: &[],
+            gcp_predefined_roles: &[],
+            azure_actions: &[],
+            azure_data_actions: &[],
+            azure_predefined_roles: &[],
+        },
     ];
 
     let mut failures = Vec::new();

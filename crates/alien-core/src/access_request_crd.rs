@@ -143,7 +143,13 @@ mod tests {
 
     #[test]
     fn empty_domain_falls_back() {
-        assert_eq!(access_request_crd_names(Some("")).kind, "AlienAccessRequest");
-        assert_eq!(access_request_crd_names(Some("   ")).kind, "AlienAccessRequest");
+        assert_eq!(
+            access_request_crd_names(Some("")).kind,
+            "AlienAccessRequest"
+        );
+        assert_eq!(
+            access_request_crd_names(Some("   ")).kind,
+            "AlienAccessRequest"
+        );
     }
 }
