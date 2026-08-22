@@ -29,7 +29,12 @@ impl TelemetryBackend for InMemoryTelemetryBackend {
                 self.log_buffer
                     .push(LogEntry {
                         timestamp: chrono::Utc::now(),
-                        deployment_id: caller.deployment_id.clone(),
+                        deployment_id: caller.deployment_id.clone().unwrap_or_else(|| {
+                            caller
+                                .gateway_log_source
+                                .map(|source| source.as_str().to_string())
+                                .unwrap_or_else(|| "unknown-telemetry-origin".to_string())
+                        }),
                         body: format!("[OTLP log data: {} bytes]", data.len()),
                         severity: "INFO".to_string(),
                         resource_name: None,

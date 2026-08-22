@@ -219,6 +219,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                         OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
                         OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
                     },
+                    provider_allowlist: Vec::new(),
                     release_channel: None,
                     required: true,
                 })
@@ -1296,14 +1297,11 @@ mod tests {
 
     #[test]
     fn parse_stack_input_arg_requires_id_value() {
-        let parsed = parse_stack_input_arg("controlPlaneApiKey=secret", "--secret-input")
+        let parsed = parse_stack_input_arg("serviceToken=secret", "--secret-input")
             .expect("valid input should parse");
-        assert_eq!(
-            parsed,
-            ("controlPlaneApiKey".to_string(), "secret".to_string())
-        );
+        assert_eq!(parsed, ("serviceToken".to_string(), "secret".to_string()));
 
-        let err = parse_stack_input_arg("controlPlaneApiKey", "--secret-input")
+        let err = parse_stack_input_arg("serviceToken", "--secret-input")
             .expect_err("missing equals should fail");
         assert!(err.to_string().contains("Invalid --secret-input format"));
     }
@@ -1311,7 +1309,7 @@ mod tests {
     #[test]
     fn collect_stack_input_values_rejects_missing_required_in_json_mode() {
         let err = collect_stack_input_values(
-            &[input("controlPlaneApiKey", StackInputKind::Secret, true)],
+            &[input("serviceToken", StackInputKind::Secret, true)],
             &[],
             &[],
             &[Platform::Aws],
@@ -1320,10 +1318,7 @@ mod tests {
         .expect_err("missing required input should fail");
 
         assert!(err.to_string().contains("Missing developer input"));
-        assert!(
-            err.to_string()
-                .contains("--secret-input controlPlaneApiKey=...")
-        );
+        assert!(err.to_string().contains("--secret-input serviceToken=..."));
     }
 
     #[test]
@@ -1352,7 +1347,7 @@ mod tests {
     fn missing_platform_scoped_input_suggests_narrowing() {
         let err = collect_stack_input_values(
             &[platform_input(
-                "tailscaleAuthKey",
+                "localAccessToken",
                 StackInputKind::Secret,
                 true,
                 vec![Platform::Local],
@@ -1364,10 +1359,9 @@ mod tests {
         )
         .expect_err("missing required local input should fail");
 
-        assert!(
-            err.to_string()
-                .contains("--secret-input tailscaleAuthKey=...")
-        );
+        assert!(err
+            .to_string()
+            .contains("--secret-input localAccessToken=..."));
         assert!(err.to_string().contains("--platforms aws"));
     }
 
@@ -1375,13 +1369,13 @@ mod tests {
     fn provided_platform_scoped_input_rejects_mixed_platform_link() {
         let err = collect_stack_input_values(
             &[platform_input(
-                "tailscaleAuthKey",
+                "localAccessToken",
                 StackInputKind::Secret,
                 true,
                 vec![Platform::Local],
             )],
             &[],
-            &["tailscaleAuthKey=tskey-auth-test".to_string()],
+            &["localAccessToken=local-test-token".to_string()],
             &[Platform::Aws, Platform::Local],
             true,
         )

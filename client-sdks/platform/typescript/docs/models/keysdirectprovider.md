@@ -9,8 +9,9 @@ let value: KeysDirectProvider = {
   provider: "databricks",
   providerEndpoint: "<value>",
   keyFingerprint: "<value>",
-  availableProviderModelIds: [],
-  verifiedAt: new Date("2026-05-28T23:54:17.474Z"),
+  credentialStatus: "pending",
+  credentialCheckedAt: new Date("2026-10-11T08:12:07.727Z"),
+  catalogObservedAt: null,
 };
 ```
 
@@ -21,5 +22,6 @@ let value: KeysDirectProvider = {
 | `provider`                                                                                    | [models.KeysProvider](../models/keysprovider.md)                                              | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `providerEndpoint`                                                                            | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
 | `keyFingerprint`                                                                              | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `availableProviderModelIds`                                                                   | *string*[]                                                                                    | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `verifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialStatus`                                                                            | [models.KeysCredentialStatus](../models/keyscredentialstatus.md)                              | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `credentialCheckedAt`                                                                         | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `catalogObservedAt`                                                                           | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |

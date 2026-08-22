@@ -6,11 +6,13 @@ use tracing::{info, warn};
 use crate::core::{ResourceControllerContext, ResourcePermissionsHelper};
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ai_catalog, bindings::AiBinding, Ai, AiAccessTest, AiAvailabilityBlocker,
-    AiAvailabilityObservation, AiAvailabilitySource, AiHeartbeatData, AiHeartbeatStatus,
-    AiModelAvailability, AiModelAvailabilityObservation, AiOutputs, GcpVertexAiHeartbeatData,
-    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ai_catalog::{self, ClientApi},
+    bindings::AiBinding,
+    Ai, AiAccessTest, AiAvailabilityBlocker, AiAvailabilityObservation, AiAvailabilitySource,
+    AiHeartbeatData, AiHeartbeatStatus, AiModelAvailability, AiModelAvailabilityObservation,
+    AiOutputs, GcpVertexAiHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::iam::IamPolicy;
@@ -78,7 +80,7 @@ async fn observe_vertex_availability(
             Err(_) => {
                 models.push(AiModelAvailabilityObservation {
                     public_model_id: model.public_id.to_string(),
-                    client_apis: model.client_apis.to_vec(),
+                    client_apis: ClientApi::ALL.to_vec(),
                     availability: AiModelAvailability::Unknown,
                     blockers: vec![AiAvailabilityBlocker::ObservationFailed],
                     access_test: AiAccessTest::NotChecked,
@@ -91,7 +93,7 @@ async fn observe_vertex_availability(
         if !listed {
             models.push(AiModelAvailabilityObservation {
                 public_model_id: model.public_id.to_string(),
-                client_apis: model.client_apis.to_vec(),
+                client_apis: ClientApi::ALL.to_vec(),
                 availability: AiModelAvailability::Blocked,
                 blockers: vec![AiAvailabilityBlocker::RegionUnavailable],
                 access_test: AiAccessTest::NotChecked,
@@ -103,7 +105,7 @@ async fn observe_vertex_availability(
         if !is_anthropic {
             models.push(AiModelAvailabilityObservation {
                 public_model_id: model.public_id.to_string(),
-                client_apis: model.client_apis.to_vec(),
+                client_apis: ClientApi::ALL.to_vec(),
                 availability: AiModelAvailability::Available,
                 blockers: vec![],
                 access_test: AiAccessTest::NotChecked,
@@ -121,7 +123,7 @@ async fn observe_vertex_availability(
         match client.check_publisher_model_eula(&resource).await {
             Ok(acceptance) => models.push(AiModelAvailabilityObservation {
                 public_model_id: model.public_id.to_string(),
-                client_apis: model.client_apis.to_vec(),
+                client_apis: ClientApi::ALL.to_vec(),
                 availability: if acceptance.publisher_model_eula_acked {
                     AiModelAvailability::Available
                 } else {
@@ -140,7 +142,7 @@ async fn observe_vertex_availability(
                 warn!(model = model.public_id, %error, "Vertex EULA observation failed");
                 models.push(AiModelAvailabilityObservation {
                     public_model_id: model.public_id.to_string(),
-                    client_apis: model.client_apis.to_vec(),
+                    client_apis: ClientApi::ALL.to_vec(),
                     availability: AiModelAvailability::Unknown,
                     blockers: vec![AiAvailabilityBlocker::ObservationFailed],
                     access_test: AiAccessTest::NotChecked,

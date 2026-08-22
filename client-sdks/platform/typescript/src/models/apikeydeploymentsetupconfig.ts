@@ -73,6 +73,18 @@ export type APIKeyDeploymentSetupConfigAllowedProvider = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigAllowedProvider
 >;
 
+export const APIKeyDeploymentSetupConfigProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type APIKeyDeploymentSetupConfigProviderAllowlist = ClosedEnum<
+  typeof APIKeyDeploymentSetupConfigProviderAllowlist
+>;
+
 export const APIKeyDeploymentSetupConfigClientAPI = {
   OpenaiChat: "openai-chat",
   OpenaiResponses: "openai-responses",
@@ -91,6 +103,9 @@ export type APIKeyDeploymentSetupConfigModelRequirement = {
 export type APIKeyDeploymentSetupConfigConfiguration = {
   allowedProviders?:
     | Array<APIKeyDeploymentSetupConfigAllowedProvider>
+    | undefined;
+  providerAllowlist?:
+    | Array<APIKeyDeploymentSetupConfigProviderAllowlist>
     | undefined;
   modelRequirements?:
     | Array<APIKeyDeploymentSetupConfigModelRequirement>
@@ -203,6 +218,12 @@ export const APIKeyDeploymentSetupConfigAllowedProvider$inboundSchema:
   );
 
 /** @internal */
+export const APIKeyDeploymentSetupConfigProviderAllowlist$inboundSchema:
+  z.ZodEnum<typeof APIKeyDeploymentSetupConfigProviderAllowlist> = z.enum(
+    APIKeyDeploymentSetupConfigProviderAllowlist,
+  );
+
+/** @internal */
 export const APIKeyDeploymentSetupConfigClientAPI$inboundSchema: z.ZodEnum<
   typeof APIKeyDeploymentSetupConfigClientAPI
 > = z.enum(APIKeyDeploymentSetupConfigClientAPI);
@@ -238,6 +259,9 @@ export const APIKeyDeploymentSetupConfigConfiguration$inboundSchema: z.ZodType<
 > = z.object({
   allowedProviders: z.array(
     APIKeyDeploymentSetupConfigAllowedProvider$inboundSchema,
+  ).optional(),
+  providerAllowlist: z.array(
+    APIKeyDeploymentSetupConfigProviderAllowlist$inboundSchema,
   ).optional(),
   modelRequirements: z.array(
     z.lazy(() => APIKeyDeploymentSetupConfigModelRequirement$inboundSchema),

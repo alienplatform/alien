@@ -23,6 +23,16 @@ pub enum ClientApi {
     AnthropicMessages,
 }
 
+impl ClientApi {
+    /// Public request protocols accepted for every text-generation model. The
+    /// gateway translates to the model's provider-native protocol when needed.
+    pub const ALL: [Self; 3] = [
+        Self::OpenAiChatCompletions,
+        Self::OpenAiResponses,
+        Self::AnthropicMessages,
+    ];
+}
+
 /// The provider API used for the upstream request. This is deliberately
 /// separate from [`ClientApi`]: an adapter may expose one client API over a
 /// different provider API, but only after that exact combination is qualified.
@@ -59,6 +69,8 @@ pub struct CatalogModel {
     pub public_id: &'static str,
     pub cloud: Platform,
     pub upstream_id: &'static str,
+    /// Provider-native protocols. These choose the lowest-overhead upstream;
+    /// applications may use any [`ClientApi`] through the gateway adapter.
     pub client_apis: &'static [ClientApi],
     pub provider_api: ProviderApi,
 }
@@ -761,7 +773,7 @@ static CATALOG: &[CatalogModel] = &[
 /// Changes whenever public model ids or their supported client APIs change.
 /// Heartbeat consumers use this to distinguish an old observation from a
 /// current catalog without duplicating the catalog in durable state.
-pub const AI_CATALOG_REVISION: &str = "2026-08-09.1";
+pub const AI_CATALOG_REVISION: &str = "2026-08-20.1";
 
 /// Azure deployments to create at provision time: (deployment name, model name,
 /// model version). The deployment name is the catalog `upstream_id`. The version

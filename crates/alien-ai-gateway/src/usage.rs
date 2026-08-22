@@ -73,7 +73,11 @@ pub struct AiUsageEvent {
     pub request_id: String,
     pub started_at: SystemTime,
     pub duration: Duration,
+    /// End-to-end duration measured by an embedding gateway, when supplied.
+    pub gateway_duration: Option<Duration>,
     pub binding: String,
+    /// Model identifier exactly as supplied by the client, before alias normalization.
+    pub requested_model: String,
     pub provider: AiUsageProvider,
     pub public_model: String,
     pub provider_model: String,
@@ -84,6 +88,28 @@ pub struct AiUsageEvent {
     pub tokens: AiTokenUsage,
 }
 
+/// Request identity and ingress clock supplied by an embedding gateway.
+///
+/// Insert this value into the request extensions before dispatching to the
+/// embedded router. Usage events will then retain the caller-visible request ID
+/// and measure total latency from the embedding gateway's ingress boundary.
+#[derive(Debug, Clone)]
+pub struct AiGatewayRequestTiming {
+    request_id: String,
+    started_at: SystemTime,
+    started: Instant,
+}
+
+impl AiGatewayRequestTiming {
+    pub fn new(request_id: impl Into<String>) -> Self {
+        Self {
+            request_id: request_id.into(),
+            started_at: SystemTime::now(),
+            started: Instant::now(),
+        }
+    }
+}
+
 const MAX_USAGE_RESPONSE_BYTES: usize = 1024 * 1024;
 
 #[derive(Clone)]
@@ -92,11 +118,13 @@ pub(crate) struct AiUsageContext {
     started_at: SystemTime,
     started: Instant,
     binding: String,
+    requested_model: String,
     provider: AiUsageProvider,
     public_model: String,
     provider_model: String,
     client_api: AiUsageClientApi,
     provider_region: Option<String>,
+    gateway_timing: Option<AiGatewayRequestTiming>,
 }
 
 impl AiUsageContext {
@@ -113,12 +141,28 @@ impl AiUsageContext {
             started_at: SystemTime::now(),
             started: Instant::now(),
             binding: binding.to_string(),
+            requested_model: public_model.to_string(),
             provider,
             public_model: public_model.to_string(),
             provider_model: provider_model.to_string(),
             client_api,
             provider_region,
+            gateway_timing: None,
         }
+    }
+
+    pub(crate) fn with_gateway_timing(mut self, timing: Option<AiGatewayRequestTiming>) -> Self {
+        if let Some(timing) = timing {
+            self.request_id.clone_from(&timing.request_id);
+            self.started_at = timing.started_at;
+            self.gateway_timing = Some(timing);
+        }
+        self
+    }
+
+    pub(crate) fn with_requested_model(mut self, requested_model: impl Into<String>) -> Self {
+        self.requested_model = requested_model.into();
+        self
     }
 
     fn observe(
@@ -128,11 +172,17 @@ impl AiUsageContext {
         status: u16,
         tokens: AiTokenUsage,
     ) {
+        let gateway_duration = self
+            .gateway_timing
+            .as_ref()
+            .map(|timing| timing.started.elapsed());
         let event = AiUsageEvent {
             request_id: self.request_id,
             started_at: self.started_at,
             duration: self.started.elapsed(),
+            gateway_duration,
             binding: self.binding,
+            requested_model: self.requested_model,
             provider: self.provider,
             public_model: self.public_model,
             provider_model: self.provider_model,
@@ -443,6 +493,35 @@ mod tests {
         fn observe(&self, event: AiUsageEvent) {
             let _ = self.0.send(event);
         }
+    }
+
+    #[test]
+    fn embedding_gateway_timing_preserves_ingress_identity_and_overhead() {
+        let timing = AiGatewayRequestTiming::new("req_test");
+        std::thread::sleep(Duration::from_millis(2));
+        let context = AiUsageContext::new(
+            "llm",
+            AiUsageProvider::OpenAi,
+            "gpt-5-mini",
+            "gpt-5-mini",
+            AiUsageClientApi::OpenAiChatCompletions,
+            None,
+        )
+        .with_gateway_timing(Some(timing));
+        std::thread::sleep(Duration::from_millis(2));
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestObserver(sender));
+
+        context.observe(
+            &observer,
+            AiUsageOutcome::Success,
+            200,
+            AiTokenUsage::default(),
+        );
+
+        let event = receiver.try_recv().expect("usage observation");
+        assert_eq!(event.request_id, "req_test");
+        assert!(event.gateway_duration.expect("gateway duration") > event.duration);
     }
 
     #[test]

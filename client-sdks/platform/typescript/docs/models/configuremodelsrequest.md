@@ -6,15 +6,10 @@
 import { ConfigureModelsRequest } from "@alienplatform/platform-api/models";
 
 let value: ConfigureModelsRequest = {
-  allowedProviders: [
-    "gcp-vertex",
-  ],
   requirements: [
     {
       publicModelId: "<id>",
-      clientApis: [
-        "openai-responses",
-      ],
+      clientApis: [],
       required: false,
     },
   ],
@@ -25,5 +20,5 @@ let value: ConfigureModelsRequest = {
 
 | Field                                                                                                | Type                                                                                                 | Required                                                                                             | Description                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `allowedProviders`                                                                                   | [models.ConfigureModelsRequestAllowedProvider](../models/configuremodelsrequestallowedprovider.md)[] | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
+| `allowedProviders`                                                                                   | [models.ConfigureModelsRequestAllowedProvider](../models/configuremodelsrequestallowedprovider.md)[] | :heavy_minus_sign:                                                                                   | N/A                                                                                                  |
 | `requirements`                                                                                       | [models.ConfigureModelsRequestRequirement](../models/configuremodelsrequestrequirement.md)[]         | :heavy_check_mark:                                                                                   | N/A                                                                                                  |

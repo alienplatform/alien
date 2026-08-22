@@ -5,9 +5,9 @@
   "homepage": "https://alien.dev",
   "license": "FSL-1.1-Apache-2.0",
   "repository": {
-    "url": "https://github.com/alienplatform/alien.git",
     "directory": "client-sdks/platform/typescript",
-    "type": "git"
+    "type": "git",
+    "url": "https://github.com/alienplatform/alien.git"
   },
   "type": "module",
   "main": "./esm/index.js",
@@ -62,7 +62,7 @@
     "@eslint/js": "^9.19.0",
     "eslint": "^9.19.0",
     "globals": "^15.14.0",
-    "typescript": "~5.9.0",
+    "typescript": "~5.8.3",
     "typescript-eslint": "^8.26.0"
   },
   "dependencies": {

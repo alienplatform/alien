@@ -13,4 +13,6 @@ pub mod command_capability;
 pub mod subject;
 
 pub use authz::{Authz, DeploymentCreateCtx};
-pub use subject::{CommandCapability, Role, Scope, Subject, SubjectKind};
+pub use subject::{
+    CommandCapability, GatewayLogSource, Role, Scope, Subject, SubjectKind, TelemetryCapability,
+};

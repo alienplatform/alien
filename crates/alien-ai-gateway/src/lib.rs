@@ -1,6 +1,7 @@
-//! Embedded, protocol-agnostic AI gateway: a loopback HTTP server that injects the
-//! workload's ambient cloud credential and proxies each request to the model's
-//! native upstream endpoint without translating the body.
+//! Embedded AI gateway: a loopback HTTP server that injects the workload's ambient
+//! cloud credential and proxies each request to the model's native upstream API.
+//! Requests using a different supported API are translated at the gateway boundary;
+//! requests already using the provider-native API remain a translation-free fast path.
 //!
 //! The runtime starts the gateway before the app process (`start_gateway`) and
 //! passes its URL to the app; routing lives in `router`, credential injection in
@@ -9,6 +10,7 @@
 mod config;
 mod creds;
 mod error;
+mod protocol;
 mod router;
 mod usage;
 pub use config::{bindings_from_env, bindings_from_env_map, route_from_remote_ai_lease};
@@ -24,8 +26,8 @@ pub use router::{
     ObservedModelAvailability, ObservedModels,
 };
 pub use usage::{
-    parse_ai_token_usage, AiTokenUsage, AiUsageClientApi, AiUsageEvent, AiUsageObserver,
-    AiUsageOutcome, AiUsageProvider,
+    parse_ai_token_usage, AiGatewayRequestTiming, AiTokenUsage, AiUsageClientApi, AiUsageEvent,
+    AiUsageObserver, AiUsageOutcome, AiUsageProvider,
 };
 
 use std::net::{Ipv4Addr, SocketAddr};

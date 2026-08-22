@@ -82,6 +82,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             azure_endpoint: None,
             cred: aws_cred(),
             upstream_base_override: Some(aws_upstream.base_url()),
+            additional_headers: Default::default(),
         },
         GatewayRoute {
             name: "azllm".to_string(),
@@ -91,6 +92,7 @@ async fn routes_two_clouds_with_rewrite_auth_and_passthrough() {
             azure_endpoint: Some(azure_upstream.base_url()),
             cred: AmbientCred::Bearer(BearerTokenCred::static_token("test-azure-token")),
             upstream_base_override: Some(azure_upstream.base_url()),
+            additional_headers: Default::default(),
         },
     ];
 
@@ -183,6 +185,7 @@ async fn large_body_reaches_the_upstream_instead_of_413() {
         azure_endpoint: None,
         cred: aws_cred(),
         upstream_base_override: Some(upstream.base_url()),
+        additional_headers: Default::default(),
     }];
     let base = serve(build_router(routes)).await;
     let client = reqwest::Client::new();
@@ -227,6 +230,7 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
         azure_endpoint: None,
         cred: aws_cred(),
         upstream_base_override: Some(upstream.base_url()),
+        additional_headers: Default::default(),
     }];
     let base = serve(build_router(routes)).await;
     let client = reqwest::Client::new();
@@ -257,7 +261,7 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
 }
 
 #[tokio::test]
-async fn direct_anthropic_is_fixed_to_messages_and_injects_only_its_api_key() {
+async fn direct_anthropic_translates_chat_and_injects_only_its_api_key() {
     let upstream = MockServer::start_async().await;
     let messages = upstream
         .mock_async(|when, then| {
@@ -292,20 +296,27 @@ async fn direct_anthropic_is_fixed_to_messages_and_injects_only_its_api_key() {
     assert!(response.text().await.unwrap().contains("msg_direct"));
     messages.assert_async().await;
 
-    let wrong_protocol = client
+    let translated_protocol = client
         .post(format!("{base}/direct/v1/chat/completions"))
         .json(&json!({"model": "claude-sonnet-4.6", "messages": []}))
         .send()
         .await
-        .expect("wrong protocol response");
-    assert_eq!(wrong_protocol.status(), 400);
-    assert_eq!(messages.hits_async().await, 1);
+        .expect("translated protocol response");
+    assert_eq!(translated_protocol.status(), 200);
+    assert_eq!(
+        translated_protocol
+            .json::<serde_json::Value>()
+            .await
+            .unwrap()["object"],
+        "chat.completion"
+    );
+    assert_eq!(messages.hits_async().await, 2);
 
     assert!(route_from_direct_anthropic("direct", "sk-ant-admin-test").is_err());
 }
 
 #[tokio::test]
-async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
+async fn direct_openai_translates_messages_and_injects_bearer_auth() {
     let upstream = MockServer::start_async().await;
     let chat = upstream
         .mock_async(|when, then| {
@@ -315,7 +326,9 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
                 .body_contains("gpt-4.1-mini");
             then.status(200)
                 .header("content-type", "application/json")
-                .body(r#"{"id":"chat_direct","choices":[]}"#);
+                .body(
+                    r#"{"id":"chat_direct","choices":[{"index":0,"message":{"role":"assistant","content":"pong"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1,"completion_tokens":1,"total_tokens":2}}"#,
+                );
         })
         .await;
     let responses = upstream
@@ -352,15 +365,20 @@ async fn direct_openai_is_fixed_to_openai_endpoints_and_injects_bearer_auth() {
         .expect("responses request");
     assert_eq!(responses_response.status(), 200);
 
-    let wrong_protocol = client
+    let translated_protocol = client
         .post(format!("{base}/direct/v1/messages"))
         .json(&json!({"model": "gpt-4.1-mini", "messages": []}))
         .send()
         .await
-        .expect("wrong protocol response");
-    assert_eq!(wrong_protocol.status(), 400);
-    assert_eq!(chat.hits_async().await, 1);
-    chat.assert_async().await;
+        .expect("translated protocol response");
+    let translated_status = translated_protocol.status();
+    let translated_body = translated_protocol
+        .json::<serde_json::Value>()
+        .await
+        .unwrap();
+    assert_eq!(translated_status, 200, "{translated_body}");
+    assert_eq!(translated_body["type"], "message");
+    assert_eq!(chat.hits_async().await, 2);
     responses.assert_async().await;
     assert!(route_from_direct_openai("direct", "contains whitespace").is_err());
 }

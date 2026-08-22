@@ -28,6 +28,7 @@ pub struct PackagesArgs {
 #[derive(Subcommand, Debug, Clone)]
 pub enum PackagesAction {
     /// List packages for a project.
+    #[command(visible_alias = "ls")]
     List {
         /// Filter by package type.
         #[arg(long = "type")]
@@ -40,6 +41,7 @@ pub enum PackagesAction {
         search: Option<String>,
     },
     /// Show one package and its outputs.
+    #[command(visible_aliases = ["describe", "show"])]
     Get {
         /// Package ID.
         id: String,

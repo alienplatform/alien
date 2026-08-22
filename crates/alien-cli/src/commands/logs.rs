@@ -27,7 +27,12 @@ const DEFAULT_LOG_SEARCH_FIELDS: &[&str] = &["body.message"];
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Search deployment and manager logs",
-    long_about = "Search logs directly in Deepstore. The platform API is used only to resolve the target manager and mint a scoped query token."
+    long_about = "Search logs directly in Deepstore. The platform API is used only to resolve the target manager and mint a scoped query token.",
+    after_help = "EXAMPLES:
+    alien logs --deployment acme/production --follow
+    alien logs --source ai-gateway --status provider-error --provider anthropic
+    alien logs --source ai-gateway --model byo/claude-opus-5 --since 24h --json
+    alien logs --source encryption-gateway --status failed --operation decrypt"
 )]
 pub struct LogsArgs {
     /// Deployment ID, or <deployment-group-name>/<deployment-name>.
@@ -53,6 +58,30 @@ pub struct LogsArgs {
     /// Severity band to include. Repeat to include several bands.
     #[arg(long, value_enum)]
     pub level: Vec<LogLevel>,
+
+    /// Restrict results to a gateway request-diagnostics source.
+    #[arg(long, value_enum, conflicts_with = "deployment")]
+    pub source: Option<LogSource>,
+
+    /// Gateway outcome, such as success, provider-error, not-routed, gateway-error, cancelled, or failed.
+    #[arg(long, requires = "source")]
+    pub status: Option<String>,
+
+    /// Requested AI model. Only valid with --source ai-gateway.
+    #[arg(long, requires = "source")]
+    pub model: Option<String>,
+
+    /// Selected AI provider. Only valid with --source ai-gateway.
+    #[arg(long, requires = "source")]
+    pub provider: Option<String>,
+
+    /// Encryption operation, such as encrypt or decrypt. Only valid with --source encryption-gateway.
+    #[arg(long, requires = "source")]
+    pub operation: Option<String>,
+
+    /// Deployment-group ID associated with a gateway request.
+    #[arg(long, requires = "source", value_name = "DG_ID")]
+    pub deployment_group: Option<String>,
 
     /// Relative time window, such as 30m, 2h, or 7d.
     #[arg(long, default_value = "1h", value_parser = parse_duration_arg)]
@@ -94,6 +123,23 @@ pub enum LogsCloud {
     Azure,
     Kubernetes,
     Local,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LogSource {
+    Application,
+    AiGateway,
+    EncryptionGateway,
+}
+
+impl LogSource {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Application => "application",
+            Self::AiGateway => "ai-gateway",
+            Self::EncryptionGateway => "encryption-gateway",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Serialize)]
@@ -240,12 +286,20 @@ pub async fn logs_task(args: LogsArgs, ctx: ExecutionMode) -> Result<()> {
         deployment_group_name: target.deployment_group_name.clone(),
         database_id: database_id.clone(),
     };
-    let query = build_logs_query(
-        &args.query,
-        &args.level,
-        target.deployment_id.as_deref(),
-        args.system,
-    )?;
+    let deployment_filter =
+        deployment_filter_for_source(args.source, target.deployment_id.as_deref());
+    let query = build_logs_query(LogQueryFilters {
+        user_query: &args.query,
+        levels: &args.level,
+        deployment_id: deployment_filter,
+        include_system: args.system || args.source.is_some(),
+        source: args.source,
+        status: args.status.as_deref(),
+        model: args.model.as_deref(),
+        provider: args.provider.as_deref(),
+        operation: args.operation.as_deref(),
+        deployment_group: args.deployment_group.as_deref(),
+    })?;
     let (start_time, end_time) = resolve_time_window(&args);
 
     if args.follow {
@@ -303,6 +357,20 @@ fn validate_args(args: &LogsArgs) -> Result<()> {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "interval".to_string(),
             message: "Interval must be greater than zero.".to_string(),
+        }));
+    }
+    if args.source != Some(LogSource::AiGateway)
+        && (args.model.is_some() || args.provider.is_some())
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "source".to_string(),
+            message: "--model and --provider require `--source ai-gateway`.".to_string(),
+        }));
+    }
+    if args.source != Some(LogSource::EncryptionGateway) && args.operation.is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "source".to_string(),
+            message: "--operation requires `--source encryption-gateway`.".to_string(),
         }));
     }
     if let (Some(from), Some(to)) = (args.from, args.to) {
@@ -861,19 +929,28 @@ fn resolve_time_window(args: &LogsArgs) -> (DateTime<Utc>, DateTime<Utc>) {
     (start, end)
 }
 
-fn build_logs_query(
-    user_query: &str,
-    levels: &[LogLevel],
-    deployment_id: Option<&str>,
+struct LogQueryFilters<'a> {
+    user_query: &'a str,
+    levels: &'a [LogLevel],
+    deployment_id: Option<&'a str>,
     include_system: bool,
-) -> Result<String> {
+    source: Option<LogSource>,
+    status: Option<&'a str>,
+    model: Option<&'a str>,
+    provider: Option<&'a str>,
+    operation: Option<&'a str>,
+    deployment_group: Option<&'a str>,
+}
+
+fn build_logs_query(options: LogQueryFilters<'_>) -> Result<String> {
     let mut filters = Vec::new();
-    let query = user_query.trim();
+    let query = options.user_query.trim();
     if query != "*" {
         filters.push(format!("({query})"));
     }
-    if !levels.is_empty() {
-        let level_filters = levels
+    if !options.levels.is_empty() {
+        let level_filters = options
+            .levels
             .iter()
             .map(|level| {
                 let (min, max) = severity_range(*level);
@@ -883,14 +960,38 @@ fn build_logs_query(
             .join(" OR ");
         filters.push(format!("({level_filters})"));
     }
-    if let Some(deployment_id) = deployment_id {
+    if let Some(deployment_id) = options.deployment_id {
         filters.push(format!(
             "{}:\"{}\"",
             deployment_id_resource_attribute_field(),
             escape_query_string(deployment_id)
         ));
     }
-    if !include_system {
+    if let Some(source) = options.source {
+        if source == LogSource::Application {
+            filters.push("NOT attributes.alien\\.log\\.source:*".to_string());
+        } else {
+            filters.push(format!(
+                "attributes.alien\\.log\\.source:\"{}\"",
+                source.as_str()
+            ));
+        }
+    }
+    for (field, value) in [
+        ("gateway\\.outcome", options.status),
+        ("ai\\.model\\.requested", options.model),
+        ("ai\\.provider", options.provider),
+        ("encryption\\.operation", options.operation),
+        ("alien\\.deployment_group_id", options.deployment_group),
+    ] {
+        if let Some(value) = value {
+            filters.push(format!(
+                "attributes.{field}:\"{}\"",
+                escape_query_string(value)
+            ));
+        }
+    }
+    if !options.include_system {
         // Hide Alien system-component logs (e.g. infrastructure daemons) unless
         // explicitly requested. `NOT field:value` keeps documents that lack the
         // attribute entirely, so user workload logs are always shown.
@@ -909,6 +1010,17 @@ fn build_logs_query(
         Ok(format!("* AND {}", filters.join(" AND ")))
     } else {
         Ok(filters.join(" AND "))
+    }
+}
+
+fn deployment_filter_for_source(
+    source: Option<LogSource>,
+    deployment_id: Option<&str>,
+) -> Option<&str> {
+    if source.is_some() {
+        None
+    } else {
+        deployment_id
     }
 }
 
@@ -988,15 +1100,37 @@ fn parse_std_duration_arg(value: &str) -> std::result::Result<StdDuration, Strin
 mod tests {
     use super::*;
 
+    fn test_query<'a>(
+        user_query: &'a str,
+        levels: &'a [LogLevel],
+        deployment_id: Option<&'a str>,
+        include_system: bool,
+        source: Option<LogSource>,
+    ) -> Result<String> {
+        build_logs_query(LogQueryFilters {
+            user_query,
+            levels,
+            deployment_id,
+            include_system,
+            source,
+            status: None,
+            model: None,
+            provider: None,
+            operation: None,
+            deployment_group: None,
+        })
+    }
+
     #[test]
     fn builds_query_with_levels_and_deployment() {
         // `include_system = true` keeps the system-exclusion clause out of the
         // way so this asserts only the level + deployment composition.
-        let query = build_logs_query(
+        let query = test_query(
             "service_name:api",
             &[LogLevel::Warn, LogLevel::Error],
             Some("dep_123"),
             true,
+            None,
         )
         .unwrap();
 
@@ -1008,7 +1142,7 @@ mod tests {
 
     #[test]
     fn deployment_filter_escapes_resource_attribute_key_dot() {
-        let query = build_logs_query("*", &[], Some("dep_123"), true).unwrap();
+        let query = test_query("*", &[], Some("dep_123"), true, None).unwrap();
 
         assert_eq!(
             query,
@@ -1020,7 +1154,7 @@ mod tests {
     fn hides_system_components_by_default_with_match_all_base() {
         // Default (no query, levels, or deployment) must not produce a
         // pure-negative query — it needs a positive `*` base.
-        let query = build_logs_query("*", &[], None, false).unwrap();
+        let query = test_query("*", &[], None, false, None).unwrap();
 
         assert_eq!(
             query,
@@ -1030,24 +1164,75 @@ mod tests {
 
     #[test]
     fn system_flag_omits_exclusion() {
-        let query = build_logs_query("*", &[], None, true).unwrap();
+        let query = test_query("*", &[], None, true, None).unwrap();
 
         assert_eq!(query, "*");
     }
 
     #[test]
     fn system_exclusion_appends_after_positive_clauses() {
-        let query = build_logs_query(
+        let query = test_query(
             "service_name:api",
             &[LogLevel::Error],
             Some("dep_123"),
             false,
+            None,
         )
         .unwrap();
 
         assert_eq!(
             query,
             "(service_name:api) AND ((severity_number:>=17 AND severity_number:<=20)) AND resource_attributes.alien\\.deployment_id:\"dep_123\" AND NOT resource_attributes.alien\\.system:\"true\" AND NOT attributes.alien\\.system:\"true\""
+        );
+    }
+
+    #[test]
+    fn gateway_source_filter_uses_the_trusted_record_attribute() {
+        let query = test_query("*", &[], None, true, Some(LogSource::AiGateway)).unwrap();
+
+        assert_eq!(query, "attributes.alien\\.log\\.source:\"ai-gateway\"");
+    }
+
+    #[test]
+    fn gateway_filters_use_structured_attributes() {
+        let query = build_logs_query(LogQueryFilters {
+            user_query: "*",
+            levels: &[],
+            deployment_id: None,
+            include_system: true,
+            source: Some(LogSource::AiGateway),
+            status: Some("provider-error"),
+            model: Some("byo/claude-opus-5"),
+            provider: Some("anthropic"),
+            operation: None,
+            deployment_group: Some("dg_123"),
+        })
+        .unwrap();
+
+        assert_eq!(
+            query,
+            "attributes.alien\\.log\\.source:\"ai-gateway\" AND attributes.gateway\\.outcome:\"provider-error\" AND attributes.ai\\.model\\.requested:\"byo/claude-opus-5\" AND attributes.ai\\.provider:\"anthropic\" AND attributes.alien\\.deployment_group_id:\"dg_123\""
+        );
+    }
+
+    #[test]
+    fn gateway_source_rejects_a_deployment_filter() {
+        let error =
+            LogsArgs::try_parse_from(["logs", "--source", "ai-gateway", "--deployment", "dep_123"])
+                .expect_err("gateway diagnostics are not deployment-scoped");
+
+        assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+    }
+
+    #[test]
+    fn gateway_source_ignores_a_deployment_inferred_from_local_context() {
+        assert_eq!(
+            deployment_filter_for_source(Some(LogSource::AiGateway), Some("dep_linked")),
+            None
+        );
+        assert_eq!(
+            deployment_filter_for_source(None, Some("dep_linked")),
+            Some("dep_linked")
         );
     }
 

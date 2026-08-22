@@ -4438,6 +4438,22 @@ export type TargetDeploymentKubernetes = {
 
 export type TargetDeploymentKubernetesUnion = TargetDeploymentKubernetes | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type TargetDeploymentLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type TargetDeploymentLogsUnion = TargetDeploymentLogs | any;
+
 export const ConfigTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -4621,6 +4637,7 @@ export type TargetDeploymentStackSettings = {
    */
   heartbeats?: TargetDeploymentHeartbeats | undefined;
   kubernetes?: TargetDeploymentKubernetes | any | null | undefined;
+  logs?: TargetDeploymentLogs | any | null | undefined;
   network?:
     | TargetDeploymentNetworkByoVpcAws
     | TargetDeploymentNetworkByoVpcGcp
@@ -4630,6 +4647,16 @@ export type TargetDeploymentStackSettings = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -14247,6 +14274,40 @@ export function targetDeploymentKubernetesUnionFromJSON(
 }
 
 /** @internal */
+export const TargetDeploymentLogs$inboundSchema: z.ZodType<
+  TargetDeploymentLogs,
+  unknown
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function targetDeploymentLogsFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentLogs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentLogs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentLogs' from JSON`,
+  );
+}
+
+/** @internal */
+export const TargetDeploymentLogsUnion$inboundSchema: z.ZodType<
+  TargetDeploymentLogsUnion,
+  unknown
+> = z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]);
+
+export function targetDeploymentLogsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<TargetDeploymentLogsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => TargetDeploymentLogsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'TargetDeploymentLogsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigTypeByoVnetAzure$inboundSchema: z.ZodEnum<
   typeof ConfigTypeByoVnetAzure
 > = z.enum(ConfigTypeByoVnetAzure);
@@ -14452,6 +14513,9 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
   kubernetes: z.nullable(
     z.union([z.lazy(() => TargetDeploymentKubernetes$inboundSchema), z.any()]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => TargetDeploymentNetworkByoVpcAws$inboundSchema),
@@ -14461,6 +14525,9 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
       z.lazy(() => TargetDeploymentNetworkCreate$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: TargetDeploymentTelemetry$inboundSchema.optional(),
   updates: TargetDeploymentUpdates$inboundSchema.optional(),

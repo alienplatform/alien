@@ -67,12 +67,14 @@ pub enum ManagersCmd {
         open: bool,
     },
     /// List private managers
+    #[command(visible_alias = "ls")]
     List {
         /// Filter by cloud
         #[arg(long)]
         cloud: Option<PrivateManagerCloudArg>,
     },
     /// Show manager status and details
+    #[command(visible_aliases = ["get", "describe", "show"])]
     Status {
         /// Manager ID
         id: String,

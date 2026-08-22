@@ -18,6 +18,8 @@
 * [getExternalAIBinding](#getexternalaibinding) - Get external AI connection state
 * [putExternalAIBinding](#putexternalaibinding) - Connect or rotate an external AI provider key
 * [deleteExternalAIBinding](#deleteexternalaibinding) - Revoke the external AI connection
+* [createExternalAIModelCheck](#createexternalaimodelcheck) - Queue an explicit external model access check
+* [getExternalAIModelCheck](#getexternalaimodelcheck) - Get an external model access check
 
 ## createDeploymentGroup
 
@@ -632,7 +634,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
   }
@@ -1146,7 +1148,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }
@@ -1174,4 +1176,160 @@ run();
 | ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 403, 404                 | application/json         |
 | errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## createExternalAIModelCheck
+
+Queue an explicit external model access check
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createExternalAIModelCheck" method="post" path="/v1/deployment-groups/{id}/ai/external/models/{publicModelId}/checks" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.createExternalAIModelCheck({
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+    publicModelId: "<id>",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsCreateExternalAIModelCheck } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateExternalAIModelCheck.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsCreateExternalAIModelCheck(alien, {
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+    publicModelId: "<id>",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsCreateExternalAIModelCheck failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.CreateExternalAIModelCheckRequest](../../models/operations/createexternalaimodelcheckrequest.md)                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ExternalAIModelCheck](../../models/externalaimodelcheck.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getExternalAIModelCheck
+
+Get an external model access check
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getExternalAIModelCheck" method="get" path="/v1/deployment-groups/{id}/ai/external/model-checks/{checkId}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.getExternalAIModelCheck({
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+    checkId: "<id>",
+    workspace: "my-workspace",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsGetExternalAIModelCheck } from "@alienplatform/platform-api/funcs/deploymentGroupsGetExternalAIModelCheck.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsGetExternalAIModelCheck(alien, {
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+    checkId: "<id>",
+    workspace: "my-workspace",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsGetExternalAIModelCheck failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetExternalAIModelCheckRequest](../../models/operations/getexternalaimodelcheckrequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.ExternalAIModelCheck](../../models/externalaimodelcheck.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 403, 404                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |

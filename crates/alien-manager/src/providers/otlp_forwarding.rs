@@ -48,7 +48,7 @@ impl TelemetryBackend for OtlpForwardingBackend {
     async fn ingest(
         &self,
         signal: TelemetrySignal,
-        _caller: &TelemetryCaller,
+        caller: &TelemetryCaller,
         data: bytes::Bytes,
     ) -> Result<(), AlienError> {
         let path = match signal {
@@ -59,16 +59,28 @@ impl TelemetryBackend for OtlpForwardingBackend {
 
         let url = format!("{}{}", self.endpoint.trim_end_matches('/'), path);
 
-        self.client
+        let mut request = self
+            .client
             .post(&url)
             .headers(self.extra_headers.clone())
             .header("content-type", "application/x-protobuf")
-            .body(data)
+            .body(data);
+        if let Some(source) = caller.gateway_log_source {
+            request = request.header("x-alien-log-source", source.as_str());
+        }
+
+        let response = request
             .send()
             .await
             .into_alien_error()
             .context(GenericError {
                 message: "Failed to forward telemetry signal to OTLP backend".to_string(),
+            })?;
+        response
+            .error_for_status()
+            .into_alien_error()
+            .context(GenericError {
+                message: "OTLP backend rejected telemetry signal".to_string(),
             })?;
 
         Ok(())
