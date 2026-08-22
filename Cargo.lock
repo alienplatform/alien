@@ -5580,9 +5580,9 @@ dependencies = [
 
 [[package]]
 name = "jwt-simple"
-version = "0.13.0"
+version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8c93b8464e3c9f1ac3e7c7d7d0639a67581a98ab2b6d96aab19cf82c262d1f3"
+checksum = "3e047b101e6cabcaffbac2a58f71122ee300d197bfc8c5e4601ffdc016b23e4c"
 dependencies = [
  "anyhow",
  "binstring",
@@ -10694,7 +10694,7 @@ version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8464ec13c3691491391d9fce00f6416c9a48e46972f72d7865688be2080192c9"
 dependencies = [
- "rand 0.10.2",
+ "rand 0.9.5",
 ]
 
 [[package]]
