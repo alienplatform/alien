@@ -37,12 +37,10 @@ fn data_layer_emits_infrastructure_bindings() {
     assert_helm_valid(&chart, "data_layer");
 }
 
-/// The Kubernetes Frozen parent, which nothing emitted before this.
-///
-/// Two things the chart owns and the operator does not: the NetworkPolicy that makes the declared
-/// egress real, and the cluster-scoped RBAC the broker's `TokenReview` needs. Rendering is not
-/// enough on its own — `assert_helm_valid` runs `helm lint`, `helm template` and `kubeconform`, so
-/// a policy the API server would reject fails here rather than at install.
+/// The Kubernetes Frozen parent owns two things the operator does not: the NetworkPolicy that
+/// makes the declared egress real, and the cluster-scoped RBAC the broker's `TokenReview` needs.
+/// Rendering is not enough on its own — `assert_helm_valid` runs `helm lint`, `helm template` and
+/// `kubeconform`, so a policy the API server would reject fails here rather than at install.
 #[test]
 fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
     let stack = Stack::new("sandbox-chart".to_string())

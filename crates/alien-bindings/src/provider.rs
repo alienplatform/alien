@@ -2231,9 +2231,8 @@ mod tests {
 
     /// The image in the binding has to be the image the provider uses.
     ///
-    /// This asserts the seam the previous code got wrong: the value was read from nowhere and a
-    /// literal was passed instead, so every session ran a stock image whatever the stack declared
-    /// — and nothing failed, because a sandbox on the wrong image still starts.
+    /// Asserted here because the failure is silent: a sandbox built from the wrong image still
+    /// starts, so nothing else catches a declared image that never reached the create call.
     #[cfg(feature = "azure")]
     #[tokio::test]
     async fn an_azure_sandbox_binding_carries_its_disk_image_to_the_provider() {

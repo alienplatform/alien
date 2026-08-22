@@ -468,9 +468,9 @@ impl Sandbox {
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
         let capabilities = SandboxCapabilities::for_platform(platform)?;
 
-        // No backend builds a sandbox image from source. Kubernetes turned this into an empty
-        // image string and a pod that could never schedule, which is the silent no-op the
-        // capability contract forbids — the failure has to land here instead.
+        // No backend builds a sandbox image from source: an empty image string schedules a pod
+        // that can never run, the silent no-op the capability contract forbids — the failure
+        // has to land here instead.
         if let SandboxCode::Source { .. } = &self.code {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -1255,9 +1255,9 @@ mod tests {
         );
     }
 
-    /// `Source` is a public part of the type that no backend builds. Kubernetes used to turn it
-    /// into an empty image string, producing a pod that could never schedule — the refusal has to
-    /// happen at plan time and on every platform, not in one emitter.
+    /// `Source` is a public part of the type that no backend builds: an empty image string
+    /// schedules a pod that can never run, so the refusal has to happen at plan time and on
+    /// every platform, not in one emitter.
     #[test]
     fn source_code_is_refused_everywhere_rather_than_producing_a_broken_manifest() {
         let sandbox = Sandbox::new("agent".to_string())
@@ -1362,7 +1362,7 @@ mod tests {
             .expect_err("renaming a sandbox is not an update");
     }
 
-    /// An idle-suspend policy is now declarable on Azure, and a wall-clock ceiling still is not.
+    /// Azure declares an idle-suspend policy but not a wall-clock ceiling.
     ///
     /// The two travel together in `SandboxSessionPolicy` and are gated separately on purpose:
     /// Azure suspends on idle and has no maximum lifetime, so accepting one and refusing the

@@ -634,8 +634,7 @@ done
     }
 
     /// The create argv, pinned. `--id` does not exist on `run`; the id is positional, and without
-    /// `--detach` the launcher stays attached until the control deadline kills it. Both were
-    /// wrong here, and neither could be caught by a fake that accepted any argv.
+    /// `--detach` the launcher stays attached until the control deadline kills it.
     #[tokio::test]
     async fn create_passes_the_id_positionally_and_detaches() {
         let directory = tempfile::tempdir().expect("temp dir");
@@ -659,7 +658,7 @@ done
     }
 
     /// A command with no deadline is a hang waiting for a slow day, in a sandbox running code the
-    /// caller does not control. Every other backend refuses it; this one did not.
+    /// caller does not control, so it is refused here as on every other backend.
     #[tokio::test]
     async fn a_command_without_a_deadline_is_refused() {
         let (_dir, sandbox) = launcher("exit 0");

@@ -60,8 +60,8 @@ fn egress(sandbox: &Sandbox) -> Expression {
 ///
 /// The create body names a public catalog image, so a registry reference has nowhere to go.
 /// Refusing at plan time follows the AWS emitter: a reference the backend cannot honour is
-/// rejected rather than quietly replaced, which is what happened before this existed — every
-/// Azure session ran a stock image whatever the declaration said, with no error anywhere.
+/// rejected rather than quietly replaced — silently ignoring it would run a stock image
+/// whatever the declaration said, with no error anywhere.
 fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
     let unsupported = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {

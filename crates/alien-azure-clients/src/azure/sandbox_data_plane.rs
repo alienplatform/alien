@@ -2,7 +2,7 @@
 //!
 //! A **second endpoint** from ARM, at `management.<region>.azuredevcompute.io`, gated by the
 //! `Container Apps SandboxGroup Data Owner` role. Subscription Owner returns 403 here, so
-//! management permissions alone provision a group cleanly and then fail at first exec.
+//! management permissions alone provision a group without error and then fail at first exec.
 //!
 //! Microsoft's published data-plane REST reference covers `sessionPools` only, so the contract
 //! below was read out of the `azure-containerapps-sandbox` PyPI package (0.1.0b4) rather than

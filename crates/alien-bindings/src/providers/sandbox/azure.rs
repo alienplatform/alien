@@ -16,8 +16,7 @@ use crate::traits::{
     SandboxSession, SandboxSessionState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
-    CreateSandbox, EgressHostRule, EgressPolicy, EgressRule, EgressRuleAction, EgressRuleMatch,
-    SandboxDataPlaneApi,
+    CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
 use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
@@ -484,17 +483,14 @@ impl AzureSandbox {
         reason
     }
 
-    /// Runs one shell string under the client-side guard.
+    /// Runs one shell string under the client-side guard, which is the deadline plus the grace
+    /// the in-session `timeout` needs to report back. See `run_command` for why the deadline is
+    /// enforced inside the session.
     ///
-    /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
-    /// When it fires the session itself did not end the command, so the session is ended, and
-    /// the call returns once that is confirmed — the same rule the agent-supervised backends
-    /// follow, where the agent waits for its kill before reporting: `deadlineExceeded` means the
-    /// command has stopped, never that a stop was requested. This is the one path where untrusted
-    /// code is known to be running past its deadline, so it is bounded rather than early: the
-    /// deadline, the grace, and the delete's confirmation window, and it is reached only by a
-    /// session that could not run `timeout` — every other overrun is ended in place, at the
-    /// deadline.
+    /// Reached only by a session that could not run `timeout`, so it is the one path where
+    /// untrusted code is known to be overrunning: the session is ended and the call returns once
+    /// that is confirmed, because `deadlineExceeded` has to mean the command stopped rather than
+    /// that a stop was asked for.
     async fn execute_within(
         &self,
         session_id: &str,
@@ -804,6 +800,9 @@ fn is_not_found(error: &AlienError<ClientErrorData>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_azure_clients::azure::sandbox_data_plane::{
+        EgressRule, EgressRuleAction, EgressRuleMatch,
+    };
     use alien_azure_clients::azure::sandbox_data_plane::ExecResult;
     use alien_azure_clients::azure::sandbox_data_plane::MockSandboxDataPlaneApi;
     use futures::StreamExt;
@@ -907,15 +906,15 @@ mod tests {
     }
 
     /// The discriminating case. A throttle whose body mentions 404 — a trace id, an inner code, a
-    /// path — used to read as "the session is gone", which starts a second sandbox while the
-    /// first keeps running and reports a live session as terminated.
+    /// path — must not read as "the session is gone": that starts a second sandbox while the
+    /// first keeps running, reporting a live session as terminated.
     #[test]
     fn only_the_status_decides_whether_a_session_is_gone() {
         assert!(is_not_found(&http_error(404, "SandboxNotFound")));
 
         // The shape the client actually produces: a 404 is returned as
         // `http_error.context(RemoteResourceNotFound)`, so the outer variant is the classified
-        // one. Matching only `HttpResponseError` made every real 404 read as a live session.
+        // one. Matching only `HttpResponseError` would read every real 404 as a live session.
         assert!(
             is_not_found(&AlienError::new(ClientErrorData::RemoteResourceNotFound {
                 resource_type: "Sandbox".to_string(),
