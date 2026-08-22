@@ -315,9 +315,6 @@ pub(crate) fn log_exporter_from_env(env_vars: &HashMap<String, String>, id: &str
         endpoint: endpoint.clone(),
         headers,
         service_name,
-        parse_application_levels: env_vars
-            .get(alien_core::ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS)
-            .is_some_and(|value| value.eq_ignore_ascii_case("true")),
     }
 }
 

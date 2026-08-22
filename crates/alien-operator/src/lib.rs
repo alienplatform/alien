@@ -149,7 +149,6 @@ pub async fn run_operator_with_cancel_and_loops(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
-    let otlp_parse_application_levels = config.parses_application_log_levels();
     let sandbox_broker = sandbox_broker_router(&config).await;
     let otlp_cancel = cancel.clone();
     tokio::spawn(async move {
@@ -159,7 +158,6 @@ pub async fn run_operator_with_cancel_and_loops(
             otlp_db,
             otlp_namespace,
             otlp_collector_token,
-            otlp_parse_application_levels,
             sandbox_broker,
             otlp_cancel,
         )

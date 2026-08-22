@@ -6,7 +6,7 @@ use alien_core::{
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
     GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
     Stack, StackState, TestEnvironmentInfo, Vault, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -182,8 +182,6 @@ pub fn inject_environment_variables(
     info!("Injecting environment variables into compute resources");
 
     let snapshot = &config.environment_variables;
-    let parse_application_levels = config.stack_settings.parses_application_log_levels();
-
     for (resource_name, resource_entry) in &mut stack.resources {
         let resource_type = resource_entry.config.resource_type();
 
@@ -191,13 +189,7 @@ pub fn inject_environment_variables(
             || resource_type == alien_core::Container::RESOURCE_TYPE
             || resource_type == alien_core::Daemon::RESOURCE_TYPE
         {
-            inject_into_compute_resource(
-                resource_name,
-                resource_entry,
-                snapshot,
-                platform,
-                parse_application_levels,
-            )?;
+            inject_into_compute_resource(resource_name, resource_entry, snapshot, platform)?;
         }
     }
 
@@ -418,37 +410,33 @@ fn inject_into_compute_resource(
     resource_entry: &mut alien_core::ResourceEntry,
     snapshot: &EnvironmentVariablesSnapshot,
     platform: Platform,
-    parse_application_levels: bool,
 ) -> Result<()> {
     if let Some(worker) = resource_entry.config.downcast_mut::<alien_core::Worker>() {
-        inject_into_environment_with_runtime_settings(
+        inject_into_environment(
             resource_name,
             ComputeKind::Worker,
             &mut worker.environment,
             snapshot,
             platform,
-            parse_application_levels,
         )
     } else if let Some(container) = resource_entry
         .config
         .downcast_mut::<alien_core::Container>()
     {
-        inject_into_environment_with_runtime_settings(
+        inject_into_environment(
             resource_name,
             ComputeKind::Container,
             &mut container.environment,
             snapshot,
             platform,
-            parse_application_levels,
         )
     } else if let Some(daemon) = resource_entry.config.downcast_mut::<alien_core::Daemon>() {
-        inject_into_environment_with_runtime_settings(
+        inject_into_environment(
             resource_name,
             ComputeKind::Daemon,
             &mut daemon.environment,
             snapshot,
             platform,
-            parse_application_levels,
         )
     } else {
         Err(AlienError::new(ErrorData::InternalError {
@@ -458,26 +446,6 @@ fn inject_into_compute_resource(
             ),
         }))
     }
-}
-
-fn inject_into_environment_with_runtime_settings(
-    resource_name: &str,
-    kind: ComputeKind,
-    environment: &mut HashMap<String, String>,
-    snapshot: &EnvironmentVariablesSnapshot,
-    platform: Platform,
-    parse_application_levels: bool,
-) -> Result<()> {
-    inject_into_environment(resource_name, kind, environment, snapshot, platform)?;
-    if parse_application_levels {
-        environment.insert(
-            ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS.to_string(),
-            "true".to_string(),
-        );
-    } else {
-        environment.remove(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS);
-    }
-    Ok(())
 }
 
 fn inject_into_environment(
@@ -1092,9 +1060,9 @@ mod tests {
     // ── inject_environment_variables tests ──────────────────────────
 
     use alien_core::{
-        DeploymentState, DeploymentStatus, ExternalBindings, LogSettings, Platform, Resource,
-        ResourceEntry, ResourceLifecycle, ResourceStatus, RuntimeMetadata, StackResourceState,
-        StackSettings, Vault, VaultBinding, Worker, WorkerCode,
+        DeploymentState, DeploymentStatus, ExternalBindings, Platform, Resource, ResourceEntry,
+        ResourceLifecycle, ResourceStatus, RuntimeMetadata, StackResourceState, StackSettings,
+        Vault, VaultBinding, Worker, WorkerCode,
     };
     use alien_error::GenericError;
     use indexmap::IndexMap;
@@ -1387,48 +1355,6 @@ mod tests {
 
         assert_eq!(func.environment.get("APP_ENV").unwrap(), "prod");
         assert!(!func.environment.contains_key(ENV_ALIEN_SECRETS));
-        assert!(!func
-            .environment
-            .contains_key(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS));
-    }
-
-    #[test]
-    fn injects_enabled_application_level_parsing_as_runtime_setting() {
-        let mut config = make_config(make_snapshot(&[], &[]));
-        config.stack_settings.logs = Some(LogSettings {
-            parse_application_levels: true,
-        });
-        let mut stack = make_single_function_stack("worker");
-
-        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
-
-        let worker = stack
-            .resources
-            .get("worker")
-            .unwrap()
-            .config
-            .downcast_ref::<Worker>()
-            .unwrap();
-        assert_eq!(
-            worker
-                .environment
-                .get(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS)
-                .map(String::as_str),
-            Some("true")
-        );
-
-        config.stack_settings.logs = None;
-        inject_environment_variables(&mut stack, &config, Platform::Aws).unwrap();
-        let worker = stack
-            .resources
-            .get("worker")
-            .unwrap()
-            .config
-            .downcast_ref::<Worker>()
-            .unwrap();
-        assert!(!worker
-            .environment
-            .contains_key(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS));
     }
 
     #[test]

@@ -65,7 +65,6 @@ pub fn collector_records_to_otlp(
     body: &[u8],
     default_namespace: &str,
     deployment_id: &str,
-    parse_application_levels: bool,
 ) -> Result<(usize, Vec<u8>)> {
     let values = parse_collector_records(body)?;
     let now = Utc::now();
@@ -87,7 +86,7 @@ pub fn collector_records_to_otlp(
         }));
     }
 
-    let request = otlp_request(records, deployment_id, parse_application_levels);
+    let request = otlp_request(records, deployment_id);
     let mut encoded = Vec::new();
     request.encode(&mut encoded).into_alien_error().context(
         ErrorData::CollectorTelemetryInvalid {
@@ -254,11 +253,7 @@ fn nanos(timestamp: DateTime<Utc>) -> u64 {
     timestamp.timestamp_nanos_opt().unwrap_or_default().max(0) as u64
 }
 
-fn otlp_request(
-    records: Vec<CollectorLogRecord>,
-    deployment_id: &str,
-    parse_application_levels: bool,
-) -> ExportLogsServiceRequest {
+fn otlp_request(records: Vec<CollectorLogRecord>, deployment_id: &str) -> ExportLogsServiceRequest {
     let mut grouped: BTreeMap<(String, String, String), Vec<CollectorLogRecord>> = BTreeMap::new();
     for record in records {
         grouped
@@ -277,8 +272,7 @@ fn otlp_request(
             let log_records = records
                 .into_iter()
                 .map(|record| {
-                    let (severity_text, severity_number) =
-                        collector_log_severity(&record, parse_application_levels);
+                    let (severity_text, severity_number) = collector_log_severity(&record);
 
                     let mut attributes = vec![
                         kv("alien.log.source", COLLECTOR_SOURCE),
@@ -329,21 +323,16 @@ fn otlp_request(
     ExportLogsServiceRequest { resource_logs }
 }
 
-fn collector_log_severity(
-    record: &CollectorLogRecord,
-    parse_application_levels: bool,
-) -> (&'static str, i32) {
-    if parse_application_levels {
-        if let Some(level) = parse_application_log_level(&record.body) {
-            return match level {
-                ApplicationLogLevel::Trace => ("TRACE", SeverityNumber::Trace as i32),
-                ApplicationLogLevel::Debug => ("DEBUG", SeverityNumber::Debug as i32),
-                ApplicationLogLevel::Info => ("INFO", SeverityNumber::Info as i32),
-                ApplicationLogLevel::Warn => ("WARN", SeverityNumber::Warn as i32),
-                ApplicationLogLevel::Error => ("ERROR", SeverityNumber::Error as i32),
-                ApplicationLogLevel::Fatal => ("FATAL", SeverityNumber::Fatal as i32),
-            };
-        }
+fn collector_log_severity(record: &CollectorLogRecord) -> (&'static str, i32) {
+    if let Some(level) = parse_application_log_level(&record.body) {
+        return match level {
+            ApplicationLogLevel::Trace => ("TRACE", SeverityNumber::Trace as i32),
+            ApplicationLogLevel::Debug => ("DEBUG", SeverityNumber::Debug as i32),
+            ApplicationLogLevel::Info => ("INFO", SeverityNumber::Info as i32),
+            ApplicationLogLevel::Warn => ("WARN", SeverityNumber::Warn as i32),
+            ApplicationLogLevel::Error => ("ERROR", SeverityNumber::Error as i32),
+            ApplicationLogLevel::Fatal => ("FATAL", SeverityNumber::Fatal as i32),
+        };
     }
 
     if record.stream == "stderr" {
@@ -462,8 +451,8 @@ mod tests {
           ]
         }"#;
 
-        let (count, encoded) = collector_records_to_otlp(body, "demo", "dep_test", false)
-            .expect("body should convert");
+        let (count, encoded) =
+            collector_records_to_otlp(body, "demo", "dep_test").expect("body should convert");
         assert_eq!(count, 1);
 
         let request =
@@ -514,8 +503,8 @@ mod tests {
         }))
         .unwrap();
 
-        let (_, encoded) = collector_records_to_otlp(&body, "demo", "dep_test", true)
-            .expect("body should convert");
+        let (_, encoded) =
+            collector_records_to_otlp(&body, "demo", "dep_test").expect("body should convert");
         let request =
             ExportLogsServiceRequest::decode(encoded.as_slice()).expect("OTLP should decode");
         let record = &request.resource_logs[0].scope_logs[0].log_records[0];
@@ -531,7 +520,7 @@ mod tests {
     #[test]
     fn drops_out_of_scope_namespace_records() {
         let body = br#"{"filename":"/var/log/pods/other_noisy_uid/noisy/0.log","log":"drop me"}"#;
-        let error = collector_records_to_otlp(body, "demo", "dep_test", false)
+        let error = collector_records_to_otlp(body, "demo", "dep_test")
             .expect_err("out-of-scope records should be rejected");
         assert!(error.to_string().contains("no in-scope log records"));
     }
@@ -540,8 +529,8 @@ mod tests {
     fn parses_ndjson_records() {
         let body = br#"{"filename":"/var/log/pods/demo_pod_uid/api/0.log","log":"one"}
 {"filename":"/var/log/pods/demo_pod_uid/api/1.log","log":"two"}"#;
-        let (count, _encoded) = collector_records_to_otlp(body, "demo", "dep_test", false)
-            .expect("NDJSON should convert");
+        let (count, _encoded) =
+            collector_records_to_otlp(body, "demo", "dep_test").expect("NDJSON should convert");
         assert_eq!(count, 2);
     }
 }

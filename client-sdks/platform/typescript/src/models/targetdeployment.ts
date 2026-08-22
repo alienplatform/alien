@@ -4438,22 +4438,6 @@ export type TargetDeploymentKubernetes = {
 
 export type TargetDeploymentKubernetesUnion = TargetDeploymentKubernetes | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type TargetDeploymentLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type TargetDeploymentLogsUnion = TargetDeploymentLogs | any;
-
 export const ConfigTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -4637,7 +4621,6 @@ export type TargetDeploymentStackSettings = {
    */
   heartbeats?: TargetDeploymentHeartbeats | undefined;
   kubernetes?: TargetDeploymentKubernetes | any | null | undefined;
-  logs?: TargetDeploymentLogs | any | null | undefined;
   network?:
     | TargetDeploymentNetworkByoVpcAws
     | TargetDeploymentNetworkByoVpcGcp
@@ -14274,40 +14257,6 @@ export function targetDeploymentKubernetesUnionFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentLogs$inboundSchema: z.ZodType<
-  TargetDeploymentLogs,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function targetDeploymentLogsFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentLogs, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentLogs$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentLogs' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentLogsUnion$inboundSchema: z.ZodType<
-  TargetDeploymentLogsUnion,
-  unknown
-> = z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]);
-
-export function targetDeploymentLogsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentLogsUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentLogsUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentLogsUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const ConfigTypeByoVnetAzure$inboundSchema: z.ZodEnum<
   typeof ConfigTypeByoVnetAzure
 > = z.enum(ConfigTypeByoVnetAzure);
@@ -14512,9 +14461,6 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
   heartbeats: TargetDeploymentHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => TargetDeploymentKubernetes$inboundSchema), z.any()]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

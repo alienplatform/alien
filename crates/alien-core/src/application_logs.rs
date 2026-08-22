@@ -19,6 +19,11 @@ pub enum ApplicationLogLevel {
 /// ignored. Callers retain their existing stream-based fallback when parsing
 /// returns `None`.
 pub fn parse_application_log_level(body: &str) -> Option<ApplicationLogLevel> {
+    let body = body.trim();
+    if !body.starts_with('{') || !body.ends_with('}') {
+        return None;
+    }
+
     let Value::Object(record) = serde_json::from_str::<Value>(body).ok()? else {
         return None;
     };

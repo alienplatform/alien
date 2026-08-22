@@ -1139,22 +1139,6 @@ export type NewDeploymentRequestKubernetesUnion =
   | NewDeploymentRequestKubernetes
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type NewDeploymentRequestLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type NewDeploymentRequestLogsUnion = NewDeploymentRequestLogs | any;
-
 export const NewDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1336,7 +1320,6 @@ export type NewDeploymentRequestStackSettings = {
    */
   heartbeats?: NewDeploymentRequestHeartbeats | undefined;
   kubernetes?: NewDeploymentRequestKubernetes | any | null | undefined;
-  logs?: NewDeploymentRequestLogs | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws
     | NewDeploymentRequestNetworkByoVpcGcp
@@ -3887,48 +3870,6 @@ export function newDeploymentRequestKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type NewDeploymentRequestLogs$Outbound = {
-  parseApplicationLevels?: boolean | undefined;
-};
-
-/** @internal */
-export const NewDeploymentRequestLogs$outboundSchema: z.ZodType<
-  NewDeploymentRequestLogs$Outbound,
-  NewDeploymentRequestLogs
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function newDeploymentRequestLogsToJSON(
-  newDeploymentRequestLogs: NewDeploymentRequestLogs,
-): string {
-  return JSON.stringify(
-    NewDeploymentRequestLogs$outboundSchema.parse(newDeploymentRequestLogs),
-  );
-}
-
-/** @internal */
-export type NewDeploymentRequestLogsUnion$Outbound =
-  | NewDeploymentRequestLogs$Outbound
-  | any;
-
-/** @internal */
-export const NewDeploymentRequestLogsUnion$outboundSchema: z.ZodType<
-  NewDeploymentRequestLogsUnion$Outbound,
-  NewDeploymentRequestLogsUnion
-> = z.union([z.lazy(() => NewDeploymentRequestLogs$outboundSchema), z.any()]);
-
-export function newDeploymentRequestLogsUnionToJSON(
-  newDeploymentRequestLogsUnion: NewDeploymentRequestLogsUnion,
-): string {
-  return JSON.stringify(
-    NewDeploymentRequestLogsUnion$outboundSchema.parse(
-      newDeploymentRequestLogsUnion,
-    ),
-  );
-}
-
-/** @internal */
 export const NewDeploymentRequestTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof NewDeploymentRequestTypeByoVnetAzure
 > = z.enum(NewDeploymentRequestTypeByoVnetAzure);
@@ -4174,7 +4115,6 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?: NewDeploymentRequestKubernetes$Outbound | any | null | undefined;
-  logs?: NewDeploymentRequestLogs$Outbound | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws$Outbound
     | NewDeploymentRequestNetworkByoVpcGcp$Outbound
@@ -4217,9 +4157,6 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestKubernetes$outboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => NewDeploymentRequestLogs$outboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

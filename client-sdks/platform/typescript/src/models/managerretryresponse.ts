@@ -1120,22 +1120,6 @@ export type ManagerRetryResponseKubernetesUnion3 =
   | ManagerRetryResponseKubernetes3
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type ManagerRetryResponseLogs3 = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type ManagerRetryResponseLogsUnion3 = ManagerRetryResponseLogs3 | any;
-
 export const ManagerRetryResponseTypeByoVnetAzure3 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1326,7 +1310,6 @@ export type ManagerRetryResponseStackSettings3 = {
    */
   heartbeats?: ManagerRetryResponseHeartbeats3 | undefined;
   kubernetes?: ManagerRetryResponseKubernetes3 | any | null | undefined;
-  logs?: ManagerRetryResponseLogs3 | any | null | undefined;
   network?:
     | ManagerRetryResponseNetworkByoVpcAws3
     | ManagerRetryResponseNetworkByoVpcGcp3
@@ -2353,22 +2336,6 @@ export type ManagerRetryResponseKubernetesUnion2 =
   | ManagerRetryResponseKubernetes2
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type ManagerRetryResponseLogs2 = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type ManagerRetryResponseLogsUnion2 = ManagerRetryResponseLogs2 | any;
-
 export const ManagerRetryResponseTypeByoVnetAzure2 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -2559,7 +2526,6 @@ export type ManagerRetryResponseStackSettings2 = {
    */
   heartbeats?: ManagerRetryResponseHeartbeats2 | undefined;
   kubernetes?: ManagerRetryResponseKubernetes2 | any | null | undefined;
-  logs?: ManagerRetryResponseLogs2 | any | null | undefined;
   network?:
     | ManagerRetryResponseNetworkByoVpcAws2
     | ManagerRetryResponseNetworkByoVpcGcp2
@@ -3581,22 +3547,6 @@ export type ManagerRetryResponseKubernetesUnion1 =
   | ManagerRetryResponseKubernetes1
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type ManagerRetryResponseLogs1 = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type ManagerRetryResponseLogsUnion1 = ManagerRetryResponseLogs1 | any;
-
 export const ManagerRetryResponseTypeByoVnetAzure1 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -3787,7 +3737,6 @@ export type ManagerRetryResponseStackSettings1 = {
    */
   heartbeats?: ManagerRetryResponseHeartbeats1 | undefined;
   kubernetes?: ManagerRetryResponseKubernetes1 | any | null | undefined;
-  logs?: ManagerRetryResponseLogs1 | any | null | undefined;
   network?:
     | ManagerRetryResponseNetworkByoVpcAws1
     | ManagerRetryResponseNetworkByoVpcGcp1
@@ -5880,40 +5829,6 @@ export function managerRetryResponseKubernetesUnion3FromJSON(
 }
 
 /** @internal */
-export const ManagerRetryResponseLogs3$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogs3,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function managerRetryResponseLogs3FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogs3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogs3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogs3' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerRetryResponseLogsUnion3$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogsUnion3,
-  unknown
-> = z.union([z.lazy(() => ManagerRetryResponseLogs3$inboundSchema), z.any()]);
-
-export function managerRetryResponseLogsUnion3FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogsUnion3, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogsUnion3$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogsUnion3' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerRetryResponseTypeByoVnetAzure3$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseTypeByoVnetAzure3
 > = z.enum(ManagerRetryResponseTypeByoVnetAzure3);
@@ -6137,9 +6052,6 @@ export const ManagerRetryResponseStackSettings3$inboundSchema: z.ZodType<
       z.lazy(() => ManagerRetryResponseKubernetes3$inboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => ManagerRetryResponseLogs3$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -7989,40 +7901,6 @@ export function managerRetryResponseKubernetesUnion2FromJSON(
 }
 
 /** @internal */
-export const ManagerRetryResponseLogs2$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogs2,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function managerRetryResponseLogs2FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogs2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogs2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogs2' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerRetryResponseLogsUnion2$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogsUnion2,
-  unknown
-> = z.union([z.lazy(() => ManagerRetryResponseLogs2$inboundSchema), z.any()]);
-
-export function managerRetryResponseLogsUnion2FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogsUnion2, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogsUnion2$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogsUnion2' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerRetryResponseTypeByoVnetAzure2$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseTypeByoVnetAzure2
 > = z.enum(ManagerRetryResponseTypeByoVnetAzure2);
@@ -8246,9 +8124,6 @@ export const ManagerRetryResponseStackSettings2$inboundSchema: z.ZodType<
       z.lazy(() => ManagerRetryResponseKubernetes2$inboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => ManagerRetryResponseLogs2$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([
@@ -10093,40 +9968,6 @@ export function managerRetryResponseKubernetesUnion1FromJSON(
 }
 
 /** @internal */
-export const ManagerRetryResponseLogs1$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogs1,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function managerRetryResponseLogs1FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogs1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogs1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogs1' from JSON`,
-  );
-}
-
-/** @internal */
-export const ManagerRetryResponseLogsUnion1$inboundSchema: z.ZodType<
-  ManagerRetryResponseLogsUnion1,
-  unknown
-> = z.union([z.lazy(() => ManagerRetryResponseLogs1$inboundSchema), z.any()]);
-
-export function managerRetryResponseLogsUnion1FromJSON(
-  jsonString: string,
-): SafeParseResult<ManagerRetryResponseLogsUnion1, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => ManagerRetryResponseLogsUnion1$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'ManagerRetryResponseLogsUnion1' from JSON`,
-  );
-}
-
-/** @internal */
 export const ManagerRetryResponseTypeByoVnetAzure1$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseTypeByoVnetAzure1
 > = z.enum(ManagerRetryResponseTypeByoVnetAzure1);
@@ -10350,9 +10191,6 @@ export const ManagerRetryResponseStackSettings1$inboundSchema: z.ZodType<
       z.lazy(() => ManagerRetryResponseKubernetes1$inboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => ManagerRetryResponseLogs1$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

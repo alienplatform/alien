@@ -1187,22 +1187,6 @@ export type SyncListResponseKubernetes = {
 
 export type SyncListResponseKubernetesUnion = SyncListResponseKubernetes | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type SyncListResponseLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type SyncListResponseLogsUnion = SyncListResponseLogs | any;
-
 export const SyncListResponseTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1384,7 +1368,6 @@ export type SyncListResponseStackSettings = {
    */
   heartbeats?: SyncListResponseHeartbeats | undefined;
   kubernetes?: SyncListResponseKubernetes | any | null | undefined;
-  logs?: SyncListResponseLogs | any | null | undefined;
   network?:
     | SyncListResponseNetworkByoVpcAws
     | SyncListResponseNetworkByoVpcGcp
@@ -7103,40 +7086,6 @@ export function syncListResponseKubernetesUnionFromJSON(
 }
 
 /** @internal */
-export const SyncListResponseLogs$inboundSchema: z.ZodType<
-  SyncListResponseLogs,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function syncListResponseLogsFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseLogs, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseLogs$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseLogs' from JSON`,
-  );
-}
-
-/** @internal */
-export const SyncListResponseLogsUnion$inboundSchema: z.ZodType<
-  SyncListResponseLogsUnion,
-  unknown
-> = z.union([z.lazy(() => SyncListResponseLogs$inboundSchema), z.any()]);
-
-export function syncListResponseLogsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<SyncListResponseLogsUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => SyncListResponseLogsUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'SyncListResponseLogsUnion' from JSON`,
-  );
-}
-
-/** @internal */
 export const SyncListResponseTypeByoVnetAzure$inboundSchema: z.ZodEnum<
   typeof SyncListResponseTypeByoVnetAzure
 > = z.enum(SyncListResponseTypeByoVnetAzure);
@@ -7341,9 +7290,6 @@ export const SyncListResponseStackSettings$inboundSchema: z.ZodType<
   heartbeats: SyncListResponseHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => SyncListResponseKubernetes$inboundSchema), z.any()]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => SyncListResponseLogs$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

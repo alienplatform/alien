@@ -292,7 +292,6 @@ export type { LocalServiceAccountHeartbeatData } from "./zod/local-service-accou
 export type { LocalStorageHeartbeatData } from "./zod/local-storage-heartbeat-data-schema.js";
 export type { LocalVaultHeartbeatData } from "./zod/local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./zod/local-worker-heartbeat-data-schema.js";
-export type { LogSettings } from "./zod/log-settings-schema.js";
 export type { MachineProfile } from "./zod/machine-profile-schema.js";
 export type { MachinesComputeClusterHeartbeatData } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
 export type { MachinesComputeMachineStatus } from "./zod/machines-compute-machine-status-schema.js";
@@ -716,7 +715,6 @@ export { LocalServiceAccountHeartbeatDataSchema } from "./zod/local-service-acco
 export { LocalStorageHeartbeatDataSchema } from "./zod/local-storage-heartbeat-data-schema.js";
 export { LocalVaultHeartbeatDataSchema } from "./zod/local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./zod/local-worker-heartbeat-data-schema.js";
-export { LogSettingsSchema } from "./zod/log-settings-schema.js";
 export { MachineProfileSchema } from "./zod/machine-profile-schema.js";
 export { MachinesComputeClusterHeartbeatDataSchema } from "./zod/machines-compute-cluster-heartbeat-data-schema.js";
 export { MachinesComputeMachineStatusSchema } from "./zod/machines-compute-machine-status-schema.js";

@@ -9,8 +9,8 @@ use super::{
 use alien_core::{
     Container, ContainerCode, Daemon, DaemonCode, KubernetesCertificateMode,
     KubernetesExposureSettings, KubernetesGatewayRouteProfile, KubernetesIngressRouteProfile,
-    KubernetesRouteProfile, KubernetesSettings, LogSettings, PermissionProfile, ResourceLifecycle,
-    ResourceSpec, Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
+    KubernetesRouteProfile, KubernetesSettings, PermissionProfile, ResourceLifecycle, ResourceSpec,
+    Stack, StackSettings, ToolchainConfig, Vault, Worker, WorkerCode,
 };
 use alien_helm::{generate_helm_chart, HelmOptions, HelmRegistry};
 use serde_json::{json, Value};
@@ -85,32 +85,6 @@ fn chart_values_include_kubernetes_exposure_contract() {
     assert!(values
         .pointer("/stackSettings/kubernetes/exposure/certificate/secret_name_template")
         .is_none());
-}
-
-#[test]
-fn chart_renders_application_log_level_setting() {
-    let stack = Stack::new("log-levels".to_string()).build();
-    let chart = render(
-        &stack,
-        StackSettings {
-            logs: Some(LogSettings {
-                parse_application_levels: true,
-            }),
-            ..StackSettings::default()
-        },
-    );
-    assert_helm_valid(&chart, "application log levels");
-
-    let values: Value =
-        serde_yaml::from_str(&chart.files["values.yaml"]).expect("values.yaml should parse");
-    assert_eq!(
-        values.pointer("/stackSettings/logs/parseApplicationLevels"),
-        Some(&json!(true))
-    );
-
-    let rendered = test_utils::helm_template(&chart.files, None);
-    rendered.assert_ok("application log levels helm template");
-    assert!(rendered.stdout.contains("parseApplicationLevels"));
 }
 
 #[test]
