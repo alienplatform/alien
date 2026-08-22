@@ -979,13 +979,17 @@ fn bounded_shell(
 /// The wrapper that holds a command to its deadline runs inside the session and inherits its
 /// environment, so a name that changes how a shell resolves, splits, or loads hands the command a
 /// deadline it can forge. `PATH` chooses which `od` draws the nonce; `IFS` changes how the wrapper
-/// reads its own pids; every `LD_*` runs attacker code inside `od` itself. Refused as a family
-/// rather than a list, because the loader's set is longer than anything kept here would be. The
-/// same names per command are safe — those travel through `env` and reach only the command.
+/// reads its own pids; every `LD_*` runs attacker code inside `od` itself; `SHELLOPTS` turns on
+/// tracing in a `sh` that is really bash. Refused as families where they are one, because a list
+/// of names is a list of the ones somebody remembered — and `DeadlineReport::read` finds its
+/// announcement by shape for the same reason, so a name missed here is noise rather than failure.
+/// The same names per command are safe — those travel through `env` and reach only the command.
 fn checked_session_env(operation: &str, env: &BTreeMap<String, String>) -> Result<()> {
     for name in env.keys() {
         checked_env_name(operation, name)?;
-        if matches!(name.as_str(), "PATH" | "IFS") || name.starts_with("LD_") {
+        if matches!(name.as_str(), "PATH" | "IFS" | "SHELLOPTS" | "BASHOPTS")
+            || name.starts_with("LD_")
+        {
             return Err(AlienError::new(ErrorData::InvalidInput {
                 operation_context: operation.to_string(),
                 details: format!(
@@ -1566,7 +1570,10 @@ mod tests {
     const DEADLINE_PLACEHOLDER: &str = "<deadline>";
     /// The nonce a session would draw. Announced on the first line of stderr, and repeated by
     /// the killer, exactly as the wrapper does.
-    const SESSION_NONCE: &str = "a1b2c3d4";
+    /// The width the wrapper draws — `od -N16` is 16 bytes, so 32 hex digits. Short of that is
+    /// not an announcement, and a fixture that used a short one pinned a weaker rule than the
+    /// session's.
+    const SESSION_NONCE: &str = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
 
     /// Wraps a scripted stderr the way a bounded session would return it.
     fn as_session_stderr(stderr: &str) -> String {
@@ -1841,6 +1848,8 @@ mod tests {
             "LD_AUDIT",
             "LD_DEBUG",
             "LD_BIND_NOW",
+            "SHELLOPTS",
+            "BASHOPTS",
         ] {
             let mut client = MockSandboxDataPlaneApi::new();
             client.expect_create_sandbox().never();
@@ -3252,7 +3261,7 @@ mod tests {
                     exit_code: Some(0),
                     stdout: String::new(),
                     // The wrapper announces its nonce before starting the command.
-                    stderr: "beef\n".to_string(),
+                    stderr: "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\n".to_string(),
                 })
             });
 

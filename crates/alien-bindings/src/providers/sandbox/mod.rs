@@ -59,6 +59,13 @@ pub(crate) const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from
 #[cfg(any(feature = "azure", feature = "local"))]
 pub(crate) struct DeadlineReport;
 
+/// Hex digits in the nonce the wrapper draws: `od -N16` reads 16 bytes.
+///
+/// Checked exactly, so a single stray hex character on a line of its own cannot be read as an
+/// announcement and turn the rest of the stream into its own repeat.
+#[cfg(any(feature = "azure", feature = "local"))]
+const NONCE_HEXITS: usize = 32;
+
 #[cfg(any(feature = "azure", feature = "local"))]
 impl DeadlineReport {
     /// The shell program that runs a command under this deadline.
@@ -110,11 +117,24 @@ impl DeadlineReport {
     /// because only the session knows the value. Whether that signal ended the command is the
     /// status's to say.
     pub(crate) fn read(exit_code: Option<i32>, stderr: &str) -> Bounded {
-        let announced = stderr
-            .split_once('\n')
-            .filter(|(nonce, _)| !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit()));
+        // The first line that is a nonce and nothing else, rather than the first line: a shell
+        // asked to trace itself writes its own lines before this one, and they displace an
+        // announcement that has to be found for the report to mean anything. Unforgeable either
+        // way — the session writes it before the command starts, and a traced line carries the
+        // shell's prefix, so nothing the command chose can be read as the announcement.
+        let announced = stderr.split('\n').enumerate().find_map(|(index, line)| {
+            let is_nonce = line.len() == NONCE_HEXITS && line.chars().all(|c| c.is_ascii_hexdigit());
+            is_nonce.then(|| {
+                let after = stderr
+                    .split('\n')
+                    .skip(index + 1)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (line, after)
+            })
+        });
 
-        let Some((nonce, rest)) = announced else {
+        let Some((nonce, rest)) = announced.as_ref().map(|(n, r)| (*n, r.as_str())) else {
             // No announcement means the wrapper exited before starting anything, so nothing of
             // the caller's ran and nothing about a deadline can be claimed.
             return Bounded::NotRun {
@@ -224,7 +244,7 @@ mod tests {
     #[test]
     fn only_the_session_can_report_a_deadline() {
         // The shell writes its own notice after the signal, so the repeat is not always last.
-        let killed = match DeadlineReport::read(Some(137), "abc123\nboom\nabc123Killed\n") {
+        let killed = match DeadlineReport::read(Some(137), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n") {
             Bounded::Ran { killed, stderr } => {
                 assert_eq!(stderr, "boom\nKilled\n");
                 killed
@@ -235,7 +255,7 @@ mod tests {
 
         // A command echoing something nonce-shaped repeats nothing the session announced.
         assert!(matches!(
-            DeadlineReport::read(Some(0), "abc123\nboom\ndeadbeef\n"),
+            DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\ndeadbeef\n"),
             Bounded::Ran { killed: false, .. }
         ));
     }
@@ -256,12 +276,43 @@ mod tests {
         assert!(reason.contains("could not start"), "{reason}");
     }
 
+    /// The announcement survives a shell that writes before it, and a short hex line is not one.
+    ///
+    /// A `sh` that is really bash turns on tracing from `SHELLOPTS` in its environment and writes
+    /// its own lines first. Reading only line 1 lost the announcement there and reported every
+    /// command — including the ones that succeeded — as never bounded. The width is checked
+    /// exactly, so a stray hex fragment on a line of its own cannot stand in for it.
+    #[test]
+    fn the_announcement_is_found_by_shape_rather_than_by_position() {
+        let traced = format!("+ unset nonce command_pid\n+ printf\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n");
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(137), &traced) else {
+            panic!("the trace must not hide the announcement");
+        };
+        assert!(killed, "the killer's repeat still reports the kill");
+        assert_eq!(
+            stderr, "boom\nKilled\n",
+            "what precedes the announcement was written before the command started, so it is the \
+             session's own noise rather than the command's — and one of those lines is the trace \
+             of the announcement itself"
+        );
+
+        // Short of the width the session draws, so not an announcement — and the rest of the
+        // stream is not its repeat.
+        assert!(
+            matches!(
+                DeadlineReport::read(Some(137), "ab\nboom\nabc\n"),
+                Bounded::NotRun { .. }
+            ),
+            "a hex fragment is not a nonce"
+        );
+    }
+
     /// A command that finished as the killer fired keeps its own result. `kill` succeeds on a
     /// process that has exited and is not yet reaped, so the repeat alone would turn a command
     /// that beat its deadline into a deadline failure and throw away what it returned.
     #[test]
     fn a_command_that_finished_as_the_killer_fired_keeps_its_result() {
-        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "abc123\nboom\nabc123")
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4")
         else {
             panic!("the command ran");
         };
