@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -135,6 +135,16 @@ pub struct MkdirBody {
     pub path: String,
 }
 
+/// The discriminating fields of an [`agent_platform`] envelope, read before its operation body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvelopeHead {
+    /// Protocol version the caller intends to speak. Refused when unsupported, never guessed.
+    v: Option<u32>,
+    /// Which operation the body carries. Absent or unknown is refused, never defaulted.
+    op: Option<String>,
+}
+
 /// Builds the agent's router.
 pub fn router(state: Arc<AgentState>) -> Router {
     // Base64 inflates by 4/3; the rest is the JSON envelope. Without this axum's 2MB default
@@ -152,6 +162,11 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
         .route("/v1/mkdir", post(mkdir))
+        // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
+        // neither path nor method, so the one route it can reach carries every operation, chosen
+        // by `op`. Placed before the body-limit layer so an envelope `writeFile` shares the same
+        // ceiling as `/v1/files` rather than falling back to axum's default.
+        .route("/", post(agent_platform))
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .with_state(state)
 }
@@ -297,6 +312,75 @@ async fn mkdir(
     files::mkdir(&state.session_root, &body.path).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The single endpoint the GCP Agent Platform can reach, dispatching by the envelope's `op`.
+///
+/// The version is reconciled and the `op` resolved before any handler runs; each arm then hands
+/// off to the matching `/v1/*` handler, so the response — the exec NDJSON stream included — is the
+/// same bytes that route produces, and authorization stays that handler's job.
+async fn agent_platform(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> std::result::Result<Response, ApiError> {
+    let head: EnvelopeHead = serde_json::from_slice(&body).map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("envelope is not valid JSON: {error}"),
+        }))
+    })?;
+
+    let requested = head.v.ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "an envelope must carry a protocol version 'v'".to_string(),
+        }))
+    })?;
+    if requested != PROTOCOL_VERSION {
+        return Err(ApiError::from(AlienError::new(
+            ErrorData::ProtocolVersionMismatch {
+                requested,
+                supported: PROTOCOL_VERSION,
+            },
+        )));
+    }
+
+    let op = head.op.ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "an envelope must name an 'op'".to_string(),
+        }))
+    })?;
+
+    // The operation's fields are re-read from the same bytes into the body the matching `/v1/*`
+    // handler takes; that works only because those types ignore the envelope's `v`/`op`. Adding
+    // `deny_unknown_fields` to one would break this dispatch at runtime, with nothing to catch it.
+    match op.as_str() {
+        "exec" => run_command(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?)).await,
+        "readFile" => Ok(read_file(State(state), ConnectInfo(peer), headers, Query(reparse(&body)?))
+            .await?
+            .into_response()),
+        "writeFile" => Ok(
+            write_file(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "mkdir" => Ok(mkdir(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+            .await?
+            .into_response()),
+        "health" => Ok(health(Query(HealthQuery { version: None })).await?.into_response()),
+        other => Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("unknown op '{other}'"),
+        }))),
+    }
+}
+
+/// Reads the operation's own fields out of an envelope body once its `op` has selected the type.
+fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<T, ApiError> {
+    serde_json::from_slice(body).map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("envelope body did not match its op: {error}"),
+        }))
+    })
 }
 
 /// Verifies the request may reach this session, or refuses it.

@@ -508,3 +508,260 @@ async fn the_lifecycle_hooks_answer_without_a_capability() {
         );
     }
 }
+
+// --- The GCP Agent Platform envelope on `POST /` ---
+//
+// One route carries every operation, selected by `op`, because the platform's `:execute` proxies
+// `POST /` with the body verbatim and can set neither path nor method. These prove the envelope's
+// output is the same bytes the versioned route produces, and that a bad envelope is refused with a
+// typed error rather than defaulted onto some operation.
+
+/// Captures what a response is on the wire: the three things the envelope must reproduce exactly.
+async fn wire(response: reqwest::Response) -> (u16, Option<String>, String) {
+    let status = response.status().as_u16();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .and_then(|value| value.to_str().ok())
+        .map(str::to_string);
+    let body = response.text().await.expect("body");
+    (status, content_type, body)
+}
+
+/// A single write to one stream forces a deterministic frame sequence — one `stdout` at `seq: 0`
+/// then `exit` — so the two NDJSON bodies are comparable byte for byte. A command writing to both
+/// streams would interleave nondeterministically and its `seq` would differ per run.
+#[tokio::test]
+async fn exec_through_the_envelope_is_byte_identical_to_v1() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let versioned = client
+        .post(format!("{}/v1/exec", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"command": ["/bin/echo", "hello"], "deadlineMs": 10_000}))
+        .send()
+        .await
+        .expect("responds");
+    let enveloped = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"v": 1, "op": "exec", "command": ["/bin/echo", "hello"], "deadlineMs": 10_000}))
+        .send()
+        .await
+        .expect("responds");
+
+    let versioned = wire(versioned).await;
+    let enveloped = wire(enveloped).await;
+    assert_eq!(versioned.1.as_deref(), Some("application/x-ndjson"));
+    assert_eq!(
+        versioned, enveloped,
+        "the envelope must reproduce the versioned route's stream exactly"
+    );
+}
+
+#[tokio::test]
+async fn read_file_through_the_envelope_is_byte_identical_to_v1() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    client
+        .put(format!("{}/v1/files", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/main.py", "contentsBase64": BASE64.encode("print(1)")}))
+        .send()
+        .await
+        .expect("responds");
+
+    let versioned = client
+        .get(format!("{}/v1/files?path=/work/main.py", agent.base_url))
+        .bearer_auth(agent.capability())
+        .send()
+        .await
+        .expect("responds");
+    let enveloped = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"v": 1, "op": "readFile", "path": "/work/main.py"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(wire(versioned).await, wire(enveloped).await);
+}
+
+#[tokio::test]
+async fn write_file_through_the_envelope_is_byte_identical_to_v1_and_lands() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let versioned = client
+        .put(format!("{}/v1/files", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/v1.txt", "contentsBase64": BASE64.encode("x")}))
+        .send()
+        .await
+        .expect("responds");
+    let enveloped = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"v": 1, "op": "writeFile", "path": "/work/env.txt", "contentsBase64": BASE64.encode("x")}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(wire(versioned).await, wire(enveloped).await);
+    assert_eq!(
+        std::fs::read(agent.root.join("work/env.txt")).expect("the envelope write landed"),
+        b"x"
+    );
+}
+
+#[tokio::test]
+async fn mkdir_through_the_envelope_is_byte_identical_to_v1_and_lands() {
+    let agent = Agent::start().await;
+    let client = reqwest::Client::new();
+
+    let versioned = client
+        .post(format!("{}/v1/mkdir", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"path": "/work/v1"}))
+        .send()
+        .await
+        .expect("responds");
+    let enveloped = client
+        .post(format!("{}/", agent.base_url))
+        .bearer_auth(agent.capability())
+        .json(&json!({"v": 1, "op": "mkdir", "path": "/work/env"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(wire(versioned).await, wire(enveloped).await);
+    assert!(agent.root.join("work/env").is_dir(), "the envelope mkdir landed");
+}
+
+/// `health` carries no capability on either route, so the envelope arm must reach it without one —
+/// the version it would assert is already the envelope's own `v`.
+#[tokio::test]
+async fn health_through_the_envelope_is_byte_identical_to_v1() {
+    let agent = Agent::start().await;
+
+    let versioned = reqwest::get(format!("{}/v1/health", agent.base_url))
+        .await
+        .expect("responds");
+    let enveloped = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": 1, "op": "health"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(wire(versioned).await, wire(enveloped).await);
+}
+
+/// An absent `op` is refused, not defaulted onto an operation. Refused before authorization, so no
+/// capability is needed to reach the check.
+#[tokio::test]
+async fn an_absent_op_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": 1}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 400);
+    assert!(
+        response.text().await.expect("body").contains("must name an 'op'"),
+        "the refusal must say an op is required"
+    );
+}
+
+/// An unknown `op` is refused rather than silently mapped to some operation.
+#[tokio::test]
+async fn an_unknown_op_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": 1, "op": "frobnicate"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 400);
+    assert!(
+        response.text().await.expect("body").contains("frobnicate"),
+        "the refusal must name the unknown op"
+    );
+}
+
+/// The agent outlives the image that built it, so a version it does not implement is a named
+/// refusal — not a request it half-understands.
+#[tokio::test]
+async fn an_unsupported_version_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .post(format!("{}/", agent.base_url))
+        .json(&json!({"v": PROTOCOL_VERSION + 1, "op": "health"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 400);
+    let body = response.text().await.expect("body");
+    assert!(
+        body.contains(&format!("v{}", PROTOCOL_VERSION + 1)) && body.contains(&format!("v{PROTOCOL_VERSION}")),
+        "the error must name both versions: {body}"
+    );
+}
+
+/// The envelope must route through `peer.rs`, not around it: under transport authorization the code
+/// the agent itself runs shares the guest's network stack and reaches this port, and it must be
+/// refused there exactly as it is on `/v1/mkdir`. Running the agent with this process as its exec
+/// identity is what that in-guest caller looks like from the inside.
+///
+/// Linux-only because the socket's owner is read from `/proc/net/tcp`.
+#[tokio::test]
+#[cfg(target_os = "linux")]
+async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
+    let dir = TempDir::new().expect("temp dir");
+    let root = dir.path().canonicalize().expect("canonical root");
+
+    let state = Arc::new(AgentState {
+        session_root: root.clone(),
+        authorization: AgentAuthorization::Transport,
+        exec_identity: test_identity(),
+        output_cap: 1 << 20,
+    });
+
+    let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
+        .await
+        .expect("bind loopback");
+    let address = listener.local_addr().expect("address");
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            router(state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .expect("serve");
+    });
+
+    let response = reqwest::Client::new()
+        .post(format!("http://{address}/"))
+        .json(&json!({"v": 1, "op": "mkdir", "path": "/work"}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 403, "the envelope must not serve the agent's own supervised code");
+    assert!(
+        !root.join("work").exists(),
+        "a refused envelope must not have done its work anyway"
+    );
+}
