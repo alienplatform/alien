@@ -34,7 +34,8 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  * Capabilities are not uniform. Call `capabilities()` on the binding and branch, or handle the
  * typed error — an unsupported capability never silently succeeds. Notably GCP cannot
  * reconnect to a session (its session id is scoped to one Cloud Run instance), only Azure
- * restricts egress to a hostname allowlist, and no platform can snapshot a session.
+ * restricts egress to a hostname allowlist, no platform can snapshot a session, and only AWS
+ * and Local run a command under a different identity than the process supervising it.
  *
  * Limits are enforced ceilings, not scheduling hints, and are validated when the stack is
  * planned. A platform that cannot enforce them rejects the sandbox rather than ignoring them.

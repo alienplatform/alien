@@ -8,6 +8,6 @@ import * as z from "zod";
 /**
  * @description Names a single sandbox capability, so an unsupported call can report which one it needed.
  */
-export const SandboxCapabilitySchema = z.enum(["files", "reconnect", "preview", "suspendResume", "snapshot", "domainEgressRules", "egressDeny", "enforcedLimits", "processLimit", "sessionLifetime", "supervisorPidNamespace"]).describe("Names a single sandbox capability, so an unsupported call can report which one it needed.")
+export const SandboxCapabilitySchema = z.enum(["files", "reconnect", "preview", "suspendResume", "snapshot", "domainEgressRules", "egressDeny", "enforcedLimits", "processLimit", "sessionLifetime", "supervisorPidNamespace", "supervisorIsolation"]).describe("Names a single sandbox capability, so an unsupported call can report which one it needed.")
 
 export type SandboxCapability = z.infer<typeof SandboxCapabilitySchema>

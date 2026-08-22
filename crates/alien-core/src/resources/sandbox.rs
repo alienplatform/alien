@@ -201,6 +201,12 @@ pub struct SandboxCapabilities {
     /// Kubernetes sandbox pod drops every capability — which is also what denies `ptrace` by
     /// construction, so granting it there would remove a lock to add one.
     pub supervisor_pid_namespace: bool,
+    /// The process supervising a command is a different identity from the command.
+    ///
+    /// False where a command runs as the agent's own user: it can then read the supervisor's
+    /// environment and signal it. Separate from `supervisorPidNamespace`, which is about
+    /// visibility rather than identity — a backend can have one without the other.
+    pub supervisor_isolation: bool,
 }
 
 impl SandboxCapabilities {
@@ -230,6 +236,9 @@ impl SandboxCapabilities {
                 // `CAP_SYS_ADMIN`. It can drop privilege (`CAP_SETUID`/`CAP_SETGID` are held) and
                 // it cannot create a namespace. No backend offers this today.
                 supervisor_pid_namespace: false,
+                // The agent runs as uid 0 and `setuid`s the command to uid 60000, so the command
+                // runs under a different identity than the process supervising it.
+                supervisor_isolation: true,
             }),
             Platform::Azure => Ok(Self {
                 files: true,
@@ -256,6 +265,9 @@ impl SandboxCapabilities {
                 session_lifetime: false,
                 // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
                 supervisor_pid_namespace: false,
+                // No Alien process runs the command at all — the platform's own data plane does,
+                // so there is no separate supervisor identity to speak of.
+                supervisor_isolation: false,
             }),
             // A Cloud Run sandbox id is scoped to one instance, and session affinity does not
             // hold one across turns. That is the absence of a reconnect guarantee, not a
@@ -273,6 +285,9 @@ impl SandboxCapabilities {
                 session_lifetime: false,
                 // A Cloud Run sandbox is a subprocess of the workload; nothing of ours is inside.
                 supervisor_pid_namespace: false,
+                // The session is a subprocess of the workload, which runs it directly: no separate
+                // identity supervises the command.
+                supervisor_isolation: false,
             }),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
@@ -293,6 +308,11 @@ impl SandboxCapabilities {
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
+                // The pod pins one uid (`run_as_user: 65534` on both pod and container) with
+                // `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no
+                // process can setuid to split the command off from a supervisor. No uid split is
+                // possible, so none exists.
+                supervisor_isolation: false,
             }),
             Platform::Local => Ok(Self {
                 files: true,
@@ -307,8 +327,12 @@ impl SandboxCapabilities {
                 process_limit: true,
                 session_lifetime: false,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
-                // there is no supervisor sharing the sandbox to isolate from.
+                // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
+                // The supervisor is the manager on the host, outside the container entirely, and
+                // `docker exec` runs the command as the workload uid — a different identity by
+                // construction.
+                supervisor_isolation: true,
             }),
             Platform::Machines | Platform::Test => {
                 Err(AlienError::new(ErrorData::SandboxPlatformUnsupported {
@@ -332,6 +356,7 @@ impl SandboxCapabilities {
             SandboxCapability::ProcessLimit => self.process_limit,
             SandboxCapability::SessionLifetime => self.session_lifetime,
             SandboxCapability::SupervisorPidNamespace => self.supervisor_pid_namespace,
+            SandboxCapability::SupervisorIsolation => self.supervisor_isolation,
         };
 
         if available {
@@ -372,6 +397,8 @@ pub enum SandboxCapability {
     SessionLifetime,
     /// A command runs in its own PID namespace, isolated from the agent supervising it
     SupervisorPidNamespace,
+    /// A command runs under a different identity than the process supervising it
+    SupervisorIsolation,
 }
 
 impl SandboxCapability {
@@ -389,6 +416,7 @@ impl SandboxCapability {
             Self::ProcessLimit => "processLimit",
             Self::SessionLifetime => "sessionLifetime",
             Self::SupervisorPidNamespace => "supervisorPidNamespace",
+            Self::SupervisorIsolation => "supervisorIsolation",
         }
     }
 }
@@ -963,6 +991,45 @@ mod tests {
             !k8s.preview,
             "the session-scoped ingress gateway does not exist yet"
         );
+    }
+
+    /// Whether the process supervising a command is a separate identity from the command.
+    ///
+    /// Values are measured, not inferred. AWS: the agent runs as uid 0 with
+    /// `CapEff: 00000000a80425fb` and `setuid`s the command to uid 60000, so the two differ.
+    /// Kubernetes: the sandbox pod pins `run_as_user: 65534` on both pod and container with
+    /// `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no uid split is
+    /// possible (`kubernetes_spec.rs`). Local: `docker exec` runs as the workload uid while the
+    /// manager supervises from the host. Azure and Cloud Run have no in-sandbox supervisor at all.
+    #[test]
+    fn supervisor_isolation_is_per_platform() {
+        let value = |platform| {
+            SandboxCapabilities::for_platform(platform)
+                .expect("supported")
+                .supervisor_isolation
+        };
+
+        assert!(value(Platform::Aws), "root agent setuids the command to 60000");
+        assert!(value(Platform::Local), "the supervisor is on the host, outside the container");
+        assert!(!value(Platform::Kubernetes), "a single pinned uid cannot be split");
+        assert!(!value(Platform::Azure), "no Alien process runs the command");
+        assert!(!value(Platform::Gcp), "the session is a subprocess of the workload");
+    }
+
+    /// The point of the field: AWS and Cloud Run report the *same* `supervisor_pid_namespace`
+    /// (neither has `CAP_SYS_ADMIN`), so that axis alone reads them as equivalent. They are not —
+    /// AWS separates the command's identity from the supervisor's and Cloud Run does not.
+    #[test]
+    fn supervisor_isolation_separates_aws_from_a_subprocess_backend() {
+        let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
+        let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+
+        assert_eq!(
+            aws.supervisor_pid_namespace, gcp.supervisor_pid_namespace,
+            "the older axis cannot tell them apart"
+        );
+        assert!(aws.supervisor_isolation, "AWS setuids the command off the supervisor");
+        assert!(!gcp.supervisor_isolation, "Cloud Run runs the command as the workload itself");
     }
 
     #[test]
