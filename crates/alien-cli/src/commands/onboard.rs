@@ -219,6 +219,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                         OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
                         OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
                     },
+                    provider_allowlist: Vec::new(),
                     release_channel: None,
                     required: true,
                 })
