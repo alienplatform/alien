@@ -142,6 +142,8 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+        checked_session_env(CREATE, &request.env)?;
+
         let asked = egress_policy(&self.egress);
         let sandbox = self
             .client
@@ -236,8 +238,9 @@ impl Sandbox for AzureSandbox {
                 Ok(session) => return Ok(session),
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
-                // session, and are answered the same way: a fresh one. The gate has already
-                // discarded whatever it refused, so nothing is left running.
+                // session, and are answered the same way: a fresh one. A session refused for its
+                // policy is left running: it may be another revision's, and this caller is served
+                // by the replacement rather than by taking theirs.
                 //
                 // Narrow on purpose: a readiness timeout says the data plane is slow, and
                 // answering that by creating a second sandbox makes it slower.
@@ -287,10 +290,24 @@ impl Sandbox for AzureSandbox {
         // that never answers at all; there the only lever left is ending the session, and that
         // call returns once the session is confirmed gone rather than claim containment early.
         // The data plane's exec takes a command and a working directory and nothing else, so a
-        // per-command variable has to travel as a shell assignment in front of it. Names are
-        // checked first: an unchecked one is a second command, not a variable.
+        // per-command variable travels through `env` in the argv — which keeps it off the shell
+        // that bounds the command. Names are checked so `env` will take them as variables.
         for name in request.env.keys() {
             checked_env_name(RUN_COMMAND, name)?;
+        }
+        // `env` takes operands as assignments until one is not, so a program whose own name
+        // carries `=` would be read as a variable and the next argument run in its place.
+        if !request.env.is_empty() {
+            if let Some(program) = request.command.first().filter(|first| first.contains('=')) {
+                return Err(AlienError::new(ErrorData::InvalidInput {
+                    operation_context: RUN_COMMAND.to_string(),
+                    details: format!(
+                        "command '{program}' cannot carry '=' in its name while the call also \
+                         declares environment variables"
+                    ),
+                    field_name: Some("command".to_string()),
+                }));
+            }
         }
         let shell = bounded_shell(&request.command, &request.env, request.deadline);
 
@@ -492,9 +509,10 @@ impl Sandbox for AzureSandbox {
 impl AzureSandbox {
     /// Brings a session the caller named back into service, or says why it cannot be.
     ///
-    /// The one path that repairs rather than refusing: `get_or_create` asked for a usable
-    /// session, so a session that cannot serve is discarded and replaced rather than returned as
-    /// an error the caller has no way to act on.
+    /// The one path that replaces rather than only refusing: `get_or_create` asked for a usable
+    /// session, so an id that cannot serve becomes a fresh session rather than an error the
+    /// caller has no way to act on. Only a `Failed` sandbox is deleted here — one refused for its
+    /// policy is left alone, because the group is shared and it may be in use.
     async fn reconnect(&self, session_id: &str) -> Result<SandboxSession> {
         let gone = || {
             AlienError::new(ErrorData::SandboxCommandFailed {
@@ -931,11 +949,10 @@ fn bounded_shell(
     // Through `env`, so the variables reach the caller's command and not the wrapper that bounds
     // it: an assignment in front of the wrapper would put a caller-chosen `PATH` on the shell
     // that resolves `setsid`, `sleep` and `kill`, and the deadline is only as real as those.
-    let mut argv = Vec::with_capacity(command.len() + env.len() + 2);
+    let mut argv = Vec::with_capacity(command.len() + env.len() + 1);
     if !env.is_empty() {
         argv.push("env".to_string());
         argv.extend(env.iter().map(|(name, value)| format!("{name}={value}")));
-        argv.push("--".to_string());
     }
     argv.extend(command.iter().cloned());
 
@@ -949,10 +966,36 @@ fn bounded_shell(
     )
 }
 
-/// Refuses a variable name the shell would read as anything other than a name.
+/// Names a session may not set, because the shell that bounds a command inherits them.
 ///
-/// The name is not quotable — it sits left of the `=` — so a name carrying a space or a `;` is a
-/// second command rather than a variable, and quoting the value alone would not stop it.
+/// A session-level `PATH` chooses which `od` draws the deadline nonce, and an `IFS` changes how
+/// the wrapper reads its own pids back — either hands the command a deadline it can forge. The
+/// same names are safe per command, where they travel through `env` and reach only the command.
+const SESSION_ENV_REFUSED: [&str; 4] = ["PATH", "IFS", "LD_PRELOAD", "LD_LIBRARY_PATH"];
+
+/// Refuses an environment a session must not carry.
+fn checked_session_env(operation: &str, env: &BTreeMap<String, String>) -> Result<()> {
+    for name in env.keys() {
+        checked_env_name(operation, name)?;
+        if SESSION_ENV_REFUSED.contains(&name.as_str()) {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: format!(
+                    "'{name}' cannot be set for the whole session, because the wrapper that holds \
+                     a command to its deadline inherits it; declare it on the command instead"
+                ),
+                field_name: Some("env".to_string()),
+            }));
+        }
+    }
+    Ok(())
+}
+
+/// Refuses a variable name `env` would not take as one.
+///
+/// Kept even though the whole `NAME=value` pair is one quoted argument: a name outside this set
+/// either fails the exec or silently becomes something else, and the other backends bound it the
+/// same way.
 fn checked_env_name(operation: &str, name: &str) -> Result<()> {
     let usable = !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
@@ -1674,7 +1717,7 @@ mod tests {
         );
 
         assert!(
-            wrapped.ends_with("' sh 'env' 'TOKEN=a'\\''; rm -rf /' '--' 'printenv' 'TOKEN'"),
+            wrapped.ends_with("' sh 'env' 'TOKEN=a'\\''; rm -rf /' 'printenv' 'TOKEN'"),
             "the value has to survive as one argument to env: {wrapped}"
         );
     }
@@ -1700,9 +1743,143 @@ mod tests {
             "the wrapper has to resolve its own tools: {wrapper}"
         );
         assert_eq!(
-            argv, "'env' 'PATH=/tmp/attacker' '--' 'sleep' 'forever'",
+            argv, "'env' 'PATH=/tmp/attacker' 'sleep' 'forever'",
             "the variable belongs to the command, not to the shell that bounds it"
         );
+    }
+
+    /// The wrapper the provider builds actually runs, with the variable set.
+    ///
+    /// The other tests here assert the shape of the string. This one runs it, because the shape
+    /// can be exactly what was intended and still not execute: `env` reads operands as
+    /// assignments until one is not, so a separator in the wrong place becomes the program name.
+    /// A stand-in `setsid` is supplied because macOS ships none.
+    #[test]
+    #[cfg(unix)]
+    fn the_wrapper_this_builds_runs_with_the_variable_set() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = std::env::temp_dir().join(format!("alien-azure-shell-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).expect("a directory for the stand-in");
+        let setsid = bin.join("setsid");
+        std::fs::write(&setsid, "#!/bin/sh\nexec \"$@\"\n").expect("the stand-in is written");
+        std::fs::set_permissions(&setsid, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+
+        // Addressed absolutely, so the command itself does not depend on the `PATH` under test.
+        let command = [
+            "/bin/sh".to_string(),
+            "-c".to_string(),
+            "printf %s \"$TOKEN\"".to_string(),
+        ];
+
+        let run = |env: BTreeMap<String, String>| {
+            let shell = bounded_shell(&command, &env, std::time::Duration::from_secs(5));
+            std::process::Command::new("/bin/sh")
+                .arg("-c")
+                .arg(shell)
+                .env("PATH", &path)
+                .output()
+                .expect("a shell runs")
+        };
+
+        let plain = run(BTreeMap::from([("TOKEN".to_string(), "reached".to_string())]));
+        assert_eq!(
+            String::from_utf8_lossy(&plain.stdout),
+            "reached",
+            "the variable has to reach the command; stderr {:?}",
+            String::from_utf8_lossy(&plain.stderr)
+        );
+
+        // The wrapper resolves its own tools before the caller's environment applies, so a `PATH`
+        // that points nowhere reaches the command and leaves the deadline intact.
+        let repointed = run(BTreeMap::from([
+            ("TOKEN".to_string(), "reached".to_string()),
+            ("PATH".to_string(), "/nonexistent".to_string()),
+        ]));
+        assert_eq!(
+            String::from_utf8_lossy(&repointed.stdout),
+            "reached",
+            "a caller's PATH must not break the wrapper; stderr {:?}",
+            String::from_utf8_lossy(&repointed.stderr)
+        );
+
+        std::fs::remove_dir_all(&bin).ok();
+    }
+
+    /// A session cannot set the variables the deadline wrapper reads.
+    ///
+    /// The wrapper runs inside the session and inherits its environment, so a session-level
+    /// `PATH` picks which `od` draws the deadline nonce and an `IFS` changes how the wrapper
+    /// reads its own pids — either lets the command claim a deadline nothing enforced. The same
+    /// names on a command are fine, because those reach only the command.
+    #[tokio::test]
+    async fn a_session_cannot_set_what_the_deadline_wrapper_reads() {
+        for name in ["PATH", "IFS", "LD_PRELOAD", "LD_LIBRARY_PATH"] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            client.expect_create_sandbox().never();
+
+            let error = sandbox_with(client)
+                .create(CreateSessionRequest {
+                    session_id: None,
+                    tenant_key: None,
+                    env: BTreeMap::from([(name.to_string(), "/tmp/attacker".to_string())]),
+                })
+                .await
+                .expect_err("a session that could forge its own deadline must not be created");
+
+            assert_eq!(error.code, "INVALID_INPUT", "{name}: {error}");
+        }
+
+        // The ordinary case still reaches the create body.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .withf(|_, request| request.environment.get("TOKEN").map(String::as_str) == Some("t"))
+            .returning(|_, _| Ok(running("s1", None)));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+
+        sandbox_with(client)
+            .create(CreateSessionRequest {
+                session_id: None,
+                tenant_key: None,
+                env: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+            })
+            .await
+            .expect("an ordinary variable is still carried");
+    }
+
+    /// A program whose own name carries `=` is refused when the call also declares variables.
+    ///
+    /// `env` reads operands as assignments until one is not, so such a name would be taken as a
+    /// variable and the next argument run in its place — the command silently replaced rather
+    /// than refused.
+    #[tokio::test]
+    async fn a_program_name_env_would_swallow_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_execute_shell_command().never();
+
+        let mut request = command(5);
+        request.command = vec!["FOO=bar".to_string(), "printenv".to_string()];
+        request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
+
+        let error = match sandbox_with(client).run_command("s1", request).await {
+            Ok(_) => panic!("a command env would swallow must not be sent"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
     }
 
     /// A name the shell would read as a second command never reaches the shell string.
@@ -2757,8 +2934,9 @@ mod tests {
             .await
             .expect("a caller asking for a session gets a usable one");
 
-        // Answered the same way as a terminated id: the one that woke up wider is discarded and
-        // replaced, rather than returned as an error the caller cannot act on.
+        // Answered the same way as a terminated id: the caller gets a fresh session. The one
+        // that woke up wider is put back to sleep, not deleted — the id may be another
+        // revision's.
         assert_eq!(session.session_id, "fresh");
     }
 
@@ -3022,7 +3200,7 @@ mod tests {
         client
             .expect_execute_shell_command()
             .times(1)
-            .withf(|_, _, shell, _| shell.ends_with("' sh 'env' 'TOKEN=t' '--' 'sleep' 'forever'"))
+            .withf(|_, _, shell, _| shell.ends_with("' sh 'env' 'TOKEN=t' 'sleep' 'forever'"))
             .returning(|_, _, _, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::ExecResult {
                     exit_code: Some(0),

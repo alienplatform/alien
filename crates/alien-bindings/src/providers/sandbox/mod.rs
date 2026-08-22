@@ -84,7 +84,8 @@ impl DeadlineReport {
              nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') || exit {unboundable}; \
              printf '%s\\n' \"$nonce\" >&2; \
              setsid \"$@\" & command_pid=$!; \
-             ( sleep {deadline} & sleeper=$!; trap 'kill $sleeper 2>/dev/null; exit' TERM; wait $sleeper; \
+             ( sleep {deadline} & sleeper=$!; trap 'kill \"$sleeper\" 2>/dev/null; exit' TERM; \
+               wait \"$sleeper\"; \
                trap '' TERM; kill -KILL -\"$command_pid\" 2>/dev/null && printf %s \"$nonce\" >&2 ) & killer_pid=$!; \
              wait \"$command_pid\"; status=$?; \
              kill \"$killer_pid\" 2>/dev/null; wait \"$killer_pid\"; \
@@ -296,11 +297,13 @@ mod tests {
             "the killer is stopped and then awaited, whatever the command's exit: {program}"
         );
         assert!(
-            program.contains("wait $sleeper; trap '' TERM; kill -KILL"),
-            "past its sleep the killer ignores the stop, so its report is never cut off: {program}"
+            program.contains(r#"wait "$sleeper"; trap '' TERM; kill -KILL"#),
+            "past its sleep the killer ignores the stop, so its report is never cut off, and the \
+             pid is quoted so an inherited IFS cannot split it into words that are not children: \
+             {program}"
         );
         assert!(
-            program.contains("trap 'kill $sleeper 2>/dev/null; exit' TERM"),
+            program.contains(r#"trap 'kill "$sleeper" 2>/dev/null; exit' TERM"#),
             "a stopped killer reaps its own sleeper, so none outlives the command: {program}"
         );
         assert!(
