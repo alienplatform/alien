@@ -292,6 +292,14 @@ impl Sandbox for AzureSandbox {
         // The data plane's exec takes a command and a working directory and nothing else, so a
         // per-command variable travels through `env` in the argv — which keeps it off the shell
         // that bounds the command. Names are checked so `env` will take them as variables.
+        if request.command.is_empty() {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: RUN_COMMAND.to_string(),
+                details: "a command must name a program to run".to_string(),
+                field_name: Some("command".to_string()),
+            }));
+        }
+
         for name in request.env.keys() {
             checked_env_name(RUN_COMMAND, name)?;
         }
@@ -966,18 +974,18 @@ fn bounded_shell(
     )
 }
 
-/// Names a session may not set, because the shell that bounds a command inherits them.
-///
-/// A session-level `PATH` chooses which `od` draws the deadline nonce, and an `IFS` changes how
-/// the wrapper reads its own pids back — either hands the command a deadline it can forge. The
-/// same names are safe per command, where they travel through `env` and reach only the command.
-const SESSION_ENV_REFUSED: [&str; 4] = ["PATH", "IFS", "LD_PRELOAD", "LD_LIBRARY_PATH"];
-
 /// Refuses an environment a session must not carry.
+///
+/// The wrapper that holds a command to its deadline runs inside the session and inherits its
+/// environment, so a name that changes how a shell resolves, splits, or loads hands the command a
+/// deadline it can forge. `PATH` chooses which `od` draws the nonce; `IFS` changes how the wrapper
+/// reads its own pids; every `LD_*` runs attacker code inside `od` itself. Refused as a family
+/// rather than a list, because the loader's set is longer than anything kept here would be. The
+/// same names per command are safe — those travel through `env` and reach only the command.
 fn checked_session_env(operation: &str, env: &BTreeMap<String, String>) -> Result<()> {
     for name in env.keys() {
         checked_env_name(operation, name)?;
-        if SESSION_ENV_REFUSED.contains(&name.as_str()) {
+        if matches!(name.as_str(), "PATH" | "IFS") || name.starts_with("LD_") {
             return Err(AlienError::new(ErrorData::InvalidInput {
                 operation_context: operation.to_string(),
                 details: format!(
@@ -1753,7 +1761,10 @@ mod tests {
     /// The other tests here assert the shape of the string. This one runs it, because the shape
     /// can be exactly what was intended and still not execute: `env` reads operands as
     /// assignments until one is not, so a separator in the wrong place becomes the program name.
-    /// A stand-in `setsid` is supplied because macOS ships none.
+    ///
+    /// A stand-in `setsid` is supplied because macOS ships none, and it only `exec`s — it starts
+    /// no session. So this pins that the command runs and the variable arrives; it says nothing
+    /// about the kill, which needs a real `setsid` and a real process group.
     #[test]
     #[cfg(unix)]
     fn the_wrapper_this_builds_runs_with_the_variable_set() {
@@ -1820,7 +1831,17 @@ mod tests {
     /// names on a command are fine, because those reach only the command.
     #[tokio::test]
     async fn a_session_cannot_set_what_the_deadline_wrapper_reads() {
-        for name in ["PATH", "IFS", "LD_PRELOAD", "LD_LIBRARY_PATH"] {
+        // `LD_AUDIT` is the one that proves the family has to go as a family: it runs attacker
+        // code inside `od`, which is what draws the nonce the deadline report rests on.
+        for name in [
+            "PATH",
+            "IFS",
+            "LD_PRELOAD",
+            "LD_LIBRARY_PATH",
+            "LD_AUDIT",
+            "LD_DEBUG",
+            "LD_BIND_NOW",
+        ] {
             let mut client = MockSandboxDataPlaneApi::new();
             client.expect_create_sandbox().never();
 
@@ -1855,6 +1876,31 @@ mod tests {
             })
             .await
             .expect("an ordinary variable is still carried");
+    }
+
+    /// A command with no program is refused rather than run.
+    ///
+    /// `env` with assignments and no operand prints the environment it was given and exits 0, so
+    /// an empty command would hand the caller the session's own variables and read as a command
+    /// that succeeded.
+    #[tokio::test]
+    async fn a_command_naming_no_program_is_refused() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_execute_shell_command().never();
+
+        let mut request = command(5);
+        request.command = Vec::new();
+        request.env = BTreeMap::from([("SECRET".to_string(), "hunter2".to_string())]);
+
+        let error = match sandbox_with(client).run_command("s1", request).await {
+            Ok(_) => panic!("a command with no program must not run"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
     }
 
     /// A program whose own name carries `=` is refused when the call also declares variables.
