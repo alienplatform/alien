@@ -239,8 +239,9 @@ impl Sandbox for AzureSandbox {
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
                 // session, and are answered the same way: a fresh one. A session refused for its
-                // policy is left running: it may be another revision's, and this caller is served
-                // by the replacement rather than by taking theirs.
+                // policy is left as it was found — asleep again if this call woke it — because it
+                // may be another revision's, and this caller is served by the replacement rather
+                // than by taking theirs.
                 //
                 // Narrow on purpose: a readiness timeout says the data plane is slow, and
                 // answering that by creating a second sandbox makes it slower.
