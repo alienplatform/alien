@@ -169,7 +169,7 @@ pub struct SandboxSessionPolicy {
 pub struct SandboxCapabilities {
     /// Files can be moved in and out of a session
     ///
-    /// Every backend but Azure, whose data plane exposes exec and lifecycle and no transfer.
+    /// Every backend but Azure, whose binding implements no transfer.
     pub files: bool,
     /// A later call can reach a session created by an earlier one
     pub reconnect: bool,
@@ -862,9 +862,9 @@ mod tests {
         assert!(!gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
-        assert!(!azure.files, "the Azure data plane has no file transfer");
+        assert!(!azure.files, "the Azure binding implements no file transfer");
         assert!(gcp.files, "every other backend moves files");
-        // The Azure data plane takes neither an egress policy nor a ceiling, so a declaration of
+        // The Azure binding renders neither an egress policy nor a ceiling, so a declaration of
         // either is refused rather than accepted and dropped.
         assert!(!azure.domain_egress_rules);
         assert!(!azure.egress_deny);
@@ -911,7 +911,7 @@ mod tests {
     }
 
     /// No backend expresses a hostname allowlist: AWS and Kubernetes match CIDRs, and the Azure
-    /// data plane takes no egress policy at all. Accepting one anywhere would leave a stack
+    /// binding renders no egress policy at all. Accepting one anywhere would leave a stack
     /// reading as restricted while the sandbox reaches the whole internet.
     #[test]
     fn a_hostname_allowlist_is_refused_on_every_backend() {
@@ -973,7 +973,7 @@ mod tests {
 
         let error = egress_only
             .validate_for_platform(Platform::Azure)
-            .expect_err("the Azure data plane takes no egress policy, so deny cannot be kept");
+            .expect_err("the Azure binding renders no egress policy, so deny cannot be kept");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
         assert!(
             error.message.contains("egressDeny"),

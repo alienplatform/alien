@@ -20,6 +20,7 @@ Metadata:
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
+      - ParseApplicationLevels
     ParameterLabels:
       HeartbeatsMode:
         default: Heartbeats
@@ -27,6 +28,8 @@ Metadata:
         default: Image account ID
       ManagingRoleArn:
         default: Management role ARN
+      ParseApplicationLevels:
+        default: Parse JSON log levels
       TelemetryMode:
         default: Telemetry
       UpdatesMode:
@@ -68,7 +71,69 @@ Parameters:
     AllowedValues:
     - "off"
     - "on"
+  ParseApplicationLevels:
+    Type: String
+    Description: Use a recognized top-level JSON level field as log severity while preserving the raw body.
+    Default: 'false'
+    AllowedValues:
+    - 'false'
+    - 'true'
+Conditions:
+  ParseApplicationLevelsEnabled:
+    Fn::Equals:
+    - Ref: ParseApplicationLevels
+    - 'true'
 Resources:
+  ManagementRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-management
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowManagingRole
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: ManagingRoleArn
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:PrincipalArn:
+                Ref: ManagingRoleArn
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: management
+      - Key: resource-type
+        Value: management
+  ManagementRoleManagementPolicy1:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: Application management permissions
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Action:
+          - ses:DescribeActiveReceiptRuleSet
+          Effect: Allow
+          Resource:
+          - '*'
+          Sid: EmailHeartbeat
+        - Sid: ReadOwnManagementRole
+          Effect: Allow
+          Action: iam:GetRole
+          Resource:
+            Fn::Sub: arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management
+      Roles:
+      - Ref: ManagementRole
+    DependsOn:
+    - ManagementRole
   Mailbox:
     Type: AWS::S3::Bucket
     Properties:
@@ -454,12 +519,28 @@ Outputs:
           Ref: TelemetryMode
         heartbeats:
           Ref: HeartbeatsMode
+        logs:
+          parseApplicationLevels:
+            Fn::If:
+            - ParseApplicationLevelsEnabled
+            - true
+            - false
         network:
           Ref: AWS::NoValue
     Description: Deployment registration settings JSON.
   DeploymentResources:
     Value:
       Fn::ToJsonString:
+      - id: management
+        type: remote-stack-management
+        importData:
+          roleName:
+            Ref: ManagementRole
+          roleArn:
+            Fn::GetAtt:
+            - ManagementRole
+            - Arn
+          managementPermissionsApplied: true
       - id: mailbox
         type: storage
         importData:

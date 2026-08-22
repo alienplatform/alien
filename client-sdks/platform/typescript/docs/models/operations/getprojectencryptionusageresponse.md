@@ -13,6 +13,7 @@ const value: operations.GetProjectEncryptionUsageUnavailable = {
   reason: "not-configured",
 };
 ```
+
 ### `operations.GetProjectEncryptionUsageAvailable`
 
 ```typescript

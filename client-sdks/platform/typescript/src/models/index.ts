@@ -250,6 +250,7 @@ export * from "./slacknotificationchannelrequest.js";
 export * from "./slacknotificationchannelresponse.js";
 export * from "./stackbyplatform.js";
 export * from "./stackinputvaluerequest.js";
+export * from "./stacksettings.js";
 export * from "./subject.js";
 export * from "./subjectscope.js";
 export * from "./supportedcloudregions.js";

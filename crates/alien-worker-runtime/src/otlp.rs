@@ -1,5 +1,8 @@
 use crate::error::{ErrorData, Result};
-use alien_core::ENV_ALIEN_RUNTIME_SECRETS;
+use alien_core::{
+    parse_application_log_level, ApplicationLogLevel, ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS,
+    ENV_ALIEN_RUNTIME_SECRETS,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use std::{
     collections::HashMap,
@@ -15,8 +18,14 @@ use opentelemetry_sdk::{
     Resource,
 };
 
-/// Global OTLP logger provider for flushing logs on shutdown.
-static OTLP_PROVIDER: LazyLock<Mutex<Option<SdkLoggerProvider>>> =
+#[derive(Clone)]
+struct ConfiguredOtlpProvider {
+    provider: SdkLoggerProvider,
+    parse_application_levels: bool,
+}
+
+/// Global OTLP logger provider and the capture settings applied to it.
+static OTLP_PROVIDER: LazyLock<Mutex<Option<ConfiguredOtlpProvider>>> =
     LazyLock::new(|| Mutex::new(None));
 
 const ENV_ALIEN_RUNTIME_SEND_OTLP: &str = "ALIEN_RUNTIME_SEND_OTLP";
@@ -28,6 +37,7 @@ pub struct OtlpConfig {
     pub headers: HashMap<String, String>,
     pub service_name: String,
     pub service_version: String,
+    pub parse_application_levels: bool,
 }
 
 impl OtlpConfig {
@@ -70,6 +80,8 @@ impl OtlpConfig {
             headers,
             service_name,
             service_version,
+            parse_application_levels: std::env::var(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS)
+                .is_ok_and(|value| value.eq_ignore_ascii_case("true")),
         })
     }
 }
@@ -121,7 +133,7 @@ pub fn init_otlp_logging(
 
     let provider = build_otlp_provider(&config)?;
     let bridge = OpenTelemetryTracingBridge::new(&provider);
-    store_otlp_provider(provider);
+    store_otlp_provider(provider, config.parse_application_levels);
 
     info!("OTLP logging initialized successfully");
     Ok(Some(bridge))
@@ -141,7 +153,7 @@ pub fn init_otlp_logging_from_config(config: OtlpConfig) -> Result<()> {
         "Initializing app log OTLP exporter"
     );
     let provider = build_otlp_provider(&config)?;
-    store_otlp_provider(provider);
+    store_otlp_provider(provider, config.parse_application_levels);
     Ok(())
 }
 
@@ -156,6 +168,7 @@ pub fn init_otlp_logging_from_config(config: OtlpConfig) -> Result<()> {
 #[derive(Debug)]
 pub struct OwnedOtlpLogger {
     provider: SdkLoggerProvider,
+    parse_application_levels: bool,
 }
 
 #[cfg(feature = "otlp")]
@@ -170,12 +183,22 @@ impl OwnedOtlpLogger {
             "Initializing owned app log OTLP exporter"
         );
         let provider = build_otlp_provider(&config)?;
-        Ok(Self { provider })
+        Ok(Self {
+            provider,
+            parse_application_levels: config.parse_application_levels,
+        })
     }
 
     /// Emits a captured stdout/stderr line through this logger's own provider.
     pub fn emit_log(&self, stream: &str, body: &str, timestamp_nanos: i64) {
-        emit_to_provider(&self.provider, stream, body, timestamp_nanos, false);
+        emit_to_provider(
+            &self.provider,
+            stream,
+            body,
+            timestamp_nanos,
+            false,
+            self.parse_application_levels,
+        );
     }
 
     /// Force-flushes this logger's own pending logs (used before shutdown).
@@ -252,8 +275,11 @@ fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
 }
 
 #[cfg(feature = "otlp")]
-fn store_otlp_provider(provider: SdkLoggerProvider) {
-    *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = Some(provider);
+fn store_otlp_provider(provider: SdkLoggerProvider, parse_application_levels: bool) {
+    *OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned") = Some(ConfiguredOtlpProvider {
+        provider,
+        parse_application_levels,
+    });
 }
 
 #[cfg(feature = "otlp")]
@@ -307,10 +333,10 @@ pub fn emit_log(stream: &str, body: &str, timestamp_nanos: i64) {
 #[cfg(feature = "otlp")]
 pub(crate) fn emit_captured_log(stream: &str, body: &str, timestamp_nanos: i64, is_system: bool) {
     // Get the global provider (initialized by init_otlp_logging)
-    let provider = {
+    let configured = {
         let guard = OTLP_PROVIDER.lock().expect("OTLP provider mutex poisoned");
         match guard.as_ref() {
-            Some(provider) => provider.clone(),
+            Some(configured) => configured.clone(),
             None => {
                 // OTLP not configured - silently skip (common in local dev without telemetry)
                 return;
@@ -318,7 +344,14 @@ pub(crate) fn emit_captured_log(stream: &str, body: &str, timestamp_nanos: i64, 
         }
     };
 
-    emit_to_provider(&provider, stream, body, timestamp_nanos, is_system);
+    emit_to_provider(
+        &configured.provider,
+        stream,
+        body,
+        timestamp_nanos,
+        is_system,
+        configured.parse_application_levels,
+    );
 }
 
 /// Emits a single captured log line through a specific provider. Shared by the
@@ -330,10 +363,9 @@ fn emit_to_provider(
     body: &str,
     timestamp_nanos: i64,
     is_system: bool,
+    parse_application_levels: bool,
 ) {
-    use opentelemetry::logs::{
-        AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity,
-    };
+    use opentelemetry::logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _};
     use std::time::{Duration, UNIX_EPOCH};
 
     // Get a logger for function output
@@ -346,14 +378,10 @@ fn emit_to_provider(
     let timestamp = UNIX_EPOCH + Duration::from_nanos(timestamp_nanos as u64);
     record.set_timestamp(timestamp);
 
-    // Set severity based on stream (stdout = INFO, stderr = ERROR)
-    if stream == "stderr" {
-        record.set_severity_text("ERROR");
-        record.set_severity_number(Severity::Error);
-    } else {
-        record.set_severity_text("INFO");
-        record.set_severity_number(Severity::Info);
-    }
+    let (severity, severity_text) =
+        captured_log_severity(stream, body, parse_application_levels && !is_system);
+    record.set_severity_text(severity_text);
+    record.set_severity_number(severity);
 
     // Set the log body
     record.set_body(AnyValue::String(body.to_string().into()));
@@ -369,6 +397,34 @@ fn emit_to_provider(
 
     // Emit the log record (batched by BatchLogProcessor)
     logger.emit(record);
+}
+
+#[cfg(feature = "otlp")]
+fn captured_log_severity(
+    stream: &str,
+    body: &str,
+    parse_application_levels: bool,
+) -> (opentelemetry::logs::Severity, &'static str) {
+    use opentelemetry::logs::Severity;
+
+    if parse_application_levels {
+        if let Some(level) = parse_application_log_level(body) {
+            return match level {
+                ApplicationLogLevel::Trace => (Severity::Trace, "TRACE"),
+                ApplicationLogLevel::Debug => (Severity::Debug, "DEBUG"),
+                ApplicationLogLevel::Info => (Severity::Info, "INFO"),
+                ApplicationLogLevel::Warn => (Severity::Warn, "WARN"),
+                ApplicationLogLevel::Error => (Severity::Error, "ERROR"),
+                ApplicationLogLevel::Fatal => (Severity::Fatal, "FATAL"),
+            };
+        }
+    }
+
+    if stream == "stderr" {
+        (Severity::Error, "ERROR")
+    } else {
+        (Severity::Info, "INFO")
+    }
 }
 
 /// Emit log (no-op when feature disabled)
@@ -389,13 +445,13 @@ pub(crate) fn emit_captured_log(
 /// Flush all pending OTLP logs
 /// This should be called before shutdown to ensure all logs are sent
 pub async fn flush_otlp_logs() -> Result<()> {
-    let provider = OTLP_PROVIDER
+    let configured = OTLP_PROVIDER
         .lock()
         .expect("OTLP provider mutex poisoned")
         .clone();
-    if let Some(provider) = provider {
+    if let Some(configured) = configured {
         info!("Flushing OTLP logs before shutdown...");
-        force_flush_provider(provider).await
+        force_flush_provider(configured.provider).await
     } else {
         // No OTLP provider configured, nothing to flush
         Ok(())
@@ -434,15 +490,15 @@ async fn force_flush_provider(provider: SdkLoggerProvider) -> Result<()> {
 /// Shutdown OTLP logging completely
 /// This should only be called during application shutdown
 pub async fn shutdown_otlp_logs() -> Result<()> {
-    let provider = OTLP_PROVIDER
+    let configured = OTLP_PROVIDER
         .lock()
         .expect("OTLP provider mutex poisoned")
         .clone();
-    if let Some(provider) = provider {
+    if let Some(configured) = configured {
         info!("Shutting down OTLP logs...");
 
         let shutdown_result = tokio::task::spawn_blocking({
-            let provider = provider.clone();
+            let provider = configured.provider.clone();
             move || match provider.shutdown() {
                 Ok(_) => {
                     info!("OTLP logs shut down successfully");
@@ -494,6 +550,7 @@ mod tests {
         std::env::remove_var("OTEL_EXPORTER_OTLP_HEADERS_AUTHORIZATION");
         std::env::remove_var("ALIEN_DEPLOYMENT_ID");
         std::env::remove_var(ENV_ALIEN_RUNTIME_SEND_OTLP);
+        std::env::remove_var(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS);
         std::env::remove_var(ENV_ALIEN_RUNTIME_SECRETS);
     }
 
@@ -517,6 +574,39 @@ mod tests {
         assert_eq!(config.endpoint, "http://localhost:4318");
         assert_eq!(config.service_name, "alien-worker-runtime");
         assert!(config.headers.is_empty());
+        assert!(!config.parse_application_levels);
+    }
+
+    #[test]
+    fn test_otlp_config_enables_application_level_parsing() {
+        let _guard = ENV_MUTEX.lock().unwrap();
+        clear_otlp_env_vars();
+
+        std::env::set_var("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4318");
+        std::env::set_var(ENV_ALIEN_RUNTIME_PARSE_APPLICATION_LEVELS, "true");
+
+        let config = OtlpConfig::from_env().expect("Should have config");
+        assert!(config.parse_application_levels);
+    }
+
+    #[test]
+    #[cfg(feature = "otlp")]
+    fn captured_log_severity_uses_explicit_level_only_when_enabled() {
+        use opentelemetry::logs::Severity;
+
+        let body = r#"{"level":"INFO","fields":{"message":"ready"}}"#;
+        assert_eq!(
+            captured_log_severity("stderr", body, false),
+            (Severity::Error, "ERROR")
+        );
+        assert_eq!(
+            captured_log_severity("stderr", body, true),
+            (Severity::Info, "INFO")
+        );
+        assert_eq!(
+            captured_log_severity("stderr", r#"{"level":"LOUD"}"#, true),
+            (Severity::Error, "ERROR")
+        );
     }
 
     #[test]

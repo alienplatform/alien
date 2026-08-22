@@ -292,6 +292,7 @@ export type { LocalServiceAccountHeartbeatData } from "./local-service-account-h
 export type { LocalStorageHeartbeatData } from "./local-storage-heartbeat-data-schema.js";
 export type { LocalVaultHeartbeatData } from "./local-vault-heartbeat-data-schema.js";
 export type { LocalWorkerHeartbeatData } from "./local-worker-heartbeat-data-schema.js";
+export type { LogSettings } from "./log-settings-schema.js";
 export type { MachineProfile } from "./machine-profile-schema.js";
 export type { MachinesComputeClusterHeartbeatData } from "./machines-compute-cluster-heartbeat-data-schema.js";
 export type { MachinesComputeMachineStatus } from "./machines-compute-machine-status-schema.js";
@@ -715,6 +716,7 @@ export { LocalServiceAccountHeartbeatDataSchema } from "./local-service-account-
 export { LocalStorageHeartbeatDataSchema } from "./local-storage-heartbeat-data-schema.js";
 export { LocalVaultHeartbeatDataSchema } from "./local-vault-heartbeat-data-schema.js";
 export { LocalWorkerHeartbeatDataSchema } from "./local-worker-heartbeat-data-schema.js";
+export { LogSettingsSchema } from "./log-settings-schema.js";
 export { MachineProfileSchema } from "./machine-profile-schema.js";
 export { MachinesComputeClusterHeartbeatDataSchema } from "./machines-compute-cluster-heartbeat-data-schema.js";
 export { MachinesComputeMachineStatusSchema } from "./machines-compute-machine-status-schema.js";

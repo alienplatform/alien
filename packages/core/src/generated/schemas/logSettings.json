@@ -1,0 +1,1 @@
+{"type":"object","description":"Application log handling for a deployment.","properties":{"parseApplicationLevels":{"type":"boolean","description":"Normalize severity fields from supported structured application logs into\nthe OTLP severity fields. The original log body is preserved. Disabled by\ndefault."}},"x-readme-ref-name":"LogSettings"}
