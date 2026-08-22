@@ -73,8 +73,10 @@ impl DeadlineReport {
     /// The command arrives as `"$@"`, so nothing re-parses its text. It is started in a session
     /// of its own so the kill reaches its process group rather than one pid: a command that
     /// spawned children would otherwise leave them running while the caller is told the deadline
-    /// contained it, which is the claim this path exists to make good on. An image that cannot do
-    /// that runs nothing — a deadline that cannot be enforced is refused, not approximated.
+    /// contained it. A child that starts a session of its own leaves that group and outlives the
+    /// kill — measured — so this covers what the command left behind, not what it moved away. An
+    /// image that cannot start a session runs nothing: a deadline that cannot be enforced at all
+    /// is refused rather than approximated.
     ///
     /// The killer repeats the nonce when its signal was delivered, which the status has to confirm:
     /// a command already exited and awaiting reaping takes the signal too. Once the command is
@@ -123,6 +125,10 @@ impl DeadlineReport {
         // way — the session writes it before the command starts, and a traced line carries the
         // shell's prefix, so nothing the command chose can be read as the announcement.
         let announced = stderr.split('\n').enumerate().find_map(|(index, line)| {
+            // A carriage return would make the announcement 33 bytes and invisible, and the first
+            // line the command chose would be adopted in its place. No transport here delivers
+            // one today; the cost of not depending on that is one trim.
+            let line = line.strip_suffix('\r').unwrap_or(line);
             let is_nonce = line.len() == NONCE_HEXITS && line.chars().all(|c| c.is_ascii_hexdigit());
             is_nonce.then(|| {
                 let after = stderr
@@ -294,6 +300,17 @@ mod tests {
             "what precedes the announcement was written before the command started, so it is the \
              session's own noise rather than the command's — and one of those lines is the trace \
              of the announcement itself"
+        );
+
+        // A carriage return does not hide the announcement, which would otherwise let the first
+        // line the command chose stand in for it.
+        let crlf = format!("a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\r\nboom\r\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\r\n");
+        assert!(
+            matches!(
+                DeadlineReport::read(Some(137), &crlf),
+                Bounded::Ran { killed: true, .. }
+            ),
+            "a carriage return is not part of the nonce"
         );
 
         // Short of the width the session draws, so not an announcement — and the rest of the
