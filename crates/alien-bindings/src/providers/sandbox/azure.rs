@@ -164,8 +164,20 @@ impl Sandbox for AzureSandbox {
         // every later verb addresses the sandbox by it, and one this client cannot send is one
         // nothing can reach or reap.
         let _ = request.session_id;
-        if let Err(error) = Self::checked_session_id(CREATE, &sandbox.id) {
-            return Err(self.discard(&sandbox.id, error).await);
+        // Not reaped on failure: an id this client will not send is one it cannot send to the
+        // delete either, and a traversing id would make that delete reach another group.
+        if Self::checked_session_id(CREATE, &sandbox.id).is_err() {
+            warn!(
+                session = %sandbox.id,
+                "the data plane minted an id this client cannot address; the sandbox is running \
+                 and cannot be deleted through this binding"
+            );
+            return Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
+                provider: "azure".to_string(),
+                binding_name: CREATE.to_string(),
+                field: "id".to_string(),
+                response_json: format!("\"{}\"", sandbox.id),
+            }));
         }
 
         // Everything past this point owns a sandbox the caller has no id for, so every failure
@@ -223,8 +235,12 @@ impl Sandbox for AzureSandbox {
                 Ok(Some(existing)) if existing.state != SandboxSessionState::Terminated => {
                     // Judged again on the sandbox that came up: a policy set on the group can
                     // change while a session is suspended, and the read above saw a stopped one.
+                    // Waking it is what makes the cleanup necessary — the wait put whatever it
+                    // was running back on the network before anything could judge it.
                     let running = self.await_running(GET_OR_CREATE, id).await?;
-                    self.policy_must_hold(&running)?;
+                    if let Err(error) = self.policy_must_hold(&running) {
+                        return Err(self.discard(id, error).await);
+                    }
                     return Ok(SandboxSession {
                         session_id: running.id,
                         state: SandboxSessionState::Running,
@@ -268,12 +284,7 @@ impl Sandbox for AzureSandbox {
         // session id outlives a declaration change, and nothing else stands between an id a
         // caller kept and the egress it was built with. One extra read against a data plane the
         // command itself is about to cross.
-        self.get(session_id).await?.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "sessionGone".to_string(),
-                reason: format!("session '{session_id}' does not exist"),
-            })
-        })?;
+        self.usable_session(RUN_COMMAND, session_id).await?;
 
         // The deadline bounds the untrusted code, not the caller's patience. Read out of the
         // preview SDK rather than assumed: `executeShellCommand` sends `command` and an optional
@@ -399,12 +410,7 @@ impl Sandbox for AzureSandbox {
         // Waking a session puts whatever it was running back on the network, so it is gated like
         // `run_command` and unlike the file operations. `await_running` resumes without this,
         // because a sandbox mid-boot has no policy to judge yet.
-        self.get(session_id).await?.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "sessionGone".to_string(),
-                reason: format!("session '{session_id}' does not exist"),
-            })
-        })?;
+        self.usable_session("sandbox.resume", session_id).await?;
 
         self.resume_unchecked(session_id).await
     }
@@ -456,6 +462,27 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// Reads a session that is fit to be used, refusing one that is not.
+    ///
+    /// `get` skips the policy check for a session being deleted, because a sandbox on its way out
+    /// carries no policy to judge — so the callers that gate on the policy have to reject that
+    /// state themselves. A delete is accepted rather than completed, so a `Deleting` sandbox is
+    /// still running: passing one through would run new code on it under whatever egress it was
+    /// built with.
+    async fn usable_session(&self, operation: &str, session_id: &str) -> Result<()> {
+        let gone = || {
+            Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sessionGone".to_string(),
+                reason: format!("session '{session_id}' cannot take work"),
+            }))
+        };
+
+        match self.get(session_id).await? {
+            Some(session) if session.state != SandboxSessionState::Terminated => Ok(()),
+            _ => gone(),
+        }
+    }
+
     /// Wakes a session without judging it, for the wait that has nothing to judge yet.
     async fn resume_unchecked(&self, session_id: &str) -> Result<()> {
         self.client
@@ -2365,8 +2392,13 @@ mod tests {
             })
         });
         // However it wakes — resumed here or already coming up — the read after it is the one
-        // that decides.
+        // that decides, and a sandbox this code woke and then refused must not be left running.
         client.expect_resume_sandbox().returning(|_, _| Ok(()));
+        client
+            .expect_delete_sandbox()
+            .withf(|_, id| id == "was-suspended")
+            .times(1)
+            .returning(|_, _| Ok(()));
         client.expect_create_sandbox().never();
 
         let error = sandbox_denying(client, SandboxEgress::Deny)
@@ -2434,5 +2466,43 @@ mod tests {
             .expect_err("a session without the declared policy must not be woken");
 
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A session being deleted is still running, so it must not take new work.
+    ///
+    /// `get` skips the policy check for one — a sandbox on its way out carries no policy to
+    /// judge — so a gate that only asks "does it exist" would run untrusted code on a live
+    /// sandbox under whatever egress it was built with. Azure accepts a delete rather than
+    /// completing it, which is why `terminate` polls to a 404 instead of trusting the accept.
+    #[tokio::test]
+    async fn a_session_being_deleted_takes_no_new_work() {
+        for outcome in ["Deleting", "gone"] {
+            let mut client = MockSandboxDataPlaneApi::new();
+            let deleting = outcome == "Deleting";
+            client.expect_get_sandbox().returning(move |_, id| {
+                if deleting {
+                    let mut sandbox = running(id, None);
+                    sandbox.state = Some("Deleting".to_string());
+                    Ok(sandbox)
+                } else {
+                    Err(http_error(404, "SandboxNotFound"))
+                }
+            });
+            client.expect_execute_shell_command().never();
+            client.expect_resume_sandbox().never();
+            let sandbox = sandbox_denying(client, SandboxEgress::Deny);
+
+            let ran = match sandbox.run_command("on-its-way-out", command(5)).await {
+                Ok(_) => panic!("{outcome}: a session that cannot take work must not run code"),
+                Err(error) => error,
+            };
+            assert_eq!(ran.code, "SANDBOX_COMMAND_FAILED", "{outcome}: {ran}");
+
+            let woken = sandbox
+                .resume("on-its-way-out")
+                .await
+                .expect_err("a session that cannot take work must not be resumed");
+            assert_eq!(woken.code, "SANDBOX_COMMAND_FAILED", "{outcome}: {woken}");
+        }
     }
 }
