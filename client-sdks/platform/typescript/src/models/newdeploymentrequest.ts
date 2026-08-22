@@ -1139,6 +1139,22 @@ export type NewDeploymentRequestKubernetesUnion =
   | NewDeploymentRequestKubernetes
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type NewDeploymentRequestLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type NewDeploymentRequestLogsUnion = NewDeploymentRequestLogs | any;
+
 export const NewDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1320,6 +1336,7 @@ export type NewDeploymentRequestStackSettings = {
    */
   heartbeats?: NewDeploymentRequestHeartbeats | undefined;
   kubernetes?: NewDeploymentRequestKubernetes | any | null | undefined;
+  logs?: NewDeploymentRequestLogs | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws
     | NewDeploymentRequestNetworkByoVpcGcp
@@ -1329,6 +1346,16 @@ export type NewDeploymentRequestStackSettings = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3860,6 +3887,48 @@ export function newDeploymentRequestKubernetesUnionToJSON(
 }
 
 /** @internal */
+export type NewDeploymentRequestLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const NewDeploymentRequestLogs$outboundSchema: z.ZodType<
+  NewDeploymentRequestLogs$Outbound,
+  NewDeploymentRequestLogs
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function newDeploymentRequestLogsToJSON(
+  newDeploymentRequestLogs: NewDeploymentRequestLogs,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestLogs$outboundSchema.parse(newDeploymentRequestLogs),
+  );
+}
+
+/** @internal */
+export type NewDeploymentRequestLogsUnion$Outbound =
+  | NewDeploymentRequestLogs$Outbound
+  | any;
+
+/** @internal */
+export const NewDeploymentRequestLogsUnion$outboundSchema: z.ZodType<
+  NewDeploymentRequestLogsUnion$Outbound,
+  NewDeploymentRequestLogsUnion
+> = z.union([z.lazy(() => NewDeploymentRequestLogs$outboundSchema), z.any()]);
+
+export function newDeploymentRequestLogsUnionToJSON(
+  newDeploymentRequestLogsUnion: NewDeploymentRequestLogsUnion,
+): string {
+  return JSON.stringify(
+    NewDeploymentRequestLogsUnion$outboundSchema.parse(
+      newDeploymentRequestLogsUnion,
+    ),
+  );
+}
+
+/** @internal */
 export const NewDeploymentRequestTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof NewDeploymentRequestTypeByoVnetAzure
 > = z.enum(NewDeploymentRequestTypeByoVnetAzure);
@@ -4105,6 +4174,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | undefined;
   heartbeats?: string | undefined;
   kubernetes?: NewDeploymentRequestKubernetes$Outbound | any | null | undefined;
+  logs?: NewDeploymentRequestLogs$Outbound | any | null | undefined;
   network?:
     | NewDeploymentRequestNetworkByoVpcAws$Outbound
     | NewDeploymentRequestNetworkByoVpcGcp$Outbound
@@ -4114,6 +4184,7 @@ export type NewDeploymentRequestStackSettings$Outbound = {
     | any
     | null
     | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4147,6 +4218,9 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => NewDeploymentRequestLogs$outboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => NewDeploymentRequestNetworkByoVpcAws$outboundSchema),
@@ -4156,6 +4230,9 @@ export const NewDeploymentRequestStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => NewDeploymentRequestNetworkCreate$outboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: NewDeploymentRequestTelemetry$outboundSchema.optional(),
   updates: NewDeploymentRequestUpdates$outboundSchema.optional(),

@@ -1,5 +1,6 @@
 # StackSettingsClusterUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsCluster`

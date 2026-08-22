@@ -1,5 +1,6 @@
 # StackSettingsFailureDomainsUnion1
 
+
 ## Supported Types
 
 ### `models.StackSettingsFailureDomains1`

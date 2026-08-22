@@ -2,6 +2,7 @@
 
 User-selected deployment settings for one compute pool.
 
+
 ## Supported Types
 
 ### `models.StackSettingsPoolsFixed`

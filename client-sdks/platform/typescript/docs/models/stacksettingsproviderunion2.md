@@ -1,5 +1,6 @@
 # StackSettingsProviderUnion2
 
+
 ## Supported Types
 
 ### `models.StackSettingsProviderAwsAlb2`

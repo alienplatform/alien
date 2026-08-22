@@ -2,6 +2,7 @@
 
 Kubernetes route API selected for public endpoints.
 
+
 ## Supported Types
 
 ### `models.StackSettingsRouteIngress2`

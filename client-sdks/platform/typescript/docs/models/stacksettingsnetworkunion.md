@@ -1,5 +1,6 @@
 # StackSettingsNetworkUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsNetworkUseDefault`
@@ -22,8 +23,14 @@ const value: models.StackSettingsNetworkCreate = {
 
 ```typescript
 const value: models.StackSettingsNetworkByoVpcAws = {
-  privateSubnetIds: ["<value 1>", "<value 2>", "<value 3>"],
-  publicSubnetIds: ["<value 1>"],
+  privateSubnetIds: [
+    "<value 1>",
+    "<value 2>",
+    "<value 3>",
+  ],
+  publicSubnetIds: [
+    "<value 1>",
+  ],
   type: "byo-vpc-aws",
   vpcId: "<id>",
 };

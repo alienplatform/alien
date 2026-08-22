@@ -1,5 +1,6 @@
 # StackSettingsDomainsUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsDomains`

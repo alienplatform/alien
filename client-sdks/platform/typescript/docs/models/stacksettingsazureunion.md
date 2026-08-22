@@ -1,5 +1,6 @@
 # StackSettingsAzureUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsAzure`

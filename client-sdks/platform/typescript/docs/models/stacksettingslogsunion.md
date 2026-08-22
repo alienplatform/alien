@@ -1,5 +1,6 @@
 # StackSettingsLogsUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsLogs`

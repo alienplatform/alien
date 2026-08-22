@@ -1057,6 +1057,24 @@ export type CreateSetupRegistrationOperationRequestKubernetesUnion =
   | CreateSetupRegistrationOperationRequestKubernetes
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type CreateSetupRegistrationOperationRequestLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type CreateSetupRegistrationOperationRequestLogsUnion =
+  | CreateSetupRegistrationOperationRequestLogs
+  | any;
+
 export const CreateSetupRegistrationOperationRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1263,6 +1281,7 @@ export type CreateSetupRegistrationOperationRequestStackSettings = {
     | any
     | null
     | undefined;
+  logs?: CreateSetupRegistrationOperationRequestLogs | any | null | undefined;
   network?:
     | CreateSetupRegistrationOperationRequestNetworkByoVpcAws
     | CreateSetupRegistrationOperationRequestNetworkByoVpcGcp
@@ -1272,6 +1291,16 @@ export type CreateSetupRegistrationOperationRequestStackSettings = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3968,6 +3997,57 @@ export function createSetupRegistrationOperationRequestKubernetesUnionToJSON(
 }
 
 /** @internal */
+export type CreateSetupRegistrationOperationRequestLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestLogs$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestLogs$Outbound,
+    CreateSetupRegistrationOperationRequestLogs
+  > = z.object({
+    parseApplicationLevels: z.boolean().optional(),
+  });
+
+export function createSetupRegistrationOperationRequestLogsToJSON(
+  createSetupRegistrationOperationRequestLogs:
+    CreateSetupRegistrationOperationRequestLogs,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestLogs$outboundSchema.parse(
+      createSetupRegistrationOperationRequestLogs,
+    ),
+  );
+}
+
+/** @internal */
+export type CreateSetupRegistrationOperationRequestLogsUnion$Outbound =
+  | CreateSetupRegistrationOperationRequestLogs$Outbound
+  | any;
+
+/** @internal */
+export const CreateSetupRegistrationOperationRequestLogsUnion$outboundSchema:
+  z.ZodType<
+    CreateSetupRegistrationOperationRequestLogsUnion$Outbound,
+    CreateSetupRegistrationOperationRequestLogsUnion
+  > = z.union([
+    z.lazy(() => CreateSetupRegistrationOperationRequestLogs$outboundSchema),
+    z.any(),
+  ]);
+
+export function createSetupRegistrationOperationRequestLogsUnionToJSON(
+  createSetupRegistrationOperationRequestLogsUnion:
+    CreateSetupRegistrationOperationRequestLogsUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupRegistrationOperationRequestLogsUnion$outboundSchema.parse(
+      createSetupRegistrationOperationRequestLogsUnion,
+    ),
+  );
+}
+
+/** @internal */
 export const CreateSetupRegistrationOperationRequestTypeByoVnetAzure$outboundSchema:
   z.ZodEnum<typeof CreateSetupRegistrationOperationRequestTypeByoVnetAzure> = z
     .enum(CreateSetupRegistrationOperationRequestTypeByoVnetAzure);
@@ -4248,6 +4328,11 @@ export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
     | any
     | null
     | undefined;
+  logs?:
+    | CreateSetupRegistrationOperationRequestLogs$Outbound
+    | any
+    | null
+    | undefined;
   network?:
     | CreateSetupRegistrationOperationRequestNetworkByoVpcAws$Outbound
     | CreateSetupRegistrationOperationRequestNetworkByoVpcGcp$Outbound
@@ -4257,6 +4342,7 @@ export type CreateSetupRegistrationOperationRequestStackSettings$Outbound = {
     | any
     | null
     | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -4301,6 +4387,14 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
         z.any(),
       ]),
     ).optional(),
+    logs: z.nullable(
+      z.union([
+        z.lazy(() =>
+          CreateSetupRegistrationOperationRequestLogs$outboundSchema
+        ),
+        z.any(),
+      ]),
+    ).optional(),
     network: z.nullable(
       z.union([
         z.lazy(() =>
@@ -4320,6 +4414,9 @@ export const CreateSetupRegistrationOperationRequestStackSettings$outboundSchema
         ),
         z.any(),
       ]),
+    ).optional(),
+    publicEndpoints: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
     telemetry: CreateSetupRegistrationOperationRequestTelemetry$outboundSchema
       .optional(),

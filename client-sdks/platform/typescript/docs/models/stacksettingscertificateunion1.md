@@ -2,6 +2,7 @@
 
 Certificate publication or reference mode for Kubernetes public endpoints.
 
+
 ## Supported Types
 
 ### `models.StackSettingsCertificateTLSSecretRef1`

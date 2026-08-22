@@ -1,5 +1,6 @@
 # StackSettingsPublicEndpointTargetUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsPublicEndpointTargetMachineAddresses`

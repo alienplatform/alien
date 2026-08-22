@@ -1,5 +1,6 @@
 # StackSettingsExposureUnion
 
+
 ## Supported Types
 
 ### `models.StackSettingsExposureDisabled`
