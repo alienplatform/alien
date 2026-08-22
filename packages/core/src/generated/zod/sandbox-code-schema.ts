@@ -10,7 +10,7 @@ import { ToolchainConfigSchema } from "./toolchain-config-schema.js";
  * @description Specifies where the sandbox\'s root filesystem comes from.
  */
 export const SandboxCodeSchema = z.union([z.object({
-    "image": z.string().describe("Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). Azure takes a\nbare catalog name such as `ubuntu` — it creates a session from a public catalog disk\nimage, so a registry path, tag or digest has nowhere to go."),
+    "image": z.string().describe("Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).\n\nTwo backends narrow it, in opposite directions: AWS builds a MicroVM from an `s3://`\nbundle, and Azure names an entry in a public catalog, so a bare `ubuntu`. One\ndeclaration therefore cannot target both, and each refuses the other's shape while\nplanning."),
 "type": z.enum(["image"])
     }), z.object({
     "src": z.string().describe("The source directory to build from"),

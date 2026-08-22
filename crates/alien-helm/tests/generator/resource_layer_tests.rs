@@ -167,6 +167,9 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
 /// NetworkPolicy matches addresses, not names, so a hostname allowlist has nothing to render
 /// into. It is refused: rendering it as `allow` would open every address the list excluded, and
 /// the chart would look like the policy applied.
+///
+/// The second gate, not the first — a customer meets `domainEgressRules` at plan time. This one
+/// covers the paths that render without planning.
 #[test]
 fn a_hostname_allowlist_is_refused_rather_than_widened() {
     let stack = Stack::new("sandbox-domains-chart".to_string())

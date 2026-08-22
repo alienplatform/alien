@@ -25,9 +25,12 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). Azure takes a
-        /// bare catalog name such as `ubuntu` — it creates a session from a public catalog disk
-        /// image, so a registry path, tag or digest has nowhere to go.
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
+        ///
+        /// Two backends narrow it, in opposite directions: AWS builds a MicroVM from an `s3://`
+        /// bundle, and Azure names an entry in a public catalog, so a bare `ubuntu`. One
+        /// declaration therefore cannot target both, and each refuses the other's shape while
+        /// planning.
         image: String,
     },
     /// Source built into a sandbox image at deploy time.
@@ -132,9 +135,9 @@ pub enum SandboxEgress {
     /// Unrestricted outbound access to the public internet, and none to private ranges or the
     /// deployment's own network.
     ///
-    /// Link-local carries the same exception as `Deny`. Azure delivers the first half only: its
-    /// egress rules match host patterns, so a private range has nothing to render into and the
-    /// data plane's own default applies.
+    /// Link-local carries the same exception as `Deny`. AWS and Kubernetes deliver both halves.
+    /// Azure and GCP deliver the first only: one matches host patterns and the other is a single
+    /// switch, so neither can name an address range to exclude.
     Allow,
     /// Outbound access only to the listed hostnames.
     ///
@@ -543,12 +546,6 @@ impl Sandbox {
         self.validate_capabilities(&capabilities, platform)
     }
 
-    /// The MicroVM size that keeps every declared ceiling, or why none does.
-    ///
-    /// AWS sizes are discrete and a running MicroVM bursts to four times its baseline, so the
-    /// only tier that honours a ceiling is one whose peak fits inside it. A declaration no tier
-    /// satisfies is refused: shipping the nearest size would give the customer a sandbox that
-    /// exceeds the bound they wrote down.
     /// The catalog disk image Azure creates a session from.
     ///
     /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
@@ -565,10 +562,12 @@ impl Sandbox {
         };
 
         let SandboxCode::Image { image } = &self.code else {
-            return Err(refused(
-                "source",
-                "no sandbox backend builds an image from source yet",
-            ));
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code".to_string(),
+                value: "source".to_string(),
+                reason: "no sandbox backend builds an image from source yet".to_string(),
+            }));
         };
 
         let image = image.trim();
@@ -588,6 +587,12 @@ impl Sandbox {
         Ok(image)
     }
 
+    /// The MicroVM size that keeps every declared ceiling, or why none does.
+    ///
+    /// AWS sizes are discrete and a running MicroVM bursts to four times its baseline, so the
+    /// only tier that honours a ceiling is one whose peak fits inside it. A declaration no tier
+    /// satisfies is refused: shipping the nearest size would give the customer a sandbox that
+    /// exceeds the bound they wrote down.
     pub fn microvm_tier(&self) -> Result<MicrovmTier> {
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared: AWS's own default baseline, which is also `default_limits`.

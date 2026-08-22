@@ -105,6 +105,9 @@ mod tests {
     /// `--allow-egress` is a switch: rendering the list as `true` opens every address it was
     /// written to exclude, and rendering it as `false` denies every one it was written to permit.
     /// Neither is the declaration, so neither is emitted.
+    ///
+    /// The second gate, not the first — a customer meets `domainEgressRules` at plan time. This
+    /// one covers the paths that render without planning.
     #[test]
     fn a_hostname_allowlist_is_refused_rather_than_approximated() {
         let error = refuse_unsupported_egress(&sandbox_with(SandboxEgress::AllowDomains {

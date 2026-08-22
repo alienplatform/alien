@@ -80,7 +80,9 @@ mod tests {
     fn sandbox(id: &str, limits: Option<SandboxLimits>, egress: SandboxEgress) -> Sandbox {
         let builder = Sandbox::new(id.to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                // A bare name, because Azure takes a catalog entry rather than a reference and
+                // these cases are about egress and limits rather than about the image.
+                image: "ubuntu".to_string(),
             })
             .egress(egress)
             .session(SandboxSessionPolicy {

@@ -51,7 +51,9 @@ pub(crate) const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from
 /// command can read its parent's `/proc/<pid>/cmdline` and `environ`: a nonce that travelled in
 /// either could be echoed back, and untrusted code would be able to claim its own deadline. A
 /// shell variable is in neither, and the command cannot read what has already been written to
-/// the stream it inherits.
+/// the stream it inherits. `unset` first, because an inherited *exported* variable of the same
+/// name keeps its export attribute across re-assignment and would carry the nonce straight back
+/// into the command's own environment.
 ///
 /// Nothing but `sh` and `/dev/urandom` is required, which every session image has.
 #[cfg(any(feature = "azure", feature = "local"))]
@@ -77,7 +79,8 @@ impl DeadlineReport {
     /// argv, which the command could read.
     pub(crate) fn bounded_program(deadline: std::time::Duration) -> String {
         format!(
-            "command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
+            "unset nonce command_pid killer_pid sleeper status; \
+             command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
              nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') || exit {unboundable}; \
              printf '%s\\n' \"$nonce\" >&2; \
              setsid \"$@\" & command_pid=$!; \
@@ -304,6 +307,58 @@ mod tests {
             !program.contains("\"$nonce\" &") && program.contains("( sleep"),
             "the killer is a subshell: the nonce reaches it as a variable, never as an argument \
              the command could read from /proc: {program}"
+        );
+    }
+
+    /// An inherited variable of the wrapper's own name never reaches the command.
+    ///
+    /// Run against a real `sh`, because the hazard is a shell rule rather than a string: an
+    /// exported variable keeps its export attribute across re-assignment, so `nonce=$(…)` would
+    /// write the session's own nonce into the slot the command inherits, and untrusted code could
+    /// then claim a deadline it was never given. A stand-in `setsid` is supplied because macOS
+    /// ships none, and without it the wrapper exits before reaching any of this.
+    #[test]
+    #[cfg(unix)]
+    fn the_wrapper_never_hands_its_nonce_to_the_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = std::env::temp_dir().join(format!("alien-sandbox-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).expect("a directory for the stand-in");
+        let setsid = bin.join("setsid");
+        std::fs::write(&setsid, "#!/bin/sh\nexec \"$@\"\n").expect("the stand-in is written");
+        std::fs::set_permissions(&setsid, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let run = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(DeadlineReport::bounded_program(std::time::Duration::from_secs(5)))
+            .arg("sh")
+            .arg("printenv")
+            .arg("nonce")
+            .env("PATH", path)
+            .env("nonce", "inherited-from-the-session")
+            .output()
+            .expect("a shell runs");
+        std::fs::remove_dir_all(&bin).ok();
+
+        let announced = String::from_utf8_lossy(&run.stderr);
+        let announced = announced.lines().next().unwrap_or_default().to_string();
+        assert!(
+            announced.len() == 32 && announced.chars().all(|c| c.is_ascii_hexdigit()),
+            "the session has to reach the point of drawing a nonce, or this proves nothing: \
+             stderr {:?}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+
+        let seen = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            seen.trim().is_empty(),
+            "the command must inherit no `nonce` at all, and it saw {seen:?}"
         );
     }
 

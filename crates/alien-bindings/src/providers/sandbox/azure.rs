@@ -515,9 +515,12 @@ impl AzureSandbox {
 
         // Judged asleep first: waking one that already fails puts its workload back on the network
         // for a boot.
-        if let Err(error) = self.judge_if_judgeable(&found) {
-            return Err(self.discard(session_id, error).await);
-        }
+        //
+        // Refused rather than deleted, here and after the wake. A session under a policy this
+        // declaration does not allow may be another revision's, mid-command, in the group both
+        // share — and `get_or_create` gets what it owes the caller from the replacement its own
+        // refusal triggers, without ending work it does not own.
+        self.judge_if_judgeable(&found)?;
 
         // Judged again once it is up: only the woken record covers a session that was still coming
         // up, or a policy set on the group while it slept.
@@ -527,13 +530,10 @@ impl AzureSandbox {
             .await
         {
             Ok(running) => running,
-            // A wait that woke it and then failed leaves it awake, and this call is about to hand
-            // back a different session — so the one it woke is its own to reap.
-            Err(error) if resumed_here => return Err(self.discard(session_id, error).await),
-            Err(error) => return Err(error),
+            Err(error) => return Err(self.put_back(session_id, resumed_here, error).await),
         };
         if let Err(error) = self.policy_must_hold(&running) {
-            return Err(self.discard(session_id, error).await);
+            return Err(self.put_back(session_id, resumed_here, error).await);
         }
 
         Ok(SandboxSession {
@@ -930,18 +930,24 @@ fn bounded_shell(
     deadline: std::time::Duration,
 ) -> String {
     let escape = |value: &str| value.replace('\'', "'\\''");
-    let arguments = command
+
+    // Through `env`, so the variables reach the caller's command and not the wrapper that bounds
+    // it: an assignment in front of the wrapper would put a caller-chosen `PATH` on the shell
+    // that resolves `setsid`, `sleep` and `kill`, and the deadline is only as real as those.
+    let mut argv = Vec::with_capacity(command.len() + env.len() + 2);
+    if !env.is_empty() {
+        argv.push("env".to_string());
+        argv.extend(env.iter().map(|(name, value)| format!("{name}={value}")));
+        argv.push("--".to_string());
+    }
+    argv.extend(command.iter().cloned());
+
+    let arguments = argv
         .iter()
         .map(|argument| format!(" '{}'", escape(argument)))
         .collect::<String>();
-    // Assignments in front of a simple command are exported to it, so the wrapper and everything
-    // it runs see them.
-    let assignments = env
-        .iter()
-        .map(|(name, value)| format!("{name}='{}' ", escape(value)))
-        .collect::<String>();
     format!(
-        "{assignments}sh -c '{}' sh{arguments}",
+        "sh -c '{}' sh{arguments}",
         escape(&DeadlineReport::bounded_program(deadline))
     )
 }
@@ -1671,8 +1677,34 @@ mod tests {
         );
 
         assert!(
-            wrapped.starts_with("TOKEN='a'\\''; rm -rf /' sh -c '"),
-            "the value has to survive as one word: {wrapped}"
+            wrapped.ends_with("' sh 'env' 'TOKEN=a'\\''; rm -rf /' '--' 'printenv' 'TOKEN'"),
+            "the value has to survive as one argument to env: {wrapped}"
+        );
+    }
+
+    /// A caller's `PATH` reaches the command and not the wrapper that bounds it.
+    ///
+    /// The wrapper resolves `setsid`, `od`, `sleep` and `kill` through `PATH`. A caller able to
+    /// set it on the wrapper's own shell could hand it no-ops, and the deadline that keeps
+    /// untrusted code bounded would never fire.
+    #[test]
+    fn a_caller_cannot_repoint_the_wrappers_own_path() {
+        let wrapped = bounded_shell(
+            &["sleep".to_string(), "forever".to_string()],
+            &BTreeMap::from([("PATH".to_string(), "/tmp/attacker".to_string())]),
+            std::time::Duration::from_millis(1500),
+        );
+
+        let (wrapper, argv) = wrapped
+            .split_once("' sh ")
+            .expect("the wrapper's program ends where its arguments begin");
+        assert!(
+            !wrapper.contains("PATH"),
+            "the wrapper has to resolve its own tools: {wrapper}"
+        );
+        assert_eq!(
+            argv, "'env' 'PATH=/tmp/attacker' '--' 'sleep' 'forever'",
+            "the variable belongs to the command, not to the shell that bounds it"
         );
     }
 
@@ -2556,7 +2588,9 @@ mod tests {
     ///
     /// `get_or_create` owes the caller a usable session, and a stale-policy sandbox is as
     /// unusable as a terminated one — returning the refusal forever would leave the caller with
-    /// no way forward and the old sandbox still running.
+    /// no way forward. The old sandbox is left where it is: another revision of the same stack
+    /// shares this group and may be running in it, and the replacement is what this caller asked
+    /// for.
     #[tokio::test]
     async fn a_stale_policy_session_is_replaced_rather_than_refused_forever() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -2580,11 +2614,7 @@ mod tests {
                 }),
             ))
         });
-        client
-            .expect_delete_sandbox()
-            .withf(|_, id| id == "built-under-allow")
-            .times(1)
-            .returning(|_, _| Ok(()));
+        client.expect_delete_sandbox().never();
         client
             .expect_create_sandbox()
             .times(1)
@@ -2683,8 +2713,9 @@ mod tests {
             }
             reads += 1;
             Ok(match reads {
-                // Suspended and compliant, so the reconnect proceeds.
-                1 => {
+                // Suspended and compliant for the reconnect's read and the wait's first poll, so
+                // the reconnect proceeds and the wait is what wakes it.
+                1 | 2 => {
                     let mut sandbox = running(id, Some(stopped.clone()));
                     sandbox.state = Some("Stopped".to_string());
                     sandbox
@@ -2708,14 +2739,15 @@ mod tests {
                 ),
             })
         });
-        // However it wakes — resumed here or already coming up — the read after it is the one
-        // that decides, and a sandbox this code woke and then refused must not be left running.
+        // Woken here, so this call owes the put-back: it is returned to the state it was found
+        // in rather than destroyed, because another revision may hold the same id.
         client.expect_resume_sandbox().returning(|_, _| Ok(()));
         client
-            .expect_delete_sandbox()
+            .expect_stop_sandbox()
             .withf(|_, id| id == "was-suspended")
             .times(1)
             .returning(|_, _| Ok(()));
+        client.expect_delete_sandbox().never();
         client
             .expect_create_sandbox()
             .times(1)
@@ -2947,12 +2979,13 @@ mod tests {
         assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
     }
 
-    /// A reconnect that woke a session and then could not use it reaps the one it woke.
+    /// A reconnect that woke a session and then could not use it puts back what it woke.
     ///
     /// The refusal travels either way; what must not survive it is a live sandbox this call put
-    /// back on the network and then walked away from.
+    /// on the network and then walked away from. Returned to sleep rather than deleted, because
+    /// the id may be another revision's.
     #[tokio::test]
-    async fn a_session_woken_by_a_failed_reconnect_is_reaped() {
+    async fn a_session_woken_by_a_failed_reconnect_is_put_back() {
         let mut client = MockSandboxDataPlaneApi::new();
         let mut reads = 0;
         client.expect_get_sandbox().returning(move |_, id| {
@@ -2966,10 +2999,11 @@ mod tests {
             .times(1)
             .returning(|_, _| Ok(()));
         client
-            .expect_delete_sandbox()
+            .expect_stop_sandbox()
             .withf(|_, id| id == "woken-then-unreadable")
             .times(1)
             .returning(|_, _| Ok(()));
+        client.expect_delete_sandbox().never();
 
         let error = sandbox_with(client)
             .get_or_create(CreateSessionRequest {
@@ -2998,7 +3032,7 @@ mod tests {
         client
             .expect_execute_shell_command()
             .times(1)
-            .withf(|_, _, shell, _| shell.starts_with("TOKEN='t' sh -c '"))
+            .withf(|_, _, shell, _| shell.ends_with("' sh 'env' 'TOKEN=t' '--' 'sleep' 'forever'"))
             .returning(|_, _, _, _| {
                 Ok(alien_azure_clients::azure::sandbox_data_plane::ExecResult {
                     exit_code: Some(0),
@@ -3374,10 +3408,9 @@ mod tests {
             Ok(sandbox)
         });
         client.expect_resume_sandbox().never();
-        client
-            .expect_delete_sandbox()
-            .times(1)
-            .returning(|_, _| Ok(()));
+        // Nothing woke it and nothing owns it here, so it is left exactly as found.
+        client.expect_delete_sandbox().never();
+        client.expect_stop_sandbox().never();
         client
             .expect_create_sandbox()
             .times(1)
