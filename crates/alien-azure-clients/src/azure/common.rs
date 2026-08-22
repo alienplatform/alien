@@ -122,7 +122,7 @@ impl AzureClientBase {
 
     pub async fn sign_request(
         &self,
-        mut req: http::Request<String>,
+        mut req: http::Request<Vec<u8>>,
         bearer_token: &str,
     ) -> Result<reqwest::Request> {
         // Inject mandatory headers if absent.
@@ -184,6 +184,55 @@ impl AzureClientBase {
 
     // ------------- Low-level executor -------------
 
+    /// Sends a request exactly once, with no retry.
+    ///
+    /// A repeat PUT to a collection with a server-minted id mints a second resource, and a
+    /// repeat exec may re-run a command that already started. Neither carries an idempotency key.
+    pub async fn execute_request_once(
+        &self,
+        req: reqwest::Request,
+        op: &str,
+        res_name: &str,
+    ) -> Result<reqwest::Response> {
+        Self::send_once(&self.client, req, op, res_name).await
+    }
+
+    async fn send_once(
+        client: &reqwest::Client,
+        req: reqwest::Request,
+        op: &str,
+        res_name: &str,
+    ) -> Result<reqwest::Response> {
+        // Captured before execution consumes the request.
+        let request_url = req.url().to_string();
+        let request_body = req.body().and_then(|b| b.as_bytes()).map(|b| {
+            String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string()
+        });
+
+        let resp = client
+            .execute(req)
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Azure {}: HTTP error for {}", op, res_name),
+            })?;
+        let status = resp.status();
+        if status.is_success() || status == StatusCode::CREATED || status == StatusCode::ACCEPTED {
+            return Ok(resp);
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        Err(create_azure_http_error_with_context(
+            status,
+            op,
+            "Resource",
+            res_name,
+            &body,
+            &request_url,
+            request_body,
+        ))
+    }
+
     /// Executes an HTTP request with retry logic and returns the response if successful.
     #[cfg(target_arch = "wasm32")]
     pub async fn execute_request(
@@ -207,36 +256,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Capture request details before execution consumes the request
-                let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(b).to_string());
-
-                let resp = client.execute(req_clone).await.into_alien_error().context(
-                    ErrorData::HttpRequestFailed {
-                        message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    },
-                )?;
-                let status = resp.status();
-                if status.is_success()
-                    || status == StatusCode::CREATED
-                    || status == StatusCode::ACCEPTED
-                {
-                    Ok(resp)
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    Err(create_azure_http_error_with_context(
-                        status,
-                        &op,
-                        "Resource",
-                        &res_name,
-                        &body,
-                        &request_url,
-                        request_body,
-                    ))
-                }
+                Self::send_once(&client, req_clone, &op, &res_name).await
             }
         };
         self.with_retry(retryable).await
@@ -265,36 +285,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Capture request details before execution consumes the request
-                let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(b).to_string());
-
-                let resp = client.execute(req_clone).await.into_alien_error().context(
-                    ErrorData::HttpRequestFailed {
-                        message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    },
-                )?;
-                let status = resp.status();
-                if status.is_success()
-                    || status == StatusCode::CREATED
-                    || status == StatusCode::ACCEPTED
-                {
-                    Ok(resp)
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    Err(create_azure_http_error_with_context(
-                        status,
-                        &op,
-                        "Resource",
-                        &res_name,
-                        &body,
-                        &request_url,
-                        request_body,
-                    ))
-                }
+                Self::send_once(&client, req_clone, &op, &res_name).await
             }
         };
         self.with_retry(retryable).await
@@ -338,7 +329,7 @@ impl AzureClientBase {
                 let request_body = req_clone
                     .body()
                     .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(b).to_string());
+                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
 
                 let resp = client.execute(req_clone).await.into_alien_error().context(
                     ErrorData::HttpRequestFailed {
@@ -489,7 +480,7 @@ impl AzureClientBase {
                 let request_body = req_clone
                     .body()
                     .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(b).to_string());
+                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
 
                 let resp = client.execute(req_clone).await.into_alien_error().context(
                     ErrorData::HttpRequestFailed {
@@ -606,11 +597,18 @@ impl AzureClientBase {
 // Light request-builder (service-agnostic)
 // -----------------------------------------------------------------------------
 
+/// How much of a request body is echoed back in an error.
+///
+/// A failed call quotes the request it sent, and a file upload's body would otherwise become a
+/// multi-megabyte error message on its way into a log. Truncated rather than dropped, so a large
+/// JSON body still shows the part that usually carries the mistake.
+const MAX_ECHOED_REQUEST_BODY: usize = 4096;
+
 pub struct AzureRequestBuilder {
     method: Method,
     uri: String,
     headers: Vec<(String, String)>,
-    body: String,
+    body: Vec<u8>,
 }
 
 impl AzureRequestBuilder {
@@ -619,7 +617,7 @@ impl AzureRequestBuilder {
             method,
             uri,
             headers: vec![],
-            body: String::new(),
+            body: Vec::new(),
         }
     }
     pub fn header(mut self, name: &str, val: &str) -> Self {
@@ -639,10 +637,15 @@ impl AzureRequestBuilder {
         self.header("content-length", &body.len().to_string())
     }
     pub fn body(mut self, body: String) -> Self {
+        self.body = body.into_bytes();
+        self
+    }
+    /// A body that is not text: a file's contents travel as bytes, not as UTF-8.
+    pub fn body_bytes(mut self, body: Vec<u8>) -> Self {
         self.body = body;
         self
     }
-    pub fn build(self) -> Result<http::Request<String>> {
+    pub fn build(self) -> Result<http::Request<Vec<u8>>> {
         let mut b = http::Request::builder().method(self.method).uri(&self.uri);
         for (k, v) in self.headers {
             b = b.header(&k, &v);

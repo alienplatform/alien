@@ -11,8 +11,26 @@ use crate::{
     emitters::gcp::helpers::{downcast, required_label},
     expr,
 };
-use alien_core::{import::EmitContext, Result, Sandbox, SandboxEgress};
+use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
+use alien_error::AlienError;
 use hcl::expr::Expression;
+
+/// Refuses an egress mode the launcher cannot deliver.
+///
+/// `--allow-egress` is a switch, so a hostname list has nowhere to go and would otherwise be
+/// carried as its nearest boolean — denying everything the declaration asked to permit, with
+/// nothing anywhere saying so.
+fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
+    match &sandbox.egress {
+        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
+        SandboxEgress::AllowDomains { .. } => Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+            reason: "the Cloud Run sandbox launcher takes a single egress switch, so a hostname \
+                     list has nothing to render into. Declare egress: deny or egress: allow"
+                .to_string(),
+        })),
+    }
+}
 
 /// Where Cloud Run mounts the sandbox CLI inside a launcher-enabled container.
 const LAUNCHER_PATH: &str = "/usr/local/gcp/bin/sandbox";
@@ -30,6 +48,7 @@ impl TfEmitter for GcpSandboxEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let _ = required_label(ctx)?;
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        refuse_unsupported_egress(sandbox)?;
         Ok(expr::object([
             (
                 "launcherPath",
@@ -45,6 +64,7 @@ impl TfEmitter for GcpSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
+        refuse_unsupported_egress(sandbox)?;
         Ok(Some(expr::object([
             ("service", Expression::String("sandbox-gcp".to_string())),
             (
@@ -59,5 +79,50 @@ impl TfEmitter for GcpSandboxEmitter {
                 Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
         ])))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{SandboxCode, SandboxSessionPolicy};
+
+    fn sandbox_with(egress: SandboxEgress) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .egress(egress)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build()
+    }
+
+    /// A hostname list is refused rather than carried as its nearest boolean.
+    ///
+    /// `--allow-egress` is a switch: rendering the list as `true` or `false` opens or denies
+    /// addresses the declaration did not say to. Neither is the declaration, so neither is emitted.
+    ///
+    /// The second gate, not the first — a customer meets `domainEgressRules` at plan time. This
+    /// one covers the paths that render without planning.
+    #[test]
+    fn a_hostname_allowlist_is_refused_rather_than_approximated() {
+        let error = refuse_unsupported_egress(&sandbox_with(SandboxEgress::AllowDomains {
+            domains: vec!["api.example.com".to_string()],
+        }))
+        .expect_err("a hostname list has nothing to render into on Cloud Run");
+
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+        assert!(
+            error.to_string().contains("agents"),
+            "the refusal has to name the sandbox: {error}"
+        );
+
+        for accepted in [SandboxEgress::Deny, SandboxEgress::Allow] {
+            refuse_unsupported_egress(&sandbox_with(accepted.clone()))
+                .unwrap_or_else(|error| panic!("{accepted:?} is a switch position: {error}"));
+        }
     }
 }

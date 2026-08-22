@@ -12,7 +12,7 @@ export const SandboxCapabilitiesSchema = z.object({
     "domainEgressRules": z.boolean().describe("Egress can be restricted to a hostname allowlist"),
 "egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped"),
 "enforcedLimits": z.boolean().describe("The platform enforces the declared cpu, memory and disk ceilings"),
-"files": z.boolean().describe("Files can be moved in and out of a session\n\nEvery backend but Azure, whose binding implements no transfer."),
+"files": z.boolean().describe("Files can be moved in and out of a session"),
 "preview": z.boolean().describe("An authenticated, port-scoped capability to reach a service inside the sandbox"),
 "processLimit": z.boolean().describe("The platform can cap how many processes a session runs"),
 "reconnect": z.boolean().describe("A later call can reach a session created by an earlier one"),

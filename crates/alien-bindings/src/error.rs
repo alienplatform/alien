@@ -301,17 +301,43 @@ pub enum ErrorData {
     },
 
     /// A command run inside a sandbox did not complete.
+    ///
+    /// Visibility is inherited for the reason `SandboxUnreachable` gives below: what this wraps is
+    /// often a cloud client's error carrying the response text of the call that failed, and
+    /// `into_external` reads only the outermost flag — so a fixed `false` here would publish it.
     #[error(
         code = "SANDBOX_COMMAND_FAILED",
         message = "Sandbox command failed ({failure}): {reason}",
         retryable = "false",
-        internal = "false",
+        internal = "inherit",
         http_status_code = 400
     )]
     SandboxCommandFailed {
         /// The agent's own cause, kept as a field so a caller can branch on it
         failure: String,
         /// Human-readable detail from the agent
+        reason: String,
+    },
+
+    /// A session came up without a restriction its declaration asked for.
+    ///
+    /// Distinct from a refused call: the data plane accepted the request and answered, and what
+    /// it built is not what was asked for. The session id is carried because the caller never
+    /// receives one — this is the failure where an operator has to be able to find what was left
+    /// behind if deleting it also failed.
+    #[error(
+        code = "SANDBOX_NOT_AS_DECLARED",
+        message = "Sandbox session '{session_id}' does not carry its declared {restriction}, so it cannot be used; create a new session. {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    SandboxNotAsDeclared {
+        /// Provider-scoped id of the session that was built
+        session_id: String,
+        /// What the declaration asked for, such as `egress policy`
+        restriction: String,
+        /// What the session came up with instead
         reason: String,
     },
 

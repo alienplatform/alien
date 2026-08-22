@@ -107,6 +107,11 @@ impl std::fmt::Debug for CredentialResolver {
     }
 }
 
+/// The ADC service defaults, named so a reader can tell a deliberate default from a magic number.
+/// One core and 2 GiB — what `begin_create_sandbox` uses when a caller passes neither.
+const DEFAULT_AZURE_CPU: &str = "1000m";
+const DEFAULT_AZURE_MEMORY: &str = "2048Mi";
+
 impl BindingsProvider {
     /// Creates a new BindingsProvider with explicit credentials and bindings.
     ///
@@ -1891,14 +1896,22 @@ impl BindingsProviderApi for BindingsProvider {
                     AzureTokenCache::new(azure_config.clone()),
                 );
 
-                // Session ceilings come from the resource, not the caller — an application must
-                // not be able to raise its own by asking.
+                let disk_image = azure_binding
+                    .disk_image
+                    .into_value(binding_name, "diskImage")
+                    .map_err(|_| invalid("diskImage"))?;
+
+                // Ceilings stay the service defaults: `.limits()` is refused on Azure at plan
+                // time, so nothing declares them and there is no value to carry. They move into
+                // the binding when `enforcedLimits` flips, not before.
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
                     Arc::new(client),
                     group,
-                    "ubuntu".to_string(),
-                    "1000m".to_string(),
-                    "2048Mi".to_string(),
+                    disk_image,
+                    azure_binding.egress,
+                    azure_binding.idle_suspend_seconds,
+                    DEFAULT_AZURE_CPU.to_string(),
+                    DEFAULT_AZURE_MEMORY.to_string(),
                 ));
                 Ok(sandbox)
             }
@@ -2213,6 +2226,54 @@ mod tests {
         assert!(
             error.to_string().contains("ALIEN_FILES_BINDING"),
             "message should name the derived env var, got: {error}"
+        );
+    }
+
+    /// The image in the binding has to be the image the provider uses.
+    ///
+    /// Asserted here because the failure is silent: a sandbox built from the wrong image still
+    /// starts, so nothing else catches a declared image that never reached the create call.
+    #[cfg(feature = "azure")]
+    #[tokio::test]
+    async fn an_azure_sandbox_binding_carries_its_disk_image_to_the_provider() {
+        let env = HashMap::from([
+            (
+                ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Azure.as_str().to_string(),
+            ),
+            ("AZURE_SUBSCRIPTION_ID".to_string(), "sub".to_string()),
+            ("AZURE_TENANT_ID".to_string(), "ten".to_string()),
+            ("AZURE_CLIENT_ID".to_string(), "cli".to_string()),
+            ("AZURE_CLIENT_SECRET".to_string(), "sec".to_string()),
+            (
+                "ALIEN_BOX_BINDING".to_string(),
+                r#"{"service":"sandbox-azure",
+                    "sandboxGroup":"grp",
+                    "dataPlaneEndpoint":"https://management.swedencentral.azuredevcompute.io",
+                    "region":"swedencentral",
+                    "resourceGroup":"rg",
+                    "diskImage":"my-toolchain",
+                    "egress":{"mode":"deny"}}"#
+                    .to_string(),
+            ),
+        ]);
+        let provider = BindingsProvider::from_env(env)
+            .await
+            .expect("provider construction validates only that the binding JSON parses");
+
+        let sandbox = provider
+            .load_sandbox("box")
+            .await
+            .expect("an Azure sandbox binding loads");
+
+        let azure = sandbox
+            .as_any()
+            .downcast_ref::<crate::providers::sandbox::azure::AzureSandbox>()
+            .expect("an Azure binding builds an Azure provider");
+        assert_eq!(
+            azure.disk_image(),
+            "my-toolchain",
+            "the declared image must reach the provider, not a literal chosen at construction"
         );
     }
 

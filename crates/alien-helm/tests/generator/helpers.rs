@@ -8,6 +8,11 @@ use super::test_utils;
 
 /// Render `stack` into a chart through the built-in registry.
 pub fn render(stack: &Stack, settings: StackSettings) -> HelmChart {
+    try_render(stack, settings).expect("chart should render")
+}
+
+/// Render `stack`, keeping the error for a case that is meant to be refused.
+pub fn try_render(stack: &Stack, settings: StackSettings) -> alien_core::Result<HelmChart> {
     let registry = HelmRegistry::built_in();
     generate_helm_chart(
         stack,
@@ -17,7 +22,6 @@ pub fn render(stack: &Stack, settings: StackSettings) -> HelmChart {
             chart_name: stack.id().to_string(),
         },
     )
-    .expect("chart should render")
 }
 
 /// Snapshot the entire chart as a single string with `=== <path> ===`

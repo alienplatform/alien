@@ -10,7 +10,7 @@ import { ToolchainConfigSchema } from "./toolchain-config-schema.js";
  * @description Specifies where the sandbox\'s root filesystem comes from.
  */
 export const SandboxCodeSchema = z.union([z.object({
-    "image": z.string().describe("Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`)"),
+    "image": z.string().describe("Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).\n\nTwo backends narrow it in opposite directions: AWS wants an `s3://` bundle, Azure a\nbare catalog name such as `ubuntu`. Each refuses the other's shape while planning."),
 "type": z.enum(["image"])
     }), z.object({
     "src": z.string().describe("The source directory to build from"),

@@ -51,11 +51,20 @@ pub(crate) const DEADLINE_GRACE: std::time::Duration = std::time::Duration::from
 /// command can read its parent's `/proc/<pid>/cmdline` and `environ`: a nonce that travelled in
 /// either could be echoed back, and untrusted code would be able to claim its own deadline. A
 /// shell variable is in neither, and the command cannot read what has already been written to
-/// the stream it inherits.
+/// the stream it inherits. `unset` first, because an inherited *exported* variable of the same
+/// name keeps its export attribute across re-assignment and would carry the nonce straight back
+/// into the command's own environment.
 ///
 /// Nothing but `sh` and `/dev/urandom` is required, which every session image has.
 #[cfg(any(feature = "azure", feature = "local"))]
 pub(crate) struct DeadlineReport;
+
+/// Hex digits in the nonce the wrapper draws: `od -N16` reads 16 bytes.
+///
+/// Checked exactly, so a single stray hex character on a line of its own cannot be read as an
+/// announcement and turn the rest of the stream into its own repeat.
+#[cfg(any(feature = "azure", feature = "local"))]
+const NONCE_HEXITS: usize = 32;
 
 #[cfg(any(feature = "azure", feature = "local"))]
 impl DeadlineReport {
@@ -64,8 +73,10 @@ impl DeadlineReport {
     /// The command arrives as `"$@"`, so nothing re-parses its text. It is started in a session
     /// of its own so the kill reaches its process group rather than one pid: a command that
     /// spawned children would otherwise leave them running while the caller is told the deadline
-    /// contained it, which is the claim this path exists to make good on. An image that cannot do
-    /// that runs nothing — a deadline that cannot be enforced is refused, not approximated.
+    /// contained it. A child that starts a session of its own leaves that group and outlives the
+    /// kill — measured — so this covers what the command left behind, not what it moved away. An
+    /// image that cannot start a session runs nothing: a deadline that cannot be enforced at all
+    /// is refused rather than approximated.
     ///
     /// The killer repeats the nonce when its signal was delivered, which the status has to confirm:
     /// a command already exited and awaiting reaping takes the signal too. Once the command is
@@ -77,11 +88,13 @@ impl DeadlineReport {
     /// argv, which the command could read.
     pub(crate) fn bounded_program(deadline: std::time::Duration) -> String {
         format!(
-            "command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
+            "unset nonce command_pid killer_pid sleeper status; \
+             command -v setsid >/dev/null 2>&1 || exit {unboundable}; \
              nonce=$(od -An -N16 -tx1 /dev/urandom | tr -d ' \\n') || exit {unboundable}; \
              printf '%s\\n' \"$nonce\" >&2; \
              setsid \"$@\" & command_pid=$!; \
-             ( sleep {deadline} & sleeper=$!; trap 'kill $sleeper 2>/dev/null; exit' TERM; wait $sleeper; \
+             ( sleep {deadline} & sleeper=$!; trap 'kill \"$sleeper\" 2>/dev/null; exit' TERM; \
+               wait \"$sleeper\"; \
                trap '' TERM; kill -KILL -\"$command_pid\" 2>/dev/null && printf %s \"$nonce\" >&2 ) & killer_pid=$!; \
              wait \"$command_pid\"; status=$?; \
              kill \"$killer_pid\" 2>/dev/null; wait \"$killer_pid\"; \
@@ -106,11 +119,28 @@ impl DeadlineReport {
     /// because only the session knows the value. Whether that signal ended the command is the
     /// status's to say.
     pub(crate) fn read(exit_code: Option<i32>, stderr: &str) -> Bounded {
-        let announced = stderr
-            .split_once('\n')
-            .filter(|(nonce, _)| !nonce.is_empty() && nonce.chars().all(|c| c.is_ascii_hexdigit()));
+        // The first line that is a nonce and nothing else, rather than the first line: a shell
+        // asked to trace itself writes its own lines before this one, and they displace an
+        // announcement that has to be found for the report to mean anything. Unforgeable either
+        // way — the session writes it before the command starts, and a traced line carries the
+        // shell's prefix, so nothing the command chose can be read as the announcement.
+        let announced = stderr.split('\n').enumerate().find_map(|(index, line)| {
+            // A carriage return would make the announcement 33 bytes and invisible, and the first
+            // line the command chose would be adopted in its place. No transport here delivers
+            // one today; the cost of not depending on that is one trim.
+            let line = line.strip_suffix('\r').unwrap_or(line);
+            let is_nonce = line.len() == NONCE_HEXITS && line.chars().all(|c| c.is_ascii_hexdigit());
+            is_nonce.then(|| {
+                let after = stderr
+                    .split('\n')
+                    .skip(index + 1)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (line, after)
+            })
+        });
 
-        let Some((nonce, rest)) = announced else {
+        let Some((nonce, rest)) = announced.as_ref().map(|(n, r)| (*n, r.as_str())) else {
             // No announcement means the wrapper exited before starting anything, so nothing of
             // the caller's ran and nothing about a deadline can be claimed.
             return Bounded::NotRun {
@@ -220,7 +250,7 @@ mod tests {
     #[test]
     fn only_the_session_can_report_a_deadline() {
         // The shell writes its own notice after the signal, so the repeat is not always last.
-        let killed = match DeadlineReport::read(Some(137), "abc123\nboom\nabc123Killed\n") {
+        let killed = match DeadlineReport::read(Some(137), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n") {
             Bounded::Ran { killed, stderr } => {
                 assert_eq!(stderr, "boom\nKilled\n");
                 killed
@@ -231,7 +261,7 @@ mod tests {
 
         // A command echoing something nonce-shaped repeats nothing the session announced.
         assert!(matches!(
-            DeadlineReport::read(Some(0), "abc123\nboom\ndeadbeef\n"),
+            DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\ndeadbeef\n"),
             Bounded::Ran { killed: false, .. }
         ));
     }
@@ -252,12 +282,54 @@ mod tests {
         assert!(reason.contains("could not start"), "{reason}");
     }
 
+    /// The announcement survives a shell that writes before it, and a short hex line is not one.
+    ///
+    /// A `sh` that is really bash turns on tracing from `SHELLOPTS` in its environment and writes
+    /// its own lines first. Reading only line 1 lost the announcement there and reported every
+    /// command — including the ones that succeeded — as never bounded. The width is checked
+    /// exactly, so a stray hex fragment on a line of its own cannot stand in for it.
+    #[test]
+    fn the_announcement_is_found_by_shape_rather_than_by_position() {
+        let traced = format!("+ unset nonce command_pid\n+ printf\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n");
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(137), &traced) else {
+            panic!("the trace must not hide the announcement");
+        };
+        assert!(killed, "the killer's repeat still reports the kill");
+        assert_eq!(
+            stderr, "boom\nKilled\n",
+            "what precedes the announcement was written before the command started, so it is the \
+             session's own noise rather than the command's — and one of those lines is the trace \
+             of the announcement itself"
+        );
+
+        // A carriage return does not hide the announcement, which would otherwise let the first
+        // line the command chose stand in for it.
+        let crlf = format!("a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\r\nboom\r\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\r\n");
+        assert!(
+            matches!(
+                DeadlineReport::read(Some(137), &crlf),
+                Bounded::Ran { killed: true, .. }
+            ),
+            "a carriage return is not part of the nonce"
+        );
+
+        // Short of the width the session draws, so not an announcement — and the rest of the
+        // stream is not its repeat.
+        assert!(
+            matches!(
+                DeadlineReport::read(Some(137), "ab\nboom\nabc\n"),
+                Bounded::NotRun { .. }
+            ),
+            "a hex fragment is not a nonce"
+        );
+    }
+
     /// A command that finished as the killer fired keeps its own result. `kill` succeeds on a
     /// process that has exited and is not yet reaped, so the repeat alone would turn a command
     /// that beat its deadline into a deadline failure and throw away what it returned.
     #[test]
     fn a_command_that_finished_as_the_killer_fired_keeps_its_result() {
-        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "abc123\nboom\nabc123")
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4")
         else {
             panic!("the command ran");
         };
@@ -293,17 +365,69 @@ mod tests {
             "the killer is stopped and then awaited, whatever the command's exit: {program}"
         );
         assert!(
-            program.contains("wait $sleeper; trap '' TERM; kill -KILL"),
-            "past its sleep the killer ignores the stop, so its report is never cut off: {program}"
+            program.contains(r#"wait "$sleeper"; trap '' TERM; kill -KILL"#),
+            "past its sleep the killer ignores the stop, so its report is never cut off, and the \
+             pid is quoted so an inherited IFS cannot split it into words that are not children: \
+             {program}"
         );
         assert!(
-            program.contains("trap 'kill $sleeper 2>/dev/null; exit' TERM"),
+            program.contains(r#"trap 'kill "$sleeper" 2>/dev/null; exit' TERM"#),
             "a stopped killer reaps its own sleeper, so none outlives the command: {program}"
         );
         assert!(
             !program.contains("\"$nonce\" &") && program.contains("( sleep"),
             "the killer is a subshell: the nonce reaches it as a variable, never as an argument \
              the command could read from /proc: {program}"
+        );
+    }
+
+    /// An inherited variable of the wrapper's own name never reaches the command.
+    ///
+    /// Run against a real `sh`: an exported variable keeps its export attribute across
+    /// re-assignment, so `nonce=$(…)` would hand the command the session's own nonce. A
+    /// stand-in `setsid` is supplied because macOS ships none.
+    #[test]
+    #[cfg(unix)]
+    fn the_wrapper_never_hands_its_nonce_to_the_command() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let bin = std::env::temp_dir().join(format!("alien-sandbox-{}", std::process::id()));
+        std::fs::create_dir_all(&bin).expect("a directory for the stand-in");
+        let setsid = bin.join("setsid");
+        std::fs::write(&setsid, "#!/bin/sh\nexec \"$@\"\n").expect("the stand-in is written");
+        std::fs::set_permissions(&setsid, std::fs::Permissions::from_mode(0o755))
+            .expect("the stand-in is executable");
+
+        let path = format!(
+            "{}:{}",
+            bin.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let run = std::process::Command::new("/bin/sh")
+            .arg("-c")
+            .arg(DeadlineReport::bounded_program(std::time::Duration::from_secs(5)))
+            .arg("sh")
+            .arg("printenv")
+            .arg("nonce")
+            .env("PATH", path)
+            .env("nonce", "inherited-from-the-session")
+            .output()
+            .expect("a shell runs");
+        std::fs::remove_dir_all(&bin).ok();
+
+        let announced = String::from_utf8_lossy(&run.stderr);
+        let announced = announced.lines().next().unwrap_or_default().to_string();
+        assert!(
+            announced.len() == 32 && announced.chars().all(|c| c.is_ascii_hexdigit()),
+            "the session has to reach the point of drawing a nonce, or this proves nothing: \
+             stderr {:?}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+
+        let seen = String::from_utf8_lossy(&run.stdout);
+        assert!(
+            seen.trim().is_empty(),
+            "the command must inherit no `nonce` at all, and it saw {seen:?}"
         );
     }
 

@@ -1,0 +1,207 @@
+# Captured from a live Cloud Run service with sandboxLauncher enabled, 2026-08-21.
+#
+# The reference at docs.cloud.google.com/run/docs/reference/sandbox-cli lists six verbs; this
+# build has eight (completion, help are undocumented). That page says to run `sandbox -h` for
+# the complete list, and it is right to.
+#
+# Kept so that "the launcher has no X verb" in gcp.rs is a citation rather than an assertion.
+# Re-capture by running `sandbox -h`, then `sandbox <verb> -h` for each verb, inside a Cloud
+# Run container deployed with --sandbox-launcher.
+# ---------------------------------------------------------------------------------------------
+
+
+===== ENVIRONMENT =====
+launcher path: /usr/local/gcp/bin/sandbox
+RESULT launcher_present=yes
+nproc=5  mem=4010112kB
+
+===== sandbox -h =====
+Serverless sandboxing CLI, providing compartmentalized execution for commands.
+
+Usage:
+  sandbox [command]
+
+Available Commands:
+  completion         Generate the autocompletion script for the specified shell
+  delete             Delete a sandbox
+  do                 Execute the specified command in a sandbox
+  exec               Execute a command in an existing sandbox session
+  fork               Fork a running sandbox to a new one.
+  help               Help about any command
+  run                Start a new sandbox.
+  tar                Export a tarfile of the writable overlay (rootfs-upper) of a running sandbox
+
+Flags:
+  -h, --help   help for sandbox
+
+Use "sandbox [command] --help" for more information about a command.
+
+===== sandbox do -h =====
+The do command provides support for executing a command in a sandbox without having to think about sandbox lifecycle management. A new sandbox will be created and destroyed for each execution, optionally persisting the state of the filesystem to a persistence directory between executions. This command blocks until the command and sandbox lifecycle completes.
+
+Usage:
+  sandbox do [flags] [command-to-execute]
+
+Flags:
+      --allow-egress          Allow egress for this sandbox
+  -e, --env string            Environment variables to set in the sandbox
+      --export-tar string     The tarball to export rootfs-upper to on exit
+  -h, --help                  help for do
+      --import-tar string     The tarball to import rootfs-upper from
+      --mount string          Mounts for the sandbox
+  -p, --publish string        Ports to expose from the sandbox
+      --rootfs string         Run the command using the root of the executing container as the root directory of the sandbox. By default, this mount is read-only (default "/")
+      --sandbox-name string   The ID to use for the sandbox; if not specified, a random ID will be generated
+      --stderr                Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin                 Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout                Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+      --sync-tar string       The tarball to use for keeping the filesystem in sync (import if exists, export on exit)
+      --template-var string   Template variables to set in the sandbox (format: KEY=VALUE)
+  -w, --workdir string        The working directory to execute the command in
+      --write                 Allow filesystems that have been mounted to be writable by this sandbox
+
+===== sandbox run -h =====
+The run command creates and starts a sandbox. If no command is specified, an empty sandbox will be started. The command blocks until the container has started.
+
+Usage:
+  sandbox run <sandbox-id> [command-to-execute] [flags]
+
+Flags:
+      --allow-egress          Allow egress for this sandbox.
+      --detach                Detach the sandbox from the console
+  -e, --env string            Environment variables to set in the sandbox
+  -h, --help                  help for run
+      --import-tar string     The tarball to import rootfs-upper from
+      --mount string          Mounts for the sandbox
+  -p, --publish string        Ports to expose from the sandbox
+      --rootfs string         Run the command using the root of the executing container as the root directory of the sandbox. (default "/")
+      --stderr                Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin                 Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout                Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+      --template-var string   Template variables to set in the sandbox (format: KEY=VALUE)
+  -w, --workdir string        The working directory to execute the command in.
+      --write                 Allow filesystems that have been mounted to be writable by this sandbox
+
+===== sandbox exec -h =====
+The exec command allows you to execute a command in a running sandbox. The sandbox must be running already, or the command will fail.
+
+Usage:
+  sandbox exec <sandbox-id> <command-to-execute> [args...] [flags]
+
+Flags:
+  -e, --env string       Environment variables to set in the sandbox
+  -h, --help             help for exec
+      --stderr           Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin            Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout           Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+  -w, --workdir string   The working directory to execute the command in
+
+===== sandbox fork -h =====
+Fork creates a new sandbox using the state and command line of a running source sandbox.
+
+Usage:
+  sandbox fork <source-sandbox-id> <target-sandbox-id> [flags]
+
+Flags:
+      --allow-egress     Allow egress for this sandbox
+      --detach           Detach the new sandbox from the console
+  -h, --help             help for fork
+  -p, --publish string   Ports to expose from the sandbox
+      --stderr           Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin            Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout           Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+      --tar string       The tarball from the source sandbox state with which the target sandbox was started
+
+===== sandbox tar -h =====
+The tar command creates a tarball of the writable overlay (rootfs-upper) of a sandbox container, containing all changes made in the sandbox. The tarball will capture all files and directories that differ from the rootfs.
+
+Usage:
+  sandbox tar <sandbox-id> [flags]
+
+Flags:
+      --file string   The file to write the tarball to
+  -h, --help          help for tar
+      --stderr        Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin         Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout        Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+
+===== sandbox delete -h =====
+The delete command removes a sandbox and cleans up its resources. In the case of a running sandbox, the sandbox can be deleted by adding --force.
+
+Usage:
+  sandbox delete <sandbox-id> [flags]
+
+Flags:
+      --force    Force delete the sandbox, even if it is running
+  -h, --help     help for delete
+      --stderr   Wire the stderr pipe of the sandbox command to the stderr of the process executing in the sandbox (default true)
+      --stdin    Wire the stdin pipe of the sandbox command to the stdin of the process executing in the sandbox (default true)
+      --stdout   Wire the stdout pipe of the sandbox command to the stdout of the process executing in the sandbox (default true)
+
+===== verbs this backend reports as absent =====
+  suspend: absent
+RESULT verb_suspend=absent
+  resume: absent
+RESULT verb_resume=absent
+  list: absent
+RESULT verb_list=absent
+  ps: absent
+RESULT verb_ps=absent
+  snapshot: absent
+RESULT verb_snapshot=absent
+  checkpoint: absent
+RESULT verb_checkpoint=absent
+  restore: absent
+RESULT verb_restore=absent
+
+===== create argv: --id versus the documented positional id =====
+--- ours: run --id poc-ours-14 --detach ---
+Error: unknown flag: --id
+
+RESULT ours_argv_rc=0
+--- documented: run poc-doc-14 --detach ---
+Running in detached mode: stdin, stdout and stderr arguments are ignored.
+RESULT doc_argv_rc=0
+--- can each id be reached by exec? ---
+  'poc-ours-14': not reachable
+RESULT reachable_poc-ours-=no
+  'poc-doc-14': REACHABLE
+RESULT reachable_poc-doc-=yes
+  '--id': not reachable
+RESULT reachable_--id=no
+
+===== does run without --detach block? =====
+  rc=124 after 20s (rc=124 means it blocked until the timeout)
+RESULT detach_needed=yes
+RESULT nodetach_elapsed=20
+
+===== does --env work? =====
+  run --env then exec: [hello]
+RESULT env_on_run=works
+  exec --env:          [world]
+RESULT env_on_exec=works
+  does a sandbox inherit the container's env? (Google says no)
+    []
+RESULT env_inherited=no
+
+===== tar export / import round trip =====
+Serializing rootfs upper layer into a tar archive for container: poc-tar-14, sandbox: poc-tar-14
+  tar produced 2560 bytes
+RESULT tar_export=yes
+  restored marker: Error: sandbox poc-restore-14 is not running
+RESULT tar_import=no
+
+===== does a sandbox see the instance's CPU and memory? =====
+  host:    cpu=5 mem=4010112kB
+  sandbox: 5 4010112
+RESULT host_cpu=5
+RESULT sandbox_cpu_mem=5 4010112
+
+===== CLEANUP =====
+  deleted poc-ours-14
+  deleted poc-doc-14
+  deleted poc-nodet-14
+  deleted poc-env-14
+  deleted poc-tar-14
+PROBE-COMPLETE
+PROBE-DONE
