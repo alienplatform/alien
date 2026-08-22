@@ -146,6 +146,12 @@ async fn health_reports_the_protocol_version_without_a_capability() {
     assert_eq!(response.status(), 200);
     let body: serde_json::Value = response.json().await.expect("json");
     assert_eq!(body["protocolVersion"], PROTOCOL_VERSION);
+    // The container boot id a caller derives its generation from: present and non-empty, so a
+    // reconnecting caller can tell its container from a blank one wearing the same name.
+    assert!(
+        body["bootId"].as_str().is_some_and(|id| !id.is_empty()),
+        "health reports a non-empty container boot id: {body}"
+    );
 }
 
 /// The agent outlives the deployment that built its image, so a mismatch has

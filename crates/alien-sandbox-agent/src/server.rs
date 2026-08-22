@@ -88,12 +88,16 @@ pub struct AgentState {
     pub jobs: JobRegistry,
 }
 
-/// Liveness and the version the agent speaks.
+/// Liveness, the version the agent speaks, and the container it runs in.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     /// The protocol version this agent implements
     pub protocol_version: u32,
+    /// The kernel boot id of the container this agent runs in. Stable across calls and processes
+    /// on one kernel, so a caller compares it across reads to tell its container from a blank one
+    /// that replaced it under the same session name.
+    pub boot_id: String,
 }
 
 /// Optional version assertion from the caller.
@@ -263,8 +267,8 @@ pub fn router(state: Arc<AgentState>) -> Router {
 
 /// Liveness, and the one place protocol versions are reconciled.
 ///
-/// Unauthenticated: it reports the version and nothing about the session, so requiring a
-/// capability would only stop a liveness probe from working.
+/// Unauthenticated: it reports the version and the container boot id — kernel identity, not session
+/// contents — so requiring a capability would only stop a liveness probe from working.
 async fn health(
     Query(query): Query<HealthQuery>,
 ) -> std::result::Result<Json<HealthResponse>, ApiError> {
@@ -281,9 +285,36 @@ async fn health(
         }
     }
 
+    // Failing closed: a caller that cannot read the container identity must not reconnect to a
+    // possibly-replaced container, so an unreadable boot id is an error, not a blank field.
+    let boot_id = container_boot_id().map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::OperationFailed {
+            operation: "read container boot id".to_string(),
+            reason: error.to_string(),
+        }))
+    })?;
+
     Ok(Json(HealthResponse {
         protocol_version: PROTOCOL_VERSION,
+        boot_id,
     }))
+}
+
+/// The kernel boot id of the container this agent runs in.
+///
+/// `/proc/sys/kernel/random/boot_id` is stable across calls and processes on one kernel and
+/// changes only when the container is replaced, which is the identity a caller's `generation` is
+/// derived from.
+#[cfg(target_os = "linux")]
+fn container_boot_id() -> std::io::Result<String> {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map(|id| id.trim().to_string())
+}
+
+/// A non-Linux dev build has no `/proc` boot id and never runs a real sandbox reconnect, so a
+/// fixed sentinel stands in rather than a per-run value that would read as a fresh container.
+#[cfg(not(target_os = "linux"))]
+fn container_boot_id() -> std::io::Result<String> {
+    Ok("dev-build-no-boot-id".to_string())
 }
 
 /// The image's readiness and validation hooks.

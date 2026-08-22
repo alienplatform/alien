@@ -76,13 +76,19 @@ const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 const RUN_COMMAND: &str = "sandbox.runCommand";
 const TERMINATE: &str = "sandbox.terminate";
 
-/// The generation every session reports until the container-identity wiring lands.
-///
-/// A sandbox reports `STATE_RUNNING` while its container has been replaced under a stable name, so
-/// `generation` must be derived from the container boot id read through the agent to detect that.
-/// That op does not exist yet, so a fixed value is returned and `reconnect` stays `false` in the
-/// capability row until the derivation is in place — a caller must not act on this as an identity.
-const PLACEHOLDER_GENERATION: u64 = 1;
+/// The generation of a session whose live container identity was not established: a state with no
+/// reachable agent, or a bulk `list` that does not probe each session. Never a value
+/// `generation_from_boot_id` returns, so a real identity is always distinguishable from an
+/// unprobed one.
+const NO_GENERATION: u64 = 0;
+
+/// A single health probe is bounded to this, because the client sets no per-request timeout and an
+/// agent that accepts the connection but never answers would otherwise hang `get()` and `create()`
+/// forever. Set above the proxy's ~30s synchronous window (see `MAX_SYNCHRONOUS_DEADLINE`) rather
+/// than tight to the round trip: too tight reports a healthy session unreachable, and
+/// `get_or_create` then provisions a fresh sandbox and loses the caller's filesystem — the failure
+/// this task exists to prevent — where too loose only delays an already-broken session.
+const AGENT_PROBE_BUDGET: Duration = Duration::from_secs(60);
 
 /// Maps a declared egress mode onto the template's `egressControlConfig`, or refuses one the API
 /// cannot express.
@@ -285,15 +291,17 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
-    /// Confirms the agent answers and speaks the protocol.
+    /// Confirms the agent answers and speaks the protocol, and returns the session's generation.
     ///
     /// A sandbox can report `STATE_RUNNING` while every `:execute` fails, so a state read is not a
-    /// health check; the agent has to answer for the session to be usable.
-    async fn probe_agent(&self, operation: &str, session_id: &str) -> Result<()> {
-        // Mapped to unreachable whatever the failure — a refused delivery, an unparseable body, a
-        // protocol mismatch — because a health probe is idempotent and the caller acts on the same
-        // thing each way: the agent cannot be reached, so `get_or_create` provisions a fresh one
-        // rather than destroying a session this call did not create.
+    /// health check; the agent has to answer for the session to be usable. The reply carries the
+    /// container boot id, from which the generation is derived so a caller can detect a container
+    /// that was replaced under a stable session name.
+    async fn probe_agent(&self, operation: &str, session_id: &str) -> Result<u64> {
+        // Mapped to unreachable whatever the failure — a refused delivery, a probe that outran its
+        // budget, an unparseable body, a protocol mismatch — because a health probe is idempotent
+        // and the caller acts on the same thing each way: the agent cannot be reached, so
+        // `get_or_create` provisions a fresh one rather than destroying a session it did not create.
         let unreachable = |reason: String| {
             AlienError::new(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
@@ -301,26 +309,34 @@ impl GcpAgentPlatformSandbox {
             })
         };
 
-        let body = self
-            .client
-            .execute(
+        let body = tokio::time::timeout(
+            AGENT_PROBE_BUDGET,
+            self.client.execute(
                 &self.engine,
                 session_id,
                 &serde_json::to_vec(&json!({ "v": AGENT_PROTOCOL_VERSION, "op": "health" }))
                     .unwrap_or_default(),
-            )
-            .await
-            .map_err(|error| {
-                error.context(ErrorData::SandboxUnreachable {
-                    operation: operation.to_string(),
-                    reason: "the session's agent did not answer a health probe".to_string(),
-                })
-            })?;
+            ),
+        )
+        .await
+        .map_err(|_| {
+            unreachable(format!(
+                "the session's agent did not answer a health probe within {}s",
+                AGENT_PROBE_BUDGET.as_secs()
+            ))
+        })?
+        .map_err(|error| {
+            error.context(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: "the session's agent did not answer a health probe".to_string(),
+            })
+        })?;
 
         #[derive(Deserialize)]
         #[serde(rename_all = "camelCase")]
         struct Health {
             protocol_version: u32,
+            boot_id: String,
         }
 
         let health: Health = serde_json::from_slice(&body).map_err(|_| {
@@ -332,15 +348,21 @@ impl GcpAgentPlatformSandbox {
         })?;
 
         if health.protocol_version != AGENT_PROTOCOL_VERSION {
-            return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                operation: operation.to_string(),
-                reason: format!(
-                    "the session's agent speaks protocol {} where this provider speaks {}",
-                    health.protocol_version, AGENT_PROTOCOL_VERSION
-                ),
-            }));
+            return Err(unreachable(format!(
+                "the session's agent speaks protocol {} where this provider speaks {}",
+                health.protocol_version, AGENT_PROTOCOL_VERSION
+            )));
         }
-        Ok(())
+        // An agent that answers without a boot id cannot be told apart from a replaced container,
+        // so the session is refused rather than reconnected to a possibly-blank one.
+        if health.boot_id.is_empty() {
+            return Err(unreachable(
+                "the session's agent reported no container boot id, so its identity cannot be \
+                 established"
+                    .to_string(),
+            ));
+        }
+        Ok(generation_from_boot_id(&health.boot_id))
     }
 
     /// Deletes a sandbox the caller will never receive, keeping the reason it is discarded.
@@ -366,11 +388,12 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
-    /// Waits for a created sandbox to reach `STATE_RUNNING`, then confirms its agent answers.
+    /// Waits for a created sandbox to reach `STATE_RUNNING`, confirms its agent answers, and returns
+    /// the session's generation.
     ///
     /// The running record is judged, not the create accept: a sandbox still coming up need not be
     /// addressable yet, and reading that as a failure would delete every one that answered early.
-    async fn settle(&self, session_id: &str) -> Result<()> {
+    async fn settle(&self, session_id: &str) -> Result<u64> {
         for _ in 0..SESSION_READY_ATTEMPTS {
             let Some(sandbox) = self.read_sandbox(CREATE, session_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -382,8 +405,7 @@ impl GcpAgentPlatformSandbox {
             };
             match session_state(CREATE, sandbox.state.as_deref())? {
                 SandboxSessionState::Running => {
-                    self.probe_agent(CREATE, session_id).await?;
-                    return Ok(());
+                    return self.probe_agent(CREATE, session_id).await;
                 }
                 SandboxSessionState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -526,10 +548,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
         match self.settle(&session_id).await {
-            Ok(()) => Ok(SandboxSession {
+            Ok(generation) => Ok(SandboxSession {
                 session_id,
                 state: SandboxSessionState::Running,
-                generation: PLACEHOLDER_GENERATION,
+                generation,
             }),
             Err(error) => Err(self.discard(&session_id, error).await),
         }
@@ -543,15 +565,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
         let state = session_state(GET, sandbox.state.as_deref())?;
         // Only a running session carries a reachable agent, and a state read is not health: a
-        // running record whose agent does not answer is not reported as usable.
-        if state == SandboxSessionState::Running {
-            self.probe_agent(GET, session_id).await?;
-        }
+        // running record whose agent does not answer is not reported as usable. A non-running
+        // session has no live container to identify, so it carries no generation.
+        let generation = if state == SandboxSessionState::Running {
+            self.probe_agent(GET, session_id).await?
+        } else {
+            NO_GENERATION
+        };
 
         Ok(Some(SandboxSession {
             session_id: session_id.to_string(),
             state,
-            generation: PLACEHOLDER_GENERATION,
+            generation,
         }))
     }
 
@@ -616,10 +641,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
             .filter_map(|sandbox| {
                 let session_id = sandbox.name.as_deref().and_then(session_segment)?;
                 let state = session_state("sandbox.list", sandbox.state.as_deref()).ok()?;
+                // A bulk list does not probe each agent, so it reports no generation; a caller that
+                // needs one reads the single session through `get`.
                 Some(SandboxSession {
                     session_id: session_id.to_string(),
                     state,
-                    generation: PLACEHOLDER_GENERATION,
+                    generation: NO_GENERATION,
                 })
             })
             .collect())
@@ -1143,6 +1170,22 @@ fn is_addressable_id(id: &str) -> bool {
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Maps a container boot id to a numeric generation deterministically.
+///
+/// A caller may compare generations across processes, so this is an explicit FNV-1a rather than a
+/// `Hash` impl — the same boot id must yield the same number in any build, and std's hashers
+/// promise no cross-release stability. `| 1` keeps the result clear of `NO_GENERATION`.
+fn generation_from_boot_id(boot_id: &str) -> u64 {
+    const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+    let mut hash = FNV_OFFSET_BASIS;
+    for byte in boot_id.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash | 1
 }
 
 /// The API's runtime states, in ours. An unrecognised one is an error rather than a default,

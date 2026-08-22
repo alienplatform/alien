@@ -1,7 +1,10 @@
 use super::*;
-use alien_gcp_clients::gcp::agent_platform::MockAgentPlatformApi;
+use alien_gcp_clients::gcp::agent_platform::{MockAgentPlatformApi, SandboxEnvironmentTemplate};
 use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+/// The client's own `Result`, distinct from the binding's `Result` that `super::*` brings in.
+type ClientResult<T> = alien_error::Result<T, AgentPlatformErrorData>;
 
 // ---- Fixtures ---------------------------------------------------------------------------------
 
@@ -9,12 +12,11 @@ const ENGINE_FULL: &str = "projects/p/locations/us-central1/reasoningEngines/eng
 const TEMPLATE: &str = "projects/p/locations/us-central1/sandboxTemplates/agent";
 
 fn provider(client: MockAgentPlatformApi) -> GcpAgentPlatformSandbox {
-    GcpAgentPlatformSandbox::new(
-        Arc::new(client),
-        ENGINE_FULL.to_string(),
-        TEMPLATE.to_string(),
-        Some(3600),
-    )
+    provider_from(Arc::new(client))
+}
+
+fn provider_from(client: Arc<dyn AgentPlatformApi>) -> GcpAgentPlatformSandbox {
+    GcpAgentPlatformSandbox::new(client, ENGINE_FULL.to_string(), TEMPLATE.to_string(), Some(3600))
 }
 
 fn sandbox_name(id: &str) -> String {
@@ -60,7 +62,12 @@ fn ndjson(lines: &[serde_json::Value]) -> Vec<u8> {
 }
 
 fn health_reply() -> Vec<u8> {
-    serde_json::to_vec(&serde_json::json!({ "protocolVersion": 1 })).expect("health serializes")
+    health_reply_with_boot("11111111-1111-1111-1111-111111111111")
+}
+
+fn health_reply_with_boot(boot_id: &str) -> Vec<u8> {
+    serde_json::to_vec(&serde_json::json!({ "protocolVersion": 1, "bootId": boot_id }))
+        .expect("health serializes")
 }
 
 fn stdout_frame(seq: u64, data: &[u8]) -> serde_json::Value {
@@ -276,6 +283,171 @@ async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second
         .expect("a suspended session is resumed and returned");
     assert_eq!(session.session_id, "paused");
     assert_eq!(session.state, SandboxSessionState::Running);
+    // The reconnect path the capability flip promises: a woken session carries a real generation
+    // read from the container it came back on, not the unprobed sentinel.
+    assert_ne!(session.generation, NO_GENERATION, "a woken session carries its container generation");
+}
+
+// ---- generation and health -------------------------------------------------------------------
+
+/// The generation a `get` reports for a running session answering with `boot_id`.
+async fn generation_for_boot(boot_id: &'static str) -> u64 {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_execute()
+        .returning(move |_, _, _| Ok(health_reply_with_boot(boot_id)));
+
+    provider(client)
+        .get("s1")
+        .await
+        .expect("a running session")
+        .expect("a present session")
+        .generation
+}
+
+/// The generation follows the container boot id: it changes when the container is replaced and is
+/// stable without a replacement, across separate reads. Mutation check: make
+/// `generation_from_boot_id` return a constant and the `assert_ne` below goes red — a reconnect
+/// test that could not see a replaced container is the exact failure this backend has.
+#[tokio::test]
+async fn generation_tracks_the_container_boot_id() {
+    let first = generation_for_boot("boot-id-aaaa").await;
+    let replaced = generation_for_boot("boot-id-bbbb").await;
+    let same = generation_for_boot("boot-id-aaaa").await;
+
+    assert_ne!(first, replaced, "a replaced container changes the generation");
+    assert_eq!(first, same, "the same container keeps its generation across separate reads");
+    assert_ne!(first, NO_GENERATION, "a probed running session carries a real generation");
+}
+
+/// A running record whose agent reports an empty boot id has no identity to reconnect to, so `get`
+/// refuses it. Mutation check: drop the emptiness guard in `probe_agent` and this returns
+/// `Some(Running)` instead of the unreachable error.
+#[tokio::test]
+async fn get_refuses_an_agent_that_reports_an_empty_boot_id() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Ok(health_reply_with_boot("")));
+
+    let error = provider(client)
+        .get("s1")
+        .await
+        .expect_err("an empty boot id is no container identity");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
+/// A health reply that omits the boot id entirely is unreadable, so the session is not reported as
+/// usable. Mutation check: make `Health.boot_id` an `Option` without a guard and this returns
+/// `Some(Running)`.
+#[tokio::test]
+async fn get_refuses_an_agent_whose_health_omits_the_boot_id() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client.expect_execute().returning(|_, _, _| {
+        Ok(serde_json::to_vec(&serde_json::json!({ "protocolVersion": 1 })).expect("serializes"))
+    });
+
+    let error = provider(client)
+        .get("s1")
+        .await
+        .expect_err("a health reply without a boot id is not usable");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
+/// A wedged agent that accepts the probe and never answers must not hang `get`; the probe budget
+/// cuts it off and `get` returns unreachable. `start_paused` advances the clock to the budget
+/// rather than sleeping in real time. Mutation check: drop the `tokio::time::timeout` in
+/// `probe_agent` and the clock instead advances to the stub's long sleep, whose `unreachable!`
+/// then panics the test — red either way.
+#[tokio::test(start_paused = true)]
+async fn get_does_not_hang_on_a_wedged_agent() {
+    let error = provider_from(Arc::new(WedgedAgent))
+        .get("s1")
+        .await
+        .expect_err("a wedged agent is unreachable, not a hang");
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}
+
+/// A client whose sandbox reads RUNNING but whose `execute` never answers, standing in for an agent
+/// that accepts the health probe and then wedges. Only the two methods `get` reaches are real; the
+/// rest are unreachable in this test.
+#[derive(Debug)]
+struct WedgedAgent;
+
+#[async_trait]
+impl AgentPlatformApi for WedgedAgent {
+    async fn get_sandbox(&self, _engine: &str, sandbox: &str) -> ClientResult<SandboxEnvironment> {
+        Ok(sandbox_in_state(sandbox, "STATE_RUNNING"))
+    }
+
+    async fn execute(&self, _engine: &str, _sandbox: &str, _input: &[u8]) -> ClientResult<Vec<u8>> {
+        // Far past any probe budget; the budget must return before this does.
+        tokio::time::sleep(Duration::from_secs(86_400)).await;
+        unreachable!("the probe budget should fire before a wedged execute returns")
+    }
+
+    async fn create_engine(&self, _display_name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn create_template(
+        &self,
+        _engine: &str,
+        _template: SandboxEnvironmentTemplate,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_template(
+        &self,
+        _engine: &str,
+        _template: &str,
+    ) -> ClientResult<SandboxEnvironmentTemplate> {
+        unimplemented!()
+    }
+    async fn delete_template(&self, _engine: &str, _template: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn create_sandbox(
+        &self,
+        _engine: &str,
+        _request: SandboxCreateRequest,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn list_sandboxes(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironment>> {
+        unimplemented!()
+    }
+    async fn delete_sandbox(&self, _engine: &str, _sandbox: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn pause(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn resume(&self, _engine: &str, _sandbox: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn snapshot(
+        &self,
+        _engine: &str,
+        _sandbox: &str,
+        _display_name: &str,
+    ) -> ClientResult<Operation> {
+        unimplemented!()
+    }
+    async fn get_operation(&self, _name: &str) -> ClientResult<Operation> {
+        unimplemented!()
+    }
 }
 
 // ---- list -------------------------------------------------------------------------------------

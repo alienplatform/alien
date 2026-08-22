@@ -352,10 +352,10 @@ impl SandboxCapabilities {
         Self {
             // Agent file operations move over the session envelope.
             files: true,
-            // Reaching a session across processes needs a stable session generation, and that
-            // wiring is not in place; flipping this true before it lands would promise a
-            // guarantee the backend does not yet keep.
-            reconnect: false,
+            // Reaching a session across processes is safe because `generation` is derived from the
+            // container boot id read through the agent's health op, so a caller detects a container
+            // replaced under a stable session name rather than reconnecting to a blank one.
+            reconnect: true,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
             // `:pause` and `:resume` preserve the running container.
@@ -1073,18 +1073,19 @@ mod tests {
     }
 
     /// The Agent Platform row, each value against the behaviour it was measured from. `reconnect`
-    /// is the tripwire: it stays `false` until a stable session generation is wired to reach a
-    /// session across processes, and whoever wires that has to flip this test and the field
-    /// together. This row is deliberately not what `for_platform(Platform::Gcp)` returns — that is
-    /// still Cloud Run — so it is asserted directly.
+    /// is the tripwire: it is `true` only because `generation` is derived from the container boot
+    /// id read through the agent's health op, so a caller detects a replaced container instead of
+    /// reconnecting to a blank one. This row is deliberately not what `for_platform(Platform::Gcp)`
+    /// returns — that is still Cloud Run — so it is asserted directly.
     #[test]
     fn gcp_agent_platform_row_matches_measured_backend() {
         let row = SandboxCapabilities::gcp_agent_platform();
 
         assert!(row.files, "agent file ops move over the session envelope");
         assert!(
-            !row.reconnect,
-            "cross-process reconnect needs a session generation that is not wired yet"
+            row.reconnect,
+            "generation is derived from the container boot id, so a session is reachable across \
+             processes"
         );
         assert!(!row.preview, "the only ingress is :execute; no port-scoped capability");
         assert!(row.suspend_resume, ":pause and :resume preserve the container");
