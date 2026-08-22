@@ -195,6 +195,42 @@ impl GcpClientBase {
         .await
     }
 
+    /// Single-attempt sibling of [`execute_request`](Self::execute_request): builds and delivers the
+    /// request exactly once, never retrying. Use for non-idempotent verbs (`create`, state
+    /// transitions, a proxied `execute`) where a silent re-send would orphan a resource or repeat a
+    /// transition. Retry, when wanted, belongs to the caller.
+    pub async fn execute_request_once<T, B>(
+        &self,
+        method: Method,
+        path: &str,
+        query_params: Option<Vec<(&str, String)>>,
+        body: Option<B>,
+        resource_name: &str,
+    ) -> Result<T>
+    where
+        T: DeserializeOwned + Send + 'static,
+        B: Serialize + Send + Sync + Clone + 'static,
+    {
+        let url = self.build_url(path, query_params.as_ref())?;
+        let mut builder = self.http.request(method.clone(), url);
+
+        if let Some(b) = body.as_ref() {
+            builder = builder.json(b);
+        } else if method == Method::POST {
+            builder = builder.header(reqwest::header::CONTENT_LENGTH, "0");
+        }
+
+        let operation = format!("{} {}", method, path);
+        crate::gcp::gcp_request_utils::auth_send_json_once(
+            builder,
+            &self.auth().await?,
+            &operation,
+            resource_name,
+            self.svc_cfg.service_name(),
+        )
+        .await
+    }
+
     /// Variant for requests that do not return a body (HTTP 2xx with empty body).
     pub async fn execute_request_no_response<B>(
         &self,

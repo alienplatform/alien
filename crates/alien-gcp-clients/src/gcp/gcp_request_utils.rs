@@ -232,6 +232,24 @@ pub async fn auth_send_json<T: DeserializeOwned + Send + 'static>(
     map_gcp_result(result, operation, resource_name, resource_type)
 }
 
+/// Attach the bearer token and deliver the request **exactly once**, then deserialize the JSON
+/// response into `T` with GCP-specific error mapping.
+///
+/// The retrying [`auth_send_json`] is wrong for a request the server cannot be told to repeat: a
+/// second `create` mints an orphan the caller has no id for, and a second state transition is
+/// refused for the state the first attempt already produced. Non-idempotent verbs send through
+/// here so a network hiccup surfaces to the caller instead of being silently re-issued.
+pub async fn auth_send_json_once<T: DeserializeOwned + Send + 'static>(
+    builder: RequestBuilder,
+    config: &GcpAuthConfig,
+    operation: &str,
+    resource_name: &str,
+    resource_type: &str,
+) -> Result<T> {
+    let result = builder.auth_gcp_request(config)?.send_json::<T>().await;
+    map_gcp_result(result, operation, resource_name, resource_type)
+}
+
 /// Attach the bearer token, apply retries and expect no response body (return `()`
 /// on HTTP success) with GCP-specific error mapping.
 pub async fn auth_send_no_response(
