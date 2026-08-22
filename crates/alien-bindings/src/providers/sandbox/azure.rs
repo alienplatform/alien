@@ -160,12 +160,17 @@ impl Sandbox for AzureSandbox {
             .map_err(|error| Self::failed(CREATE, error))?;
 
         // The caller's requested id is not authoritative: Azure allocates the id, and returning
-        // the requested one would hand back a handle that addresses nothing.
+        // the requested one would hand back a handle that addresses nothing. Checked because
+        // every later verb addresses the sandbox by it, and one this client cannot send is one
+        // nothing can reach or reap.
         let _ = request.session_id;
+        if let Err(error) = Self::checked_session_id(CREATE, &sandbox.id) {
+            return Err(self.discard(&sandbox.id, error).await);
+        }
 
         // Everything past this point owns a sandbox the caller has no id for, so every failure
         // deletes it. Azure allocates the id, so the one in this response was minted by this call.
-        match self.settle(&sandbox, asked.as_ref()).await {
+        match self.settle(&sandbox).await {
             Ok(session) => Ok(session),
             Err(error) => Err(self.discard(&sandbox.id, error).await),
         }
@@ -185,27 +190,23 @@ impl Sandbox for AzureSandbox {
             Err(error) => return Err(Self::failed("sandbox.get", error)),
         };
 
+        let state = session_state("sandbox.get", sandbox.state.as_deref())?;
+
         // Checked here as well as at create, because this is the path a reconnect takes: a
         // session created under an older declaration outlives the change — Azure has no session
         // ceiling, and an idle sandbox only suspends — so a caller holding its id would otherwise
         // be handed a sandbox whose containment is whatever it was built with.
-        if let Some(asked) = egress_policy(&self.egress) {
-            if !policy_holds(&asked, sandbox.egress_policy.as_ref()) {
-                return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
-                    session_id: sandbox.id,
-                    restriction: "egress policy".to_string(),
-                    reason: format!(
-                        "it is running {} where the declaration asks for {}",
-                        describe(sandbox.egress_policy.as_ref()),
-                        describe(Some(&asked))
-                    ),
-                }));
-            }
+        //
+        // Not a session on its way out: a sandbox being deleted carries no policy to judge, and
+        // reading that absence as a mismatch would report a disappearing session as an
+        // uncontained one.
+        if state != SandboxSessionState::Terminated {
+            self.policy_must_hold(&sandbox)?;
         }
 
         Ok(Some(SandboxSession {
             session_id: sandbox.id,
-            state: session_state("sandbox.get", sandbox.state.as_deref())?,
+            state,
             generation: 1,
         }))
     }
@@ -220,7 +221,10 @@ impl Sandbox for AzureSandbox {
                     return Ok(existing)
                 }
                 Ok(Some(existing)) if existing.state != SandboxSessionState::Terminated => {
+                    // Judged again on the sandbox that came up: a policy set on the group can
+                    // change while a session is suspended, and the read above saw a stopped one.
                     let running = self.await_running(GET_OR_CREATE, id).await?;
+                    self.policy_must_hold(&running)?;
                     return Ok(SandboxSession {
                         session_id: running.id,
                         state: SandboxSessionState::Running,
@@ -253,6 +257,13 @@ impl Sandbox for AzureSandbox {
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         Self::checked_session_id(RUN_COMMAND, session_id)?;
+        if request.deadline.is_zero() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.runCommand".to_string(),
+                reason: "a command must carry a non-zero deadline".to_string(),
+            }));
+        }
+
         // The only verb that starts untrusted code, so it is the one that re-reads the policy: a
         // session id outlives a declaration change, and nothing else stands between an id a
         // caller kept and the egress it was built with. One extra read against a data plane the
@@ -263,13 +274,6 @@ impl Sandbox for AzureSandbox {
                 reason: format!("session '{session_id}' does not exist"),
             })
         })?;
-
-        if request.deadline.is_zero() {
-            return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: "sandbox.runCommand".to_string(),
-                reason: "a command must carry a non-zero deadline".to_string(),
-            }));
-        }
 
         // The deadline bounds the untrusted code, not the caller's patience. Read out of the
         // preview SDK rather than assumed: `executeShellCommand` sends `command` and an optional
@@ -381,8 +385,9 @@ impl Sandbox for AzureSandbox {
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
         Self::checked_session_id("sandbox.suspend", session_id)?;
-        // Accepted, not completed — the same contract the AWS backend follows. A caller that
-        // needs the session to have stopped polls `get` for `Suspended`.
+        // Accepted, not completed — the same contract the AWS backend follows. `get` reports
+        // `Suspended` from the moment the stop is under way, so it answers "cannot take work",
+        // not "has stopped"; only `terminate` confirms a session is actually gone.
         self.client
             .stop_sandbox(&self.sandbox_group, session_id)
             .await
@@ -391,10 +396,17 @@ impl Sandbox for AzureSandbox {
 
     async fn resume(&self, session_id: &str) -> Result<()> {
         Self::checked_session_id("sandbox.resume", session_id)?;
-        self.client
-            .resume_sandbox(&self.sandbox_group, session_id)
-            .await
-            .map_err(|error| Self::failed("sandbox.resume", error))
+        // Waking a session puts whatever it was running back on the network, so it is gated like
+        // `run_command` and unlike the file operations. `await_running` resumes without this,
+        // because a sandbox mid-boot has no policy to judge yet.
+        self.get(session_id).await?.ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "sessionGone".to_string(),
+                reason: format!("session '{session_id}' does not exist"),
+            })
+        })?;
+
+        self.resume_unchecked(session_id).await
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
@@ -424,6 +436,7 @@ impl Sandbox for AzureSandbox {
                 if is_not_found(&error) {
                     return Ok(());
                 }
+                warn!(session = %session_id, %error, "could not confirm a sandbox is gone");
             }
             tokio::time::sleep(TERMINATE_POLL_INTERVAL).await;
         }
@@ -443,6 +456,41 @@ impl Sandbox for AzureSandbox {
 }
 
 impl AzureSandbox {
+    /// Wakes a session without judging it, for the wait that has nothing to judge yet.
+    async fn resume_unchecked(&self, session_id: &str) -> Result<()> {
+        self.client
+            .resume_sandbox(&self.sandbox_group, session_id)
+            .await
+            .map_err(|error| Self::failed("sandbox.resume", error))
+    }
+
+    /// Refuses a sandbox that is not running the policy the declaration asked for.
+    ///
+    /// The effective policy can change under a live session — a group-scoped policy is set
+    /// somewhere this binding never writes — so every path that hands one back checks, not just
+    /// the one that created it.
+    fn policy_must_hold(
+        &self,
+        sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+    ) -> Result<()> {
+        let Some(asked) = egress_policy(&self.egress) else {
+            return Ok(());
+        };
+        if policy_holds(&asked, sandbox.egress_policy.as_ref()) {
+            return Ok(());
+        }
+
+        Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
+            session_id: sandbox.id.clone(),
+            restriction: "egress policy".to_string(),
+            reason: format!(
+                "it is running {} where the declaration asks for {}",
+                describe(sandbox.egress_policy.as_ref()),
+                describe(Some(&asked))
+            ),
+        }))
+    }
+
     /// Turns a freshly created sandbox into a session, or says why it is not one.
     ///
     /// Every check that can fail after the sandbox exists lives here, so `create` has one place
@@ -450,7 +498,6 @@ impl AzureSandbox {
     async fn settle(
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
-        asked: Option<&EgressPolicy>,
     ) -> Result<SandboxSession> {
         // The running sandbox is what gets judged, not the accept: a create response sent while
         // the sandbox is still coming up need not carry the policy yet, and reading its absence
@@ -459,19 +506,7 @@ impl AzureSandbox {
 
         // A restriction that did not take effect is worse than one that was never asked for: the
         // caller believes the sandbox is contained.
-        if let Some(asked) = asked {
-            if !policy_holds(asked, running.egress_policy.as_ref()) {
-                return Err(AlienError::new(ErrorData::SandboxNotAsDeclared {
-                    session_id: running.id,
-                    restriction: "egress policy".to_string(),
-                    reason: format!(
-                        "it came up with {} where the declaration asks for {}",
-                        describe(running.egress_policy.as_ref()),
-                        describe(Some(asked))
-                    ),
-                }));
-            }
-        }
+        self.policy_must_hold(&running)?;
 
         Ok(SandboxSession {
             session_id: running.id,
@@ -512,8 +547,12 @@ impl AzureSandbox {
                 // Going down, or already down. Either way nothing is bringing it up.
                 Some("Stopping" | "Stopped" | "Suspended" | "Idle") => {
                     if !resumed {
-                        self.resume(session_id).await?;
                         resumed = true;
+                        // A resume racing a sandbox that is still stopping answers 409, which is
+                        // the wait's business rather than the caller's: the budget decides.
+                        if let Err(error) = self.resume_unchecked(session_id).await {
+                            warn!(session = %session_id, %error, "resume was refused; still waiting");
+                        }
                     }
                 }
                 // A terminated session never becomes runnable, and folding it into the timeout
@@ -555,12 +594,16 @@ impl AzureSandbox {
             %error,
             "could not delete a sandbox that was never handed to its caller"
         );
-        // A fixed clause rather than the delete's own error: that text is the cloud client's, and
-        // this variant is externally visible.
-        reason.context(ErrorData::SandboxNotAsDeclared {
-            session_id: session_id.to_string(),
-            restriction: "egress policy".to_string(),
-            reason: "it could not be deleted either, so it is still running".to_string(),
+        // Names the leak rather than the reason for it: a timeout and a policy mismatch both
+        // reach here, and reporting either as the other sends the reader somewhere false. The
+        // original reason stays on the chain. The clause is fixed text, because the delete's own
+        // error is the cloud client's and this variant is externally visible.
+        reason.context(ErrorData::SandboxCommandFailed {
+            failure: "sandboxLeftBehind".to_string(),
+            reason: format!(
+                "session '{session_id}' was not handed to its caller and could not be deleted, \
+                 so it is still running"
+            ),
         })
     }
 
@@ -1827,10 +1870,24 @@ mod tests {
         client
             .expect_create_sandbox()
             .times(1)
-            .returning(|_, _| Ok(running("fresh", None)));
-        settles_running(&mut client, None);
+            .returning(|_, request| Ok(running("fresh", request.egress)));
+        settles_running(
+            &mut client,
+            Some(EgressPolicy {
+                default_action: "Deny".to_string(),
+                host_rules: vec![EgressHostRule {
+                    pattern: "*".to_string(),
+                    action: "Deny".to_string(),
+                }],
+                rules: Vec::new(),
+                unmodelled: Default::default(),
+                traffic_inspection: Some("Full".to_string()),
+            }),
+        );
 
-        let session = sandbox_with(client)
+        // Declared `deny`, because a terminated session carries no policy — judging it before
+        // reading the state reported a disappearing sandbox as an uncontained one.
+        let session = sandbox_denying(client, SandboxEgress::Deny)
             .get_or_create(CreateSessionRequest {
                 session_id: Some("going-away".to_string()),
                 tenant_key: None,
@@ -1969,6 +2026,7 @@ mod tests {
             .expect("suspend should be accepted");
 
         let mut client = MockSandboxDataPlaneApi::new();
+        settles_running(&mut client, None);
         client
             .expect_resume_sandbox()
             .withf(|group, id| group == "grp" && id == "s1")
@@ -2253,6 +2311,127 @@ mod tests {
             Ok(_) => panic!("a session without the declared policy must not run code"),
             Err(error) => error,
         };
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A policy that changed while a session was suspended is caught on the way back.
+    ///
+    /// The effective policy can be set on the group, somewhere this binding never writes, so the
+    /// read that finds a stopped sandbox is not the read that decides whether it is contained —
+    /// the one taken after it comes up is.
+    #[tokio::test]
+    async fn a_policy_that_changed_during_suspension_is_caught_on_reconnect() {
+        let declared = EgressPolicy {
+            default_action: "Deny".to_string(),
+            host_rules: vec![EgressHostRule {
+                pattern: "*".to_string(),
+                action: "Deny".to_string(),
+            }],
+            rules: Vec::new(),
+            unmodelled: Default::default(),
+            traffic_inspection: Some("Full".to_string()),
+        };
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        let stopped = declared.clone();
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            Ok(match reads {
+                // Suspended and compliant, so the reconnect proceeds.
+                1 => {
+                    let mut sandbox = running(id, Some(stopped.clone()));
+                    sandbox.state = Some("Stopped".to_string());
+                    sandbox
+                }
+                // Awake, and the group gained a host nobody here asked for.
+                _ => running(
+                    id,
+                    Some(EgressPolicy {
+                        host_rules: vec![
+                            EgressHostRule {
+                                pattern: "*".to_string(),
+                                action: "Deny".to_string(),
+                            },
+                            EgressHostRule {
+                                pattern: "exfil.example.com".to_string(),
+                                action: "Allow".to_string(),
+                            },
+                        ],
+                        ..stopped.clone()
+                    }),
+                ),
+            })
+        });
+        // However it wakes — resumed here or already coming up — the read after it is the one
+        // that decides.
+        client.expect_resume_sandbox().returning(|_, _| Ok(()));
+        client.expect_create_sandbox().never();
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .get_or_create(CreateSessionRequest {
+                session_id: Some("was-suspended".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect_err("a session that woke up with more reach must not be handed back");
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A sandbox left behind must not publish the cloud's own response text.
+    ///
+    /// `discard` wraps the reason so the leak is named, and the wrapper inherits visibility: the
+    /// error it wraps is the cloud client's, which carries the request and response of the call
+    /// that failed, and the flag `into_external` reads is the outermost one.
+    #[tokio::test]
+    async fn a_sandbox_left_behind_does_not_publish_the_response_body() {
+        const SECRET: &str = "tenant-only-detail";
+
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(running("s1", None)));
+        // The readiness read and the delete both fail, which is one failure in practice: a
+        // missing data-plane role refuses every verb.
+        client
+            .expect_get_sandbox()
+            .returning(|_, _| Err(http_error(403, SECRET)));
+        client
+            .expect_delete_sandbox()
+            .returning(|_, _| Err(http_error(403, SECRET)));
+
+        let error = sandbox_with(client)
+            .create(CreateSessionRequest::default())
+            .await
+            .expect_err("a create that cannot be confirmed must fail");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(
+            error.internal,
+            "the wrapper must inherit the cloud error's visibility: {error}"
+        );
+    }
+
+    /// Waking a session puts what it was running back on the network, so it is gated like
+    /// `run_command`: a caller holding an id from an older declaration must not be able to
+    /// resume its way around the check.
+    #[tokio::test]
+    async fn a_stale_policy_session_cannot_be_resumed() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .times(1)
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_resume_sandbox().never();
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("built-under-allow")
+            .await
+            .expect_err("a session without the declared policy must not be woken");
 
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
     }
