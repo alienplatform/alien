@@ -312,11 +312,9 @@ mod tests {
 
     /// An inherited variable of the wrapper's own name never reaches the command.
     ///
-    /// Run against a real `sh`, because the hazard is a shell rule rather than a string: an
-    /// exported variable keeps its export attribute across re-assignment, so `nonce=$(…)` would
-    /// write the session's own nonce into the slot the command inherits, and untrusted code could
-    /// then claim a deadline it was never given. A stand-in `setsid` is supplied because macOS
-    /// ships none, and without it the wrapper exits before reaching any of this.
+    /// Run against a real `sh`: an exported variable keeps its export attribute across
+    /// re-assignment, so `nonce=$(…)` would hand the command the session's own nonce. A
+    /// stand-in `setsid` is supplied because macOS ships none.
     #[test]
     #[cfg(unix)]
     fn the_wrapper_never_hands_its_nonce_to_the_command() {

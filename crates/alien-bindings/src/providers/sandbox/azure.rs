@@ -514,12 +514,8 @@ impl AzureSandbox {
         };
 
         // Judged asleep first: waking one that already fails puts its workload back on the network
-        // for a boot.
-        //
-        // Refused rather than deleted, here and after the wake. A session under a policy this
-        // declaration does not allow may be another revision's, mid-command, in the group both
-        // share — and `get_or_create` gets what it owes the caller from the replacement its own
-        // refusal triggers, without ending work it does not own.
+        // for a boot. Refused rather than deleted, here and after the wake: the policy mismatch
+        // may belong to another revision, mid-command in the shared group.
         self.judge_if_judgeable(&found)?;
 
         // Judged again once it is up: only the woken record covers a session that was still coming
@@ -773,11 +769,12 @@ impl AzureSandbox {
         match sandbox.state.as_deref() {
             Some("Running") => true,
             Some("Stopping" | "Stopped" | "Suspended" | "Idle") => sandbox.egress_policy.is_some(),
+            // The two ends of the lifecycle and anything unread: one has no policy yet, the other
+            // has dropped it, and a state this client cannot name is refused before it gets here.
             _ => false,
         }
     }
 
-    /// Judges a record only where there is something to judge.
     fn judge_if_judgeable(
         &self,
         sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
@@ -2587,10 +2584,8 @@ mod tests {
     /// A session the declaration no longer matches is replaced, not a permanent error.
     ///
     /// `get_or_create` owes the caller a usable session, and a stale-policy sandbox is as
-    /// unusable as a terminated one — returning the refusal forever would leave the caller with
-    /// no way forward. The old sandbox is left where it is: another revision of the same stack
-    /// shares this group and may be running in it, and the replacement is what this caller asked
-    /// for.
+    /// unusable as a terminated one. The old sandbox is left running: another revision of the
+    /// same stack may share this group, and the replacement is what this caller asked for.
     #[tokio::test]
     async fn a_stale_policy_session_is_replaced_rather_than_refused_forever() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -2891,10 +2886,8 @@ mod tests {
 
     /// A suspended session that reports no policy reads as suspended, not as a mismatch.
     ///
-    /// `get` and the reconnect path have to answer this the same way. Whether the data plane
-    /// reports `egressPolicy` for a sandbox that is not running is unverified, so if it does not,
-    /// judging the record here would turn every idle-suspended session into a containment
-    /// failure — and `suspendResume` would advertise a state the caller cannot observe.
+    /// Whether the data plane reports `egressPolicy` off `Running` is unverified; judging it
+    /// here would turn every idle-suspended session into a containment failure.
     #[tokio::test]
     async fn a_suspended_session_reporting_no_policy_is_not_a_mismatch() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -2948,9 +2941,8 @@ mod tests {
 
     /// A wait that woke a session and then failed still puts it back.
     ///
-    /// The refusal is not the only way out of `resume`: the wait can fail after issuing the
-    /// resume, and a session left awake by a call that returned an error is exactly the one
-    /// nothing else will come back for.
+    /// The wait can fail after issuing the resume, and a session left awake by a call that
+    /// returned an error is exactly the one nothing else will come back for.
     #[tokio::test]
     async fn a_session_woken_by_a_wait_that_then_failed_is_put_back() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -3019,10 +3011,8 @@ mod tests {
 
     /// The variables a command declares reach the command.
     ///
-    /// Every other backend honours `RunCommandRequest.env`; the exec endpoint here takes no
-    /// environment at all, so dropping it silently would make one backend answer a documented
-    /// field with nothing, and the failure would surface inside the sandbox rather than at the
-    /// call.
+    /// Every other backend honours `RunCommandRequest.env`; dropping it here would answer a
+    /// documented field with nothing, and the failure would surface inside the sandbox.
     #[tokio::test]
     async fn a_declared_variable_reaches_the_command() {
         let mut client = MockSandboxDataPlaneApi::new();
@@ -3045,10 +3035,17 @@ mod tests {
         let mut request = command(5);
         request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
 
-        sandbox_with(client)
+        let frames: Vec<Result<CommandOutput>> = sandbox_with(client)
             .run_command("s1", request)
             .await
-            .expect("a command declaring a variable must run");
+            .expect("a command declaring a variable must run")
+            .collect()
+            .await;
+
+        assert!(
+            matches!(frames.last(), Some(Ok(CommandOutput::Exit { code, .. })) if *code == 0),
+            "the command has to reach its exit: {frames:?}"
+        );
     }
 
     /// A variable name that is not a name never reaches the shell string.

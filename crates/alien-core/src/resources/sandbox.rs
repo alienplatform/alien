@@ -27,10 +27,8 @@ pub enum SandboxCode {
     Image {
         /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
         ///
-        /// Two backends narrow it, in opposite directions: AWS builds a MicroVM from an `s3://`
-        /// bundle, and Azure names an entry in a public catalog, so a bare `ubuntu`. One
-        /// declaration therefore cannot target both, and each refuses the other's shape while
-        /// planning.
+        /// Two backends narrow it in opposite directions: AWS wants an `s3://` bundle, Azure a
+        /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
         image: String,
     },
     /// Source built into a sandbox image at deploy time.
@@ -1213,10 +1211,8 @@ mod tests {
 
     /// An image reference Azure cannot honour is refused while planning, not at the first session.
     ///
-    /// The examples in `code.image`'s own documentation — a tag, a registry path — are exactly
-    /// what Azure cannot take, so this is the shape a customer is most likely to declare. Caught
-    /// at plan time it names the sandbox; caught nowhere, it renders into the module, plans,
-    /// applies, and fails when the first session is created.
+    /// `code.image`'s own documentation gives a tag and a registry path as examples — exactly
+    /// what Azure cannot take, so this is the shape a customer is most likely to declare.
     #[test]
     fn an_image_azure_cannot_pull_is_refused_while_planning() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);

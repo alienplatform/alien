@@ -179,9 +179,7 @@ mod tests {
     /// Every key the binding deserializes is a key the emitter writes.
     ///
     /// The emitter types the names by hand while the provider reads them through serde, so a
-    /// rename on either side lands on a customer's cluster as a deserialization failure at the
-    /// first session rather than as a failure at plan time. The names come from the type here,
-    /// not from a second hand-typed list.
+    /// rename on either side would otherwise surface as a deserialization failure at runtime.
     #[test]
     fn the_emitted_keys_are_the_ones_the_binding_deserializes() {
         let rendered = binding_with(

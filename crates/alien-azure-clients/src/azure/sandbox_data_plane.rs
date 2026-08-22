@@ -409,11 +409,8 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
 
         let signed = self.base.sign_request(request, &token).await?;
         // The create body carries the caller's environment variables, and a failure echoes the
-        // request into the error chain, which is serialized into durable state.
-        //
-        // Sent once. The id is minted by the service and this is a PUT to a collection, so a
-        // re-send mints a second sandbox — and with no enumeration verb, the first one has no
-        // id-holder and nothing to reap it.
+        // request into the error chain, which is serialized into durable state. Sent once: the
+        // id is server-minted, so a re-send mints an orphan sandbox nothing can find or reap.
         let response = alien_client_core::redact_request_body(
             self.base
                 .execute_request_once(signed, "CreateSandbox", group)
@@ -482,10 +479,8 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
 
         let signed = self.base.sign_request(request, &token).await?;
         // The body is the command, which is where a caller puts a token it wants the session to
-        // have.
-        //
-        // Sent once: a response that never arrives does not mean the command did not start, and
-        // running untrusted code a second time is not a recovery.
+        // have. Sent once: a response that never arrives does not mean the command did not
+        // start, so a re-send would risk running untrusted code twice.
         let response = alien_client_core::redact_request_body(
             self.base
                 .execute_request_once(signed, "ExecuteShellCommand", sandbox_id)
@@ -603,8 +598,7 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .body(body)
             .build()?;
         let signed = self.base.sign_request(request, &token).await?;
-        // The body is a caller-supplied path; wrapped like the other bodied calls so the next one
-        // added here inherits the redaction rather than the omission.
+        // The body is a caller-supplied path, redacted like the other bodied calls.
         alien_client_core::redact_request_body(
             self.base.execute_request(signed, "Mkdir", sandbox_id).await,
         )?;
@@ -648,10 +642,8 @@ mod tests {
 
     /// A create is delivered once, however the data plane answers.
     ///
-    /// The id is minted by the service and the PUT names a collection, so a second delivery makes
-    /// a second sandbox that no id-holder can find and no enumeration verb can list — one this
-    /// call would never learn about even when it eventually succeeds. The read is the contrast:
-    /// repeating it is free, so it keeps the retry.
+    /// A second delivery mints an orphan sandbox no enumeration verb can find. Reads keep their
+    /// retry — repeating one is free.
     #[tokio::test]
     async fn a_create_is_never_re_sent_where_a_read_is() {
         let server = MockServer::start_async().await;

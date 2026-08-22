@@ -186,10 +186,8 @@ impl AzureClientBase {
 
     /// Sends a request exactly once, with no retry.
     ///
-    /// For the verbs a repeat performs twice: a PUT to a collection with a server-minted id makes
-    /// a second resource the caller has no id for, and an exec that answered late may already
-    /// have started the command. Neither carries an idempotency key, so the only safe number of
-    /// attempts is one.
+    /// A repeat PUT to a collection with a server-minted id mints a second resource, and a
+    /// repeat exec may re-run a command that already started. Neither carries an idempotency key.
     pub async fn execute_request_once(
         &self,
         req: reqwest::Request,
@@ -199,7 +197,6 @@ impl AzureClientBase {
         Self::send_once(&self.client, req, op, res_name).await
     }
 
-    /// One attempt: send it, and turn a non-success status into an error carrying the context.
     async fn send_once(
         client: &reqwest::Client,
         req: reqwest::Request,
