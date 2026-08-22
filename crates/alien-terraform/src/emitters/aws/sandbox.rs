@@ -620,8 +620,9 @@ fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
 /// Refuses an egress mode the emitted artifact cannot deliver.
 ///
 /// `deny` is built from a connector whose security group carries no egress rule. Outbound
-/// allowances are not: `allow` would depend on the network's NAT topology, and AWS has no
-/// domain-filtering primitive at the connector, so `allowDomains` has nothing to render into.
+/// allowances are not: AWS has no domain-filtering primitive at the connector, so `allowDomains`
+/// has nothing to render into. `allow` is accepted and emits no connector at all — a MicroVM
+/// without one reaches the internet.
 /// Emitting a template that silently ignores a declared egress policy is worse than refusing it —
 /// the customer would believe outbound access was configured.
 fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {

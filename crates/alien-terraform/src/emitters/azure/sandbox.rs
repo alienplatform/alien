@@ -14,8 +14,7 @@ use crate::{
     emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxCode, SandboxEgress};
-use alien_error::AlienError;
+use alien_core::{import::EmitContext, Result, Sandbox, SandboxEgress};
 use hcl::expr::Expression;
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
@@ -56,42 +55,6 @@ fn egress(sandbox: &Sandbox) -> Expression {
     }
 }
 
-/// The catalog image name a declaration asks for, or a refusal.
-///
-/// The create body names a public catalog image, so a registry reference has nowhere to go.
-/// Refusing at plan time follows the AWS emitter: a reference the backend cannot honour is
-/// rejected rather than quietly replaced — silently ignoring it would run a stock image
-/// whatever the declaration said, with no error anywhere.
-fn catalog_disk_image(sandbox: &Sandbox) -> Result<String> {
-    let unsupported = |reason: String| {
-        AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason,
-        })
-    };
-
-    match &sandbox.code {
-        // A tag is the shape that gets through unnoticed: `ubuntu:24.04` has no slash, renders
-        // into the customer's module, plans and applies, and fails at the first session.
-        SandboxCode::Image { image }
-            if image.trim().is_empty()
-                || image.contains('/')
-                || image.contains(':')
-                || image.contains('@') =>
-        {
-            Err(unsupported(format!(
-                "Azure creates a sandbox from a public catalog disk image, so code.image must be \
-                 a bare catalog name such as 'ubuntu'; '{image}' is empty or carries a registry \
-                 path, tag or digest, which the data plane has nowhere to put"
-            )))
-        }
-        SandboxCode::Image { image } => Ok(image.clone()),
-        SandboxCode::Source { .. } => Err(unsupported(
-            "no sandbox backend builds an image from source yet".to_string(),
-        )),
-    }
-}
-
 impl TfEmitter for AzureSandboxEmitter {
     fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
         // Deliberately empty: see the module note. A group emitted here would sit idle until a
@@ -112,7 +75,7 @@ impl TfEmitter for AzureSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let _ = required_label(ctx)?;
-        let disk_image = catalog_disk_image(sandbox)?;
+        let disk_image = sandbox.azure_catalog_image()?.to_string();
         let mut fields = vec![
             ("service", Expression::String("sandbox-azure".to_string())),
             ("sandboxGroup", sandbox_group(ctx)),
@@ -142,6 +105,8 @@ impl TfEmitter for AzureSandboxEmitter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::bindings::{AzureSandboxBinding, BindingValue};
+    use alien_core::SandboxCode;
     use alien_core::{ResourceLifecycle, SandboxSessionPolicy, Stack, StackSettings};
     use indexmap::IndexMap;
 
@@ -209,6 +174,40 @@ mod tests {
 
         let open = binding_for(SandboxEgress::Allow);
         assert!(open.contains(r#"mode = "allow""#), "{open}");
+    }
+
+    /// Every key the binding deserializes is a key the emitter writes.
+    ///
+    /// The emitter types the names by hand while the provider reads them through serde, so a
+    /// rename on either side lands on a customer's cluster as a deserialization failure at the
+    /// first session rather than as a failure at plan time. The names come from the type here,
+    /// not from a second hand-typed list.
+    #[test]
+    fn the_emitted_keys_are_the_ones_the_binding_deserializes() {
+        let rendered = binding_with(
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()],
+            },
+            Some(900),
+        );
+
+        let binding = AzureSandboxBinding {
+            sandbox_group: BindingValue::Value("sbg".to_string()),
+            data_plane_endpoint: BindingValue::Value("https://example.invalid".to_string()),
+            region: BindingValue::Value("eastus".to_string()),
+            resource_group: BindingValue::Value("rg".to_string()),
+            egress: SandboxEgress::Allow,
+            idle_suspend_seconds: Some(900),
+            disk_image: BindingValue::Value("ubuntu".to_string()),
+        };
+        let keys = serde_json::to_value(&binding).expect("the binding serializes");
+
+        for key in keys.as_object().expect("an object").keys() {
+            assert!(
+                rendered.contains(&format!("{key} = ")),
+                "the emitter never writes '{key}': {rendered}"
+            );
+        }
     }
 
     /// The idle-suspend policy travels the same way, and only when it was declared.

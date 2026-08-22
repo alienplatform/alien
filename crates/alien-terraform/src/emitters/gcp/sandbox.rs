@@ -81,3 +81,46 @@ impl TfEmitter for GcpSandboxEmitter {
         ])))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{SandboxCode, SandboxSessionPolicy};
+
+    fn sandbox_with(egress: SandboxEgress) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .egress(egress)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build()
+    }
+
+    /// A hostname list is refused rather than carried as its nearest boolean.
+    ///
+    /// `--allow-egress` is a switch: rendering the list as `true` opens every address it was
+    /// written to exclude, and rendering it as `false` denies every one it was written to permit.
+    /// Neither is the declaration, so neither is emitted.
+    #[test]
+    fn a_hostname_allowlist_is_refused_rather_than_approximated() {
+        let error = refuse_unsupported_egress(&sandbox_with(SandboxEgress::AllowDomains {
+            domains: vec!["api.example.com".to_string()],
+        }))
+        .expect_err("a hostname list has nothing to render into on Cloud Run");
+
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+        assert!(
+            error.to_string().contains("agents"),
+            "the refusal has to name the sandbox: {error}"
+        );
+
+        for accepted in [SandboxEgress::Deny, SandboxEgress::Allow] {
+            refuse_unsupported_egress(&sandbox_with(accepted.clone()))
+                .unwrap_or_else(|error| panic!("{accepted:?} is a switch position: {error}"));
+        }
+    }
+}

@@ -39,15 +39,6 @@ pub struct AzureSandbox {
     memory: String,
 }
 
-/// A session that reached `Running`, and whether this wait is what resumed it.
-///
-/// Only the wait knows: a read taken before it cannot tell a session that came up on its own from
-/// one this call woke, and suspending the wrong one ends another revision's command.
-struct Ready {
-    sandbox: alien_azure_clients::azure::sandbox_data_plane::Sandbox,
-    resumed_here: bool,
-}
-
 impl AzureSandbox {
     /// Builds a provider bound to one sandbox group.
     pub fn new(
@@ -227,12 +218,7 @@ impl Sandbox for AzureSandbox {
         // under, so a caller holding its id would otherwise be handed whatever containment it was
         // built with. Only the two ends of the lifecycle carry no policy, and that is not a
         // mismatch.
-        if !matches!(
-            sandbox.state.as_deref(),
-            Some("Creating" | "Resuming" | "Deleting" | "Failed")
-        ) {
-            self.policy_must_hold(&sandbox)?;
-        }
+        self.judge_if_judgeable(&sandbox)?;
 
         Ok(Some(SandboxSession {
             session_id: sandbox.id,
@@ -300,7 +286,13 @@ impl Sandbox for AzureSandbox {
         // agent-supervised backends give. The client-side guard is the backstop for a data plane
         // that never answers at all; there the only lever left is ending the session, and that
         // call returns once the session is confirmed gone rather than claim containment early.
-        let shell = bounded_shell(&request.command, request.deadline);
+        // The data plane's exec takes a command and a working directory and nothing else, so a
+        // per-command variable has to travel as a shell assignment in front of it. Names are
+        // checked first: an unchecked one is a second command, not a variable.
+        for name in request.env.keys() {
+            checked_env_name(RUN_COMMAND, name)?;
+        }
+        let shell = bounded_shell(&request.command, &request.env, request.deadline);
 
         let result = self.execute_within(session_id, &shell, &request).await?;
         // The session's own report, removed from what the caller sees.
@@ -354,6 +346,9 @@ impl Sandbox for AzureSandbox {
         Ok(Box::pin(stream::iter(frames)))
     }
 
+    /// Ungated on purpose, as is `mkdir`: reading existing content and creating an empty
+    /// directory add nothing to a sandbox, so neither can turn a stale session into a way to run
+    /// something under egress the declaration has since removed.
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
         Self::checked_session_id("sandbox.readFile", session_id)?;
         let path = &checked_path("sandbox.readFile", path)?;
@@ -382,7 +377,6 @@ impl Sandbox for AzureSandbox {
         // One request per path, stopping at the first failure: the same partial application every
         // other backend performs, so a caller sees one contract rather than five.
         for (path, contents) in files {
-
             self.client
                 .write_file(&self.sandbox_group, session_id, &path, contents)
                 .await
@@ -421,45 +415,32 @@ impl Sandbox for AzureSandbox {
         Self::checked_session_id("sandbox.resume", session_id)?;
         const OPERATION: &str = "sandbox.resume";
 
-        if self.read_session(OPERATION, session_id).await?.is_none() {
+        let Some(found) = self.read_session(OPERATION, session_id).await? else {
             return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "sessionGone".to_string(),
                 reason: format!("{OPERATION}: session '{session_id}' does not exist"),
             }));
-        }
+        };
 
-        // Waking a session puts whatever it was running back on the network, so the policy is
-        // judged after the wake rather than before it: the stopped record is not the one the work
-        // runs under. That makes `resume` complete rather than accepted, which the sub-second
-        // resume Microsoft documents makes affordable.
-        let ready = self.await_running(OPERATION, session_id).await?;
+        // Refused from the record already in hand where that record answers it, so a session
+        // whose stored policy is plainly wrong is never put back on the network for a boot.
+        self.judge_if_judgeable(&found)?;
 
-        // Put back only if this call is what woke it. A session that was already up, or that came
-        // up on its own, is someone else's — another revision of the same stack shares this
-        // sandbox group — and stopping it would end a command that revision is mid-way through.
-        if let Err(error) = self.policy_must_hold(&ready.sandbox) {
-            if !ready.resumed_here {
-                return Err(error);
-            }
-            let Err(failed) = self
-                .client
-                .stop_sandbox(&self.sandbox_group, session_id)
-                .await
-            else {
-                return Err(error);
-            };
+        // Judged again after the wake: the stopped record is not the one the work runs under, and
+        // a policy set on the group can change while a session sleeps.
+        let mut resumed_here = false;
+        let woken = self
+            .await_running(OPERATION, session_id, &mut resumed_here)
+            .await;
 
-            warn!(session = %session_id, error = %failed, "could not re-suspend a session that woke up uncontained");
-            return Err(error.context(ErrorData::SandboxCommandFailed {
-                failure: "sandboxLeftAwake".to_string(),
-                reason: format!(
-                    "session '{session_id}' was woken to be judged, does not carry the declared \
-                     policy, and could not be put back"
-                ),
-            }));
-        }
-
-        Ok(())
+        let refusal = match woken {
+            Err(error) => error,
+            Ok(running) => match self.policy_must_hold(&running) {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            },
+        };
+        Err(self.put_back(session_id, resumed_here, refusal).await)
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
@@ -533,18 +514,24 @@ impl AzureSandbox {
         };
 
         // Judged asleep first: waking one that already fails puts its workload back on the network
-        // for a boot. An absent policy is unknown rather than wrong — whether the data plane
-        // reports one for a stopped sandbox is unverified, and refusing would churn every idle
-        // session if it does not.
-        if found.state.as_deref() != Some("Running") && found.egress_policy.is_some() {
-            if let Err(error) = self.policy_must_hold(&found) {
-                return Err(self.discard(session_id, error).await);
-            }
+        // for a boot.
+        if let Err(error) = self.judge_if_judgeable(&found) {
+            return Err(self.discard(session_id, error).await);
         }
 
         // Judged again once it is up: only the woken record covers a session that was still coming
         // up, or a policy set on the group while it slept.
-        let running = self.await_running(GET_OR_CREATE, session_id).await?.sandbox;
+        let mut resumed_here = false;
+        let running = match self
+            .await_running(GET_OR_CREATE, session_id, &mut resumed_here)
+            .await
+        {
+            Ok(running) => running,
+            // A wait that woke it and then failed leaves it awake, and this call is about to hand
+            // back a different session — so the one it woke is its own to reap.
+            Err(error) if resumed_here => return Err(self.discard(session_id, error).await),
+            Err(error) => return Err(error),
+        };
         if let Err(error) = self.policy_must_hold(&running) {
             return Err(self.discard(session_id, error).await);
         }
@@ -664,7 +651,10 @@ impl AzureSandbox {
         // The running sandbox is what gets judged, not the accept: a create response sent while
         // the sandbox is still coming up need not carry the policy yet, and reading its absence
         // as "the restriction did not take" would delete every sandbox that answered early.
-        let running = self.await_running(CREATE, &sandbox.id).await?.sandbox;
+        let mut resumed_here = false;
+        let running = self
+            .await_running(CREATE, &sandbox.id, &mut resumed_here)
+            .await?;
 
         // A restriction that did not take effect is worse than one that was never asked for: the
         // caller believes the sandbox is contained.
@@ -686,10 +676,14 @@ impl AzureSandbox {
     /// can stop a sandbox before its first command, and on the reconnect path a stopped sandbox
     /// is the ordinary resting state. Nothing else brings one up, so waiting alone would spend
     /// the whole deadline and then delete it.
-    async fn await_running(&self, operation: &str, session_id: &str) -> Result<Ready> {
+    async fn await_running(
+        &self,
+        operation: &str,
+        session_id: &str,
+        resumed_here: &mut bool,
+    ) -> Result<alien_azure_clients::azure::sandbox_data_plane::Sandbox> {
         let deadline = std::time::Instant::now() + SESSION_READY_TIMEOUT;
         let mut refusal: Option<String> = None;
-        let mut resumed_here = false;
 
         loop {
             let Some(sandbox) = self.read_session(operation, session_id).await? else {
@@ -702,12 +696,7 @@ impl AzureSandbox {
             // The raw state, because the four the trait publishes cannot separate a sandbox on
             // its way up from one on its way down, and this loop needs that difference.
             match sandbox.state.as_deref() {
-                Some("Running") => {
-                    return Ok(Ready {
-                        sandbox,
-                        resumed_here,
-                    })
-                }
+                Some("Running") => return Ok(sandbox),
                 Some("Creating" | "Resuming") => {}
                 // Still going down. Resume is refused in this state — the SDK's own resumable
                 // set excludes it — so the wait is for `Stopped`, not for the call to work.
@@ -719,7 +708,7 @@ impl AzureSandbox {
                     match self.resume_unchecked(session_id).await {
                         Ok(()) => {
                             refusal = None;
-                            resumed_here = true;
+                            *resumed_here = true;
                         }
                         Err(error) => {
                             warn!(session = %session_id, %error, "resume was refused; still waiting");
@@ -735,10 +724,12 @@ impl AzureSandbox {
                 // A terminated session never becomes runnable, and folding it into the timeout
                 // would report it a minute late as a slow boot.
                 other => {
-                    session_state(operation, other)?;
+                    let state = session_state(operation, other)?;
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "sessionTerminated".to_string(),
-                        reason: format!("session '{session_id}' is being deleted"),
+                        reason: format!(
+                            "session '{session_id}' reached {state:?} and will not run again"
+                        ),
                     }));
                 }
             }
@@ -763,6 +754,60 @@ impl AzureSandbox {
             }
             tokio::time::sleep(SESSION_READY_INTERVAL).await;
         }
+    }
+
+    /// Whether a record carries a policy this client can hold it to.
+    ///
+    /// A running session always reports its effective policy, so an absent one there is a
+    /// mismatch. Off that state the data plane's behaviour is unverified, and reading absence as
+    /// a mismatch would refuse every idle-suspended session; the read taken after the wake is
+    /// authoritative either way.
+    fn judgeable(sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox) -> bool {
+        match sandbox.state.as_deref() {
+            Some("Running") => true,
+            Some("Stopping" | "Stopped" | "Suspended" | "Idle") => sandbox.egress_policy.is_some(),
+            _ => false,
+        }
+    }
+
+    /// Judges a record only where there is something to judge.
+    fn judge_if_judgeable(
+        &self,
+        sandbox: &alien_azure_clients::azure::sandbox_data_plane::Sandbox,
+    ) -> Result<()> {
+        if Self::judgeable(sandbox) {
+            self.policy_must_hold(sandbox)?;
+        }
+        Ok(())
+    }
+
+    /// Re-suspends a session this call woke, keeping the reason it is being refused.
+    ///
+    /// Only a session this call woke: another revision of the same stack shares the sandbox
+    /// group, and stopping one that was already up ends a command that revision is mid-way
+    /// through. A stop that fails is named rather than logged — a sandbox this call put back on
+    /// the network under a policy the declaration does not allow is not "nothing happened".
+    async fn put_back(
+        &self,
+        session_id: &str,
+        resumed_here: bool,
+        reason: AlienError<ErrorData>,
+    ) -> AlienError<ErrorData> {
+        if !resumed_here {
+            return reason;
+        }
+        let Err(failed) = self.client.stop_sandbox(&self.sandbox_group, session_id).await else {
+            return reason;
+        };
+
+        warn!(session = %session_id, error = %failed, "could not re-suspend a session this call woke");
+        reason.context(ErrorData::SandboxCommandFailed {
+            failure: "sandboxLeftAwake".to_string(),
+            reason: format!(
+                "session '{session_id}' was woken by this call, could not be handed back, and \
+                 could not be put to sleep again"
+            ),
+        })
     }
 
     /// Deletes a sandbox the caller will never receive, keeping the reason it is being discarded.
@@ -867,16 +912,49 @@ const TERMINATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_s
 /// The data plane takes one shell string, so the command is passed to `sh` as arguments rather
 /// than pasted into the program text: `"$@"` cannot re-parse what it holds, so an argument
 /// carrying a space or an operator stays one argument.
-fn bounded_shell(command: &[String], deadline: std::time::Duration) -> String {
+fn bounded_shell(
+    command: &[String],
+    env: &BTreeMap<String, String>,
+    deadline: std::time::Duration,
+) -> String {
     let escape = |value: &str| value.replace('\'', "'\\''");
     let arguments = command
         .iter()
         .map(|argument| format!(" '{}'", escape(argument)))
         .collect::<String>();
+    // Assignments in front of a simple command are exported to it, so the wrapper and everything
+    // it runs see them.
+    let assignments = env
+        .iter()
+        .map(|(name, value)| format!("{name}='{}' ", escape(value)))
+        .collect::<String>();
     format!(
-        "sh -c '{}' sh{arguments}",
+        "{assignments}sh -c '{}' sh{arguments}",
         escape(&DeadlineReport::bounded_program(deadline))
     )
+}
+
+/// Refuses a variable name the shell would read as anything other than a name.
+///
+/// The name is not quotable — it sits left of the `=` — so a name carrying a space or a `;` is a
+/// second command rather than a variable, and quoting the value alone would not stop it.
+fn checked_env_name(operation: &str, name: &str) -> Result<()> {
+    let usable = !name.is_empty()
+        && !name.starts_with(|c: char| c.is_ascii_digit())
+        && name
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if usable {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::InvalidInput {
+        operation_context: operation.to_string(),
+        details: format!(
+            "environment variable name '{name}' is not a shell name: letters, digits and \
+             underscores only, and not starting with a digit"
+        ),
+        field_name: Some("env".to_string()),
+    }))
 }
 
 /// Refuses a caller's path before it reaches the data plane, and returns what to send.
@@ -1068,7 +1146,10 @@ const FULL_INSPECTION: &str = "Full";
 /// The host pattern that matches everything, so `deny` is a rule rather than only a default.
 const EVERY_HOST: &str = "*";
 
-/// Longest session id the data plane is addressed with, matching the launcher-side bound.
+/// Longest session id this client will put in a data-plane URL.
+///
+/// A bound on what a caller hands back rather than on what Azure mints: the ids seen in practice
+/// are far shorter, and the point is that an id reaching the URL is one this client chose to send.
 const MAX_SESSION_ID: usize = 63;
 
 /// The two operations a repeat could perform twice.
@@ -1555,6 +1636,7 @@ mod tests {
                 "&&".to_string(),
                 "sleep 5".to_string(),
             ],
+            &BTreeMap::new(),
             std::time::Duration::from_millis(1500),
         );
         assert!(wrapped.contains("sleep 1.500"), "{wrapped}");
@@ -1562,6 +1644,38 @@ mod tests {
             wrapped.ends_with("' sh 'echo' 'it'\\''s' '&&' 'sleep 5'"),
             "{wrapped}"
         );
+    }
+
+    /// A per-command variable reaches the command, and its value stays data.
+    ///
+    /// The exec endpoint takes no environment, so the assignment travels in the shell string —
+    /// which is exactly where an unquoted value would stop being a value.
+    #[test]
+    fn the_bounded_shell_carries_variables_as_data() {
+        let wrapped = bounded_shell(
+            &["printenv".to_string(), "TOKEN".to_string()],
+            &BTreeMap::from([("TOKEN".to_string(), "a'; rm -rf /".to_string())]),
+            std::time::Duration::from_millis(1500),
+        );
+
+        assert!(
+            wrapped.starts_with("TOKEN='a'\\''; rm -rf /' sh -c '"),
+            "the value has to survive as one word: {wrapped}"
+        );
+    }
+
+    /// A name the shell would read as a second command never reaches the shell string.
+    #[test]
+    fn a_variable_name_that_is_not_a_name_is_refused() {
+        for name in ["", "A B", "A;rm", "1A", "A=B", "A-B"] {
+            let error = checked_env_name("sandbox.runCommand", name)
+                .expect_err("a name the shell would not read as a name must be refused");
+            assert_eq!(error.code, "INVALID_INPUT", "name '{name}': {error}");
+        }
+        for name in ["A", "_a", "TOKEN_1"] {
+            checked_env_name("sandbox.runCommand", name)
+                .unwrap_or_else(|error| panic!("name '{name}' is a shell name: {error}"));
+        }
     }
 
     /// A path that could leave the caller's own directory is refused before anything is sent.
@@ -2729,6 +2843,189 @@ mod tests {
             .expect_err("a session without the declared policy must not be handed back");
 
         assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A suspended session that reports no policy reads as suspended, not as a mismatch.
+    ///
+    /// `get` and the reconnect path have to answer this the same way. Whether the data plane
+    /// reports `egressPolicy` for a sandbox that is not running is unverified, so if it does not,
+    /// judging the record here would turn every idle-suspended session into a containment
+    /// failure — and `suspendResume` would advertise a state the caller cannot observe.
+    #[tokio::test]
+    async fn a_suspended_session_reporting_no_policy_is_not_a_mismatch() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            let mut sandbox = running(id, None);
+            sandbox.state = Some("Stopped".to_string());
+            Ok(sandbox)
+        });
+
+        let session = sandbox_denying(client, SandboxEgress::Deny)
+            .get("asleep")
+            .await
+            .expect("a sleeping session must still be readable")
+            .expect("the session exists");
+
+        assert_eq!(session.state, SandboxSessionState::Suspended);
+    }
+
+    /// A sleeping session whose own record is plainly wrong is refused before anything wakes it.
+    ///
+    /// Waking it to reach the same verdict puts its workload back on the network for the length of
+    /// a boot, which is the window this check exists to close.
+    #[tokio::test]
+    async fn a_sleeping_session_with_a_wrong_policy_is_never_woken() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_get_sandbox().times(1).returning(|_, id| {
+            let mut sandbox = running(
+                id,
+                Some(EgressPolicy {
+                    default_action: "Allow".to_string(),
+                    host_rules: Vec::new(),
+                    rules: Vec::new(),
+                    unmodelled: Default::default(),
+                    traffic_inspection: Some("Full".to_string()),
+                }),
+            );
+            sandbox.state = Some("Stopped".to_string());
+            Ok(sandbox)
+        });
+        client.expect_resume_sandbox().never();
+        client.expect_stop_sandbox().never();
+        client.expect_delete_sandbox().never();
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("built-under-allow")
+            .await
+            .expect_err("a stored policy that already fails must not be woken");
+
+        assert_eq!(error.code, "SANDBOX_NOT_AS_DECLARED", "{error}");
+    }
+
+    /// A wait that woke a session and then failed still puts it back.
+    ///
+    /// The refusal is not the only way out of `resume`: the wait can fail after issuing the
+    /// resume, and a session left awake by a call that returned an error is exactly the one
+    /// nothing else will come back for.
+    #[tokio::test]
+    async fn a_session_woken_by_a_wait_that_then_failed_is_put_back() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            let mut sandbox = running(id, None);
+            // Asleep for the resume's read and the wait's first poll, then unreadable.
+            sandbox.state = Some(if reads <= 2 { "Stopped" } else { "Hibernated" }.to_string());
+            Ok(sandbox)
+        });
+        client
+            .expect_resume_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        client
+            .expect_stop_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let error = sandbox_denying(client, SandboxEgress::Deny)
+            .resume("wakes-then-breaks")
+            .await
+            .expect_err("a wait that cannot finish must not report a resumed session");
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+    }
+
+    /// A reconnect that woke a session and then could not use it reaps the one it woke.
+    ///
+    /// The refusal travels either way; what must not survive it is a live sandbox this call put
+    /// back on the network and then walked away from.
+    #[tokio::test]
+    async fn a_session_woken_by_a_failed_reconnect_is_reaped() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        let mut reads = 0;
+        client.expect_get_sandbox().returning(move |_, id| {
+            reads += 1;
+            let mut sandbox = running(id, None);
+            sandbox.state = Some(if reads <= 2 { "Stopped" } else { "Hibernated" }.to_string());
+            Ok(sandbox)
+        });
+        client
+            .expect_resume_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
+        client
+            .expect_delete_sandbox()
+            .withf(|_, id| id == "woken-then-unreadable")
+            .times(1)
+            .returning(|_, _| Ok(()));
+
+        let error = sandbox_with(client)
+            .get_or_create(CreateSessionRequest {
+                session_id: Some("woken-then-unreadable".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect_err("a state this client cannot read is not a session");
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+    }
+
+    /// The variables a command declares reach the command.
+    ///
+    /// Every other backend honours `RunCommandRequest.env`; the exec endpoint here takes no
+    /// environment at all, so dropping it silently would make one backend answer a documented
+    /// field with nothing, and the failure would surface inside the sandbox rather than at the
+    /// call.
+    #[tokio::test]
+    async fn a_declared_variable_reaches_the_command() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client
+            .expect_execute_shell_command()
+            .times(1)
+            .withf(|_, _, shell, _| shell.starts_with("TOKEN='t' sh -c '"))
+            .returning(|_, _, _, _| {
+                Ok(alien_azure_clients::azure::sandbox_data_plane::ExecResult {
+                    exit_code: Some(0),
+                    stdout: String::new(),
+                    // The wrapper announces its nonce before starting the command.
+                    stderr: "beef\n".to_string(),
+                })
+            });
+
+        let mut request = command(5);
+        request.env = BTreeMap::from([("TOKEN".to_string(), "t".to_string())]);
+
+        sandbox_with(client)
+            .run_command("s1", request)
+            .await
+            .expect("a command declaring a variable must run");
+    }
+
+    /// A variable name that is not a name never reaches the shell string.
+    ///
+    /// The name sits left of the `=`, where quoting cannot reach it, so an unchecked one is a
+    /// second command running inside the sandbox rather than a variable in it.
+    #[tokio::test]
+    async fn a_command_carrying_an_unusable_variable_name_runs_nothing() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        client.expect_execute_shell_command().never();
+
+        let mut request = command(5);
+        request.env = BTreeMap::from([("X; curl evil".to_string(), "1".to_string())]);
+
+        let error = match sandbox_with(client).run_command("s1", request).await {
+            Ok(_) => panic!("a name the shell would run must not reach the shell"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "INVALID_INPUT", "{error}");
     }
 
     /// A session being deleted is still running, so it must not take new work.

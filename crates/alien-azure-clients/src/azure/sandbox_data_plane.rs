@@ -410,8 +410,14 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         let signed = self.base.sign_request(request, &token).await?;
         // The create body carries the caller's environment variables, and a failure echoes the
         // request into the error chain, which is serialized into durable state.
+        //
+        // Sent once. The id is minted by the service and this is a PUT to a collection, so a
+        // re-send mints a second sandbox — and with no enumeration verb, the first one has no
+        // id-holder and nothing to reap it.
         let response = alien_client_core::redact_request_body(
-            self.base.execute_request(signed, "CreateSandbox", group).await,
+            self.base
+                .execute_request_once(signed, "CreateSandbox", group)
+                .await,
         )?;
         Self::parse(response, "CreateSandbox").await
     }
@@ -477,9 +483,12 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         let signed = self.base.sign_request(request, &token).await?;
         // The body is the command, which is where a caller puts a token it wants the session to
         // have.
+        //
+        // Sent once: a response that never arrives does not mean the command did not start, and
+        // running untrusted code a second time is not a recovery.
         let response = alien_client_core::redact_request_body(
             self.base
-                .execute_request(signed, "ExecuteShellCommand", sandbox_id)
+                .execute_request_once(signed, "ExecuteShellCommand", sandbox_id)
                 .await,
         )?;
         Self::parse(response, "ExecuteShellCommand").await
@@ -594,7 +603,11 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             .body(body)
             .build()?;
         let signed = self.base.sign_request(request, &token).await?;
-        self.base.execute_request(signed, "Mkdir", sandbox_id).await?;
+        // The body is a caller-supplied path; wrapped like the other bodied calls so the next one
+        // added here inherits the redaction rather than the omission.
+        alien_client_core::redact_request_body(
+            self.base.execute_request(signed, "Mkdir", sandbox_id).await,
+        )?;
         Ok(())
     }
 }
@@ -631,6 +644,58 @@ mod tests {
             "rg",
             AzureTokenCache::new(config),
         )
+    }
+
+    /// A create is delivered once, however the data plane answers.
+    ///
+    /// The id is minted by the service and the PUT names a collection, so a second delivery makes
+    /// a second sandbox that no id-holder can find and no enumeration verb can list — one this
+    /// call would never learn about even when it eventually succeeds. The read is the contrast:
+    /// repeating it is free, so it keeps the retry.
+    #[tokio::test]
+    async fn a_create_is_never_re_sent_where_a_read_is() {
+        let server = MockServer::start_async().await;
+        let unavailable = server.mock(|when, then| {
+            when.method(httpmock::Method::PUT);
+            then.status(503).body("{}");
+        });
+        let client = client_against(&server);
+
+        client
+            .create_sandbox(
+                "grp",
+                CreateSandbox {
+                    disk_image: "ubuntu".to_string(),
+                    cpu: "1".to_string(),
+                    memory: "2Gi".to_string(),
+                    environment: Default::default(),
+                    egress: None,
+                    idle_suspend_seconds: None,
+                },
+            )
+            .await
+            .expect_err("an unavailable data plane fails the create");
+
+        assert_eq!(
+            unavailable.hits(),
+            1,
+            "a create that may already have minted a sandbox must not be sent twice"
+        );
+
+        let read = server.mock(|when, then| {
+            when.method(httpmock::Method::GET);
+            then.status(503).body("{}");
+        });
+        client
+            .get_sandbox("grp", "s1")
+            .await
+            .expect_err("an unavailable data plane fails the read");
+
+        assert!(
+            read.hits() > 1,
+            "a read is safe to repeat and must keep its retry: {} attempt(s)",
+            read.hits()
+        );
     }
 
     /// Pinned because the contract came from a preview SDK Microsoft says may change. If these

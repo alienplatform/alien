@@ -184,6 +184,58 @@ impl AzureClientBase {
 
     // ------------- Low-level executor -------------
 
+    /// Sends a request exactly once, with no retry.
+    ///
+    /// For the verbs a repeat performs twice: a PUT to a collection with a server-minted id makes
+    /// a second resource the caller has no id for, and an exec that answered late may already
+    /// have started the command. Neither carries an idempotency key, so the only safe number of
+    /// attempts is one.
+    pub async fn execute_request_once(
+        &self,
+        req: reqwest::Request,
+        op: &str,
+        res_name: &str,
+    ) -> Result<reqwest::Response> {
+        Self::send_once(&self.client, req, op, res_name).await
+    }
+
+    /// One attempt: send it, and turn a non-success status into an error carrying the context.
+    async fn send_once(
+        client: &reqwest::Client,
+        req: reqwest::Request,
+        op: &str,
+        res_name: &str,
+    ) -> Result<reqwest::Response> {
+        // Captured before execution consumes the request.
+        let request_url = req.url().to_string();
+        let request_body = req.body().and_then(|b| b.as_bytes()).map(|b| {
+            String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string()
+        });
+
+        let resp = client
+            .execute(req)
+            .await
+            .into_alien_error()
+            .context(ErrorData::HttpRequestFailed {
+                message: format!("Azure {}: HTTP error for {}", op, res_name),
+            })?;
+        let status = resp.status();
+        if status.is_success() || status == StatusCode::CREATED || status == StatusCode::ACCEPTED {
+            return Ok(resp);
+        }
+
+        let body = resp.text().await.unwrap_or_default();
+        Err(create_azure_http_error_with_context(
+            status,
+            op,
+            "Resource",
+            res_name,
+            &body,
+            &request_url,
+            request_body,
+        ))
+    }
+
     /// Executes an HTTP request with retry logic and returns the response if successful.
     #[cfg(target_arch = "wasm32")]
     pub async fn execute_request(
@@ -207,36 +259,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Capture request details before execution consumes the request
-                let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
-
-                let resp = client.execute(req_clone).await.into_alien_error().context(
-                    ErrorData::HttpRequestFailed {
-                        message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    },
-                )?;
-                let status = resp.status();
-                if status.is_success()
-                    || status == StatusCode::CREATED
-                    || status == StatusCode::ACCEPTED
-                {
-                    Ok(resp)
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    Err(create_azure_http_error_with_context(
-                        status,
-                        &op,
-                        "Resource",
-                        &res_name,
-                        &body,
-                        &request_url,
-                        request_body,
-                    ))
-                }
+                Self::send_once(&client, req_clone, &op, &res_name).await
             }
         };
         self.with_retry(retryable).await
@@ -265,36 +288,7 @@ impl AzureClientBase {
                     })
                 })?;
 
-                // Capture request details before execution consumes the request
-                let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
-
-                let resp = client.execute(req_clone).await.into_alien_error().context(
-                    ErrorData::HttpRequestFailed {
-                        message: format!("Azure {}: HTTP error for {}", op, res_name),
-                    },
-                )?;
-                let status = resp.status();
-                if status.is_success()
-                    || status == StatusCode::CREATED
-                    || status == StatusCode::ACCEPTED
-                {
-                    Ok(resp)
-                } else {
-                    let body = resp.text().await.unwrap_or_default();
-                    Err(create_azure_http_error_with_context(
-                        status,
-                        &op,
-                        "Resource",
-                        &res_name,
-                        &body,
-                        &request_url,
-                        request_body,
-                    ))
-                }
+                Self::send_once(&client, req_clone, &op, &res_name).await
             }
         };
         self.with_retry(retryable).await

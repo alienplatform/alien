@@ -25,7 +25,9 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`)
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`). Azure takes a
+        /// bare catalog name such as `ubuntu` — it creates a session from a public catalog disk
+        /// image, so a registry path, tag or digest has nowhere to go.
         image: String,
     },
     /// Source built into a sandbox image at deploy time.
@@ -130,7 +132,9 @@ pub enum SandboxEgress {
     /// Unrestricted outbound access to the public internet, and none to private ranges or the
     /// deployment's own network.
     ///
-    /// Link-local carries the same exception as `Deny`.
+    /// Link-local carries the same exception as `Deny`. Azure delivers the first half only: its
+    /// egress rules match host patterns, so a private range has nothing to render into and the
+    /// data plane's own default applies.
     Allow,
     /// Outbound access only to the listed hostnames.
     ///
@@ -482,6 +486,11 @@ impl Sandbox {
             }));
         }
 
+        // Read before the limits, because the image is declared whether or not any are.
+        if platform == Platform::Azure {
+            self.azure_catalog_image()?;
+        }
+
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared, so nothing to enforce and nothing to reject.
             return self.validate_capabilities(&capabilities, platform);
@@ -540,6 +549,45 @@ impl Sandbox {
     /// only tier that honours a ceiling is one whose peak fits inside it. A declaration no tier
     /// satisfies is refused: shipping the nearest size would give the customer a sandbox that
     /// exceeds the bound they wrote down.
+    /// The catalog disk image Azure creates a session from.
+    ///
+    /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
+    /// tag or digest has nowhere to go. An allowlist, because the answer to "what else could be
+    /// in there" is a name the data plane rejects at the first session, long after the apply.
+    pub fn azure_catalog_image(&self) -> Result<&str> {
+        let refused = |value: &str, reason: &str| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code.image".to_string(),
+                value: value.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+
+        let SandboxCode::Image { image } = &self.code else {
+            return Err(refused(
+                "source",
+                "no sandbox backend builds an image from source yet",
+            ));
+        };
+
+        let image = image.trim();
+        if image.is_empty() {
+            return Err(refused(image, "a sandbox has to name an image"));
+        }
+        if !image
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(refused(
+                image,
+                "Azure creates a session from a public catalog disk image, so code.image must be \
+                 a bare catalog name such as 'ubuntu'",
+            ));
+        }
+        Ok(image)
+    }
+
     pub fn microvm_tier(&self) -> Result<MicrovmTier> {
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared: AWS's own default baseline, which is also `default_limits`.
@@ -853,7 +901,7 @@ mod tests {
     fn sandbox_with(egress: SandboxEgress, preview_ports: Vec<u16>) -> Sandbox {
         Sandbox::new("agent-sbx".to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                image: "ubuntu".to_string(),
             })
             .limits(SandboxLimits {
                 cpu: "1".to_string(),
@@ -995,7 +1043,7 @@ mod tests {
         // Declares no ceilings, which Azure refuses for its own reason, so this isolates egress.
         let egress_only = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
-                image: "alpine:3.20".to_string(),
+                image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
@@ -1021,7 +1069,7 @@ mod tests {
 
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
-                image: "alpine:3.20".to_string(),
+                image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
@@ -1156,6 +1204,63 @@ mod tests {
         sandbox
             .validate_for_platform(Platform::Aws)
             .expect("the ceiling itself is allowed");
+    }
+
+    /// An image reference Azure cannot honour is refused while planning, not at the first session.
+    ///
+    /// The examples in `code.image`'s own documentation — a tag, a registry path — are exactly
+    /// what Azure cannot take, so this is the shape a customer is most likely to declare. Caught
+    /// at plan time it names the sandbox; caught nowhere, it renders into the module, plans,
+    /// applies, and fails when the first session is created.
+    #[test]
+    fn an_image_azure_cannot_pull_is_refused_while_planning() {
+        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        // Azure enforces no declared ceiling, so a sandbox carrying limits is refused before the
+        // image is ever read.
+        sandbox.limits = None;
+
+        for image in [
+            "ubuntu:24.04",
+            "ghcr.io/myorg/sandbox:latest",
+            "ubuntu@sha256:abc",
+            "",
+            "   ",
+            "ubuntu latest",
+            "ubuntu?x",
+        ] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            let error = sandbox
+                .validate_for_platform(Platform::Azure)
+                .expect_err("an image Azure has nowhere to put is refused");
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "image '{image}'");
+
+            // The same declaration is ordinary everywhere that pulls a reference.
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("a registry reference is what every other backend takes");
+        }
+
+        for image in ["ubuntu", "ubuntu-22.04", "debian_slim"] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            sandbox
+                .validate_for_platform(Platform::Azure)
+                .unwrap_or_else(|error| panic!("'{image}' is a catalog name: {error}"));
+        }
+
+        // Surrounding space is trimmed rather than carried into the create body.
+        sandbox.code = SandboxCode::Image {
+            image: " ubuntu ".to_string(),
+        };
+        assert_eq!(
+            sandbox
+                .azure_catalog_image()
+                .expect("a padded name is still a name"),
+            "ubuntu"
+        );
     }
 
     /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
@@ -1339,7 +1444,7 @@ mod tests {
         let original = sandbox_with(SandboxEgress::Deny, vec![]);
         let renamed = Sandbox::new("other".to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                image: "ubuntu".to_string(),
             })
             .limits(
                 original

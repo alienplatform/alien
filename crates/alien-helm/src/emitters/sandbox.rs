@@ -58,7 +58,6 @@ impl HelmEmitter for SandboxEmitter {
                 })
             })?;
 
-
         let mut fragment = HelmFragment::empty();
         fragment.extra_templates.insert(
             format!("sandbox-{}-networkpolicy.yaml", sandbox.id()),
