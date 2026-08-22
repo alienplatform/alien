@@ -42,10 +42,10 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
         "Execute tool calls in your customer's cloud. The AI worker pattern.",
     ),
     (
-        "basic-function-ts",
-        "The simplest Alien function, in TypeScript.",
+        "basic-worker-ts",
+        "The simplest Alien worker, in TypeScript.",
     ),
-    ("basic-function-rs", "The simplest Alien function, in Rust."),
+    ("basic-worker-rs", "The simplest Alien worker, in Rust."),
     (
         "data-connector-ts",
         "Query private databases behind the customer's firewall.",
@@ -65,6 +65,26 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
         "ai-quickstart-ts",
         "The smallest AI setup: one worker calling cloud LLMs, no API keys, no database.",
+    ),
+    (
+        "customer-models-ts",
+        "Let each customer connect models from their cloud account.",
+    ),
+    (
+        "byob-storage-ts",
+        "Access customer-owned object storage from an external backend.",
+    ),
+    (
+        "customer-keys-ts",
+        "Encrypt data with a key controlled by each customer.",
+    ),
+    (
+        "github-agent",
+        "A GitHub integration agent with a Next.js dashboard.",
+    ),
+    (
+        "ai-chatbot-ts",
+        "A streaming AI chatbot that answers questions about a private Postgres.",
     ),
 ];
 
@@ -133,23 +153,19 @@ async fn fetch_templates() -> Result<Vec<TemplateInfo>> {
             Ok(r) if r.status().is_success() => {
                 let text = r.text().await.unwrap_or_default();
                 match toml::from_str::<TemplateToml>(&text) {
-                    Ok(t) => TemplateInfo {
+                    Ok(t) => Some(TemplateInfo {
                         name: t.name,
                         description: t.description,
-                    },
-                    Err(_) => TemplateInfo {
-                        name: dir_name.clone(),
-                        description: String::new(),
-                    },
+                    }),
+                    Err(_) => None,
                 }
             }
-            _ => TemplateInfo {
-                name: dir_name.clone(),
-                description: String::new(),
-            },
+            _ => None,
         };
 
-        templates.push(info);
+        if let Some(info) = info {
+            templates.push(info);
+        }
     }
 
     Ok(templates)

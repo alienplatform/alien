@@ -4,14 +4,22 @@ Each example is a self-contained template you can initialize with `alien init`.
 
 | Template | Description | Language |
 |----------|-------------|----------|
+| [basic-worker-ts](./basic-worker-ts) | The smallest remote worker, in TypeScript. | TypeScript |
+| [basic-worker-rs](./basic-worker-rs) | The smallest remote worker, in Rust. | Rust |
+| [ai-quickstart-ts](./ai-quickstart-ts) | Call the cloud AI service already available in a remote environment. | TypeScript |
+| [remote-worker-ts](./remote-worker-ts) | Execute agent tool calls near private services and data. | TypeScript |
+| [data-connector-ts](./data-connector-ts) | Query a private database without exposing it to the public internet. | TypeScript |
+| [webhook-api-ts](./webhook-api-ts) | Receive webhooks and expose an API in a remote environment. | TypeScript |
+| [event-pipeline-ts](./event-pipeline-ts) | Process queue, storage, and scheduled events. | TypeScript |
+| [nextjs-app](./nextjs-app) | Deploy a complete Next.js application as a container. | TypeScript |
+| [github-agent](./github-agent) | Build a GitHub integration agent with a Next.js dashboard. | TypeScript |
+| [customer-models-ts](./customer-models-ts) | Let each customer connect models from their cloud account. | TypeScript |
 | [byob-storage-ts](./byob-storage-ts) | Provision customer-owned object storage and access it from an external SaaS backend. | TypeScript |
-| [remote-worker-ts](./remote-worker-ts) | Execute tool calls in your customer's cloud. The AI worker pattern. | TypeScript |
-| [basic-worker-ts](./basic-worker-ts) | The simplest Alien worker, in TypeScript. | TypeScript |
-| [basic-worker-rs](./basic-worker-rs) | The simplest Alien worker, in Rust. | Rust |
-| [data-connector-ts](./data-connector-ts) | Query private databases behind the customer's firewall. | TypeScript |
-| [event-pipeline-ts](./event-pipeline-ts) | Process events from queues, storage changes, and cron schedules. | TypeScript |
-| [webhook-api-ts](./webhook-api-ts) | Receive webhooks and expose an API inside the customer's cloud. | TypeScript |
-| [nextjs-app](./nextjs-app) | Deploy a Next.js app as a single container in the customer's cloud. | TypeScript |
+| [customer-keys-ts](./customer-keys-ts) | Encrypt data with a key controlled by each customer. | TypeScript |
+| [ai-chatbot-ts](./ai-chatbot-ts) | Answer questions about a private Postgres with ambient cloud models. | TypeScript |
+
+Some repository directories are supporting projects or advanced source examples. `alien init`
+only lists directories with a valid `template.toml`, so every option it shows can be scaffolded.
 
 ## Getting started
 
