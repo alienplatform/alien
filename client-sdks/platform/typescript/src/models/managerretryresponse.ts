@@ -78,6 +78,18 @@ export type ManagerRetryResponseAllowedProvider = ClosedEnum<
   typeof ManagerRetryResponseAllowedProvider
 >;
 
+export const ManagerRetryResponseProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type ManagerRetryResponseProviderAllowlist = ClosedEnum<
+  typeof ManagerRetryResponseProviderAllowlist
+>;
+
 export const ManagerRetryResponseClientApi = {
   OpenaiChat: "openai-chat",
   OpenaiResponses: "openai-responses",
@@ -95,6 +107,7 @@ export type ManagerRetryResponseModelRequirement = {
 
 export type ManagerRetryResponseConfiguration = {
   allowedProviders?: Array<ManagerRetryResponseAllowedProvider> | undefined;
+  providerAllowlist?: Array<ManagerRetryResponseProviderAllowlist> | undefined;
   modelRequirements?: Array<ManagerRetryResponseModelRequirement> | undefined;
 };
 
@@ -3856,6 +3869,11 @@ export const ManagerRetryResponseAllowedProvider$inboundSchema: z.ZodEnum<
 > = z.enum(ManagerRetryResponseAllowedProvider);
 
 /** @internal */
+export const ManagerRetryResponseProviderAllowlist$inboundSchema: z.ZodEnum<
+  typeof ManagerRetryResponseProviderAllowlist
+> = z.enum(ManagerRetryResponseProviderAllowlist);
+
+/** @internal */
 export const ManagerRetryResponseClientApi$inboundSchema: z.ZodEnum<
   typeof ManagerRetryResponseClientApi
 > = z.enum(ManagerRetryResponseClientApi);
@@ -3888,6 +3906,9 @@ export const ManagerRetryResponseConfiguration$inboundSchema: z.ZodType<
 > = z.object({
   allowedProviders: z.array(ManagerRetryResponseAllowedProvider$inboundSchema)
     .optional(),
+  providerAllowlist: z.array(
+    ManagerRetryResponseProviderAllowlist$inboundSchema,
+  ).optional(),
   modelRequirements: z.array(
     z.lazy(() => ManagerRetryResponseModelRequirement$inboundSchema),
   ).optional(),

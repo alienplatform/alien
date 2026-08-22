@@ -19,6 +19,7 @@ import { projectsGetAiUsage } from "../funcs/projectsGetAiUsage.js";
 import { projectsGetCapabilityOverview } from "../funcs/projectsGetCapabilityOverview.js";
 import { projectsGetDeploymentLinkSetup } from "../funcs/projectsGetDeploymentLinkSetup.js";
 import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
+import { projectsGetEncryptionUsage } from "../funcs/projectsGetEncryptionUsage.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
@@ -359,6 +360,17 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetProjectAiUsageResponse> {
     return unwrapAsync(projectsGetAiUsage(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getEncryptionUsage(
+    request: operations.GetProjectEncryptionUsageRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetProjectEncryptionUsageResponse> {
+    return unwrapAsync(projectsGetEncryptionUsage(
       this,
       request,
       options,

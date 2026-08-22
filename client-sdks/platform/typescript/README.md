@@ -381,6 +381,7 @@ run();
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getAiUsage](docs/sdks/projects/README.md#getaiusage)
+* [getEncryptionUsage](docs/sdks/projects/README.md#getencryptionusage)
 
 ### [ReleaseChannels](docs/sdks/releasechannels/README.md)
 
@@ -635,6 +636,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetCapabilityOverview`](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 - [`projectsGetDeploymentLinkSetup`](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
+- [`projectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.

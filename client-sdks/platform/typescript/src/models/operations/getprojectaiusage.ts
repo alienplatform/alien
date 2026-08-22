@@ -8,12 +8,14 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
-export const QueryParamRange = {
+export const GetProjectAiUsageQueryParamRange = {
   TwentyFourh: "24h",
   Sevend: "7d",
   Thirtyd: "30d",
 } as const;
-export type QueryParamRange = ClosedEnum<typeof QueryParamRange>;
+export type GetProjectAiUsageQueryParamRange = ClosedEnum<
+  typeof GetProjectAiUsageQueryParamRange
+>;
 
 export type GetProjectAiUsageRequest = {
   /**
@@ -24,15 +26,17 @@ export type GetProjectAiUsageRequest = {
    * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
    */
   workspace?: string | undefined;
-  range?: QueryParamRange | undefined;
+  range?: GetProjectAiUsageQueryParamRange | undefined;
 };
 
-export const RangeResponse = {
+export const GetProjectAiUsageRangeResponse = {
   TwentyFourh: "24h",
   Sevend: "7d",
   Thirtyd: "30d",
 } as const;
-export type RangeResponse = ClosedEnum<typeof RangeResponse>;
+export type GetProjectAiUsageRangeResponse = ClosedEnum<
+  typeof GetProjectAiUsageRangeResponse
+>;
 
 export const Label = {
   EstimatedProviderCost: "Estimated provider cost",
@@ -45,7 +49,7 @@ export type Pricing = {
   revision: string | null;
 };
 
-export type Totals = {
+export type GetProjectAiUsageTotals = {
   requests: number;
   successfulRequests: number;
   errorRequests: number;
@@ -57,7 +61,7 @@ export type Totals = {
   pricedRequests: number;
 };
 
-export type TimeSery = {
+export type GetProjectAiUsageTimeSery = {
   requests: number;
   successfulRequests: number;
   errorRequests: number;
@@ -99,12 +103,12 @@ export type GetProjectAiUsageModel = {
   provider: string;
 };
 
-export type Available = {
+export type GetProjectAiUsageAvailable = {
   status: "available";
-  range: RangeResponse;
+  range: GetProjectAiUsageRangeResponse;
   pricing: Pricing;
-  totals: Totals;
-  timeSeries: Array<TimeSery>;
+  totals: GetProjectAiUsageTotals;
+  timeSeries: Array<GetProjectAiUsageTimeSery>;
   customers: Array<Customer>;
   models: Array<GetProjectAiUsageModel>;
   customersTruncated: boolean;
@@ -119,7 +123,7 @@ export type GetProjectAiUsageReason = ClosedEnum<
   typeof GetProjectAiUsageReason
 >;
 
-export type Unavailable = {
+export type GetProjectAiUsageUnavailable = {
   status: "unavailable";
   reason: GetProjectAiUsageReason;
 };
@@ -127,11 +131,14 @@ export type Unavailable = {
 /**
  * Privacy-safe AI Gateway usage aggregates.
  */
-export type GetProjectAiUsageResponse = Unavailable | Available;
+export type GetProjectAiUsageResponse =
+  | GetProjectAiUsageUnavailable
+  | GetProjectAiUsageAvailable;
 
 /** @internal */
-export const QueryParamRange$outboundSchema: z.ZodEnum<typeof QueryParamRange> =
-  z.enum(QueryParamRange);
+export const GetProjectAiUsageQueryParamRange$outboundSchema: z.ZodEnum<
+  typeof GetProjectAiUsageQueryParamRange
+> = z.enum(GetProjectAiUsageQueryParamRange);
 
 /** @internal */
 export type GetProjectAiUsageRequest$Outbound = {
@@ -147,7 +154,7 @@ export const GetProjectAiUsageRequest$outboundSchema: z.ZodType<
 > = z.object({
   idOrName: z.string(),
   workspace: z.string().optional(),
-  range: QueryParamRange$outboundSchema.default("24h"),
+  range: GetProjectAiUsageQueryParamRange$outboundSchema.default("24h"),
 });
 
 export function getProjectAiUsageRequestToJSON(
@@ -159,8 +166,9 @@ export function getProjectAiUsageRequestToJSON(
 }
 
 /** @internal */
-export const RangeResponse$inboundSchema: z.ZodEnum<typeof RangeResponse> = z
-  .enum(RangeResponse);
+export const GetProjectAiUsageRangeResponse$inboundSchema: z.ZodEnum<
+  typeof GetProjectAiUsageRangeResponse
+> = z.enum(GetProjectAiUsageRangeResponse);
 
 /** @internal */
 export const Label$inboundSchema: z.ZodEnum<typeof Label> = z.enum(Label);
@@ -183,7 +191,10 @@ export function pricingFromJSON(
 }
 
 /** @internal */
-export const Totals$inboundSchema: z.ZodType<Totals, unknown> = z.object({
+export const GetProjectAiUsageTotals$inboundSchema: z.ZodType<
+  GetProjectAiUsageTotals,
+  unknown
+> = z.object({
   requests: z.int(),
   successfulRequests: z.int(),
   errorRequests: z.int(),
@@ -195,18 +206,21 @@ export const Totals$inboundSchema: z.ZodType<Totals, unknown> = z.object({
   pricedRequests: z.int(),
 });
 
-export function totalsFromJSON(
+export function getProjectAiUsageTotalsFromJSON(
   jsonString: string,
-): SafeParseResult<Totals, SDKValidationError> {
+): SafeParseResult<GetProjectAiUsageTotals, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Totals$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Totals' from JSON`,
+    (x) => GetProjectAiUsageTotals$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectAiUsageTotals' from JSON`,
   );
 }
 
 /** @internal */
-export const TimeSery$inboundSchema: z.ZodType<TimeSery, unknown> = z.object({
+export const GetProjectAiUsageTimeSery$inboundSchema: z.ZodType<
+  GetProjectAiUsageTimeSery,
+  unknown
+> = z.object({
   requests: z.int(),
   successfulRequests: z.int(),
   errorRequests: z.int(),
@@ -219,13 +233,13 @@ export const TimeSery$inboundSchema: z.ZodType<TimeSery, unknown> = z.object({
   bucket: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
 });
 
-export function timeSeryFromJSON(
+export function getProjectAiUsageTimeSeryFromJSON(
   jsonString: string,
-): SafeParseResult<TimeSery, SDKValidationError> {
+): SafeParseResult<GetProjectAiUsageTimeSery, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => TimeSery$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TimeSery' from JSON`,
+    (x) => GetProjectAiUsageTimeSery$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectAiUsageTimeSery' from JSON`,
   );
 }
 
@@ -284,25 +298,28 @@ export function getProjectAiUsageModelFromJSON(
 }
 
 /** @internal */
-export const Available$inboundSchema: z.ZodType<Available, unknown> = z.object({
+export const GetProjectAiUsageAvailable$inboundSchema: z.ZodType<
+  GetProjectAiUsageAvailable,
+  unknown
+> = z.object({
   status: z.literal("available"),
-  range: RangeResponse$inboundSchema,
+  range: GetProjectAiUsageRangeResponse$inboundSchema,
   pricing: z.lazy(() => Pricing$inboundSchema),
-  totals: z.lazy(() => Totals$inboundSchema),
-  timeSeries: z.array(z.lazy(() => TimeSery$inboundSchema)),
+  totals: z.lazy(() => GetProjectAiUsageTotals$inboundSchema),
+  timeSeries: z.array(z.lazy(() => GetProjectAiUsageTimeSery$inboundSchema)),
   customers: z.array(z.lazy(() => Customer$inboundSchema)),
   models: z.array(z.lazy(() => GetProjectAiUsageModel$inboundSchema)),
   customersTruncated: z.boolean(),
   modelsTruncated: z.boolean(),
 });
 
-export function availableFromJSON(
+export function getProjectAiUsageAvailableFromJSON(
   jsonString: string,
-): SafeParseResult<Available, SDKValidationError> {
+): SafeParseResult<GetProjectAiUsageAvailable, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Available$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Available' from JSON`,
+    (x) => GetProjectAiUsageAvailable$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectAiUsageAvailable' from JSON`,
   );
 }
 
@@ -312,19 +329,21 @@ export const GetProjectAiUsageReason$inboundSchema: z.ZodEnum<
 > = z.enum(GetProjectAiUsageReason);
 
 /** @internal */
-export const Unavailable$inboundSchema: z.ZodType<Unavailable, unknown> = z
-  .object({
-    status: z.literal("unavailable"),
-    reason: GetProjectAiUsageReason$inboundSchema,
-  });
+export const GetProjectAiUsageUnavailable$inboundSchema: z.ZodType<
+  GetProjectAiUsageUnavailable,
+  unknown
+> = z.object({
+  status: z.literal("unavailable"),
+  reason: GetProjectAiUsageReason$inboundSchema,
+});
 
-export function unavailableFromJSON(
+export function getProjectAiUsageUnavailableFromJSON(
   jsonString: string,
-): SafeParseResult<Unavailable, SDKValidationError> {
+): SafeParseResult<GetProjectAiUsageUnavailable, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Unavailable$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Unavailable' from JSON`,
+    (x) => GetProjectAiUsageUnavailable$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectAiUsageUnavailable' from JSON`,
   );
 }
 
@@ -333,8 +352,8 @@ export const GetProjectAiUsageResponse$inboundSchema: z.ZodType<
   GetProjectAiUsageResponse,
   unknown
 > = z.union([
-  z.lazy(() => Unavailable$inboundSchema),
-  z.lazy(() => Available$inboundSchema),
+  z.lazy(() => GetProjectAiUsageUnavailable$inboundSchema),
+  z.lazy(() => GetProjectAiUsageAvailable$inboundSchema),
 ]);
 
 export function getProjectAiUsageResponseFromJSON(

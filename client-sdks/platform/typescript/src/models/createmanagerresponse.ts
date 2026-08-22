@@ -81,6 +81,18 @@ export type CreateManagerResponseAllowedProvider = ClosedEnum<
   typeof CreateManagerResponseAllowedProvider
 >;
 
+export const CreateManagerResponseProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type CreateManagerResponseProviderAllowlist = ClosedEnum<
+  typeof CreateManagerResponseProviderAllowlist
+>;
+
 export const CreateManagerResponseClientApi = {
   OpenaiChat: "openai-chat",
   OpenaiResponses: "openai-responses",
@@ -98,6 +110,7 @@ export type CreateManagerResponseModelRequirement = {
 
 export type CreateManagerResponseConfiguration = {
   allowedProviders?: Array<CreateManagerResponseAllowedProvider> | undefined;
+  providerAllowlist?: Array<CreateManagerResponseProviderAllowlist> | undefined;
   modelRequirements?: Array<CreateManagerResponseModelRequirement> | undefined;
 };
 
@@ -3903,6 +3916,11 @@ export const CreateManagerResponseAllowedProvider$inboundSchema: z.ZodEnum<
 > = z.enum(CreateManagerResponseAllowedProvider);
 
 /** @internal */
+export const CreateManagerResponseProviderAllowlist$inboundSchema: z.ZodEnum<
+  typeof CreateManagerResponseProviderAllowlist
+> = z.enum(CreateManagerResponseProviderAllowlist);
+
+/** @internal */
 export const CreateManagerResponseClientApi$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseClientApi
 > = z.enum(CreateManagerResponseClientApi);
@@ -3935,6 +3953,9 @@ export const CreateManagerResponseConfiguration$inboundSchema: z.ZodType<
 > = z.object({
   allowedProviders: z.array(CreateManagerResponseAllowedProvider$inboundSchema)
     .optional(),
+  providerAllowlist: z.array(
+    CreateManagerResponseProviderAllowlist$inboundSchema,
+  ).optional(),
   modelRequirements: z.array(
     z.lazy(() => CreateManagerResponseModelRequirement$inboundSchema),
   ).optional(),

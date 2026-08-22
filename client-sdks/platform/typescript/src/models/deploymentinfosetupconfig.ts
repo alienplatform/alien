@@ -92,6 +92,18 @@ export type DeploymentInfoSetupConfigAllowedProvider = ClosedEnum<
   typeof DeploymentInfoSetupConfigAllowedProvider
 >;
 
+export const DeploymentInfoSetupConfigProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type DeploymentInfoSetupConfigProviderAllowlist = ClosedEnum<
+  typeof DeploymentInfoSetupConfigProviderAllowlist
+>;
+
 export const DeploymentInfoSetupConfigClientApi = {
   OpenaiChat: "openai-chat",
   OpenaiResponses: "openai-responses",
@@ -110,6 +122,9 @@ export type DeploymentInfoSetupConfigModelRequirement = {
 export type DeploymentInfoSetupConfigConfiguration = {
   allowedProviders?:
     | Array<DeploymentInfoSetupConfigAllowedProvider>
+    | undefined;
+  providerAllowlist?:
+    | Array<DeploymentInfoSetupConfigProviderAllowlist>
     | undefined;
   modelRequirements?:
     | Array<DeploymentInfoSetupConfigModelRequirement>
@@ -490,6 +505,12 @@ export const DeploymentInfoSetupConfigAllowedProvider$inboundSchema: z.ZodEnum<
 > = z.enum(DeploymentInfoSetupConfigAllowedProvider);
 
 /** @internal */
+export const DeploymentInfoSetupConfigProviderAllowlist$inboundSchema:
+  z.ZodEnum<typeof DeploymentInfoSetupConfigProviderAllowlist> = z.enum(
+    DeploymentInfoSetupConfigProviderAllowlist,
+  );
+
+/** @internal */
 export const DeploymentInfoSetupConfigClientApi$inboundSchema: z.ZodEnum<
   typeof DeploymentInfoSetupConfigClientApi
 > = z.enum(DeploymentInfoSetupConfigClientApi);
@@ -527,6 +548,9 @@ export const DeploymentInfoSetupConfigConfiguration$inboundSchema: z.ZodType<
 > = z.object({
   allowedProviders: z.array(
     DeploymentInfoSetupConfigAllowedProvider$inboundSchema,
+  ).optional(),
+  providerAllowlist: z.array(
+    DeploymentInfoSetupConfigProviderAllowlist$inboundSchema,
   ).optional(),
   modelRequirements: z.array(
     z.lazy(() => DeploymentInfoSetupConfigModelRequirement$inboundSchema),

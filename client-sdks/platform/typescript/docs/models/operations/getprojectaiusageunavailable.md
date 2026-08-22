@@ -1,11 +1,11 @@
-# Unavailable
+# GetProjectAiUsageUnavailable
 
 ## Example Usage
 
 ```typescript
-import { Unavailable } from "@alienplatform/platform-api/models/operations";
+import { GetProjectAiUsageUnavailable } from "@alienplatform/platform-api/models/operations";
 
-let value: Unavailable = {
+let value: GetProjectAiUsageUnavailable = {
   status: "unavailable",
   reason: "not-configured",
 };

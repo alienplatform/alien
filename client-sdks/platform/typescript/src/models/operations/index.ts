@@ -97,6 +97,7 @@ export * from "./getprojectaiusage.js";
 export * from "./getprojectcapabilityoverview.js";
 export * from "./getprojectdeploymentlinksetup.js";
 export * from "./getprojectdeploymentportaldomain.js";
+export * from "./getprojectencryptionusage.js";
 export * from "./getprojectgcpoauthprovider.js";
 export * from "./getprojecttemplateurls.js";
 export * from "./getrelease.js";

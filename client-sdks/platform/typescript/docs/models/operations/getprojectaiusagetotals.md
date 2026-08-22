@@ -1,20 +1,20 @@
-# Totals
+# GetProjectAiUsageTotals
 
 ## Example Usage
 
 ```typescript
-import { Totals } from "@alienplatform/platform-api/models/operations";
+import { GetProjectAiUsageTotals } from "@alienplatform/platform-api/models/operations";
 
-let value: Totals = {
-  requests: 299586,
-  successfulRequests: 873533,
-  errorRequests: 232940,
-  averageLatencyMs: null,
-  p95LatencyMs: 5533.3,
-  inputTokens: 818361,
-  outputTokens: null,
-  estimatedCostMicrousd: 744870,
-  pricedRequests: 317021,
+let value: GetProjectAiUsageTotals = {
+  requests: 430337,
+  successfulRequests: 386393,
+  errorRequests: 135983,
+  averageLatencyMs: 2507.1,
+  p95LatencyMs: 2435.72,
+  inputTokens: 634118,
+  outputTokens: 324859,
+  estimatedCostMicrousd: 466326,
+  pricedRequests: 561781,
 };
 ```
 

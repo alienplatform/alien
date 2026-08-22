@@ -4631,6 +4631,16 @@ export type TargetDeploymentStackSettings = {
     | null
     | undefined;
   /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: TargetDeploymentTelemetry | undefined;
@@ -14461,6 +14471,9 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
       z.lazy(() => TargetDeploymentNetworkCreate$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: TargetDeploymentTelemetry$inboundSchema.optional(),
   updates: TargetDeploymentUpdates$inboundSchema.optional(),
