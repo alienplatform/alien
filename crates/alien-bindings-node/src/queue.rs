@@ -2,9 +2,9 @@
 //! trait, including payload (JSON/text) marshalling.
 
 use crate::error::map_alien_error;
-use alien_bindings::BoundQueue;
 use alien_bindings::error::ErrorData;
 use alien_bindings::traits::{MessagePayload, QueueMessage};
+use alien_bindings::BoundQueue;
 use alien_error::AlienError;
 use napi_derive::napi;
 

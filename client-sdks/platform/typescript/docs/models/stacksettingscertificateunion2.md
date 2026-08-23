@@ -47,3 +47,4 @@ const value: models.StackSettingsCertificateNone2 = {
   mode: "none",
 };
 ```
+

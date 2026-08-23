@@ -182,6 +182,7 @@ export * from "./revokeworkspaceinvitation.js";
 export * from "./revokeworkspaceinvitelink.js";
 export * from "./rotateawsvirtualkeycredential.js";
 export * from "./rotatemachinesjointoken.js";
+export * from "./setbuiltinoperationsplugins.js";
 export * from "./setdeploymentgroupexternalid.js";
 export * from "./setdeploymentreleasechannel.js";
 export * from "./setoperationspluginenabled.js";

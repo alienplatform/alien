@@ -7,9 +7,7 @@
 
 use std::collections::HashMap;
 
-use alien_local::{
-    LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig,
-};
+use alien_local::{LocalSandboxManager, SandboxEgressMode, SandboxOutput, SandboxSessionConfig};
 use tempfile::TempDir;
 
 const IMAGE: &str = "alpine:3.20";
@@ -83,7 +81,10 @@ async fn session_round_trips_and_runs_unprivileged() {
     assert_eq!(stdout(&read_back).trim(), "payload-in");
 
     manager
-        .exec(&session.container_id, &sh("echo payload-out > /sandbox/out.txt"))
+        .exec(
+            &session.container_id,
+            &sh("echo payload-out > /sandbox/out.txt"),
+        )
         .await
         .expect("exec runs");
     let downloaded = manager
@@ -98,7 +99,11 @@ async fn session_round_trips_and_runs_unprivileged() {
         .await
         .expect("terminate is idempotent");
     assert!(
-        manager.list_sessions(sandbox).await.expect("lists").is_empty(),
+        manager
+            .list_sessions(sandbox)
+            .await
+            .expect("lists")
+            .is_empty(),
         "a terminated session must not remain"
     );
 }
@@ -120,7 +125,8 @@ async fn root_filesystem_is_read_only_and_scratch_is_not() {
         .await
         .expect("exec runs");
     assert_ne!(
-        root_write.exit_code, 0,
+        root_write.exit_code,
+        0,
         "the root filesystem must be read-only, got: {}",
         stdout(&root_write)
     );
@@ -256,7 +262,10 @@ async fn deny_isolates_sessions_and_allow_does_not_promise_to() {
         .await
         .expect("exec runs");
     let first_ip = stdout(&address).trim().to_string();
-    assert!(!first_ip.is_empty(), "the egress-allowed session needs an address");
+    assert!(
+        !first_ip.is_empty(),
+        "the egress-allowed session needs an address"
+    );
 
     let from_denied = manager
         .exec(
@@ -426,7 +435,10 @@ async fn session_output_is_not_written_into_manager_state() {
         .exec(&session.container_id, &sh(&format!("echo {canary}")))
         .await
         .expect("exec");
-    assert!(stdout(&result).contains(canary), "the caller should get its own output");
+    assert!(
+        stdout(&result).contains(canary),
+        "the caller should get its own output"
+    );
 
     let mut found = Vec::new();
     for entry in walk(dir.path()) {

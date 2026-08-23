@@ -597,13 +597,11 @@ mod tests {
     #[test]
     fn package_page_rejects_an_invalid_response_shape() {
         assert!(append_package_page(&serde_json::json!({ "items": {} }), &mut Vec::new()).is_err());
-        assert!(
-            append_package_page(
-                &serde_json::json!({ "items": [], "nextCursor": 42 }),
-                &mut Vec::new()
-            )
-            .is_err()
-        );
+        assert!(append_package_page(
+            &serde_json::json!({ "items": [], "nextCursor": 42 }),
+            &mut Vec::new()
+        )
+        .is_err());
     }
 
     #[test]

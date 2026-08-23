@@ -1002,6 +1002,24 @@ export type DeploymentSetupStackSettingsPolicyKubernetesUnion =
   | DeploymentSetupStackSettingsPolicyKubernetes
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type DeploymentSetupStackSettingsPolicyLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type DeploymentSetupStackSettingsPolicyLogsUnion =
+  | DeploymentSetupStackSettingsPolicyLogs
+  | any;
+
 export const DeploymentSetupStackSettingsPolicyTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1201,6 +1219,7 @@ export type Defaults = {
     | any
     | null
     | undefined;
+  logs?: DeploymentSetupStackSettingsPolicyLogs | any | null | undefined;
   network?:
     | DeploymentSetupStackSettingsPolicyNetworkByoVpcAws
     | DeploymentSetupStackSettingsPolicyNetworkByoVpcGcp
@@ -5718,6 +5737,94 @@ export function deploymentSetupStackSettingsPolicyKubernetesUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentSetupStackSettingsPolicyLogs$inboundSchema: z.ZodType<
+  DeploymentSetupStackSettingsPolicyLogs,
+  unknown
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyLogs$outboundSchema: z.ZodType<
+  DeploymentSetupStackSettingsPolicyLogs$Outbound,
+  DeploymentSetupStackSettingsPolicyLogs
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function deploymentSetupStackSettingsPolicyLogsToJSON(
+  deploymentSetupStackSettingsPolicyLogs:
+    DeploymentSetupStackSettingsPolicyLogs,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyLogs$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyLogs,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyLogsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentSetupStackSettingsPolicyLogs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyLogs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyLogs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyLogsUnion$inboundSchema:
+  z.ZodType<DeploymentSetupStackSettingsPolicyLogsUnion, unknown> = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyLogs$inboundSchema),
+    z.any(),
+  ]);
+/** @internal */
+export type DeploymentSetupStackSettingsPolicyLogsUnion$Outbound =
+  | DeploymentSetupStackSettingsPolicyLogs$Outbound
+  | any;
+
+/** @internal */
+export const DeploymentSetupStackSettingsPolicyLogsUnion$outboundSchema:
+  z.ZodType<
+    DeploymentSetupStackSettingsPolicyLogsUnion$Outbound,
+    DeploymentSetupStackSettingsPolicyLogsUnion
+  > = z.union([
+    z.lazy(() => DeploymentSetupStackSettingsPolicyLogs$outboundSchema),
+    z.any(),
+  ]);
+
+export function deploymentSetupStackSettingsPolicyLogsUnionToJSON(
+  deploymentSetupStackSettingsPolicyLogsUnion:
+    DeploymentSetupStackSettingsPolicyLogsUnion,
+): string {
+  return JSON.stringify(
+    DeploymentSetupStackSettingsPolicyLogsUnion$outboundSchema.parse(
+      deploymentSetupStackSettingsPolicyLogsUnion,
+    ),
+  );
+}
+export function deploymentSetupStackSettingsPolicyLogsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  DeploymentSetupStackSettingsPolicyLogsUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      DeploymentSetupStackSettingsPolicyLogsUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'DeploymentSetupStackSettingsPolicyLogsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentSetupStackSettingsPolicyTypeByoVnetAzure$inboundSchema:
   z.ZodEnum<typeof DeploymentSetupStackSettingsPolicyTypeByoVnetAzure> = z.enum(
     DeploymentSetupStackSettingsPolicyTypeByoVnetAzure,
@@ -6212,6 +6319,12 @@ export const Defaults$inboundSchema: z.ZodType<Defaults, unknown> = z.object({
       z.any(),
     ]),
   ).optional(),
+  logs: z.nullable(
+    z.union([
+      z.lazy(() => DeploymentSetupStackSettingsPolicyLogs$inboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() =>
@@ -6262,6 +6375,11 @@ export type Defaults$Outbound = {
     | any
     | null
     | undefined;
+  logs?:
+    | DeploymentSetupStackSettingsPolicyLogs$Outbound
+    | any
+    | null
+    | undefined;
   network?:
     | DeploymentSetupStackSettingsPolicyNetworkByoVpcAws$Outbound
     | DeploymentSetupStackSettingsPolicyNetworkByoVpcGcp$Outbound
@@ -6306,6 +6424,12 @@ export const Defaults$outboundSchema: z.ZodType<Defaults$Outbound, Defaults> = z
         z.lazy(() =>
           DeploymentSetupStackSettingsPolicyKubernetes$outboundSchema
         ),
+        z.any(),
+      ]),
+    ).optional(),
+    logs: z.nullable(
+      z.union([
+        z.lazy(() => DeploymentSetupStackSettingsPolicyLogs$outboundSchema),
         z.any(),
       ]),
     ).optional(),

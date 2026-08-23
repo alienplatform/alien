@@ -1,8 +1,8 @@
 # Webhook API
 
-Receive webhooks from external services and expose an HTTP API inside the customer's cloud. Incoming events are stored in a KV store and queryable via both HTTP and remote commands.
+Expose an HTTP service beside private data or infrastructure. The example receives webhooks, stores events in a KV store, and makes them queryable through HTTP and remote commands.
 
-The function gets an HTTPS endpoint in the customer's environment. Alien creates the infrastructure -- the customer's network controls who can reach it:
+The function gets an HTTPS endpoint in its remote environment. Alien creates the infrastructure, while that environment's network controls who can reach it:
 
 - **Public internet** -- for receiving webhooks from SaaS services (GitHub, Stripe, Slack)
 - **Employees only** -- behind a VPN or private DNS, for dashboards and internal tools

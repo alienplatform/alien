@@ -81,11 +81,11 @@ pub use kv_manager::LocalKvManager;
 pub use local_bindings_provider::LocalBindingsProvider;
 pub use postgres_manager::LocalPostgresManager;
 pub use queue_manager::LocalQueueManager;
-pub use sandbox_route::SandboxRoute;
 pub use sandbox_manager::{
     LocalSandboxManager, SandboxEgressMode, SandboxExecResult, SandboxOutput, SandboxSessionConfig,
     SandboxSessionHandle,
 };
+pub use sandbox_route::SandboxRoute;
 pub use storage_manager::LocalStorageManager;
 pub use vault_manager::LocalVaultManager;
 pub use worker_manager::{LocalWorkerManager, RuntimeOnlyBindingRef};

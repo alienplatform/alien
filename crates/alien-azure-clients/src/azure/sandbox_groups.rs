@@ -98,7 +98,6 @@ impl AzureSandboxGroupsClient {
     }
 }
 
-
 impl AzureSandboxGroupsClient {
     /// Reads a response body and parses it, naming the operation so a parse failure says which
     /// call produced the body rather than only that some JSON was wrong.
@@ -148,11 +147,11 @@ impl SandboxGroupsApi for AzureSandboxGroupsClient {
             properties: None,
         };
 
-        let body = serde_json::to_string(&group)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(&group).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: format!("Failed to serialize sandbox group '{name}'"),
-            })?;
+            },
+        )?;
 
         let request = AzureRequestBuilder::new(Method::PUT, url)
             .content_type_json()
@@ -226,7 +225,10 @@ mod tests {
 
         assert_eq!(group.name.as_deref(), Some("sbg1"));
         assert_eq!(
-            group.properties.and_then(|p| p.provisioning_state).as_deref(),
+            group
+                .properties
+                .and_then(|p| p.provisioning_state)
+                .as_deref(),
             Some("Succeeded")
         );
     }

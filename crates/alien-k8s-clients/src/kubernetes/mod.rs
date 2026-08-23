@@ -18,8 +18,8 @@ pub mod pods;
 pub mod routes;
 pub mod runtime_classes;
 pub mod secrets;
-pub mod token_reviews;
 pub mod services;
+pub mod token_reviews;
 pub mod version;
 pub mod workload_heartbeat;
 

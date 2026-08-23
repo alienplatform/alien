@@ -7,7 +7,8 @@ use alien_platform_api::types::{
     ConfigureModelsRequest, ConfigureModelsRequestAllowedProvidersItem,
     ConfigureModelsRequestRequirementsItem, ConfigureModelsRequestRequirementsItemClientApisItem,
     ConfigureModelsRequestRequirementsItemPublicModelId, ConfigureProjectBucketsBody,
-    ConfigureProjectBucketsBodyAccess, ConfigureProjectDeploymentsBody, ConfigureProjectKeysBody,
+    ConfigureProjectBucketsBodyAccess, ConfigureProjectDeploymentsBody,
+    ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, CreateProjectBody, CreateProjectBodyName,
     CreateProjectWorkspace, ListProjectsWorkspace,
@@ -210,7 +211,10 @@ async fn capabilities_task(
                     let mut request = client
                         .configure_project_deployments()
                         .id_or_name(project)
-                        .body(&ConfigureProjectDeploymentsBody { enabled: true });
+                        .body(&ConfigureProjectDeploymentsBody {
+                            enabled: true,
+                            methods: vec![ConfigureProjectDeploymentsBodyMethodsItem::Framework],
+                        });
                     if let Some(workspace) = workspace {
                         request = request.workspace(workspace);
                     }

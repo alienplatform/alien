@@ -106,7 +106,10 @@ mod tests {
             .expect_err("an empty cluster must be refused");
 
         let rendered = error.to_string();
-        assert!(rendered.contains("gvisor"), "names what is missing: {rendered}");
+        assert!(
+            rendered.contains("gvisor"),
+            "names what is missing: {rendered}"
+        );
         assert!(
             rendered.contains("Pending"),
             "explains why waiting is not the answer: {rendered}"
@@ -117,12 +120,9 @@ mod tests {
     /// run untrusted code on the shared node kernel while reporting success.
     #[test]
     fn an_unsandboxed_handler_is_refused_even_when_the_name_matches() {
-        let error = require_sandboxed_runtime_class(
-            "agent",
-            "gvisor",
-            &[runtime_class("gvisor", "runc")],
-        )
-        .expect_err("runc is not a sandbox");
+        let error =
+            require_sandboxed_runtime_class("agent", "gvisor", &[runtime_class("gvisor", "runc")])
+                .expect_err("runc is not a sandbox");
 
         assert!(error.to_string().contains("runc"), "names the handler");
     }
@@ -192,9 +192,13 @@ mod live_cluster_shape {
     /// "no RuntimeClass 'gvisor'" needs to know whether to install gVisor or fix a typo.
     #[test]
     fn a_missing_class_reports_what_the_cluster_offers() {
-        let error = require_sandboxed_runtime_class("sbx", "kata-containers", &autopilot_runtime_classes())
-            .expect_err("the cluster has no kata-containers");
+        let error =
+            require_sandboxed_runtime_class("sbx", "kata-containers", &autopilot_runtime_classes())
+                .expect_err("the cluster has no kata-containers");
         let message = error.to_string();
-        assert!(message.contains("gvisor"), "must list what is available: {message}");
+        assert!(
+            message.contains("gvisor"),
+            "must list what is available: {message}"
+        );
     }
 }

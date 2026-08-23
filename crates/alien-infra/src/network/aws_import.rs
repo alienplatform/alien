@@ -417,17 +417,15 @@ mod tests {
             .allow_frozen_changes(false)
             .build();
 
-        let executor = StackExecutor::builder(
-            &stack,
-            ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
-        )
-        .deployment_config(&config)
-        .service_provider(Arc::new(provider))
-        .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
-        .lifecycle_filter(vec![ResourceLifecycle::Frozen])
-        .step_running_resources(false)
-        .build()
-        .expect("executor should build");
+        let executor =
+            StackExecutor::builder(&stack, ClientConfig::Aws(Box::new(AwsClientConfig::mock())))
+                .deployment_config(&config)
+                .service_provider(Arc::new(provider))
+                .initial_setup_authority(InitialSetupAuthority::ImportedHandoff)
+                .lifecycle_filter(vec![ResourceLifecycle::Frozen])
+                .step_running_resources(false)
+                .build()
+                .expect("executor should build");
 
         let _ = executor.continue_imported(state).await;
         assert!(

@@ -146,9 +146,18 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route(&hook_path("ready"), get(hook_ready).post(hook_ready))
         .route(&hook_path("validate"), get(hook_ready).post(hook_ready))
         .route(&hook_path("run"), get(hook_lifecycle).post(hook_lifecycle))
-        .route(&hook_path("resume"), get(hook_lifecycle).post(hook_lifecycle))
-        .route(&hook_path("suspend"), get(hook_lifecycle).post(hook_lifecycle))
-        .route(&hook_path("terminate"), get(hook_lifecycle).post(hook_lifecycle))
+        .route(
+            &hook_path("resume"),
+            get(hook_lifecycle).post(hook_lifecycle),
+        )
+        .route(
+            &hook_path("suspend"),
+            get(hook_lifecycle).post(hook_lifecycle),
+        )
+        .route(
+            &hook_path("terminate"),
+            get(hook_lifecycle).post(hook_lifecycle),
+        )
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
         .route("/v1/mkdir", post(mkdir))
@@ -222,7 +231,14 @@ async fn run_command(
     let output_cap = state.output_cap;
     let identity = state.exec_identity;
     tokio::spawn(async move {
-        exec::stream(&request, Some(&working_directory), identity, output_cap, sender).await;
+        exec::stream(
+            &request,
+            Some(&working_directory),
+            identity,
+            output_cap,
+            sender,
+        )
+        .await;
     });
 
     let frames = futures::stream::unfold(receiver, |mut receiver| async move {

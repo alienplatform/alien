@@ -7,11 +7,13 @@ import { ConfigureProjectDeploymentsRequestBody } from "@alienplatform/platform-
 
 let value: ConfigureProjectDeploymentsRequestBody = {
   enabled: true,
+  methods: [],
 };
 ```
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `enabled`          | *boolean*          | :heavy_check_mark: | N/A                |
+| Field                                                                                                          | Type                                                                                                           | Required                                                                                                       | Description                                                                                                    |
+| -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `enabled`                                                                                                      | *boolean*                                                                                                      | :heavy_check_mark:                                                                                             | N/A                                                                                                            |
+| `methods`                                                                                                      | [operations.ConfigureProjectDeploymentsMethod](../../models/operations/configureprojectdeploymentsmethod.md)[] | :heavy_check_mark:                                                                                             | N/A                                                                                                            |

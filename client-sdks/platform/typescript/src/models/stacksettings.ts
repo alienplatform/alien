@@ -949,6 +949,22 @@ export type StackSettingsKubernetes = {
 
 export type StackSettingsKubernetesUnion = StackSettingsKubernetes | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type StackSettingsLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type StackSettingsLogsUnion = StackSettingsLogs | any;
+
 export const StackSettingsTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1135,6 +1151,7 @@ export type StackSettings = {
    */
   heartbeats?: StackSettingsHeartbeats | undefined;
   kubernetes?: StackSettingsKubernetes | any | null | undefined;
+  logs?: StackSettingsLogs | any | null | undefined;
   network?:
     | StackSettingsNetworkByoVpcAws
     | StackSettingsNetworkByoVpcGcp
@@ -3259,6 +3276,44 @@ export function stackSettingsKubernetesUnionToJSON(
 }
 
 /** @internal */
+export type StackSettingsLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const StackSettingsLogs$outboundSchema: z.ZodType<
+  StackSettingsLogs$Outbound,
+  StackSettingsLogs
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function stackSettingsLogsToJSON(
+  stackSettingsLogs: StackSettingsLogs,
+): string {
+  return JSON.stringify(
+    StackSettingsLogs$outboundSchema.parse(stackSettingsLogs),
+  );
+}
+
+/** @internal */
+export type StackSettingsLogsUnion$Outbound = StackSettingsLogs$Outbound | any;
+
+/** @internal */
+export const StackSettingsLogsUnion$outboundSchema: z.ZodType<
+  StackSettingsLogsUnion$Outbound,
+  StackSettingsLogsUnion
+> = z.union([z.lazy(() => StackSettingsLogs$outboundSchema), z.any()]);
+
+export function stackSettingsLogsUnionToJSON(
+  stackSettingsLogsUnion: StackSettingsLogsUnion,
+): string {
+  return JSON.stringify(
+    StackSettingsLogsUnion$outboundSchema.parse(stackSettingsLogsUnion),
+  );
+}
+
+/** @internal */
 export const StackSettingsTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof StackSettingsTypeByoVnetAzure
 > = z.enum(StackSettingsTypeByoVnetAzure);
@@ -3496,6 +3551,7 @@ export type StackSettings$Outbound = {
   externalBindings?: StackSettingsExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
   kubernetes?: StackSettingsKubernetes$Outbound | any | null | undefined;
+  logs?: StackSettingsLogs$Outbound | any | null | undefined;
   network?:
     | StackSettingsNetworkByoVpcAws$Outbound
     | StackSettingsNetworkByoVpcGcp$Outbound
@@ -3528,6 +3584,9 @@ export const StackSettings$outboundSchema: z.ZodType<
   heartbeats: StackSettingsHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => StackSettingsKubernetes$outboundSchema), z.any()]),
+  ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => StackSettingsLogs$outboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

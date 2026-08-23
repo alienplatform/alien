@@ -42,7 +42,8 @@ export type RenderOperatorManifestRequestScope = ClosedEnum<
  * Operator permission tier
  */
 export const Permission = {
-  Observe: "observe",
+  Diagnostics: "diagnostics",
+  Remediation: "remediation",
 } as const;
 /**
  * Operator permission tier
@@ -170,7 +171,7 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   namespace: z.string().optional(),
   scope: RenderOperatorManifestRequestScope$outboundSchema.default("namespace"),
   labelSelector: z.string().optional(),
-  permission: Permission$outboundSchema.default("observe"),
+  permission: Permission$outboundSchema.default("diagnostics"),
   operatorImagePackageId: z.string().optional(),
   deploymentGroupToken: z.string(),
   logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),

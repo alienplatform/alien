@@ -212,14 +212,18 @@ pub fn create_dir_all(root: &Path, requested: &str) -> io::Result<()> {
     // SAFETY: fresh, valid descriptor.
     let mut current = unsafe { OwnedFd::from_raw_fd(fd) };
 
-    for component in relative(requested).split('/').filter(|part| !part.is_empty()) {
+    for component in relative(requested)
+        .split('/')
+        .filter(|part| !part.is_empty())
+    {
         // `EXDEV` rather than `EINVAL`: this is the same refusal `RESOLVE_BENEATH` reports for a
         // path that leaves the root, and callers classify the escape by errno.
         if component == "." || component == ".." {
             return Err(io::Error::from_raw_os_error(libc::EXDEV));
         }
 
-        let name = CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
+        let name =
+            CString::new(component).map_err(|_| io::Error::from_raw_os_error(libc::EINVAL))?;
 
         // SAFETY: a valid dirfd and NUL-terminated component name.
         let made = unsafe { libc::mkdirat(current.as_raw_fd(), name.as_ptr(), CREATED_DIR) };
@@ -285,8 +289,7 @@ mod fallback {
     /// Reports a refusal as `EXDEV`, the same errno `RESOLVE_BENEATH` returns, so callers
     /// classify an escape the same way on both paths.
     fn resolved(root: &Path, requested: &str) -> io::Result<std::path::PathBuf> {
-        resolve_within_root(root, requested)
-            .map_err(|_| io::Error::from_raw_os_error(libc::EXDEV))
+        resolve_within_root(root, requested).map_err(|_| io::Error::from_raw_os_error(libc::EXDEV))
     }
 
     pub fn open_read(root: &Path, requested: &str) -> io::Result<std::fs::File> {

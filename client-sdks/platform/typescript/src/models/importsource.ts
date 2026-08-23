@@ -972,6 +972,22 @@ export type ImportSourceKubernetes = {
 
 export type ImportSourceKubernetesUnion = ImportSourceKubernetes | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type ImportSourceLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type ImportSourceLogsUnion = ImportSourceLogs | any;
+
 export const ImportSourceTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1156,6 +1172,7 @@ export type ImportSourceStackSettings = {
    */
   heartbeats?: ImportSourceHeartbeats | undefined;
   kubernetes?: ImportSourceKubernetes | any | null | undefined;
+  logs?: ImportSourceLogs | any | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws
     | ImportSourceNetworkByoVpcGcp
@@ -3413,6 +3430,44 @@ export function importSourceKubernetesUnionToJSON(
 }
 
 /** @internal */
+export type ImportSourceLogs$Outbound = {
+  parseApplicationLevels?: boolean | undefined;
+};
+
+/** @internal */
+export const ImportSourceLogs$outboundSchema: z.ZodType<
+  ImportSourceLogs$Outbound,
+  ImportSourceLogs
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function importSourceLogsToJSON(
+  importSourceLogs: ImportSourceLogs,
+): string {
+  return JSON.stringify(
+    ImportSourceLogs$outboundSchema.parse(importSourceLogs),
+  );
+}
+
+/** @internal */
+export type ImportSourceLogsUnion$Outbound = ImportSourceLogs$Outbound | any;
+
+/** @internal */
+export const ImportSourceLogsUnion$outboundSchema: z.ZodType<
+  ImportSourceLogsUnion$Outbound,
+  ImportSourceLogsUnion
+> = z.union([z.lazy(() => ImportSourceLogs$outboundSchema), z.any()]);
+
+export function importSourceLogsUnionToJSON(
+  importSourceLogsUnion: ImportSourceLogsUnion,
+): string {
+  return JSON.stringify(
+    ImportSourceLogsUnion$outboundSchema.parse(importSourceLogsUnion),
+  );
+}
+
+/** @internal */
 export const ImportSourceTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof ImportSourceTypeByoVnetAzure
 > = z.enum(ImportSourceTypeByoVnetAzure);
@@ -3650,6 +3705,7 @@ export type ImportSourceStackSettings$Outbound = {
   externalBindings?: ImportSourceExternalBindings$Outbound | null | undefined;
   heartbeats?: string | undefined;
   kubernetes?: ImportSourceKubernetes$Outbound | any | null | undefined;
+  logs?: ImportSourceLogs$Outbound | any | null | undefined;
   network?:
     | ImportSourceNetworkByoVpcAws$Outbound
     | ImportSourceNetworkByoVpcGcp$Outbound
@@ -3682,6 +3738,9 @@ export const ImportSourceStackSettings$outboundSchema: z.ZodType<
   heartbeats: ImportSourceHeartbeats$outboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => ImportSourceKubernetes$outboundSchema), z.any()]),
+  ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => ImportSourceLogs$outboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

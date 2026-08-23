@@ -33,10 +33,11 @@ pub async fn read(root: &Path, requested: &str) -> Result<Vec<u8>> {
 
         // Refused rather than read: a directory yields a confusing OS error, and a FIFO or device
         // node is not something a caller can have meant by "read this file".
-        let metadata = file
-            .metadata()
-            .into_alien_error()
-            .context(failed("read", &requested, "inspecting the opened file"))?;
+        let metadata = file.metadata().into_alien_error().context(failed(
+            "read",
+            &requested,
+            "inspecting the opened file",
+        ))?;
         if !metadata.is_file() {
             return Err(AlienError::new(ErrorData::RequestInvalid {
                 reason: format!("'{requested}' is not a regular file"),
@@ -89,24 +90,28 @@ pub async fn write(root: &Path, requested: &str, contents: &[u8]) -> Result<()> 
             })?;
         }
 
-        let mut file = confine::open_write(&root, &requested)
-            .map_err(|error| refused_or_failed(error, &requested, "opening the file for writing"))?;
+        let mut file = confine::open_write(&root, &requested).map_err(|error| {
+            refused_or_failed(error, &requested, "opening the file for writing")
+        })?;
 
         // A path the command replaced with a FIFO opens and accepts the bytes, so without this the
         // upload would go into a pipe it controls and the caller would be told the file landed.
-        let metadata = file
-            .metadata()
-            .into_alien_error()
-            .context(failed("write", &requested, "inspecting the opened file"))?;
+        let metadata = file.metadata().into_alien_error().context(failed(
+            "write",
+            &requested,
+            "inspecting the opened file",
+        ))?;
         if !metadata.is_file() {
             return Err(AlienError::new(ErrorData::RequestInvalid {
                 reason: format!("'{requested}' is not a regular file"),
             }));
         }
 
-        file.write_all(&contents)
-            .into_alien_error()
-            .context(failed("write", &requested, "writing the file contents"))
+        file.write_all(&contents).into_alien_error().context(failed(
+            "write",
+            &requested,
+            "writing the file contents",
+        ))
     })
     .await
     .into_alien_error()
@@ -137,7 +142,11 @@ pub async fn mkdir(root: &Path, requested: &str) -> Result<()> {
 
 /// The kernel refuses an escape with `EXDEV`, and a symlink or `..` in the path with `ELOOP` or
 /// `EXDEV` depending on which rule caught it. Those are the caller's mistake, not ours.
-fn refused_or_failed(error: std::io::Error, requested: &str, purpose: &str) -> AlienError<ErrorData> {
+fn refused_or_failed(
+    error: std::io::Error,
+    requested: &str,
+    purpose: &str,
+) -> AlienError<ErrorData> {
     let raw = error.raw_os_error();
     if matches!(raw, Some(libc::EXDEV) | Some(libc::ELOOP)) {
         return AlienError::new(ErrorData::PathRefused {
@@ -191,7 +200,9 @@ mod tests {
         let (_dir, root) = root();
         let bytes: Vec<u8> = (0u8..=255).collect();
 
-        write(&root, "/work/blob.bin", &bytes).await.expect("writes");
+        write(&root, "/work/blob.bin", &bytes)
+            .await
+            .expect("writes");
         assert_eq!(read(&root, "/work/blob.bin").await.expect("reads"), bytes);
     }
 
@@ -323,7 +334,9 @@ mod tests {
                 .custom_flags(libc::O_NONBLOCK)
                 .open(&root.join("planted"))
                 .expect("reader opens");
-            let refused = runtime.block_on(write(&root, "/planted", b"payload")).is_err();
+            let refused = runtime
+                .block_on(write(&root, "/planted", b"payload"))
+                .is_err();
             drop(held);
             let _ = sender.send(refused);
         });
@@ -343,11 +356,15 @@ mod tests {
     async fn traversal_is_refused_on_every_operation() {
         let (_dir, root) = root();
 
-        read(&root, "/../etc/passwd").await.expect_err("read must refuse traversal");
+        read(&root, "/../etc/passwd")
+            .await
+            .expect_err("read must refuse traversal");
         write(&root, "/../evil.txt", b"x")
             .await
             .expect_err("write must refuse traversal");
-        mkdir(&root, "/../evil").await.expect_err("mkdir must refuse traversal");
+        mkdir(&root, "/../evil")
+            .await
+            .expect_err("mkdir must refuse traversal");
     }
 
     #[tokio::test]
@@ -373,7 +390,9 @@ mod tests {
         let (_dir, root) = root();
         mkdir(&root, "/work").await.expect("mkdir");
 
-        let error = read(&root, "/work").await.expect_err("a directory is not a file");
+        let error = read(&root, "/work")
+            .await
+            .expect_err("a directory is not a file");
         assert!(error.to_string().contains("not a regular file"));
     }
 

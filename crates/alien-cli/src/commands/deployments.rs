@@ -1887,6 +1887,7 @@ async fn create_deployment_task(
         external_bindings: None,
         kubernetes: None,
         public_endpoints: None,
+        logs: None,
     };
 
     let request = NewDeploymentRequest {

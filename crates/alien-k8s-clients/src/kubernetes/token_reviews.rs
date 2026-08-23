@@ -30,11 +30,11 @@ pub trait TokenReviewsApi: Send + Sync + std::fmt::Debug {
 impl KubernetesClient {
     /// Submits a `TokenReview` to the apiserver.
     pub async fn create_token_review(&self, review: &TokenReview) -> Result<TokenReview> {
-        let body = serde_json::to_string(review)
-            .into_alien_error()
-            .context(ErrorData::SerializationError {
+        let body = serde_json::to_string(review).into_alien_error().context(
+            ErrorData::SerializationError {
                 message: "Failed to serialize TokenReview".to_string(),
-            })?;
+            },
+        )?;
 
         let url = format!(
             "{}/apis/authentication.k8s.io/v1/tokenreviews",

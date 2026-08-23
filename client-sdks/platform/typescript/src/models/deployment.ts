@@ -1152,6 +1152,22 @@ export type DeploymentKubernetes = {
 
 export type DeploymentKubernetesUnion = DeploymentKubernetes | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type DeploymentLogs = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type DeploymentLogsUnion = DeploymentLogs | any;
+
 export const DeploymentTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1327,6 +1343,7 @@ export type DeploymentStackSettings = {
    */
   heartbeats?: DeploymentHeartbeats | undefined;
   kubernetes?: DeploymentKubernetes | any | null | undefined;
+  logs?: DeploymentLogs | any | null | undefined;
   network?:
     | DeploymentNetworkByoVpcAws
     | DeploymentNetworkByoVpcGcp
@@ -6848,6 +6865,38 @@ export function deploymentKubernetesUnionFromJSON(
 }
 
 /** @internal */
+export const DeploymentLogs$inboundSchema: z.ZodType<DeploymentLogs, unknown> =
+  z.object({
+    parseApplicationLevels: z.boolean().optional(),
+  });
+
+export function deploymentLogsFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentLogs, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentLogs$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentLogs' from JSON`,
+  );
+}
+
+/** @internal */
+export const DeploymentLogsUnion$inboundSchema: z.ZodType<
+  DeploymentLogsUnion,
+  unknown
+> = z.union([z.lazy(() => DeploymentLogs$inboundSchema), z.any()]);
+
+export function deploymentLogsUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<DeploymentLogsUnion, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DeploymentLogsUnion$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DeploymentLogsUnion' from JSON`,
+  );
+}
+
+/** @internal */
 export const DeploymentTypeByoVnetAzure$inboundSchema: z.ZodEnum<
   typeof DeploymentTypeByoVnetAzure
 > = z.enum(DeploymentTypeByoVnetAzure);
@@ -7051,6 +7100,9 @@ export const DeploymentStackSettings$inboundSchema: z.ZodType<
   heartbeats: DeploymentHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => DeploymentKubernetes$inboundSchema), z.any()]),
+  ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => DeploymentLogs$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

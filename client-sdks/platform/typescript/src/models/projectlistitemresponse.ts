@@ -274,8 +274,17 @@ export type ProjectListItemResponseDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export const ProjectListItemResponseMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type ProjectListItemResponseMethod = ClosedEnum<
+  typeof ProjectListItemResponseMethod
+>;
+
 export type ProjectListItemResponseDeployments = {
   enabled: boolean;
+  methods?: Array<ProjectListItemResponseMethod> | undefined;
 };
 
 export type ProjectListItemResponseKeys = {
@@ -631,11 +640,17 @@ export function projectListItemResponseDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseMethod$inboundSchema: z.ZodEnum<
+  typeof ProjectListItemResponseMethod
+> = z.enum(ProjectListItemResponseMethod);
+
+/** @internal */
 export const ProjectListItemResponseDeployments$inboundSchema: z.ZodType<
   ProjectListItemResponseDeployments,
   unknown
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(ProjectListItemResponseMethod$inboundSchema).optional(),
 });
 
 export function projectListItemResponseDeploymentsFromJSON(

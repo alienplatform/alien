@@ -1,3 +1,3 @@
 name = "basic-worker-ts"
-description = "The simplest Alien worker, in TypeScript."
+description = "Start with one TypeScript worker and no infrastructure."
 language = "TypeScript"

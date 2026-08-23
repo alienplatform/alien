@@ -25,9 +25,9 @@ mod kubernetes_spec;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_warm_pool;
 #[cfg(feature = "kubernetes")]
-pub use kubernetes_warm_pool::*;
-#[cfg(feature = "kubernetes")]
 pub use kubernetes_spec::*;
+#[cfg(feature = "kubernetes")]
+pub use kubernetes_warm_pool::*;
 
 #[cfg(feature = "local")]
 mod local;

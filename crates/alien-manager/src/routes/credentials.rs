@@ -1,15 +1,15 @@
 //! Credential resolution and minting endpoints.
 
-use alien_bindings::ServiceAccountInfo;
 use alien_bindings::traits::ImpersonationRequest;
+use alien_bindings::ServiceAccountInfo;
 use alien_core::{ClientConfig, Container, Daemon, Platform, ServiceAccount, Worker};
 use alien_error::ContextError;
 use axum::{
-    Router,
     extract::{Json, State},
-    http::{HeaderMap, header::CACHE_CONTROL, header::PRAGMA},
+    http::{header::CACHE_CONTROL, header::PRAGMA, HeaderMap},
     response::{IntoResponse, Response},
     routing::post,
+    Router,
 };
 use chrono::{SecondsFormat, Utc};
 use serde::{Deserialize, Serialize};
@@ -21,7 +21,7 @@ use crate::error::ErrorData;
 use crate::ids::sha256_hash;
 use crate::traits::DeploymentRecord;
 
-use super::{AppState, auth, current_release_resource, load_current_release};
+use super::{auth, current_release_resource, load_current_release, AppState};
 
 // --- Mint constants ---
 
@@ -465,8 +465,8 @@ fn principal_from_client_config(config: &ClientConfig) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        MAX_SESSION_NAME_LEN, MintCredentialsResponse, clamp_duration, mint_session_name,
-        principal_from_client_config, principal_from_info, truncate_session_name,
+        clamp_duration, mint_session_name, principal_from_client_config, principal_from_info,
+        truncate_session_name, MintCredentialsResponse, MAX_SESSION_NAME_LEN,
     };
     use alien_bindings::ServiceAccountInfo;
     use alien_bindings::{

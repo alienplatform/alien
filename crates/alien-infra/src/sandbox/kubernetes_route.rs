@@ -263,9 +263,12 @@ mod tests {
     #[tokio::test]
     async fn a_token_the_apiserver_rejects_is_unauthorized() {
         let mut reviews = MockTokenReviewsApi::new();
-        reviews
-            .expect_create_token_review()
-            .returning(|_| Ok(verdict(false, "system:serviceaccount:alien-sandbox-sbx:app")));
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                false,
+                "system:serviceaccount:alien-sandbox-sbx:app",
+            ))
+        });
 
         let error = authorize(&state_with(reviews), &bearer("nonsense"))
             .await
@@ -291,9 +294,12 @@ mod tests {
     #[tokio::test]
     async fn a_service_account_in_this_namespace_is_allowed() {
         let mut reviews = MockTokenReviewsApi::new();
-        reviews
-            .expect_create_token_review()
-            .returning(|_| Ok(verdict(true, "system:serviceaccount:alien-sandbox-sbx:worker")));
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:alien-sandbox-sbx:worker",
+            ))
+        });
 
         let user = authorize(&state_with(reviews), &bearer("valid"))
             .await

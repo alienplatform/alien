@@ -230,6 +230,8 @@ export * from "./rotatemachinesjointokenresponse.js";
 export * from "./scope.js";
 export * from "./security.js";
 export * from "./serviceaccountsubject.js";
+export * from "./setbuiltinoperationspluginsrequest.js";
+export * from "./setbuiltinoperationspluginsresponse.js";
 export * from "./setdeploymentgroupexternalidrequest.js";
 export * from "./setfirstpartydeploymentinputsrequest.js";
 export * from "./setfirstpartydeploymentinputsresponse.js";
