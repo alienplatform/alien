@@ -98,6 +98,9 @@ fn build_template_body(
         name: None,
         display_name: Some(display_name.to_string()),
         custom_container_environment: Some(CustomContainerEnvironment {
+            // No env: the command shares the agent's uid and can read the supervisor's
+            // environment, so a secret placed here would leak. Capability auth, if ever wanted,
+            // needs a carrier that is not the container env.
             custom_container_spec: Some(CustomContainerSpec {
                 image_uri: image,
                 extra: Default::default(),
@@ -615,9 +618,9 @@ fn missing_state(resource_id: &str, field: &str) -> AlienError<ErrorData> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::Platform;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
+    use alien_core::Platform;
     use alien_core::{SandboxEgress, SandboxSessionPolicy};
     use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
     use alien_gcp_clients::longrunning::{Operation, OperationResult};
