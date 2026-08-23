@@ -148,6 +148,22 @@ pub enum SandboxEgress {
     },
 }
 
+impl SandboxEgress {
+    /// The single outbound switch for a backend that has no host matcher, or `None` for a mode a
+    /// boolean cannot carry.
+    ///
+    /// `AllowDomains` needs a host list, so it maps to nothing and each caller refuses it in its
+    /// own error naming the sandbox. One source for what a mode means, so a template and a session
+    /// cannot disagree on it.
+    pub fn internet_access_switch(&self) -> Option<bool> {
+        match self {
+            SandboxEgress::Allow => Some(true),
+            SandboxEgress::Deny => Some(false),
+            SandboxEgress::AllowDomains { .. } => None,
+        }
+    }
+}
+
 /// How long a session may live and when it is suspended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -1681,5 +1697,21 @@ mod tests {
 
         declared(vec!["api.example.com".to_string()])
             .expect("a named domain is what an allowlist is for");
+    }
+
+    /// The two expressible modes map to the boolean; a host list maps to nothing so the caller has
+    /// to refuse rather than silently pick a side.
+    #[test]
+    fn internet_access_switch_maps_only_the_two_expressible_modes() {
+        assert_eq!(SandboxEgress::Allow.internet_access_switch(), Some(true));
+        assert_eq!(SandboxEgress::Deny.internet_access_switch(), Some(false));
+        assert_eq!(
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()]
+            }
+            .internet_access_switch(),
+            None,
+            "a host list has no boolean and must not be approximated"
+        );
     }
 }

@@ -28,8 +28,6 @@ use alien_aws_clients::{
 use alien_azure_clients::{
     application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient},
     authorization::{AuthorizationApi, AzureAuthorizationClient},
-    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
-    sandbox_groups::{AzureSandboxGroupsClient, SandboxGroupsApi},
     blob_containers::{AzureBlobContainerClient, BlobContainerApi},
     cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi},
     compute::{AzureVmssClient, VirtualMachineScaleSetsApi},
@@ -51,6 +49,8 @@ use alien_azure_clients::{
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
     resources::{AzureResourcesClient, ResourcesApi},
+    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
+    sandbox_groups::{AzureSandboxGroupsClient, SandboxGroupsApi},
     service_bus::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
         ServiceBusManagementApi,
@@ -61,6 +61,7 @@ use alien_azure_clients::{
 };
 use alien_error::Context;
 use alien_gcp_clients::{
+    agent_platform::{AgentPlatformApi, AgentPlatformClient},
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
@@ -83,9 +84,8 @@ use alien_gcp_clients::{
 use alien_k8s_clients::{
     deployments::DeploymentApi, events::EventApi, jobs::JobApi,
     kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
-    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi,
-    services::ServiceApi, version::VersionApi,
-    KubernetesClientConfig,
+    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi, services::ServiceApi,
+    version::VersionApi, KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -192,6 +192,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>>;
     fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>>;
+    fn get_gcp_agent_platform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AgentPlatformApi>>;
 
     // Azure clients
     fn get_azure_application_gateway_client(
@@ -899,6 +903,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
         )))
     }
 
+    fn get_gcp_agent_platform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AgentPlatformApi>> {
+        Ok(Arc::new(AgentPlatformClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
     fn get_gcp_firestore_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn FirestoreApi>> {
         Ok(Arc::new(FirestoreClient::new(
             reqwest::Client::new(),
@@ -1455,7 +1469,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     #[cfg(feature = "local")]
     fn get_local_sandbox_manager(&self) -> Option<Arc<alien_local::LocalSandboxManager>> {
-        self.local_bindings.as_ref().and_then(|p| p.sandbox_manager())
+        self.local_bindings
+            .as_ref()
+            .and_then(|p| p.sandbox_manager())
     }
 
     #[cfg(feature = "local")]

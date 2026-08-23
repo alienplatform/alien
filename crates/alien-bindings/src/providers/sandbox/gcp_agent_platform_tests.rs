@@ -418,6 +418,12 @@ impl AgentPlatformApi for WedgedAgent {
     async fn delete_template(&self, _engine: &str, _template: &str) -> ClientResult<()> {
         unimplemented!()
     }
+    async fn list_templates(
+        &self,
+        _engine: &str,
+    ) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
+        unimplemented!()
+    }
     async fn create_sandbox(
         &self,
         _engine: &str,

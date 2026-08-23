@@ -102,19 +102,15 @@ pub fn egress_control_config(
     sandbox_label: &str,
     egress: &SandboxEgress,
 ) -> Result<EgressControlConfig> {
-    let internet_access = match egress {
-        SandboxEgress::Allow => true,
-        SandboxEgress::Deny => false,
-        SandboxEgress::AllowDomains { .. } => {
-            return Err(AlienError::new(ErrorData::InvalidInput {
-                operation_context: "sandbox.template".to_string(),
-                details: format!(
-                    "sandbox '{sandbox_label}' asked for domain-scoped egress, which Agent \
-                     Platform cannot express; it offers only 'allow' (open) and 'deny' (closed)"
-                ),
-                field_name: Some("egress".to_string()),
-            }));
-        }
+    let Some(internet_access) = egress.internet_access_switch() else {
+        return Err(AlienError::new(ErrorData::InvalidInput {
+            operation_context: "sandbox.template".to_string(),
+            details: format!(
+                "sandbox '{sandbox_label}' asked for domain-scoped egress, which Agent \
+                 Platform cannot express; it offers only 'allow' (open) and 'deny' (closed)"
+            ),
+            field_name: Some("egress".to_string()),
+        }));
     };
 
     Ok(EgressControlConfig {

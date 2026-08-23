@@ -401,6 +401,14 @@ struct ListSandboxesResponse {
     next_page_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListTemplatesResponse {
+    #[serde(default)]
+    sandbox_environment_templates: Vec<SandboxEnvironmentTemplate>,
+    next_page_token: Option<String>,
+}
+
 // =================================================================================================
 // API
 // =================================================================================================
@@ -422,6 +430,9 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     ) -> Result<Operation>;
     /// Read a template. Retries.
     async fn get_template(&self, engine: &str, template: &str) -> Result<SandboxEnvironmentTemplate>;
+    /// List templates under an engine, following pagination. Retries. Lets a replace find the old
+    /// template it must delete, and a resumed provision adopt what an interrupted one left.
+    async fn list_templates(&self, engine: &str) -> Result<Vec<SandboxEnvironmentTemplate>>;
     /// Delete a template. Retries; a not-found is success.
     async fn delete_template(&self, engine: &str, template: &str) -> Result<()>;
 
@@ -669,6 +680,33 @@ impl AgentPlatformApi for AgentPlatformClient {
                 operation: "get template".to_string(),
                 message: template.to_string(),
             })
+    }
+
+    async fn list_templates(&self, engine: &str) -> Result<Vec<SandboxEnvironmentTemplate>> {
+        let path = self.templates_path(engine);
+        let mut templates = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let query = page_token
+                .as_ref()
+                .map(|token| vec![("pageToken", token.clone())]);
+            let page: ListTemplatesResponse = self
+                .base
+                .execute_request(Method::GET, &path, query, Option::<()>::None, engine)
+                .await
+                .context(AgentPlatformErrorData::RequestFailed {
+                    operation: "list templates".to_string(),
+                    message: format!("engine '{engine}'"),
+                })?;
+
+            templates.extend(page.sandbox_environment_templates);
+            match page.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(templates)
     }
 
     async fn delete_template(&self, engine: &str, template: &str) -> Result<()> {
@@ -1236,6 +1274,71 @@ mod tests {
         assert!(
             delete.hits_async().await > 1,
             "delete must retry on a retryable failure"
+        );
+    }
+
+    // ---- Template listing: paginated, and a read still retries. -------------------------------
+
+    const TEMPLATES_PATH: &str = "/projects/test-project/locations/us-central1/reasoningEngines/eng1/sandboxEnvironmentTemplates";
+
+    #[tokio::test]
+    async fn list_templates_follows_pagination() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(TEMPLATES_PATH).matches(|req| {
+                    req.query_params
+                        .as_ref()
+                        .is_none_or(|q| q.iter().all(|(k, _)| k != "pageToken"))
+                });
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "sandboxEnvironmentTemplates": [{ "name": "eng1/sandboxEnvironmentTemplates/t1", "state": "ACTIVE" }],
+                    "nextPageToken": "page2"
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(TEMPLATES_PATH)
+                    .query_param("pageToken", "page2");
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "sandboxEnvironmentTemplates": [{ "name": "eng1/sandboxEnvironmentTemplates/t2", "state": "ACTIVE" }]
+                }));
+            })
+            .await;
+
+        let templates = client(&server)
+            .list_templates(ENGINE)
+            .await
+            .expect("both pages should list");
+        assert_eq!(templates.len(), 2, "both pages were followed");
+        assert_eq!(
+            templates[0].name.as_deref(),
+            Some("eng1/sandboxEnvironmentTemplates/t1")
+        );
+        assert_eq!(
+            templates[1].name.as_deref(),
+            Some("eng1/sandboxEnvironmentTemplates/t2")
+        );
+    }
+
+    #[tokio::test]
+    async fn list_templates_retries_a_transient_failure() {
+        let server = MockServer::start_async().await;
+        let list = server
+            .mock_async(|when, then| {
+                when.method(GET).path_contains("sandboxEnvironmentTemplates");
+                then.status(503);
+            })
+            .await;
+        client(&server)
+            .list_templates(ENGINE)
+            .await
+            .expect_err("a transient list failure surfaces");
+        assert!(
+            list.hits_async().await > 1,
+            "a read must retry on a retryable failure"
         );
     }
 

@@ -178,8 +178,10 @@
     ],
     "gcp": [
       {
-        // The durable parent (reasoningEngine) and release-owned template: create, delete, and the
-        // reads a resumed provision needs to adopt what an interrupted one left. No
+        // The durable parent (reasoningEngine): create and delete only — the template controller
+        // is handed the engine name and never reads it back, so no get/list here. The
+        // release-owned template: create, delete, and the reads the controller reconciles with —
+        // list to find the template a prior attempt left, get to read its state. No
         // sandboxEnvironments verb — provisioning must not reach a live session.
         "grant": {
           "permissions": [
@@ -188,9 +190,7 @@
             "aiplatform.sandboxEnvironmentTemplates.get",
             "aiplatform.sandboxEnvironmentTemplates.list",
             "aiplatform.reasoningEngines.create",
-            "aiplatform.reasoningEngines.delete",
-            "aiplatform.reasoningEngines.get",
-            "aiplatform.reasoningEngines.list"
+            "aiplatform.reasoningEngines.delete"
           ]
         },
         "binding": {
