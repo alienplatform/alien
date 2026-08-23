@@ -5,8 +5,8 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    Network, NetworkSettings, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
-    SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
+    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
+    SandboxEgress, SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
 };
 
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
@@ -412,5 +412,76 @@ fn the_sandbox_templates_render_whole() {
             name,
         );
         insta::assert_snapshot!(name, yaml);
+    }
+}
+
+/// The grant a remote caller's credentials are bounded by.
+///
+/// The setup package is where the Remote Bindings identity gets its policies, so without this the
+/// manager mints a session against a role that carries none.
+#[test]
+fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(
+            sandbox_fixture(SandboxEgress::Allow),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote sandbox",
+    );
+
+    let policy = template
+        .resources
+        .get("AgentsRemoteExecutePolicy")
+        .expect("the remote grant must attach to the Remote Bindings role");
+    assert_eq!(policy.resource_type, "AWS::IAM::Policy");
+    let roles =
+        serde_json::to_string(policy.properties.get("Roles").expect("Roles")).expect("serializes");
+    assert!(
+        roles.contains("AccessRole"),
+        "the grant belongs to the shared Remote Bindings identity: {roles}"
+    );
+
+    let document = serde_json::to_string(
+        policy
+            .properties
+            .get("PolicyDocument")
+            .expect("PolicyDocument"),
+    )
+    .expect("serializes");
+    for action in [
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:GetMicrovm",
+    ] {
+        assert!(document.contains(action), "{action} is missing: {document}");
+    }
+    assert!(
+        document.contains("microvm-image:${AWS::StackName}-agents"),
+        "the grant must name this sandbox's own image: {document}"
+    );
+    for withheld in [
+        "lambda:PassNetworkConnector",
+        "iam:PassRole",
+        "lambda:CreateMicrovmShellAuthToken",
+        "microvm-image:${AWS::StackName}-*",
+    ] {
+        assert!(
+            !document.contains(withheld),
+            "{withheld} must stay out of the remote grant: {document}"
+        );
     }
 }

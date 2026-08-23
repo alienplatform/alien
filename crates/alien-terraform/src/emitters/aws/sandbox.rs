@@ -8,17 +8,20 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        default_network, downcast, iam_role_block, iam_role_name_template, iam_role_policy_block,
-        nested_block, private_subnet_ids_expr, required_label, resource_prefix_template,
-        service_assume_role_policy, tags, vpc_id_expr,
+        aws_terraform_permission_context, default_network, downcast,
+        emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize, iam_role_block,
+        iam_role_name_template, iam_role_policy_block, nested_block, private_subnet_ids_expr,
+        required_label, resource_prefix_template, service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
 use alien_core::{
-    import::EmitContext, ErrorData, NetworkSettings, Result, Sandbox, SandboxCode, SandboxEgress,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, permissions::PermissionSetReference, ErrorData, NetworkSettings,
+    RemoteBindings, Result, Sandbox, SandboxCode, SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
+use alien_permissions::BindingTarget;
 use hcl::expr::Expression;
 
 /// Terraform resource type for a MicroVM image.
@@ -348,20 +351,20 @@ impl TfEmitter for AwsSandboxEmitter {
             ],
         );
 
-        let fragment = TfFragment::empty()
+        let mut fragment = TfFragment::empty()
             .with_resource(build_role)
             .with_resource(build_policy)
             .with_resource(iam_propagation)
             .with_resource(image);
-        Ok(if open {
-            fragment
-        } else {
-            fragment
+        if !open {
+            fragment = fragment
                 .with_resource(operator_role)
                 .with_resource(operator_policy)
                 .with_resource(security_group)
-                .with_resource(connector)
-        })
+                .with_resource(connector);
+        }
+        emit_remote_bindings_policy(ctx, &mut fragment)?;
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -424,6 +427,50 @@ impl TfEmitter for AwsSandboxEmitter {
         }
         Ok(Some(expr::object(fields)))
     }
+}
+
+/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
+///
+/// The grant is authorized against the image name rather than its ARN: the permission set builds
+/// the ARN itself from `${stackPrefix}-${resourceName}`, and the image is named from the same two
+/// parts here.
+fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
+    let (Some(definition), Some(access_label)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        remote_bindings_label(ctx),
+    ) else {
+        return Ok(());
+    };
+    let permission = PermissionSetReference::from_name(definition.permission_set);
+    let Some(permission_set) =
+        permission.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    else {
+        return Ok(());
+    };
+
+    let context =
+        aws_terraform_permission_context().with_resource_name(ctx.resource_id.to_string());
+    emit_iam_role_policy_for_target_with_label(
+        fragment,
+        access_label,
+        &permission_set,
+        &format!("{access_label}_{}_remote_execute", ctx.resource_id),
+        &format!(
+            "access-{}-{}",
+            ctx.resource_id,
+            iam_policy_name_sanitize(&permission_set.id)
+        ),
+        &context,
+        BindingTarget::Resource,
+    )
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
 }
 
 /// The ports a preview capability may be minted for.

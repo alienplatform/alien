@@ -7,16 +7,19 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        default_network, private_subnet_ids_expr, required_logical_id, resource_config,
-        service_trust_policy, subnet_refs, tags, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
-        PARAM_PRIVATE_SUBNET_IDS,
+        cf_from_json, default_network, private_subnet_ids_expr, required_logical_id,
+        resource_config, service_trust_policy, subnet_refs, tags, vpc_id_expr,
+        CONDITION_NETWORK_MODE_CREATE, PARAM_PRIVATE_SUBNET_IDS,
     },
+    emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, NetworkSettings, Result, Sandbox, SandboxCode, SandboxEgress,
+    import::EmitContext, ErrorData, NetworkSettings, RemoteBindings, Result, Sandbox, SandboxCode,
+    SandboxEgress,
 };
-use alien_error::AlienError;
+use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
 
 /// The only architecture MicroVM images accept — the schema's enum has one member, so the agent
 /// in the image has to be an aarch64 Linux binary.
@@ -234,6 +237,9 @@ impl CfEmitter for AwsSandboxEmitter {
         let mut resources = vec![role];
         resources.append(&mut egress_resources);
         resources.push(image);
+        if let Some(policy) = remote_access_policy(ctx)? {
+            resources.push(policy);
+        }
         Ok(resources)
     }
 
@@ -307,6 +313,67 @@ impl CfEmitter for AwsSandboxEmitter {
         }
         Ok(Some(CfExpression::object(fields)))
     }
+}
+
+/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
+fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
+    let (Some(definition), Some(access_logical_id)) = (
+        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        ctx.stack.resources().find_map(|(id, entry)| {
+            (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+                .then(|| ctx.name_for(id))
+                .flatten()
+        }),
+    ) else {
+        return Ok(None);
+    };
+    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "permission set '{}' named by the sandbox Remote Bindings definition is missing",
+                    definition.permission_set
+                ),
+            })
+        })?;
+
+    // The bare resource id: the generator renders `${stackPrefix}` as `${AWS::StackName}`, which
+    // is how this template already names the image.
+    let context = permission_context().with_resource_name(ctx.resource_id.to_string());
+    let document = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: format!(
+                "could not generate the remote sandbox IAM policy for '{}'",
+                ctx.resource_id
+            ),
+        })?;
+    let document = cf_from_json(serde_json::to_value(document).into_alien_error().context(
+        ErrorData::TemplateSerializationFailed {
+            format: "CloudFormation IAM policy".to_string(),
+            reason: "Failed to serialize the remote sandbox IAM policy".to_string(),
+        },
+    )?)?;
+
+    let mut policy = CfResource::new(
+        format!("{}RemoteExecutePolicy", required_logical_id(ctx)?),
+        "AWS::IAM::Policy".to_string(),
+    );
+    policy.properties.insert(
+        "PolicyName".to_string(),
+        CfExpression::sub(format!(
+            "${{AWS::StackName}}-{}-sandbox-access",
+            ctx.resource_id
+        )),
+    );
+    policy.properties.insert(
+        "Roles".to_string(),
+        CfExpression::list([CfExpression::ref_(format!("{access_logical_id}Role"))]),
+    );
+    policy
+        .properties
+        .insert("PolicyDocument".to_string(), document);
+    Ok(Some(policy))
 }
 
 /// The ports a preview capability may be minted for.
