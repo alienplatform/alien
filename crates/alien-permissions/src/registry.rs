@@ -161,17 +161,21 @@ pub fn permission_set_reaches_a_microvm_session(
 /// action is matched on the `Microvm` namespace so a verb AWS adds later fails closed, and the
 /// `MicrovmImage` family is excluded because it addresses the image a session launches from —
 /// `sandbox/provision` and `sandbox/heartbeat` legitimately hold those.
+///
+/// Compared lowercased throughout, because AWS matches action names case-insensitively — a set
+/// granting `lambda:runmicrovm` reaches a session exactly as `lambda:RunMicrovm` does.
 fn action_reaches_a_microvm_session(action: &str) -> bool {
+    let action = action.to_ascii_lowercase();
     if action.contains('*') {
         let literal = action.split('*').next().unwrap_or_default();
         return SENSITIVE_MICROVM_ACTIONS
             .iter()
             .chain(MICROVM_SESSION_LIFECYCLE_ACTIONS)
-            .any(|known| known.starts_with(literal));
+            .any(|known| known.to_ascii_lowercase().starts_with(literal));
     }
     action
         .strip_prefix("lambda:")
-        .is_some_and(|verb| verb.contains("Microvm") && !verb.contains("MicrovmImage"))
+        .is_some_and(|verb| verb.contains("microvm") && !verb.contains("microvmimage"))
 }
 
 /// Whether `permission_set_id` grants anything at all on `platform`.

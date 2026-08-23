@@ -731,6 +731,25 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_lowercase_run_microvm_grant_does_not_slip_the_reach_scan() {
+        // AWS matches action names case-insensitively, so a set the classifier read literally
+        // would be a bypass by casing alone.
+        let mut set = inline_run_microvm_set("custom/telemetry");
+        set.platforms.aws.as_mut().unwrap()[0].grant.actions =
+            Some(vec!["lambda:runmicrovm".to_string()]);
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission("execution", PermissionProfile::new().global([set]))
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect_err("a lowercase RunMicrovm still starts a session");
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+    }
+
+    #[tokio::test]
     async fn a_remote_sandbox_reached_by_a_service_account_set_is_refused() {
         let account = ServiceAccount::new("runner".to_string())
             .stack_permission_set(inline_run_microvm_set("custom/telemetry"))

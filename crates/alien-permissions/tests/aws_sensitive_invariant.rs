@@ -15,13 +15,6 @@ const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "codebuild:BatchGetBuilds",
     "logs:GetLogEvents",
     "logs:FilterLogEvents",
-    // A MicroVM auth token is the credential the sandbox agent protocol travels on, so holding
-    // one is access to session contents.
-    "lambda:CreateMicrovmAuthToken",
-    "lambda:CreateMicrovmShellAuthToken",
-    // Grantable in IAM without a matching API operation, and it attaches to a running session
-    // directly. Listed so no later edit can put it in an implicit-management set.
-    "lambda:ConnectMicrovm",
 ];
 
 #[test]
@@ -40,8 +33,12 @@ fn aws_implicit_management_sets_do_not_grant_sensitive_content() {
         for (index, entry) in aws_entries.iter().enumerate() {
             if let Some(actions) = &entry.grant.actions {
                 for action in actions {
+                    // The MicroVM token/connect family is a session-content credential, held apart
+                    // in one constant so the single-tenancy classifier and this invariant agree on
+                    // what reaches a session.
                     assert!(
-                        !SENSITIVE_IMPLICIT_ACTIONS.contains(&action.as_str()),
+                        !SENSITIVE_IMPLICIT_ACTIONS.contains(&action.as_str())
+                            && !SENSITIVE_MICROVM_ACTIONS.contains(&action.as_str()),
                         "{permission_set_id} AWS entry {index} grants sensitive action {action}"
                     );
                 }
