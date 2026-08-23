@@ -4,6 +4,7 @@
 //! session. Nothing is negotiated at runtime: the process that placed this agent in the sandbox
 //! is the only thing that gets to decide what session it serves and what authorises a request.
 
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -14,6 +15,7 @@ use alien_sandbox_agent::error::{ErrorData, Result};
 use alien_sandbox_agent::exec::ExecIdentity;
 use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
+use axum::serve::{Listener, ListenerExt};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use ed25519_compact::PublicKey;
@@ -53,8 +55,7 @@ async fn main() -> Result<()> {
     // All interfaces: on AWS the agent is reached from outside the guest, and a
     // loopback bind would make it unreachable.
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
+    let std_listener = std::net::TcpListener::bind(address)
         .into_alien_error()
         .context(failed(
             "bind the agent listener",
@@ -64,7 +65,10 @@ async fn main() -> Result<()> {
     tracing::info!("sandbox agent listening on {address}");
 
     axum::serve(
-        listener,
+        // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
+        // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
+        // straight onto SocketAddr).
+        BlockingListener::new(std_listener, address).tap_io(|_| {}),
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
@@ -73,6 +77,62 @@ async fn main() -> Result<()> {
         "serve the agent protocol",
         "the agent stopped serving".to_string(),
     ))
+}
+
+/// A listener whose accept blocks in the `accept(2)` syscall instead of waiting on an epoll edge.
+///
+/// The GCP Agent Platform detaches and reattaches a sandbox's data plane on pause/resume. A tokio
+/// `TcpListener` registered with epoll then stops receiving readiness for the listen socket across
+/// that reattach and never accepts again — the process stays alive and the socket stays in LISTEN,
+/// but no connection is served. A blocking `accept()` re-wakes on the next connection regardless,
+/// which is why a plain blocking server survives the same transition. Each accepted connection is a
+/// fresh tokio stream, so only the long-lived listener needs this.
+struct BlockingListener {
+    inner: Arc<std::net::TcpListener>,
+    local: SocketAddr,
+}
+
+impl BlockingListener {
+    fn new(listener: std::net::TcpListener, local: SocketAddr) -> Self {
+        Self {
+            inner: Arc::new(listener),
+            local,
+        }
+    }
+}
+
+impl Listener for BlockingListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let listener = Arc::clone(&self.inner);
+            match tokio::task::spawn_blocking(move || listener.accept()).await {
+                Ok(Ok((stream, peer))) => {
+                    if let Err(error) = stream.set_nonblocking(true) {
+                        tracing::warn!(%error, "dropping a connection that would not go non-blocking");
+                        continue;
+                    }
+                    match tokio::net::TcpStream::from_std(stream) {
+                        Ok(stream) => return (stream, peer),
+                        Err(error) => {
+                            tracing::warn!(%error, "dropping a connection tokio would not adopt")
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "accept failed; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(error) => tracing::warn!(%error, "the accept task failed; retrying"),
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        Ok(self.local)
+    }
 }
 
 /// Which boundary keeps untrusted code away from the agent that supervises it.
