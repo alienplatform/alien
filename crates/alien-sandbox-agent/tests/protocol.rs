@@ -473,6 +473,7 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         authorization: AgentAuthorization::Transport,
         exec_identity: test_identity(),
         output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
@@ -750,6 +751,7 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         authorization: AgentAuthorization::Transport,
         exec_identity: test_identity(),
         output_cap: 1 << 20,
+        jobs: JobRegistry::new(),
     });
 
     let listener = TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().expect("literal"))
