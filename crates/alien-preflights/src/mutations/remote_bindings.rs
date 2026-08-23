@@ -2,8 +2,9 @@
 
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
-    Ai, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
-    ResourceLifecycle, Sandbox, Stack, StackState,
+    Ai, Build, Container, Daemon, DeploymentConfig, Key, Platform, RemoteBindingGrant,
+    RemoteBindings, ResourceEntry, ResourceLifecycle, ResourceRef, Sandbox, Stack, StackState,
+    Worker,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -46,6 +47,7 @@ impl StackMutation for RemoteBindingsMutation {
     ) -> Result<Stack> {
         validate_isolated_remote_resource(&stack, self.description())?;
         validate_remote_sandboxes_allow_egress(&stack, self.description())?;
+        validate_remote_sandboxes_are_single_tenant(&stack, self.description())?;
 
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -154,12 +156,84 @@ fn validate_remote_sandboxes_allow_egress(stack: &Stack, mutation_name: &str) ->
     Ok(())
 }
 
+/// Refuses a remotely published sandbox that the deployment's own workloads can also reach.
+///
+/// One MicroVM image serves every session of a sandbox and AWS scopes a token mint no finer than
+/// the image, so a remote caller holding raw credentials can read, suspend, terminate or mint into
+/// sessions the customer's own compute started. Single tenancy is the only containment available.
+fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &str) -> Result<()> {
+    for (resource_id, entry) in &stack.resources {
+        if !entry.has_remote_bindings() || entry.config.resource_type() != Sandbox::RESOURCE_TYPE {
+            continue;
+        }
+        let Some(reach) = in_cloud_reach_to(stack, resource_id) else {
+            continue;
+        };
+        return Err(AlienError::new(ErrorData::StackMutationFailed {
+            mutation_name: mutation_name.to_string(),
+            message: format!(
+                "a remotely published sandbox must be reachable by nobody else in the deployment, \
+                 but {reach}"
+            ),
+            resource_id: Some(resource_id.clone()),
+        }));
+    }
+    Ok(())
+}
+
+/// How the deployment's own workloads can reach `sandbox_id`, if any can.
+///
+/// Both routes matter: a link authors `sandbox/execute`, while `sandbox/management` — session
+/// lifecycle — only ever arrives as an explicit profile grant.
+fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
+    let linked_by = stack.resources().find(|(_, entry)| {
+        compute_links(entry).is_some_and(|links| links.iter().any(|link| link.id() == sandbox_id))
+    });
+    if let Some((consumer_id, _)) = linked_by {
+        return Some(format!("resource '{consumer_id}' links it"));
+    }
+
+    stack
+        .permissions
+        .profiles
+        .iter()
+        .find_map(|(profile_name, profile)| {
+            profile
+                .0
+                .iter()
+                .any(|(target, permission_sets)| {
+                    (target == sandbox_id || target == "*")
+                        && permission_sets
+                            .iter()
+                            .any(|permission_set| permission_set.id().starts_with("sandbox/"))
+                })
+                .then(|| format!("permission profile '{profile_name}' grants access to it"))
+        })
+}
+
+/// The resources this stack's own compute declares it reaches.
+fn compute_links(entry: &ResourceEntry) -> Option<&[ResourceRef]> {
+    if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+        Some(&worker.links)
+    } else if let Some(container) = entry.config.downcast_ref::<Container>() {
+        Some(&container.links)
+    } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+        Some(&daemon.links)
+    } else {
+        entry
+            .config
+            .downcast_ref::<Build>()
+            .map(|build| build.links.as_slice())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{
-        Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, Sandbox,
-        SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings, Storage,
+        permissions::PermissionProfile, Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key,
+        ManagementConfig, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings,
+        Storage, WorkerCode,
     };
 
     fn config() -> DeploymentConfig {
@@ -341,6 +415,93 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Test), &config())
             .await
             .expect("non-remote application resources are allowed beside a remote sandbox");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "agents");
+        assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
+    }
+
+    /// A link authors `sandbox/execute` on the customer's own workload, which starts sessions in
+    /// the same MicroVM image the remote caller's credentials address.
+    #[tokio::test]
+    async fn a_remote_sandbox_linked_by_compute_is_refused() {
+        let sandbox = sandbox(SandboxEgress::Allow);
+        let worker = Worker::new("processor".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/processor:latest".to_string(),
+            })
+            .link(&sandbox)
+            .build();
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect_err("a linked sandbox is not single-tenant to the remote caller");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(
+            error.to_string().contains("resource 'processor' links it"),
+            "the refusal must name the workload that shares the sandbox, got: {error}"
+        );
+    }
+
+    /// `sandbox/management` never arrives through a link, so a profile-only grant is the case a
+    /// link scan misses — and it is session lifecycle over the remote caller's own sessions.
+    #[tokio::test]
+    async fn a_remote_sandbox_granted_to_a_profile_is_refused() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("agents", ["sandbox/management"]),
+            )
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect_err("an in-cloud management grant is not single-tenant to the remote caller");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(
+            error
+                .to_string()
+                .contains("permission profile 'execution' grants access to it"),
+            "the refusal must name the profile that shares the sandbox, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remote_sandbox_allows_compute_that_does_not_reach_it() {
+        let worker = Worker::new("processor".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/processor:latest".to_string(),
+            })
+            .build();
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add(worker, ResourceLifecycle::Live)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("exports", ["storage/data-write"]),
+            )
+            .build();
+
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect("compute that never reaches the sandbox leaves it single-tenant");
         let bindings = mutated
             .resources
             .get(REMOTE_BINDINGS_ID)

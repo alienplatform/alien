@@ -45,6 +45,11 @@
           // The same pair as `sandbox/execute`, and it carries the same weight: minting a MicroVM
           // auth token is access to session contents. `CreateMicrovmShellAuthToken` stays out for
           // the same reason it does there — an interactive shell is not part of this surface.
+          //
+          // One image serves every session of the sandbox and AWS has no finer ARN, so this pair
+          // reaches every session of it, whoever started it. Preflight makes the sandbox
+          // single-tenant to the remote caller by refusing one the deployment's own compute can
+          // also reach, which is the only containment IAM cannot express.
           "actions": ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"]
         },
         "binding": {
