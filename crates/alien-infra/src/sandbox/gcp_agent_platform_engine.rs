@@ -8,9 +8,6 @@
 //! Create-once: the id is persisted, so a later reconcile reuses it and never creates a second
 //! engine. The provision permission set grants create and delete but no get/list, so readiness is
 //! not re-read and reuse comes from state, never a lookup.
-//!
-//! Unregistered until the cutover, like the template controller (T09) it feeds: the registered GCP
-//! sandbox backend is still Cloud Run, so nothing reaches this yet and it is proven by its tests.
 
 use std::time::Duration;
 use tracing::info;
@@ -349,6 +346,24 @@ mod tests {
             .await
             .expect("delete runs to terminal");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// A controller must round-trip by tag: the executor persists and reloads state between
+    /// reconciles, and a missing by-tag arm surfaces as an above-the-handler failure with no
+    /// per-resource cause to read.
+    #[test]
+    fn controller_round_trips_by_tag() {
+        use crate::core::{deserialize_controller, serialize_controller, ResourceController};
+
+        let controller = GcpAgentPlatformEngineController {
+            engine_id: Some("eng-42".to_string()),
+            ..Default::default()
+        };
+        let value = serialize_controller(&controller).expect("serializes with its tag");
+        assert_eq!(value["type"], "GcpAgentPlatformEngineController");
+
+        let restored = deserialize_controller(value).expect("a registered tag must deserialize");
+        assert_eq!(restored.controller_type(), controller.controller_type());
     }
 
     #[tokio::test]

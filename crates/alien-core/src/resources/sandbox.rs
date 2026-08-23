@@ -285,26 +285,7 @@ impl SandboxCapabilities {
                 // so there is no separate supervisor identity to speak of.
                 supervisor_isolation: false,
             }),
-            // A Cloud Run sandbox id is scoped to one instance, and session affinity does not
-            // hold one across turns. That is the absence of a reconnect guarantee, not a
-            // degraded one.
-            Platform::Gcp => Ok(Self {
-                files: true,
-                reconnect: false,
-                preview: false,
-                suspend_resume: false,
-                snapshot: false,
-                domain_egress_rules: false,
-                egress_deny: true,
-                enforced_limits: false,
-                process_limit: false,
-                session_lifetime: false,
-                // A Cloud Run sandbox is a subprocess of the workload; nothing of ours is inside.
-                supervisor_pid_namespace: false,
-                // The session is a subprocess of the workload, which runs it directly: no separate
-                // identity supervises the command.
-                supervisor_isolation: false,
-            }),
+            Platform::Gcp => Ok(Self::gcp_agent_platform()),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
             Platform::Kubernetes => Ok(Self {
@@ -358,12 +339,7 @@ impl SandboxCapabilities {
         }
     }
 
-    /// What the GCP Agent Platform sandbox backend supports.
-    ///
-    /// Not what `for_platform(Platform::Gcp)` returns: that reports the Cloud Run backend, which
-    /// is the registered one. This row is measured against the Agent Platform backend and takes
-    /// effect only once it replaces Cloud Run as the registered GCP backend — at which point it
-    /// becomes the body of the `Platform::Gcp` arm above.
+    /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
     pub fn gcp_agent_platform() -> Self {
         Self {
             // Agent file operations move over the session envelope.
@@ -1014,11 +990,11 @@ mod tests {
     fn capability_sets_are_per_platform() {
         let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
         assert!(
-            !gcp.reconnect,
-            "a GCP session id is scoped to one instance, so reconnect is absent"
+            gcp.reconnect,
+            "generation from the container boot id makes a session reachable across processes"
         );
         assert!(!gcp.preview);
-        assert!(!gcp.enforced_limits);
+        assert!(gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
         assert!(azure.files, "every backend moves files");
@@ -1056,7 +1032,7 @@ mod tests {
     /// Kubernetes: the sandbox pod pins `run_as_user: 65534` on both pod and container with
     /// `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no uid split is
     /// possible (`kubernetes_spec.rs`). Local: `docker exec` runs as the workload uid while the
-    /// manager supervises from the host. Azure and Cloud Run have no in-sandbox supervisor at all.
+    /// manager supervises from the host. Azure and Agent Platform have no in-sandbox supervisor.
     #[test]
     fn supervisor_isolation_is_per_platform() {
         let value = |platform| {
@@ -1069,12 +1045,15 @@ mod tests {
         assert!(value(Platform::Local), "the supervisor is on the host, outside the container");
         assert!(!value(Platform::Kubernetes), "a single pinned uid cannot be split");
         assert!(!value(Platform::Azure), "no Alien process runs the command");
-        assert!(!value(Platform::Gcp), "the session is a subprocess of the workload");
+        assert!(
+            !value(Platform::Gcp),
+            "no separate supervisor identity runs the command"
+        );
     }
 
-    /// The point of the field: AWS and Cloud Run report the *same* `supervisor_pid_namespace`
-    /// (neither has `CAP_SYS_ADMIN`), so that axis alone reads them as equivalent. They are not —
-    /// AWS separates the command's identity from the supervisor's and Cloud Run does not.
+    /// The point of the field: AWS and GCP report the *same* `supervisor_pid_namespace` (neither
+    /// has `CAP_SYS_ADMIN`), so that axis alone reads them as equivalent. They are not — AWS
+    /// separates the command's identity from the supervisor's and Agent Platform does not.
     #[test]
     fn supervisor_isolation_separates_aws_from_a_subprocess_backend() {
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
@@ -1085,14 +1064,16 @@ mod tests {
             "the older axis cannot tell them apart"
         );
         assert!(aws.supervisor_isolation, "AWS setuids the command off the supervisor");
-        assert!(!gcp.supervisor_isolation, "Cloud Run runs the command as the workload itself");
+        assert!(
+            !gcp.supervisor_isolation,
+            "the command runs under no separate supervisor identity"
+        );
     }
 
     /// The Agent Platform row, each value against the behaviour it was measured from. `reconnect`
     /// is the tripwire: it is `true` only because `generation` is derived from the container boot
     /// id read through the agent's health op, so a caller detects a replaced container instead of
-    /// reconnecting to a blank one. This row is deliberately not what `for_platform(Platform::Gcp)`
-    /// returns — that is still Cloud Run — so it is asserted directly.
+    /// reconnecting to a blank one. It is also the body of the `Platform::Gcp` arm, asserted below.
     #[test]
     fn gcp_agent_platform_row_matches_measured_backend() {
         let row = SandboxCapabilities::gcp_agent_platform();
@@ -1123,11 +1104,11 @@ mod tests {
             "the command is not run under a separate supervisor identity"
         );
 
-        // The registered GCP backend is still Cloud Run, so the swap has not happened.
+        // Agent Platform is the registered GCP backend, so the arm returns exactly this row.
         let live = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
-        assert_ne!(
+        assert_eq!(
             live, row,
-            "the Agent Platform row must not silently become the live GCP row before cutover"
+            "the Platform::Gcp arm is the Agent Platform capability row"
         );
     }
 
@@ -1233,8 +1214,8 @@ mod tests {
     fn a_platform_that_cannot_enforce_limits_still_takes_a_sandbox_without_them() {
         let declared = sandbox_with(SandboxEgress::Deny, Vec::new());
         declared
-            .validate_for_platform(Platform::Gcp)
-            .expect_err("declaring ceilings GCP cannot enforce is rejected");
+            .validate_for_platform(Platform::Azure)
+            .expect_err("declaring ceilings Azure cannot enforce is rejected");
 
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
@@ -1248,7 +1229,7 @@ mod tests {
             .build();
 
         undeclared
-            .validate_for_platform(Platform::Gcp)
+            .validate_for_platform(Platform::Azure)
             .expect("a sandbox naming no ceilings takes the platform's own");
 
         // A backend still gets a concrete set, so nothing downstream has to invent one.
@@ -1270,12 +1251,11 @@ mod tests {
     }
 
     #[test]
-    fn gcp_rejects_a_sandbox_declaring_enforced_limits() {
+    fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
         let sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
-        let error = sandbox
+        sandbox
             .validate_for_platform(Platform::Gcp)
-            .expect_err("GCP cannot enforce ceilings on a subprocess sandbox");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            .expect("Agent Platform enforces declared ceilings, by terminating on breach");
     }
 
     #[test]

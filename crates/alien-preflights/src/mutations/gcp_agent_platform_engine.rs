@@ -41,8 +41,7 @@ impl StackMutation for GcpAgentPlatformEngineMutation {
         stack_state: &StackState,
         _config: &DeploymentConfig,
     ) -> bool {
-        // Keys on Gcp + sandbox; correct only once Cloud Run is removed as the GCP sandbox backend,
-        // which is why this mutation stays unregistered until the cutover.
+        // Gcp always means the Agent Platform sandbox backend; no other GCP backend exists to key on.
         stack_state.platform == Platform::Gcp && !Self::sandbox_ids(stack).is_empty()
     }
 

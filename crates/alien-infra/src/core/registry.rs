@@ -768,14 +768,23 @@ impl ResourceRegistry {
             Box::new(DefaultControllerFactory::<crate::sandbox::KubernetesSandboxController>::new()),
         );
 
-        // Register the GCP Agent Platform reasoning-engine controller. Inert until the cutover
-        // registers the mutation that synthesizes the engine resource.
+        // Register the GCP Agent Platform reasoning-engine controller.
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(
             alien_core::GcpAgentPlatformEngine::RESOURCE_TYPE,
             Platform::Gcp,
             Box::new(
                 DefaultControllerFactory::<crate::sandbox::GcpAgentPlatformEngineController>::new(),
+            ),
+        );
+
+        // Register the GCP Agent Platform sandbox (template) controller.
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(
+                DefaultControllerFactory::<crate::sandbox::GcpAgentPlatformTemplateController>::new(),
             ),
         );
 

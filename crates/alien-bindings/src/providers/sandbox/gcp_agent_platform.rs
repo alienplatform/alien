@@ -5,9 +5,6 @@
 //! `POST /` envelope and returns its body verbatim. So every command, file operation and health
 //! check is one envelope over that proxy, and the lifecycle verbs are long-running operations
 //! polled to completion.
-//!
-//! Unregistered on purpose: it is compiled and unit-tested but no factory selects it, so no
-//! declaration can reach it until the cutover wires it in.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;

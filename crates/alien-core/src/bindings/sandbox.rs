@@ -22,9 +22,6 @@ pub enum SandboxBinding {
     /// Azure Container Apps Sandboxes
     #[serde(rename = "sandbox-azure")]
     Azure(AzureSandboxBinding),
-    /// Cloud Run sandboxes, launched inside the workload's own instance
-    #[serde(rename = "sandbox-gcp")]
-    Gcp(GcpSandboxBinding),
     /// GCP Agent Platform sandboxes, created as sessions under a durable Agent Engine
     #[serde(rename = "sandbox-gcp-agent-platform")]
     GcpAgentPlatform(GcpAgentPlatformSandboxBinding),
@@ -115,25 +112,10 @@ pub struct AzureSandboxBinding {
     pub disk_image: BindingValue<String>,
 }
 
-/// GCP sandbox binding configuration.
-///
-/// There is no durable parent to address: a Cloud Run sandbox is a subprocess of the workload's
-/// own instance, created through a CLI on the container's filesystem.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GcpSandboxBinding {
-    /// Path to the sandbox CLI inside the Cloud Run container
-    pub launcher_path: BindingValue<String>,
-    /// Whether sandboxes may reach the network. Carried in the binding rather than passed per
-    /// create: the launcher takes `--allow-egress` per sandbox, and a limit the application
-    /// supplies is a limit it can decline to supply.
-    pub allow_egress: BindingValue<bool>,
-}
-
 /// GCP Agent Platform sandbox binding configuration.
 ///
-/// Unlike the Cloud Run backend, sessions have a durable parent to address: an Agent Engine
-/// provisioned at setup and reached through a regional endpoint.
+/// Sessions have a durable parent to address: an Agent Engine provisioned at deploy and reached
+/// through a regional endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpAgentPlatformSandboxBinding {
@@ -227,17 +209,6 @@ impl SandboxBinding {
         })
     }
 
-    /// Creates a GCP sandbox binding.
-    pub fn gcp(
-        launcher_path: impl Into<BindingValue<String>>,
-        allow_egress: impl Into<BindingValue<bool>>,
-    ) -> Self {
-        Self::Gcp(GcpSandboxBinding {
-            launcher_path: launcher_path.into(),
-            allow_egress: allow_egress.into(),
-        })
-    }
-
     /// Creates a GCP Agent Platform sandbox binding.
     pub fn gcp_agent_platform(
         engine: impl Into<BindingValue<String>>,
@@ -308,7 +279,6 @@ mod tests {
                 SandboxEgress::Deny,
                 None,
             ),
-            SandboxBinding::gcp("/usr/local/gcp/bin/sandbox", false),
             SandboxBinding::gcp_agent_platform(
                 "projects/p/locations/us-central1/reasoningEngines/1",
                 "projects/p/locations/us-central1/sandboxTemplates/agent",
@@ -387,7 +357,6 @@ mod tests {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
             SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny, None),
-            SandboxBinding::gcp("p", true),
             SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),

@@ -21,7 +21,6 @@ impl GcpAgentPlatformEngine {
     /// The resource type identifier for Agent Platform reasoning engines.
     pub const RESOURCE_TYPE: ResourceType = ResourceType::from_static("gcp_agent_platform_engine");
 
-    /// Returns the engine's unique identifier within the stack.
     pub fn id(&self) -> &str {
         &self.id
     }

@@ -207,7 +207,6 @@ export type { GcpQueueImportData } from "./zod/gcp-queue-import-data-schema.js";
 export type { GcpRemoteBindingsImportData } from "./zod/gcp-remote-bindings-import-data-schema.js";
 export type { GcpRemoteStackManagementHeartbeatData } from "./zod/gcp-remote-stack-management-heartbeat-data-schema.js";
 export type { GcpRemoteStackManagementImportData } from "./zod/gcp-remote-stack-management-import-data-schema.js";
-export type { GcpSandboxImportData } from "./zod/gcp-sandbox-import-data-schema.js";
 export type { GcpSecretManagerVaultHeartbeatData } from "./zod/gcp-secret-manager-vault-heartbeat-data-schema.js";
 export type { GcpServiceAccountHeartbeatData } from "./zod/gcp-service-account-heartbeat-data-schema.js";
 export type { GcpServiceAccountImportData } from "./zod/gcp-service-account-import-data-schema.js";
@@ -631,7 +630,6 @@ export { GcpQueueImportDataSchema } from "./zod/gcp-queue-import-data-schema.js"
 export { GcpRemoteBindingsImportDataSchema } from "./zod/gcp-remote-bindings-import-data-schema.js";
 export { GcpRemoteStackManagementHeartbeatDataSchema } from "./zod/gcp-remote-stack-management-heartbeat-data-schema.js";
 export { GcpRemoteStackManagementImportDataSchema } from "./zod/gcp-remote-stack-management-import-data-schema.js";
-export { GcpSandboxImportDataSchema } from "./zod/gcp-sandbox-import-data-schema.js";
 export { GcpSecretManagerVaultHeartbeatDataSchema } from "./zod/gcp-secret-manager-vault-heartbeat-data-schema.js";
 export { GcpServiceAccountHeartbeatDataSchema } from "./zod/gcp-service-account-heartbeat-data-schema.js";
 export { GcpServiceAccountImportDataSchema } from "./zod/gcp-service-account-import-data-schema.js";

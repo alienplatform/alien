@@ -1,10 +1,7 @@
-//! GCP Sandbox — nothing built, because Cloud Run already ships the launcher.
+//! GCP Agent Platform sandbox emitter.
 //!
-//! A Cloud Run sandbox is a nested gVisor sandbox started by a binary Cloud Run injects into the
-//! container when it carries `sandboxLauncher`, which the `gcp_sandbox_launcher` preflight sets on
-//! the worker hosting the sandbox. There is no control plane to provision, no group to name and no
-//! endpoint to hand over: setup's whole contribution is telling the runtime where the binary is
-//! and whether sandboxes may reach the network.
+//! Emits the Agent Platform sandbox binding — the engine and template resource-name shapes the runtime provider reads
+//! — and refuses domain-scoped egress, which the single internet-access switch cannot express.
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
@@ -15,74 +12,7 @@ use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress}
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
-/// Refuses an egress mode the launcher cannot deliver.
-///
-/// `--allow-egress` is a switch, so a hostname list has nowhere to go and would otherwise be
-/// carried as its nearest boolean — denying everything the declaration asked to permit, with
-/// nothing anywhere saying so.
-fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
-    match &sandbox.egress {
-        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
-        SandboxEgress::AllowDomains { .. } => Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason: "the Cloud Run sandbox launcher takes a single egress switch, so a hostname \
-                     list has nothing to render into. Declare egress: deny or egress: allow"
-                .to_string(),
-        })),
-    }
-}
-
-/// Where Cloud Run mounts the sandbox CLI inside a launcher-enabled container.
-const LAUNCHER_PATH: &str = "/usr/local/gcp/bin/sandbox";
-
-/// Emits the launcher's location; Cloud Run provides everything else.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct GcpSandboxEmitter;
-
-impl TfEmitter for GcpSandboxEmitter {
-    fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // Deliberately empty: see the module note. The launcher arrives with the container.
-        Ok(TfFragment::default())
-    }
-
-    fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
-        let _ = required_label(ctx)?;
-        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        refuse_unsupported_egress(sandbox)?;
-        Ok(expr::object([
-            (
-                "launcherPath",
-                Expression::String(LAUNCHER_PATH.to_string()),
-            ),
-            (
-                "allowEgress",
-                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
-            ),
-        ]))
-    }
-
-    fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
-        let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
-        let _ = required_label(ctx)?;
-        refuse_unsupported_egress(sandbox)?;
-        Ok(Some(expr::object([
-            ("service", Expression::String("sandbox-gcp".to_string())),
-            (
-                "launcherPath",
-                Expression::String(LAUNCHER_PATH.to_string()),
-            ),
-            // Carried in the binding rather than passed per create: the launcher takes
-            // `--allow-egress` per sandbox, and a limit the application supplies is one it can
-            // decline to supply.
-            (
-                "allowEgress",
-                Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
-            ),
-        ])))
-    }
-}
-
-/// Serde `service` tag of the T07 `GcpAgentPlatformSandboxBinding`, and the resource-name shapes
+/// Serde `service` tag of the `GcpAgentPlatformSandboxBinding`, and the resource-name shapes
 /// the engine and template are addressed by. Kept together so the binding this emits is the one
 /// the provider deserializes.
 const AGENT_PLATFORM_SERVICE: &str = "sandbox-gcp-agent-platform";
@@ -106,11 +36,10 @@ fn refuse_domain_egress(sandbox: &Sandbox) -> Result<()> {
 
 /// The engine, template, region and ttl fields shared by the import ref and the binding ref.
 ///
-/// `engine` and `template` carry runtime-assigned ids, so at emit time they are addressed by a
-/// resource-name convention over the setup label rather than a Terraform resource attribute — this
-/// emitter is unregistered and the Live path takes the real names from the controller's binding
-/// params. `sessionTtlSeconds` is present only when the declaration set a lifetime, matching the
-/// binding's `skip_serializing_if`.
+/// `engine` and `template` carry runtime-assigned ids addressed by a resource-name convention over
+/// the setup label rather than a Terraform resource attribute; the Live path takes the real names
+/// from the controller's binding params. `sessionTtlSeconds` is present only when the declaration
+/// set a lifetime, matching the binding's `skip_serializing_if`.
 fn agent_platform_fields(sandbox: &Sandbox, label: &str) -> Vec<(&'static str, Expression)> {
     let mut fields = vec![
         (
@@ -137,20 +66,18 @@ fn agent_platform_fields(sandbox: &Sandbox, label: &str) -> Vec<(&'static str, E
 }
 
 /// Emits the GCP Agent Platform sandbox binding: the durable Agent Engine, the release-owned
-/// template, the region and the session ttl (T07).
+/// template, the region and the session ttl.
 ///
-/// Unregistered on purpose, like the provider it feeds (T05): `built_ins` keeps Cloud Run as the
-/// GCP sandbox backend, so the generator never dispatches here and this is exercised by direct
-/// unit test until the cutover moves the registration. The engine is a Frozen setup resource with
-/// no Terraform analogue — Vertex exposes no `google_…reasoning_engine` — so `emit` is empty as in
-/// `gcp/ai.rs` and identity travels in the binding, not a resource block.
+/// The engine is a Live resource with its own controller and no Terraform analogue — Vertex
+/// exposes no `google_…reasoning_engine` — so `emit` is empty as in `gcp/ai.rs` and identity
+/// travels in the binding, not a resource block.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpAgentPlatformSandboxEmitter;
 
 impl TfEmitter for GcpAgentPlatformSandboxEmitter {
     fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // The engine is setup-created and monitored only; the template is reconciled by the Live
-        // controller after apply. Both carry runtime-assigned names, so neither is a resource block.
+        // The engine and template are created by Live controllers after apply and carry
+        // runtime-assigned names, so neither is a Terraform resource block.
         Ok(TfFragment::default())
     }
 
@@ -176,50 +103,6 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use alien_core::{SandboxCode, SandboxSessionPolicy};
-
-    fn sandbox_with(egress: SandboxEgress) -> Sandbox {
-        Sandbox::new("agents".to_string())
-            .code(SandboxCode::Image {
-                image: "ubuntu".to_string(),
-            })
-            .egress(egress)
-            .session(SandboxSessionPolicy {
-                max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
-            })
-            .build()
-    }
-
-    /// A hostname list is refused rather than carried as its nearest boolean.
-    ///
-    /// `--allow-egress` is a switch: rendering the list as `true` or `false` opens or denies
-    /// addresses the declaration did not say to. Neither is the declaration, so neither is emitted.
-    ///
-    /// The second gate, not the first — a customer meets `domainEgressRules` at plan time. This
-    /// one covers the paths that render without planning.
-    #[test]
-    fn a_hostname_allowlist_is_refused_rather_than_approximated() {
-        let error = refuse_unsupported_egress(&sandbox_with(SandboxEgress::AllowDomains {
-            domains: vec!["api.example.com".to_string()],
-        }))
-        .expect_err("a hostname list has nothing to render into on Cloud Run");
-
-        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
-        assert!(
-            error.to_string().contains("agents"),
-            "the refusal has to name the sandbox: {error}"
-        );
-
-        for accepted in [SandboxEgress::Deny, SandboxEgress::Allow] {
-            refuse_unsupported_egress(&sandbox_with(accepted.clone()))
-                .unwrap_or_else(|error| panic!("{accepted:?} is a switch position: {error}"));
-        }
-    }
-
-    // ---- Agent Platform emitter: unregistered, so exercised by direct invocation. -------------
-
     mod agent_platform {
         use super::super::*;
         use alien_core::bindings::SandboxBinding;
@@ -272,11 +155,11 @@ mod tests {
             }
         }
 
-        /// The emitted keys are read against the T07 binding type, not a second hand-typed list, so
+        /// The emitted keys are read against the binding type, not a second hand-typed list, so
         /// a rename on either side fails here rather than reaching a customer's cluster. The ttl is
         /// set on both sides so the key sets are comparable whole.
         #[test]
-        fn emitted_binding_keys_match_the_t07_binding_type() {
+        fn emitted_binding_keys_match_the_binding_type() {
             let emitted = emit_binding(SandboxEgress::Allow, Some(3600))
                 .expect("the binding renders")
                 .expect("an Agent Platform sandbox has a binding");
@@ -298,7 +181,7 @@ mod tests {
             assert_eq!(
                 object_keys(&emitted),
                 type_keys,
-                "emitted keys must track the T07 binding type"
+                "emitted keys must track the binding type"
             );
         }
 

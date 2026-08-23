@@ -1,6 +1,6 @@
 //! GCP Agent Platform sandbox template controller.
 //!
-//! Reconciles the `SandboxEnvironmentTemplate` (T09): the Live, release-owned object that carries
+//! Reconciles the `SandboxEnvironmentTemplate`: the Live, release-owned object that carries
 //! the image digest, ceilings and egress and warms the session pool. The reasoning engine it hangs
 //! under is a separate Live resource with its own controller; this one reads the engine's id as a
 //! dependency and creates templates beneath it, never creating the engine itself.
@@ -9,10 +9,6 @@
 //! A changed image (or any field that lands in the template body) creates a new template, waits for
 //! it to become `ACTIVE`, and only then reaps the old one — so a release never leaves a session
 //! pointing at a template that has already been deleted.
-//!
-//! Unregistered like the provider it feeds (T05): the registered GCP sandbox backend is still Cloud
-//! Run, so no declaration reaches this and it is proven by the controller tests below until the
-//! cutover moves the registration.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -741,6 +737,24 @@ mod tests {
             .expect("executor builds")
     }
 
+    /// A controller must round-trip by tag: the executor persists and reloads state between
+    /// reconciles, and a missing by-tag arm fails above the handler layer with no cause to read.
+    #[test]
+    fn controller_round_trips_by_tag() {
+        use crate::core::{deserialize_controller, serialize_controller, ResourceController};
+
+        let controller = GcpAgentPlatformTemplateController {
+            engine: Some("eng".to_string()),
+            template_id: Some("tpl1".to_string()),
+            ..Default::default()
+        };
+        let value = serialize_controller(&controller).expect("serializes with its tag");
+        assert_eq!(value["type"], "GcpAgentPlatformTemplateController");
+
+        let restored = deserialize_controller(value).expect("a registered tag must deserialize");
+        assert_eq!(restored.controller_type(), controller.controller_type());
+    }
+
     // ---- 1. Create and delete flow, across config variants. -----------------------------------
 
     async fn create_then_delete(resource: Sandbox) {
@@ -849,7 +863,7 @@ mod tests {
             .expect("binding serializes")
             .expect("a running template has a binding");
         let binding: alien_core::bindings::SandboxBinding =
-            serde_json::from_value(params).expect("binding parses back to the T07 type");
+            serde_json::from_value(params).expect("binding parses back to the Agent Platform binding type");
 
         match binding {
             alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) => {
