@@ -757,7 +757,9 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             alien_core::Sandbox::RESOURCE_TYPE,
             Platform::Local,
-            Box::new(DefaultControllerFactory::<crate::sandbox::LocalSandboxController>::new()),
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::LocalSandboxController,
+            >::new()),
         );
 
         // Register Kubernetes Sandbox controller
@@ -765,7 +767,9 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             alien_core::Sandbox::RESOURCE_TYPE,
             Platform::Kubernetes,
-            Box::new(DefaultControllerFactory::<crate::sandbox::KubernetesSandboxController>::new()),
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::KubernetesSandboxController,
+            >::new()),
         );
 
         // Register KubernetesCluster controller. The cluster is selected or

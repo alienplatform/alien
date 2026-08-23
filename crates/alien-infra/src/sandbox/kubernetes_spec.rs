@@ -7,8 +7,7 @@
 use std::collections::BTreeMap;
 
 use k8s_openapi::api::core::v1::{
-    EnvVar,
-    Capabilities, Container, Pod, PodSecurityContext, PodSpec, ResourceRequirements,
+    Capabilities, Container, EnvVar, Pod, PodSecurityContext, PodSpec, ResourceRequirements,
     SecurityContext,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
@@ -199,7 +198,14 @@ mod tests {
 
     #[test]
     fn a_pod_always_carries_a_sandboxed_runtime_class() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         let spec = pod.spec.expect("a spec");
 
         assert_eq!(spec.runtime_class_name.as_deref(), Some("gvisor"));
@@ -208,7 +214,14 @@ mod tests {
     /// A mounted token is the workload's credential, readable by the untrusted code beside it.
     #[test]
     fn a_pod_mounts_no_service_account_token() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         let spec = pod.spec.expect("a spec");
 
         assert_eq!(spec.automount_service_account_token, Some(false));
@@ -217,7 +230,14 @@ mod tests {
 
     #[test]
     fn a_pod_is_unprivileged_with_a_read_only_root() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         let container = pod.spec.expect("a spec").containers.remove(0);
         let security = container.security_context.expect("a security context");
 
@@ -234,7 +254,14 @@ mod tests {
 
     #[test]
     fn a_pod_never_restarts() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         assert_eq!(
             pod.spec.expect("a spec").restart_policy.as_deref(),
             Some("Never"),
@@ -263,7 +290,14 @@ mod tests {
 
     #[test]
     fn a_pod_carries_the_declared_session_deadline() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         assert_eq!(
             pod.spec.expect("a spec").active_deadline_seconds,
             Some(3600)
@@ -282,7 +316,14 @@ mod tests {
 
     #[test]
     fn a_pod_carries_the_declared_ceilings() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         let container = pod.spec.expect("a spec").containers.remove(0);
         let limits = container
             .resources
@@ -297,10 +338,6 @@ mod tests {
             Some(&Quantity("20Gi".to_string()))
         );
     }
-
-
-
-
 
     /// A pooled pod is handed to a session that did not create it, so anything weaker here
     /// would silently downgrade isolation for every warm start — the common path.
@@ -352,19 +389,33 @@ mod tests {
                 .and_then(|variable| variable.value.clone())
         };
 
-        assert_eq!(value("ALIEN_SANDBOX_AUTHORIZATION").as_deref(), Some("capability"));
-        assert_eq!(value("ALIEN_SANDBOX_PUBLIC_KEY").as_deref(), Some("cHVibGlj"));
+        assert_eq!(
+            value("ALIEN_SANDBOX_AUTHORIZATION").as_deref(),
+            Some("capability")
+        );
+        assert_eq!(
+            value("ALIEN_SANDBOX_PUBLIC_KEY").as_deref(),
+            Some("cHVibGlj")
+        );
         assert!(
             !environment
                 .iter()
-                .any(|variable| variable.name.contains("PRIVATE") || variable.name.contains("SIGNING")),
+                .any(|variable| variable.name.contains("PRIVATE")
+                    || variable.name.contains("SIGNING")),
             "no signing material may reach a sandbox pod"
         );
     }
 
     #[test]
     fn pods_are_enumerable_by_sandbox_for_reaping() {
-        let pod = sandbox_pod(&sandbox(SandboxEgress::Deny), "s1", "sbx", "gvisor", None, None);
+        let pod = sandbox_pod(
+            &sandbox(SandboxEgress::Deny),
+            "s1",
+            "sbx",
+            "gvisor",
+            None,
+            None,
+        );
         let labels = pod.metadata.labels.expect("labels");
 
         assert_eq!(labels.get(LABEL_SANDBOX), Some(&"agent".to_string()));

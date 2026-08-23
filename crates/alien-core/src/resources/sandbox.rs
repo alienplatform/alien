@@ -862,7 +862,10 @@ mod tests {
         assert!(!gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
-        assert!(!azure.files, "the Azure binding implements no file transfer");
+        assert!(
+            !azure.files,
+            "the Azure binding implements no file transfer"
+        );
         assert!(gcp.files, "every other backend moves files");
         // The Azure binding renders neither an egress policy nor a ceiling, so a declaration of
         // either is refused rather than accepted and dropped.

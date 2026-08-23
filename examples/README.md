@@ -25,14 +25,13 @@ only lists directories with a valid `template.toml`, so every option it shows ca
 
 ```bash
 # Install Alien
-curl -fsSL https://alien.dev/install | sh
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://alien.dev/install | sh -s -- --login
 
 # Create a project from a template
-alien init my-app
+alien init
 
 # Start local development
-cd my-app
+cd alien
 alien dev
 ```
 

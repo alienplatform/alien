@@ -297,8 +297,8 @@ async fn typescript_source_image_shapes_per_compute_type() {
     // asserting mere presence passes on a stale one: compare bytes against the addon this build
     // staged. Without this, a binding added after the base image was published is absent
     // at runtime in the cloud, with the build reporting success.
-    let staged_addon = worker_dir
-        .join("node_modules/@alienplatform/bindings/dist/alien-bindings.node");
+    let staged_addon =
+        worker_dir.join("node_modules/@alienplatform/bindings/dist/alien-bindings.node");
     if staged_addon.is_file() {
         let expected = std::fs::read(&staged_addon).expect("read staged addon");
         let packaged = addon_bytes_in_image(&worker_tarball)

@@ -4,15 +4,15 @@
 //! determine where to push images without hardcoding the repo path.
 
 use axum::{
-    Json, Router,
     extract::{Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 use crate::error::ErrorData;
 
 #[derive(Debug, Deserialize)]

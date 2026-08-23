@@ -15,6 +15,7 @@ mod generator {
 
     pub mod boot_paths_tests;
     pub mod manager_only_tests;
+    pub mod operator_manifest_tests;
     pub mod plugin_tests;
     pub mod resource_layer_tests;
 }

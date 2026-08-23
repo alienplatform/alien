@@ -52,10 +52,7 @@ pub fn claim_idle_pod(pod: &mut Pod, session_id: &str) -> bool {
         return false;
     }
 
-    labels.insert(
-        LABEL_POOL_STATE.to_string(),
-        POOL_STATE_CLAIMED.to_string(),
-    );
+    labels.insert(LABEL_POOL_STATE.to_string(), POOL_STATE_CLAIMED.to_string());
     labels.insert(LABEL_SESSION.to_string(), session_id.to_string());
     true
 }
@@ -90,7 +87,10 @@ mod tests {
         let labels = idle_pod_labels("agent");
 
         assert_eq!(labels.get(LABEL_SANDBOX), Some(&"agent".to_string()));
-        assert_eq!(labels.get(LABEL_POOL_STATE), Some(&POOL_STATE_IDLE.to_string()));
+        assert_eq!(
+            labels.get(LABEL_POOL_STATE),
+            Some(&POOL_STATE_IDLE.to_string())
+        );
         assert!(
             !labels.contains_key(LABEL_SESSION),
             "an unclaimed pod must not carry a session label, or reaping would target it"

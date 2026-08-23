@@ -8,8 +8,17 @@ import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
+export const ProjectCapabilitiesMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type ProjectCapabilitiesMethod = ClosedEnum<
+  typeof ProjectCapabilitiesMethod
+>;
+
 export type ProjectCapabilitiesDeployments = {
   enabled: boolean;
+  methods?: Array<ProjectCapabilitiesMethod> | undefined;
 };
 
 export type ProjectCapabilitiesKeys = {
@@ -90,11 +99,17 @@ export type ProjectCapabilities = {
 };
 
 /** @internal */
+export const ProjectCapabilitiesMethod$inboundSchema: z.ZodEnum<
+  typeof ProjectCapabilitiesMethod
+> = z.enum(ProjectCapabilitiesMethod);
+
+/** @internal */
 export const ProjectCapabilitiesDeployments$inboundSchema: z.ZodType<
   ProjectCapabilitiesDeployments,
   unknown
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(ProjectCapabilitiesMethod$inboundSchema).optional(),
 });
 
 export function projectCapabilitiesDeploymentsFromJSON(

@@ -266,8 +266,15 @@ export type ProjectDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export const ProjectMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type ProjectMethod = ClosedEnum<typeof ProjectMethod>;
+
 export type ProjectDeployments = {
   enabled: boolean;
+  methods?: Array<ProjectMethod> | undefined;
 };
 
 export type ProjectKeys = {
@@ -592,11 +599,16 @@ export function projectDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ProjectMethod$inboundSchema: z.ZodEnum<typeof ProjectMethod> = z
+  .enum(ProjectMethod);
+
+/** @internal */
 export const ProjectDeployments$inboundSchema: z.ZodType<
   ProjectDeployments,
   unknown
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(ProjectMethod$inboundSchema).optional(),
 });
 
 export function projectDeploymentsFromJSON(

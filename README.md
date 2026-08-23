@@ -21,8 +21,7 @@ Alien provides a better model: **managed self-hosting**.
 Install the CLI:
 
 ```bash title="macOS / Linux"
-curl -fsSL https://alien.dev/install | sh
-export PATH="$HOME/.local/bin:$PATH"
+curl -fsSL https://alien.dev/install | sh -s -- --login
 ```
 
 ```powershell title="Windows"
@@ -33,7 +32,7 @@ Create a project and start developing:
 
 ```bash
 alien init
-cd my-project && pnpm dev
+cd alien && alien dev
 ```
 
 Follow the [Quickstart](https://www.alien.dev/docs/quickstart) guide to build an AI worker, test it locally, and deploy it — no cloud account needed to start.

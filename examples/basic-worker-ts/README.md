@@ -2,7 +2,7 @@
 
 The simplest Alien worker, in TypeScript. An HTTPS endpoint with one command handler -- a good starting point for building something from scratch.
 
-The worker gets an HTTPS endpoint in the customer's environment. Alien creates the infrastructure -- the customer's network controls who can reach it (public internet, employees only, or other services). See [External URLs](https://alien.dev/docs/external-urls).
+The worker gets an HTTPS endpoint in its remote environment. Alien creates the infrastructure, while that environment's network controls who can reach it (public internet, employees only, or other services). See [External URLs](https://alien.dev/docs/external-urls).
 
 ## What's included
 

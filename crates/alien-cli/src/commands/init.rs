@@ -7,7 +7,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tar::Archive;
 
 #[derive(Parser, Debug, Clone)]
@@ -16,7 +16,8 @@ pub struct InitArgs {
     /// Template to use (omit for interactive selection)
     pub template: Option<String>,
 
-    /// Directory name (defaults to template name)
+    /// Destination directory. Defaults to `alien` inside an existing repository
+    /// and to the current directory when it is empty.
     pub directory: Option<String>,
 
     /// Overwrite target directory if it exists
@@ -30,61 +31,30 @@ struct TemplateInfo {
     description: String,
 }
 
-#[derive(Deserialize)]
-struct TemplateToml {
-    name: String,
-    description: String,
-}
-
 const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
         "remote-worker-ts",
-        "Execute tool calls in your customer's cloud. The AI worker pattern.",
+        "Run a private worker near sensitive data, internal services, or specialized compute.",
     ),
-    (
-        "basic-worker-ts",
-        "The simplest Alien worker, in TypeScript.",
-    ),
-    ("basic-worker-rs", "The simplest Alien worker, in Rust."),
     (
         "data-connector-ts",
-        "Query private databases behind the customer's firewall.",
+        "Connect your product to data and services that are not publicly reachable.",
     ),
     (
         "event-pipeline-ts",
-        "Process events from queues, storage, and cron.",
+        "Process events and data close to the systems that produce them.",
     ),
     (
         "webhook-api-ts",
-        "Receive webhooks and expose an API inside the customer's cloud.",
+        "Expose an HTTPS service that runs beside private data or infrastructure.",
     ),
     (
-        "nextjs-app",
-        "Deploy a Next.js app as a single container in the customer's cloud.",
+        "basic-worker-ts",
+        "Start with one TypeScript worker and no infrastructure.",
     ),
     (
-        "ai-quickstart-ts",
-        "The smallest AI setup: one worker calling cloud LLMs, no API keys, no database.",
-    ),
-    (
-        "customer-models-ts",
-        "Let each customer connect models from their cloud account.",
-    ),
-    (
-        "byob-storage-ts",
-        "Access customer-owned object storage from an external backend.",
-    ),
-    (
-        "customer-keys-ts",
-        "Encrypt data with a key controlled by each customer.",
-    ),
-    (
-        "github-agent",
-        "A GitHub integration agent with a Next.js dashboard.",
-    ),
-    (
-        "ai-chatbot-ts",
-        "A streaming AI chatbot that answers questions about a private Postgres.",
+        "basic-worker-rs",
+        "Start with one Rust worker and no infrastructure.",
     ),
 ];
 
@@ -136,39 +106,36 @@ async fn fetch_templates() -> Result<Vec<TemplateInfo>> {
         return Ok(fallback_templates());
     }
 
-    // For each directory, try to fetch template.toml
-    let mut templates = Vec::new();
-    for dir_name in &dir_names {
-        let toml_url = format!(
-            "https://raw.githubusercontent.com/alienplatform/alien/main/examples/{}/template.toml",
-            dir_name
-        );
-        let toml_response = client
-            .get(&toml_url)
-            .header("User-Agent", "alien-cli")
-            .send()
-            .await;
+    Ok(fallback_templates()
+        .into_iter()
+        .filter(|template| dir_names.contains(&template.name))
+        .collect())
+}
 
-        let info = match toml_response {
-            Ok(r) if r.status().is_success() => {
-                let text = r.text().await.unwrap_or_default();
-                match toml::from_str::<TemplateToml>(&text) {
-                    Ok(t) => Some(TemplateInfo {
-                        name: t.name,
-                        description: t.description,
-                    }),
-                    Err(_) => None,
-                }
-            }
-            _ => None,
-        };
-
-        if let Some(info) = info {
-            templates.push(info);
-        }
+fn destination_for_init(cwd: &Path, directory: Option<&str>) -> PathBuf {
+    if let Some(directory) = directory {
+        return cwd.join(directory);
     }
 
-    Ok(templates)
+    let has_files = cwd
+        .read_dir()
+        .map(|mut entries| entries.next().is_some())
+        .unwrap_or(false);
+
+    if has_files {
+        cwd.join("alien")
+    } else {
+        cwd.to_path_buf()
+    }
+}
+
+fn display_directory(cwd: &Path, target_dir: &Path) -> String {
+    target_dir
+        .strip_prefix(cwd)
+        .ok()
+        .filter(|path| !path.as_os_str().is_empty())
+        .map(|path| path.display().to_string())
+        .unwrap_or_else(|| ".".to_string())
 }
 
 fn print_template_list(templates: &[TemplateInfo]) {
@@ -259,16 +226,35 @@ fn edit_distance(a: &str, b: &str) -> usize {
     prev[b.len()]
 }
 
-async fn install_dependencies(target_dir: &Path) -> Result<bool> {
+fn package_manager_for(target_dir: &Path) -> Option<&'static str> {
+    for directory in target_dir.ancestors() {
+        if directory.join("pnpm-lock.yaml").exists() && which::which("pnpm").is_ok() {
+            return Some("pnpm");
+        }
+        if (directory.join("bun.lock").exists() || directory.join("bun.lockb").exists())
+            && which::which("bun").is_ok()
+        {
+            return Some("bun");
+        }
+        if directory.join("yarn.lock").exists() && which::which("yarn").is_ok() {
+            return Some("yarn");
+        }
+        if directory.join("package-lock.json").exists() && which::which("npm").is_ok() {
+            return Some("npm");
+        }
+    }
+
+    ["pnpm", "bun", "npm", "yarn"]
+        .into_iter()
+        .find(|command| which::which(command).is_ok())
+}
+
+async fn install_dependencies(target_dir: &Path, package_manager: Option<&str>) -> Result<bool> {
     if !target_dir.join("package.json").exists() {
         return Ok(false);
     }
 
-    let cmd = if which::which("bun").is_ok() {
-        "bun"
-    } else if which::which("npm").is_ok() {
-        "npm"
-    } else {
+    let Some(cmd) = package_manager else {
         return Ok(false);
     };
 
@@ -287,6 +273,25 @@ async fn install_dependencies(target_dir: &Path) -> Result<bool> {
         })?;
 
     Ok(output.status.success())
+}
+
+fn remove_unused_template_lockfile(target_dir: &Path, package_manager: Option<&str>) -> Result<()> {
+    if package_manager == Some("pnpm") {
+        return Ok(());
+    }
+
+    let lockfile = target_dir.join("pnpm-lock.yaml");
+    if !lockfile.exists() {
+        return Ok(());
+    }
+
+    std::fs::remove_file(&lockfile)
+        .into_alien_error()
+        .context(ErrorData::FileOperationFailed {
+            operation: "remove unused template lockfile".to_string(),
+            file_path: lockfile.display().to_string(),
+            reason: "Failed to remove pnpm lockfile".to_string(),
+        })
 }
 
 fn new_spinner(message: &str) -> Spinner {
@@ -532,15 +537,16 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     };
 
     // 3. Determine target directory
-    let directory = args.directory.unwrap_or_else(|| selected.name.clone());
-    let target_dir = std::env::current_dir()
-        .into_alien_error()
-        .context(ErrorData::FileOperationFailed {
-            operation: "get current directory".to_string(),
-            file_path: ".".to_string(),
-            reason: "Failed to get current directory".to_string(),
-        })?
-        .join(&directory);
+    let current_dir =
+        std::env::current_dir()
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "get current directory".to_string(),
+                file_path: ".".to_string(),
+                reason: "Failed to get current directory".to_string(),
+            })?;
+    let target_dir = destination_for_init(&current_dir, args.directory.as_deref());
+    let directory = display_directory(&current_dir, &target_dir);
 
     // 4. Validate directory
     if target_dir.exists() {
@@ -559,6 +565,20 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
         }
 
         if !is_empty && args.force {
+            let targets_current_directory = target_dir
+                .canonicalize()
+                .ok()
+                .zip(current_dir.canonicalize().ok())
+                .is_some_and(|(target, current)| target == current);
+            if targets_current_directory {
+                return Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "overwrite project".to_string(),
+                    file_path: target_dir.display().to_string(),
+                    reason: "Refusing to overwrite the current directory. Choose a child directory instead."
+                        .to_string(),
+                }));
+            }
+
             std::fs::remove_dir_all(&target_dir)
                 .into_alien_error()
                 .context(ErrorData::FileOperationFailed {
@@ -568,6 +588,10 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
                 })?;
         }
     }
+
+    // Resolve this before downloading the template so the template's own
+    // lockfile does not override the package manager used by the host repository.
+    let package_manager = package_manager_for(&target_dir);
 
     // 5. Download, set up, and install dependencies
     let steps = FixedSteps::new(&[
@@ -581,11 +605,16 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     steps.complete(0, Some("downloaded".to_string()));
 
     steps.activate(1, Some(directory.clone()));
-    rewrite_package_json_name(&target_dir, &directory)?;
+    let package_name = target_dir
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&selected.name);
+    rewrite_package_json_name(&target_dir, package_name)?;
+    remove_unused_template_lockfile(&target_dir, package_manager)?;
     steps.complete(1, Some("ready".to_string()));
 
     steps.activate(2, Some("installing...".to_string()));
-    let installed = match install_dependencies(&target_dir).await {
+    let installed = match install_dependencies(&target_dir, package_manager).await {
         Ok(true) => {
             steps.complete(2, Some("done".to_string()));
             true
@@ -603,11 +632,53 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
     println!("{} {}", dim_label("Template "), accent(&selected.name));
     println!();
     println!("{}", dim_label("Next steps"));
-    println!("  cd {directory}");
+    if directory != "." {
+        println!("  cd {directory}");
+    }
     if !installed {
-        println!("  bun install");
+        println!("  {} install", package_manager.unwrap_or("npm"));
     }
     println!("  {}", command("alien dev"));
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{destination_for_init, display_directory};
+    use std::fs;
+
+    #[test]
+    fn initializes_into_alien_directory_inside_existing_repository() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        fs::write(temporary.path().join("package.json"), "{}").expect("package file");
+
+        let destination = destination_for_init(temporary.path(), None);
+
+        assert_eq!(destination, temporary.path().join("alien"));
+        assert_eq!(display_directory(temporary.path(), &destination), "alien");
+    }
+
+    #[test]
+    fn initializes_in_place_inside_empty_directory() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+
+        let destination = destination_for_init(temporary.path(), None);
+
+        assert_eq!(destination, temporary.path());
+        assert_eq!(display_directory(temporary.path(), &destination), ".");
+    }
+
+    #[test]
+    fn explicit_directory_wins() {
+        let temporary = tempfile::tempdir().expect("temporary directory");
+        fs::write(temporary.path().join("Cargo.toml"), "").expect("cargo file");
+
+        let destination = destination_for_init(temporary.path(), Some("packages/private-runtime"));
+
+        assert_eq!(
+            destination,
+            temporary.path().join("packages/private-runtime")
+        );
+    }
 }

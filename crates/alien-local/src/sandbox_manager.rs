@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use bollard::container::{
     Config, CreateContainerOptions, ListContainersOptions, RemoveContainerOptions,
 };
-use bollard::image::CreateImageOptions;
 use bollard::exec::{CreateExecOptions, StartExecResults};
+use bollard::image::CreateImageOptions;
 use bollard::models::{HostConfig, PortBinding};
 use bollard::network::CreateNetworkOptions;
 use bollard::Docker;
@@ -243,7 +243,10 @@ impl LocalSandboxManager {
             },
             // Hold the session open without a shell of its own; commands arrive through exec.
             entrypoint: Some(vec!["/bin/sh".to_string()]),
-            cmd: Some(vec!["-c".to_string(), "while true; do sleep 3600; done".to_string()]),
+            cmd: Some(vec![
+                "-c".to_string(),
+                "while true; do sleep 3600; done".to_string(),
+            ]),
             host_config: Some(host_config),
             ..Default::default()
         };
@@ -335,11 +338,7 @@ impl LocalSandboxManager {
     }
 
     /// Runs a command inside a session and collects its output and exit code.
-    pub async fn exec(
-        &self,
-        container_id: &str,
-        command: &[String],
-    ) -> Result<SandboxExecResult> {
+    pub async fn exec(&self, container_id: &str, command: &[String]) -> Result<SandboxExecResult> {
         let exec = self
             .docker
             .create_exec(
@@ -370,12 +369,17 @@ impl LocalSandboxManager {
             })?;
 
         let mut output = Vec::new();
-        if let StartExecResults::Attached { output: mut stream, .. } = started {
+        if let StartExecResults::Attached {
+            output: mut stream, ..
+        } = started
+        {
             while let Some(frame) = stream.next().await {
-                let frame = frame.into_alien_error().context(ErrorData::SandboxSessionFailed {
-                    session_id: container_id.to_string(),
-                    operation: "read exec output".to_string(),
-                })?;
+                let frame = frame
+                    .into_alien_error()
+                    .context(ErrorData::SandboxSessionFailed {
+                        session_id: container_id.to_string(),
+                        operation: "read exec output".to_string(),
+                    })?;
 
                 match frame {
                     bollard::container::LogOutput::StdOut { message } => {
@@ -400,14 +404,12 @@ impl LocalSandboxManager {
             })?;
 
         // A missing exit code means the command did not finish, which is not success.
-        let exit_code = inspect
-            .exit_code
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::SandboxSessionFailed {
-                    session_id: container_id.to_string(),
-                    operation: "exec finished without an exit code".to_string(),
-                })
-            })?;
+        let exit_code = inspect.exit_code.ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxSessionFailed {
+                session_id: container_id.to_string(),
+                operation: "exec finished without an exit code".to_string(),
+            })
+        })?;
 
         Ok(SandboxExecResult { output, exit_code })
     }
@@ -460,15 +462,17 @@ impl LocalSandboxManager {
                 operation: "start upload exec".to_string(),
             })?;
 
-        if let StartExecResults::Attached { mut input, mut output } = started {
-            input
-                .write_all(contents)
-                .await
-                .into_alien_error()
-                .context(ErrorData::SandboxSessionFailed {
+        if let StartExecResults::Attached {
+            mut input,
+            mut output,
+        } = started
+        {
+            input.write_all(contents).await.into_alien_error().context(
+                ErrorData::SandboxSessionFailed {
                     session_id: container_id.to_string(),
                     operation: "write file contents".to_string(),
-                })?;
+                },
+            )?;
             input
                 .shutdown()
                 .await
@@ -549,7 +553,11 @@ impl LocalSandboxManager {
             .network_settings
             .and_then(|settings| settings.ports)
             .and_then(|ports| ports.get(&format!("{port}/tcp")).cloned().flatten())
-            .and_then(|bindings| bindings.first().and_then(|binding| binding.host_port.clone()))
+            .and_then(|bindings| {
+                bindings
+                    .first()
+                    .and_then(|binding| binding.host_port.clone())
+            })
             .ok_or_else(|| {
                 AlienError::new(ErrorData::SandboxSessionFailed {
                     session_id: container_id.to_string(),
@@ -617,10 +625,14 @@ impl LocalSandboxManager {
             Err(bollard::errors::Error::DockerResponseServerError {
                 status_code: 404, ..
             }) => Ok(()),
-            Err(error) => Err(error).into_alien_error().context(ErrorData::SandboxSessionFailed {
-                session_id: session_id.to_string(),
-                operation: format!("remove container '{name}'"),
-            })?,
+            Err(error) => {
+                Err(error)
+                    .into_alien_error()
+                    .context(ErrorData::SandboxSessionFailed {
+                        session_id: session_id.to_string(),
+                        operation: format!("remove container '{name}'"),
+                    })?
+            }
         }
     }
 
@@ -638,7 +650,10 @@ impl LocalSandboxManager {
 
         // Best effort: Docker refuses to remove a network with members, which is the correct
         // outcome rather than an error to propagate.
-        let _ = self.docker.remove_network(&Self::network_name(sandbox)).await;
+        let _ = self
+            .docker
+            .remove_network(&Self::network_name(sandbox))
+            .await;
 
         Ok(count)
     }
@@ -669,7 +684,10 @@ fn resolve_in_root(path: &str) -> Result<String> {
         return Err(refused("is empty"));
     }
 
-    if relative.split('/').any(|part| part == ".." || part.is_empty()) {
+    if relative
+        .split('/')
+        .any(|part| part == ".." || part.is_empty())
+    {
         return Err(refused("must not traverse"));
     }
 
@@ -722,8 +740,9 @@ mod tests {
             "",
             "work//main.py",
         ] {
-            resolve_in_root(path)
-                .expect_err(&format!("'{path}' must be refused before it reaches Docker"));
+            resolve_in_root(path).expect_err(&format!(
+                "'{path}' must be refused before it reaches Docker"
+            ));
         }
     }
 }

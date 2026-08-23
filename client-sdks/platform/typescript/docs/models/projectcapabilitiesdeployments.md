@@ -12,6 +12,7 @@ let value: ProjectCapabilitiesDeployments = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `enabled`          | *boolean*          | :heavy_check_mark: | N/A                |
+| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `enabled`                                                                    | *boolean*                                                                    | :heavy_check_mark:                                                           | N/A                                                                          |
+| `methods`                                                                    | [models.ProjectCapabilitiesMethod](../models/projectcapabilitiesmethod.md)[] | :heavy_minus_sign:                                                           | N/A                                                                          |

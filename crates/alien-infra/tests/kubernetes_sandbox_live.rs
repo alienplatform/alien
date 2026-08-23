@@ -13,8 +13,8 @@
 #![cfg(feature = "kubernetes")]
 
 use alien_core::{
-    ClientConfig, KubernetesClientConfig, Platform, ResourceStatus, Sandbox,
-    SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy,
+    ClientConfig, KubernetesClientConfig, Platform, ResourceStatus, Sandbox, SandboxCode,
+    SandboxEgress, SandboxLimits, SandboxSessionPolicy,
 };
 use alien_infra::controller_test::SingleControllerExecutor;
 use alien_infra::KubernetesSandboxController;
@@ -144,10 +144,7 @@ async fn the_lifecycle_creates_and_removes_pool_pods_on_a_real_cluster() {
     );
 
     // A signing key nobody can use is still a signing key sitting in the cluster.
-    let secrets = kubectl(
-        &path,
-        &["get", "secrets", "-n", NAMESPACE, "-o", "name"],
-    );
+    let secrets = kubectl(&path, &["get", "secrets", "-n", NAMESPACE, "-o", "name"]);
     assert!(
         !secrets.contains("capability"),
         "teardown must take the capability key with it, got: {secrets}"
@@ -206,7 +203,10 @@ async fn a_claimed_pod_runs_a_command_at_the_unprivileged_uid() {
         CLAIM_NAMESPACE,
         "gvisor",
         None,
-        Some(&{ use base64::Engine as _; base64::engine::general_purpose::STANDARD.encode(pair.pk.as_ref()) }),
+        Some(&{
+            use base64::Engine as _;
+            base64::engine::general_purpose::STANDARD.encode(pair.pk.as_ref())
+        }),
     );
     alien_k8s_clients::kubernetes::pods::PodApi::create_pod(client.as_ref(), CLAIM_NAMESPACE, &pod)
         .await
@@ -216,7 +216,15 @@ async fn a_claimed_pod_runs_a_command_at_the_unprivileged_uid() {
     for _ in 0..60 {
         let running = kubectl(
             &path,
-            &["get", "pod", "alien-sbx-live-pool-0", "-n", CLAIM_NAMESPACE, "-o", "jsonpath={.status.podIP}"],
+            &[
+                "get",
+                "pod",
+                "alien-sbx-live-pool-0",
+                "-n",
+                CLAIM_NAMESPACE,
+                "-o",
+                "jsonpath={.status.podIP}",
+            ],
         );
         if !running.is_empty() {
             break;
@@ -241,16 +249,35 @@ async fn a_claimed_pod_runs_a_command_at_the_unprivileged_uid() {
     .expect("an idle pod is claimable");
 
     println!("claimed {} at {}", claimed.session_id, claimed.endpoint);
-    assert!(claimed.endpoint.ends_with(":8971"), "got {}", claimed.endpoint);
+    assert!(
+        claimed.endpoint.ends_with(":8971"),
+        "got {}",
+        claimed.endpoint
+    );
 
     // The pod carries the session label now, which is what stops a second caller claiming it.
     let labelled = kubectl(
         &path,
-        &["get", "pods", "-n", CLAIM_NAMESPACE, "-l", "alien.dev/sandbox-session=s1", "-o", "name"],
+        &[
+            "get",
+            "pods",
+            "-n",
+            CLAIM_NAMESPACE,
+            "-l",
+            "alien.dev/sandbox-session=s1",
+            "-o",
+            "name",
+        ],
     );
-    assert!(labelled.contains("alien-sbx-live-pool-0"), "got: {labelled}");
+    assert!(
+        labelled.contains("alien-sbx-live-pool-0"),
+        "got: {labelled}"
+    );
 
-    kubectl(&path, &["delete", "namespace", CLAIM_NAMESPACE, "--wait=false"]);
+    kubectl(
+        &path,
+        &["delete", "namespace", CLAIM_NAMESPACE, "--wait=false"],
+    );
 }
 
 /// Resolves the kubeconfig the same way the service provider does.

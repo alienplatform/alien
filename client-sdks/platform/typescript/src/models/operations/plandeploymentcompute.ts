@@ -924,22 +924,6 @@ export type PlanDeploymentComputeKubernetesUnion =
   | PlanDeploymentComputeKubernetes
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type PlanDeploymentComputeLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type PlanDeploymentComputeLogsUnion = PlanDeploymentComputeLogs | any;
-
 export const PlanDeploymentComputeTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1118,7 +1102,6 @@ export type PlanDeploymentComputeStackSettings = {
    */
   heartbeats?: PlanDeploymentComputeHeartbeats | undefined;
   kubernetes?: PlanDeploymentComputeKubernetes | any | null | undefined;
-  logs?: PlanDeploymentComputeLogs | any | null | undefined;
   network?:
     | PlanDeploymentComputeNetworkByoVpcAws
     | PlanDeploymentComputeNetworkByoVpcGcp
@@ -1128,16 +1111,6 @@ export type PlanDeploymentComputeStackSettings = {
     | any
     | null
     | undefined;
-  /**
-   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
-   *
-   * @remarks
-   *
-   * This is intended for adopted Machines deployments whose DNS and certificates remain
-   * customer-owned. The platform passes these URLs to the runtime without creating or
-   * replacing DNS records or certificates.
-   */
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3245,48 +3218,6 @@ export function planDeploymentComputeKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type PlanDeploymentComputeLogs$Outbound = {
-  parseApplicationLevels?: boolean | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeLogs$outboundSchema: z.ZodType<
-  PlanDeploymentComputeLogs$Outbound,
-  PlanDeploymentComputeLogs
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function planDeploymentComputeLogsToJSON(
-  planDeploymentComputeLogs: PlanDeploymentComputeLogs,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeLogs$outboundSchema.parse(planDeploymentComputeLogs),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeLogsUnion$Outbound =
-  | PlanDeploymentComputeLogs$Outbound
-  | any;
-
-/** @internal */
-export const PlanDeploymentComputeLogsUnion$outboundSchema: z.ZodType<
-  PlanDeploymentComputeLogsUnion$Outbound,
-  PlanDeploymentComputeLogsUnion
-> = z.union([z.lazy(() => PlanDeploymentComputeLogs$outboundSchema), z.any()]);
-
-export function planDeploymentComputeLogsUnionToJSON(
-  planDeploymentComputeLogsUnion: PlanDeploymentComputeLogsUnion,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeLogsUnion$outboundSchema.parse(
-      planDeploymentComputeLogsUnion,
-    ),
-  );
-}
-
-/** @internal */
 export const PlanDeploymentComputeTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof PlanDeploymentComputeTypeByoVnetAzure
 > = z.enum(PlanDeploymentComputeTypeByoVnetAzure);
@@ -3537,7 +3468,6 @@ export type PlanDeploymentComputeStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  logs?: PlanDeploymentComputeLogs$Outbound | any | null | undefined;
   network?:
     | PlanDeploymentComputeNetworkByoVpcAws$Outbound
     | PlanDeploymentComputeNetworkByoVpcGcp$Outbound
@@ -3547,7 +3477,6 @@ export type PlanDeploymentComputeStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3576,9 +3505,6 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => PlanDeploymentComputeLogs$outboundSchema), z.any()]),
-  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => PlanDeploymentComputeNetworkByoVpcAws$outboundSchema),
@@ -3588,9 +3514,6 @@ export const PlanDeploymentComputeStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => PlanDeploymentComputeNetworkCreate$outboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  publicEndpoints: z.nullable(
-    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: PlanDeploymentComputeTelemetry$outboundSchema.optional(),
   updates: PlanDeploymentComputeUpdates$outboundSchema.optional(),

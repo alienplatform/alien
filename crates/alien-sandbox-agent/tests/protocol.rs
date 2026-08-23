@@ -69,11 +69,11 @@ impl Agent {
 
         tokio::spawn(async move {
             axum::serve(
-            listener,
-            router(state).into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .expect("serve");
+                listener,
+                router(state).into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .expect("serve");
         });
 
         Self {
@@ -276,7 +276,10 @@ async fn a_command_streams_its_output_and_a_real_exit_code() {
     let frames = frames(&response.text().await.expect("body"));
     let terminal = frames.last().expect("terminal");
     assert_eq!(terminal["t"], "exit");
-    assert_eq!(terminal["code"], 7, "the real exit code, not a normalised one");
+    assert_eq!(
+        terminal["code"], 7,
+        "the real exit code, not a normalised one"
+    );
 
     let decoded: Vec<String> = frames
         .iter()
@@ -351,7 +354,10 @@ async fn path_traversal_is_refused_over_the_protocol() {
     let client = reqwest::Client::new();
 
     let read = client
-        .get(format!("{}/v1/files?path=/../../etc/passwd", agent.base_url))
+        .get(format!(
+            "{}/v1/files?path=/../../etc/passwd",
+            agent.base_url
+        ))
         .bearer_auth(agent.capability())
         .send()
         .await
@@ -415,7 +421,10 @@ async fn transport_authorization_needs_no_capability() {
         authorization: AgentAuthorization::Transport,
         // Not the test's own uid: the agent and the code it runs are different users in a real
         // image, and the caller here stands in for one arriving through the transport.
-        exec_identity: ExecIdentity { uid: 60000, gid: 60000 },
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
         output_cap: 1 << 20,
     });
 
@@ -482,7 +491,11 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         .await
         .expect("responds");
 
-    assert_eq!(response.status(), 403, "the agent must not serve its own supervised code");
+    assert_eq!(
+        response.status(),
+        403,
+        "the agent must not serve its own supervised code"
+    );
     assert!(
         !root.join("work").exists(),
         "a refused request must not have done its work anyway"

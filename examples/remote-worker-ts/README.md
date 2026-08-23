@@ -1,9 +1,9 @@
 # Remote Worker
 
-Execute tool calls in your customer's cloud. Your control plane sends commands, the worker runs them inside the customer's environment -- reading files, writing results -- without any data leaving their network.
+Run tool calls close to sensitive data, private services, or specialized compute. Your main application sends commands; the worker executes them in a remote environment and returns a narrow result. That environment can belong to a customer or to your own organization.
 
 ```
-Your Cloud                          Customer's Cloud
+Main application                    Remote environment
 +-----------------+                 +----------------------+
 |  AI Agent       |  -- command --> |  worker              |
 |  (reasoning)    |  <-- result --  |  (this template)     |
@@ -82,7 +82,7 @@ bun test
 
 ## Deploy to a real cloud
 
-See [From Local to AWS](https://alien.dev/docs/quickstart/from-local-to-aws) to deploy this worker into a customer's AWS account.
+See [From Local to AWS](https://alien.dev/docs/quickstart/from-local-to-aws) to deploy this worker into AWS.
 
 ## Learn more
 

@@ -28,8 +28,6 @@ use alien_aws_clients::{
 use alien_azure_clients::{
     application_gateways::{ApplicationGatewayApi, AzureApplicationGatewayClient},
     authorization::{AuthorizationApi, AzureAuthorizationClient},
-    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
-    sandbox_groups::{AzureSandboxGroupsClient, SandboxGroupsApi},
     blob_containers::{AzureBlobContainerClient, BlobContainerApi},
     cognitive_services::{AzureCognitiveServicesClient, CognitiveServicesAccountsApi},
     compute::{AzureVmssClient, VirtualMachineScaleSetsApi},
@@ -51,6 +49,8 @@ use alien_azure_clients::{
     private_networking::{AzurePrivateNetworkingClient, PrivateNetworkingApi},
     resource_skus::{AzureResourceSkusClient, ResourceSkusApi},
     resources::{AzureResourcesClient, ResourcesApi},
+    sandbox_data_plane::{AzureSandboxDataPlaneClient, SandboxDataPlaneApi},
+    sandbox_groups::{AzureSandboxGroupsClient, SandboxGroupsApi},
     service_bus::{
         AzureServiceBusDataPlaneClient, AzureServiceBusManagementClient, ServiceBusDataPlaneApi,
         ServiceBusManagementApi,
@@ -83,9 +83,8 @@ use alien_gcp_clients::{
 use alien_k8s_clients::{
     deployments::DeploymentApi, events::EventApi, jobs::JobApi,
     kubernetes_client::KubernetesClient, metrics::MetricsApi, nodes::NodeApi, pods::PodApi,
-    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi,
-    services::ServiceApi, version::VersionApi,
-    KubernetesClientConfig,
+    routes::RouteApi, runtime_classes::RuntimeClassApi, secrets::SecretsApi, services::ServiceApi,
+    version::VersionApi, KubernetesClientConfig,
 };
 use std::sync::Arc;
 
@@ -1455,7 +1454,9 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     #[cfg(feature = "local")]
     fn get_local_sandbox_manager(&self) -> Option<Arc<alien_local::LocalSandboxManager>> {
-        self.local_bindings.as_ref().and_then(|p| p.sandbox_manager())
+        self.local_bindings
+            .as_ref()
+            .and_then(|p| p.sandbox_manager())
     }
 
     #[cfg(feature = "local")]

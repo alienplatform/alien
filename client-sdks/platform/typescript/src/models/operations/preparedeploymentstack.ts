@@ -928,22 +928,6 @@ export type PrepareDeploymentStackKubernetesUnion =
   | PrepareDeploymentStackKubernetes
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type PrepareDeploymentStackLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type PrepareDeploymentStackLogsUnion = PrepareDeploymentStackLogs | any;
-
 export const PrepareDeploymentStackTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1122,7 +1106,6 @@ export type PrepareDeploymentStackStackSettings = {
    */
   heartbeats?: PrepareDeploymentStackHeartbeats | undefined;
   kubernetes?: PrepareDeploymentStackKubernetes | any | null | undefined;
-  logs?: PrepareDeploymentStackLogs | any | null | undefined;
   network?:
     | PrepareDeploymentStackNetworkByoVpcAws
     | PrepareDeploymentStackNetworkByoVpcGcp
@@ -1132,16 +1115,6 @@ export type PrepareDeploymentStackStackSettings = {
     | any
     | null
     | undefined;
-  /**
-   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
-   *
-   * @remarks
-   *
-   * This is intended for adopted Machines deployments whose DNS and certificates remain
-   * customer-owned. The platform passes these URLs to the runtime without creating or
-   * replacing DNS records or certificates.
-   */
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3277,48 +3250,6 @@ export function prepareDeploymentStackKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type PrepareDeploymentStackLogs$Outbound = {
-  parseApplicationLevels?: boolean | undefined;
-};
-
-/** @internal */
-export const PrepareDeploymentStackLogs$outboundSchema: z.ZodType<
-  PrepareDeploymentStackLogs$Outbound,
-  PrepareDeploymentStackLogs
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function prepareDeploymentStackLogsToJSON(
-  prepareDeploymentStackLogs: PrepareDeploymentStackLogs,
-): string {
-  return JSON.stringify(
-    PrepareDeploymentStackLogs$outboundSchema.parse(prepareDeploymentStackLogs),
-  );
-}
-
-/** @internal */
-export type PrepareDeploymentStackLogsUnion$Outbound =
-  | PrepareDeploymentStackLogs$Outbound
-  | any;
-
-/** @internal */
-export const PrepareDeploymentStackLogsUnion$outboundSchema: z.ZodType<
-  PrepareDeploymentStackLogsUnion$Outbound,
-  PrepareDeploymentStackLogsUnion
-> = z.union([z.lazy(() => PrepareDeploymentStackLogs$outboundSchema), z.any()]);
-
-export function prepareDeploymentStackLogsUnionToJSON(
-  prepareDeploymentStackLogsUnion: PrepareDeploymentStackLogsUnion,
-): string {
-  return JSON.stringify(
-    PrepareDeploymentStackLogsUnion$outboundSchema.parse(
-      prepareDeploymentStackLogsUnion,
-    ),
-  );
-}
-
-/** @internal */
 export const PrepareDeploymentStackTypeByoVnetAzure$outboundSchema: z.ZodEnum<
   typeof PrepareDeploymentStackTypeByoVnetAzure
 > = z.enum(PrepareDeploymentStackTypeByoVnetAzure);
@@ -3572,7 +3503,6 @@ export type PrepareDeploymentStackStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  logs?: PrepareDeploymentStackLogs$Outbound | any | null | undefined;
   network?:
     | PrepareDeploymentStackNetworkByoVpcAws$Outbound
     | PrepareDeploymentStackNetworkByoVpcGcp$Outbound
@@ -3582,7 +3512,6 @@ export type PrepareDeploymentStackStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -3612,9 +3541,6 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => PrepareDeploymentStackLogs$outboundSchema), z.any()]),
-  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => PrepareDeploymentStackNetworkByoVpcAws$outboundSchema),
@@ -3624,9 +3550,6 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
       z.lazy(() => PrepareDeploymentStackNetworkCreate$outboundSchema),
       z.any(),
     ]),
-  ).optional(),
-  publicEndpoints: z.nullable(
-    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: PrepareDeploymentStackTelemetry$outboundSchema.optional(),
   updates: PrepareDeploymentStackUpdates$outboundSchema.optional(),

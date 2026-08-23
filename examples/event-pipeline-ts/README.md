@@ -1,6 +1,6 @@
 # Event Pipeline
 
-React to things happening in the customer's environment -- queue messages, file uploads, and scheduled jobs. All three trigger types in a single function.
+Process events close to the systems that produce them: queue messages, file uploads, and scheduled jobs. All three trigger types run through a single worker.
 
 ## What's included
 

@@ -1043,24 +1043,6 @@ export type PersistImportedDeploymentRequestKubernetesUnion =
   | PersistImportedDeploymentRequestKubernetes
   | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type PersistImportedDeploymentRequestLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type PersistImportedDeploymentRequestLogsUnion =
-  | PersistImportedDeploymentRequestLogs
-  | any;
-
 export const PersistImportedDeploymentRequestTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1258,7 +1240,6 @@ export type PersistImportedDeploymentRequestStackSettings = {
     | any
     | null
     | undefined;
-  logs?: PersistImportedDeploymentRequestLogs | any | null | undefined;
   network?:
     | PersistImportedDeploymentRequestNetworkByoVpcAws
     | PersistImportedDeploymentRequestNetworkByoVpcGcp
@@ -1268,16 +1249,6 @@ export type PersistImportedDeploymentRequestStackSettings = {
     | any
     | null
     | undefined;
-  /**
-   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
-   *
-   * @remarks
-   *
-   * This is intended for adopted Machines deployments whose DNS and certificates remain
-   * customer-owned. The platform passes these URLs to the runtime without creating or
-   * replacing DNS records or certificates.
-   */
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -7484,55 +7455,6 @@ export function persistImportedDeploymentRequestKubernetesUnionToJSON(
 }
 
 /** @internal */
-export type PersistImportedDeploymentRequestLogs$Outbound = {
-  parseApplicationLevels?: boolean | undefined;
-};
-
-/** @internal */
-export const PersistImportedDeploymentRequestLogs$outboundSchema: z.ZodType<
-  PersistImportedDeploymentRequestLogs$Outbound,
-  PersistImportedDeploymentRequestLogs
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function persistImportedDeploymentRequestLogsToJSON(
-  persistImportedDeploymentRequestLogs: PersistImportedDeploymentRequestLogs,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestLogs$outboundSchema.parse(
-      persistImportedDeploymentRequestLogs,
-    ),
-  );
-}
-
-/** @internal */
-export type PersistImportedDeploymentRequestLogsUnion$Outbound =
-  | PersistImportedDeploymentRequestLogs$Outbound
-  | any;
-
-/** @internal */
-export const PersistImportedDeploymentRequestLogsUnion$outboundSchema:
-  z.ZodType<
-    PersistImportedDeploymentRequestLogsUnion$Outbound,
-    PersistImportedDeploymentRequestLogsUnion
-  > = z.union([
-    z.lazy(() => PersistImportedDeploymentRequestLogs$outboundSchema),
-    z.any(),
-  ]);
-
-export function persistImportedDeploymentRequestLogsUnionToJSON(
-  persistImportedDeploymentRequestLogsUnion:
-    PersistImportedDeploymentRequestLogsUnion,
-): string {
-  return JSON.stringify(
-    PersistImportedDeploymentRequestLogsUnion$outboundSchema.parse(
-      persistImportedDeploymentRequestLogsUnion,
-    ),
-  );
-}
-
-/** @internal */
 export const PersistImportedDeploymentRequestTypeByoVnetAzure$outboundSchema:
   z.ZodEnum<typeof PersistImportedDeploymentRequestTypeByoVnetAzure> = z.enum(
     PersistImportedDeploymentRequestTypeByoVnetAzure,
@@ -7815,7 +7737,6 @@ export type PersistImportedDeploymentRequestStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  logs?: PersistImportedDeploymentRequestLogs$Outbound | any | null | undefined;
   network?:
     | PersistImportedDeploymentRequestNetworkByoVpcAws$Outbound
     | PersistImportedDeploymentRequestNetworkByoVpcGcp$Outbound
@@ -7825,7 +7746,6 @@ export type PersistImportedDeploymentRequestStackSettings$Outbound = {
     | any
     | null
     | undefined;
-  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -7863,12 +7783,6 @@ export const PersistImportedDeploymentRequestStackSettings$outboundSchema:
         z.any(),
       ]),
     ).optional(),
-    logs: z.nullable(
-      z.union([
-        z.lazy(() => PersistImportedDeploymentRequestLogs$outboundSchema),
-        z.any(),
-      ]),
-    ).optional(),
     network: z.nullable(
       z.union([
         z.lazy(() =>
@@ -7888,9 +7802,6 @@ export const PersistImportedDeploymentRequestStackSettings$outboundSchema:
         ),
         z.any(),
       ]),
-    ).optional(),
-    publicEndpoints: z.nullable(
-      z.record(z.string(), z.record(z.string(), z.string())),
     ).optional(),
     telemetry: PersistImportedDeploymentRequestTelemetry$outboundSchema
       .optional(),

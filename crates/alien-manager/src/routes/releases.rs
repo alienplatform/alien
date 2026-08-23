@@ -1,11 +1,11 @@
 //! Releases REST API endpoints.
 
 use axum::{
-    Json, Router,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
+    Json, Router,
 };
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +16,7 @@ use alien_core::{Platform, Stack};
 use crate::error::ErrorData;
 use crate::traits::{CreateReleaseParams, ReleaseRecord};
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 
 // --- Request / Response types ---
 

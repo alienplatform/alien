@@ -909,7 +909,9 @@ users:
             namespace: Some("default".to_string()),
         };
         assert_eq!(
-            resolve_kubeconfig(&in_cluster).await.expect("passes through"),
+            resolve_kubeconfig(&in_cluster)
+                .await
+                .expect("passes through"),
             in_cluster
         );
     }

@@ -4,9 +4,19 @@
 
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
+import { ClosedEnum } from "../../types/enums.js";
+
+export const ConfigureProjectDeploymentsMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type ConfigureProjectDeploymentsMethod = ClosedEnum<
+  typeof ConfigureProjectDeploymentsMethod
+>;
 
 export type ConfigureProjectDeploymentsRequestBody = {
   enabled: boolean;
+  methods: Array<ConfigureProjectDeploymentsMethod>;
 };
 
 export type ConfigureProjectDeploymentsRequest = {
@@ -22,8 +32,14 @@ export type ConfigureProjectDeploymentsRequest = {
 };
 
 /** @internal */
+export const ConfigureProjectDeploymentsMethod$outboundSchema: z.ZodEnum<
+  typeof ConfigureProjectDeploymentsMethod
+> = z.enum(ConfigureProjectDeploymentsMethod);
+
+/** @internal */
 export type ConfigureProjectDeploymentsRequestBody$Outbound = {
   enabled: boolean;
+  methods: Array<string>;
 };
 
 /** @internal */
@@ -32,6 +48,7 @@ export const ConfigureProjectDeploymentsRequestBody$outboundSchema: z.ZodType<
   ConfigureProjectDeploymentsRequestBody
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(ConfigureProjectDeploymentsMethod$outboundSchema),
 });
 
 export function configureProjectDeploymentsRequestBodyToJSON(

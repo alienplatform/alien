@@ -1,7 +1,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::{can_prompt, print_json, prompt_text};
-use crate::ui::{FixedSteps, accent, command, contextual_heading, dim_label, success_line};
+use crate::ui::{accent, command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_core::{Platform, Stack, StackInputDefinition, StackInputKind, StackInputProvider};
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
@@ -309,8 +309,8 @@ async fn fetch_available_setup(
     workspace_query: Option<&str>,
     project_id: &str,
 ) -> Result<AvailableSetup> {
-    use alien_platform_api::SdkResultExt;
     use alien_platform_api::types::DeploymentLinkSetupResponseSetupItemsItem;
+    use alien_platform_api::SdkResultExt;
 
     let mut request = client
         .get_project_deployment_link_setup()
@@ -1012,8 +1012,8 @@ fn platform_setup_environment_variables(
 
 /// Standalone/Dev mode: use manager API, show CLI command.
 async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String) -> Result<()> {
-    use alien_manager_api::SdkResultExt;
     use alien_manager_api::types::CreateDeploymentGroupRequest;
+    use alien_manager_api::SdkResultExt;
 
     if !args.env_vars.is_empty() || !args.secret_vars.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1093,11 +1093,9 @@ async fn onboard_standalone(args: OnboardArgs, ctx: ExecutionMode, name: String)
     println!();
     println!("{}", dim_label("Share with the customer's admin:"));
     println!(
-        "  curl -fsSL {}/install | sh",
+        "  curl -fsSL {}/install | sh -s -- deploy \\",
         mgr.manager_url.trim_end_matches('/')
     );
-    println!("  export PATH=\"$HOME/.local/bin:$PATH\"");
-    println!("  alien-deploy deploy \\");
     println!("    --token {} \\", token_response.token);
     println!("    --name <deployment-name> \\");
     println!("    --platform <aws|gcp|azure> \\");

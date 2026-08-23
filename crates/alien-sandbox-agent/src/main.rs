@@ -52,7 +52,10 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .into_alien_error()
-        .context(failed("bind the agent listener", "the agent could not take its port".to_string()))?;
+        .context(failed(
+            "bind the agent listener",
+            "the agent could not take its port".to_string(),
+        ))?;
 
     tracing::info!("sandbox agent listening on {address}");
 
@@ -60,9 +63,12 @@ async fn main() -> Result<()> {
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .await
-        .into_alien_error()
-        .context(failed("serve the agent protocol", "the agent stopped serving".to_string()))
+    .await
+    .into_alien_error()
+    .context(failed(
+        "serve the agent protocol",
+        "the agent stopped serving".to_string(),
+    ))
 }
 
 fn load_state() -> Result<AgentState> {
@@ -70,13 +76,10 @@ fn load_state() -> Result<AgentState> {
 
     // Canonical up front, because every path check compares against it. A root that is itself a
     // symlink would make each comparison a false negative.
-    let session_root = root
-        .canonicalize()
-        .into_alien_error()
-        .context(failed(
-            &format!("resolve {ENV_ROOT} '{}'", root.display()),
-            "the session root must exist before the agent starts".to_string(),
-        ))?;
+    let session_root = root.canonicalize().into_alien_error().context(failed(
+        &format!("resolve {ENV_ROOT} '{}'", root.display()),
+        "the session root must exist before the agent starts".to_string(),
+    ))?;
 
     let output_cap = match std::env::var(ENV_OUTPUT_CAP) {
         Ok(_) => parse(ENV_OUTPUT_CAP)?,
@@ -154,11 +157,12 @@ fn load_authorization() -> Result<AgentAuthorization> {
         }
         "capability" => {
             let encoded = required(ENV_PUBLIC_KEY)?;
-            let bytes = BASE64.decode(&encoded).map_err(|error| {
-                invalid(ENV_PUBLIC_KEY, &format!("not valid base64: {error}"))
+            let bytes = BASE64
+                .decode(&encoded)
+                .map_err(|error| invalid(ENV_PUBLIC_KEY, &format!("not valid base64: {error}")))?;
+            let public_key = PublicKey::from_slice(&bytes).map_err(|error| {
+                invalid(ENV_PUBLIC_KEY, &format!("not an Ed25519 key: {error}"))
             })?;
-            let public_key = PublicKey::from_slice(&bytes)
-                .map_err(|error| invalid(ENV_PUBLIC_KEY, &format!("not an Ed25519 key: {error}")))?;
 
             Ok(AgentAuthorization::Capability {
                 public_key,

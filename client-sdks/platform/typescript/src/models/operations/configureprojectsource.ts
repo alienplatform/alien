@@ -340,8 +340,17 @@ export type ConfigureProjectSourceDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export const ConfigureProjectSourceMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type ConfigureProjectSourceMethod = ClosedEnum<
+  typeof ConfigureProjectSourceMethod
+>;
+
 export type ConfigureProjectSourceDeployments = {
   enabled: boolean;
+  methods?: Array<ConfigureProjectSourceMethod> | undefined;
 };
 
 export type ConfigureProjectSourceKeys = {
@@ -915,11 +924,17 @@ export function configureProjectSourceDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const ConfigureProjectSourceMethod$inboundSchema: z.ZodEnum<
+  typeof ConfigureProjectSourceMethod
+> = z.enum(ConfigureProjectSourceMethod);
+
+/** @internal */
 export const ConfigureProjectSourceDeployments$inboundSchema: z.ZodType<
   ConfigureProjectSourceDeployments,
   unknown
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(ConfigureProjectSourceMethod$inboundSchema).optional(),
 });
 
 export function configureProjectSourceDeploymentsFromJSON(

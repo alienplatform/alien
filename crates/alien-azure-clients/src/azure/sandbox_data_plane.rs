@@ -57,8 +57,13 @@ pub struct ExecResult {
 #[async_trait]
 pub trait SandboxDataPlaneApi: Send + Sync + std::fmt::Debug {
     /// Creates a sandbox from a disk image.
-    async fn create_sandbox(&self, group: &str, disk: &str, cpu: &str, memory: &str)
-        -> Result<Sandbox>;
+    async fn create_sandbox(
+        &self,
+        group: &str,
+        disk: &str,
+        cpu: &str,
+        memory: &str,
+    ) -> Result<Sandbox>;
 
     /// Reads a sandbox. A 404 is how deletion is confirmed.
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox>;
@@ -178,7 +183,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         cpu: &str,
         memory: &str,
     ) -> Result<Sandbox> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!("{}/sandboxes", self.group_path(group)),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -207,7 +215,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.sandbox_path(group, sandbox_id),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -223,7 +234,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn delete_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.sandbox_path(group, sandbox_id),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -248,7 +262,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         command: &str,
         working_directory: Option<String>,
     ) -> Result<ExecResult> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/executeShellCommand",
