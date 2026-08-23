@@ -14,24 +14,34 @@ const SCHEMA = `
 `
 
 const CUSTOMERS = `
-  insert into customers (name, plan, country, mrr_usd) values
-    ('Acme Corp','enterprise','US',4200),
-    ('Globex','enterprise','DE',3800),
-    ('Initech','pro','US',900),
-    ('Umbrella','enterprise','UK',5100),
-    ('Hooli','pro','IL',1200),
-    ('Stark Industries','enterprise','US',6400),
-    ('Wayne Enterprises','pro','US',1500),
-    ('Soylent','starter','FR',150);
+  insert into customers (id, name, plan, country, mrr_usd) values
+    (1,'Acme Corp','enterprise','US',4200),
+    (2,'Globex','enterprise','DE',3800),
+    (3,'Initech','pro','US',900),
+    (4,'Umbrella','enterprise','UK',5100),
+    (5,'Hooli','pro','IL',1200),
+    (6,'Stark Industries','enterprise','US',6400),
+    (7,'Wayne Enterprises','pro','US',1500),
+    (8,'Soylent','starter','FR',150)
+  on conflict (id) do update set
+    name = excluded.name,
+    plan = excluded.plan,
+    country = excluded.country,
+    mrr_usd = excluded.mrr_usd;
 `
 
 const ORDERS = `
-  insert into orders (customer_id, amount_usd, status, created) values
-    (1,1200,'paid','2026-05-02'),(1,800,'paid','2026-06-01'),
-    (2,3800,'paid','2026-06-03'),(4,5100,'paid','2026-06-05'),
-    (6,6400,'paid','2026-06-06'),(3,900,'refunded','2026-05-20'),
-    (5,1200,'paid','2026-06-10'),(7,1500,'pending','2026-06-12'),
-    (8,150,'paid','2026-06-14'),(6,2000,'paid','2026-06-20');
+  insert into orders (id, customer_id, amount_usd, status, created) values
+    (1,1,1200,'paid','2026-05-02'),(2,1,800,'paid','2026-06-01'),
+    (3,2,3800,'paid','2026-06-03'),(4,4,5100,'paid','2026-06-05'),
+    (5,6,6400,'paid','2026-06-06'),(6,3,900,'refunded','2026-05-20'),
+    (7,5,1200,'paid','2026-06-10'),(8,7,1500,'pending','2026-06-12'),
+    (9,8,150,'paid','2026-06-14'),(10,6,2000,'paid','2026-06-20')
+  on conflict (id) do update set
+    customer_id = excluded.customer_id,
+    amount_usd = excluded.amount_usd,
+    status = excluded.status,
+    created = excluded.created;
 `
 
 const SEED_LOCK = 4212025
@@ -73,14 +83,15 @@ async function run(): Promise<void> {
     await client.query("begin")
     try {
       await client.query(SCHEMA)
-      const customers = await client.query("select count(*)::int as count from customers")
-      if (customers.rows[0].count === 0) {
-        await client.query(CUSTOMERS)
-      }
-      const orders = await client.query("select count(*)::int as count from orders")
-      if (orders.rows[0].count === 0) {
-        await client.query(ORDERS)
-      }
+      // Stable IDs plus upserts repair an interrupted or partially completed seed.
+      await client.query(CUSTOMERS)
+      await client.query(ORDERS)
+      await client.query(
+        "select setval(pg_get_serial_sequence('customers', 'id'), greatest(max(id), 1)) from customers",
+      )
+      await client.query(
+        "select setval(pg_get_serial_sequence('orders', 'id'), greatest(max(id), 1)) from orders",
+      )
       await client.query("commit")
     } catch (err) {
       await client.query("rollback")
