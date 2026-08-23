@@ -73,8 +73,9 @@ pub struct AwsSandbox {
     /// Connectors every session starts with. Empty means the public internet is reachable, so
     /// `deny` is a connector rather than the absence of one.
     egress_connector_arns: Vec<String>,
-    /// Ports preview may be minted for. `CreateMicrovmAuthToken` grants whatever port it is
-    /// asked for, so this list is where "a port not listed can never be exposed" is enforced.
+    /// Ports preview may be minted for. `CreateMicrovmAuthToken` carries no port condition key
+    /// and grants whatever port it is asked for, so this list bounds callers that go through this
+    /// provider; a Remote Bindings caller holding the raw credential is not bounded by it.
     preview_ports: Vec<u16>,
     /// Idle seconds before AWS suspends the MicroVM, where the declaration asked for it.
     idle_suspend_seconds: Option<u32>,
@@ -886,9 +887,9 @@ mod tests {
         assert_eq!(capability.expires_in_seconds, 1800);
     }
 
-    /// The declared list is where ingress is bounded: `CreateMicrovmAuthToken` mints a token for
-    /// whatever port it is handed, so an unlisted port must be refused before the call rather
-    /// than after it.
+    /// The declared list is what bounds ingress for callers on this path: `CreateMicrovmAuthToken`
+    /// mints a token for whatever port it is handed and has no port condition key, so an unlisted
+    /// port must be refused before the call rather than after it.
     #[tokio::test]
     async fn a_port_the_stack_did_not_declare_is_refused_before_a_token_exists() {
         let mut client = MockLambdaMicrovmsApi::new();

@@ -50,6 +50,9 @@
           // reaches every session of it, whoever started it. Preflight makes the sandbox
           // single-tenant to the remote caller by refusing one the deployment's own compute can
           // also reach, which is the only containment IAM cannot express.
+          //
+          // The mint also has no port condition key, so a declared `previewPorts` list bounds only
+          // callers going through the provider, not a holder of these credentials.
           "actions": ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"]
         },
         "binding": {

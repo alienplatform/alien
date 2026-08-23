@@ -134,10 +134,11 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
     }))
 }
 
-/// Refuses a remotely published sandbox whose binding a deployment cannot deliver.
+/// Refuses a remotely published sandbox that restricts egress.
 ///
 /// The declaration has to fail here rather than install a role carrying arbitrary code execution
-/// for a binding the manager will then refuse to resolve.
+/// for a binding the manager will then refuse to resolve. `remote_binding_is_deliverable` holds
+/// the reason and is the same predicate both setup emitters read.
 fn validate_remote_sandboxes_allow_egress(stack: &Stack, mutation_name: &str) -> Result<()> {
     for (resource_id, entry) in &stack.resources {
         if !entry.has_remote_bindings()
