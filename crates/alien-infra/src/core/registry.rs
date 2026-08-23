@@ -768,6 +768,17 @@ impl ResourceRegistry {
             Box::new(DefaultControllerFactory::<crate::sandbox::KubernetesSandboxController>::new()),
         );
 
+        // Register the GCP Agent Platform reasoning-engine controller. Inert until the cutover
+        // registers the mutation that synthesizes the engine resource.
+        #[cfg(feature = "gcp")]
+        registry.register_controller_factory(
+            alien_core::GcpAgentPlatformEngine::RESOURCE_TYPE,
+            Platform::Gcp,
+            Box::new(
+                DefaultControllerFactory::<crate::sandbox::GcpAgentPlatformEngineController>::new(),
+            ),
+        );
+
         // Register KubernetesCluster controller. The cluster is selected or
         // created during setup; this runtime controller records substrate
         // readiness once the agent is installed and reporting.

@@ -38,3 +38,8 @@ pub use local::*;
 mod gcp_agent_platform_template;
 #[cfg(feature = "gcp")]
 pub use gcp_agent_platform_template::*;
+
+#[cfg(feature = "gcp")]
+mod gcp_agent_platform_engine;
+#[cfg(feature = "gcp")]
+pub use gcp_agent_platform_engine::*;

@@ -1,9 +1,9 @@
 //! GCP Agent Platform sandbox template controller.
 //!
 //! Reconciles the `SandboxEnvironmentTemplate` (T09): the Live, release-owned object that carries
-//! the image digest, ceilings and egress and warms the session pool. The Agent Engine it hangs
-//! under is Frozen setup and is not touched here — the controller is handed the engine and creates
-//! templates beneath it.
+//! the image digest, ceilings and egress and warms the session pool. The reasoning engine it hangs
+//! under is a separate Live resource with its own controller; this one reads the engine's id as a
+//! dependency and creates templates beneath it, never creating the engine itself.
 //!
 //! Template config is immutable: there is no update verb, so reconciliation is replace-not-update.
 //! A changed image (or any field that lands in the template body) creates a new template, waits for
@@ -20,7 +20,11 @@ use tracing::{info, warn};
 
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
-use alien_core::{ResourceOutputs, ResourceStatus, Sandbox, SandboxCode, SandboxLimits};
+use crate::sandbox::GcpAgentPlatformEngineController;
+use alien_core::{
+    GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
+    SandboxLimits,
+};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
     ContainerResources, CustomContainerEnvironment, CustomContainerSpec, EgressControlConfig,
@@ -155,10 +159,16 @@ impl GcpAgentPlatformTemplateController {
             .service_provider
             .get_gcp_agent_platform_client(gcp_config)?;
 
-        // The concrete engine id is server-assigned at setup; until the cutover wires the real one
-        // through, it is addressed by a stable per-sandbox convention. The controller is
-        // unregistered, so nothing depends on this reaching a live engine yet.
-        let engine = format!("{}-{}", ctx.resource_prefix, config.id);
+        // The engine id is server-assigned; read it from the engine dependency's state, keyed by
+        // the `{id}-engine` convention the engine mutation writes.
+        let engine_ref = ResourceRef::new(
+            GcpAgentPlatformEngine::RESOURCE_TYPE,
+            GcpAgentPlatformEngine::id_for_sandbox(&config.id),
+        );
+        let engine = ctx
+            .require_dependency::<GcpAgentPlatformEngineController>(&engine_ref)?
+            .engine_id
+            .ok_or_else(|| missing_state(&config.id, "engine id from the engine dependency"))?;
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
         let body = build_template_body(config, &display_name)?;
 
@@ -719,6 +729,13 @@ mod tests {
             .platform(Platform::Gcp)
             .service_provider(provider)
             .with_test_dependencies()
+            // The engine the sandbox depends on, already provisioned: create_start reads its
+            // server-assigned id ("eng") from here rather than fabricating one.
+            .with_dependency(
+                GcpAgentPlatformEngine::new(GcpAgentPlatformEngine::id_for_sandbox("agent-sbx"))
+                    .build(),
+                GcpAgentPlatformEngineController::mock_ready("eng"),
+            )
             .build()
             .await
             .expect("executor builds")
@@ -747,6 +764,11 @@ mod tests {
             controller.template_id.as_deref(),
             Some("tpl1"),
             "the ACTIVE template id is the serving one"
+        );
+        assert_eq!(
+            controller.engine.as_deref(),
+            Some("eng"),
+            "the template is created under the engine's real id from the dependency"
         );
 
         executor.delete().expect("delete is accepted");
@@ -844,6 +866,10 @@ mod tests {
                 assert!(
                     template.ends_with("/sandboxEnvironmentTemplates/tpl1"),
                     "the binding points at the ACTIVE template: {template}"
+                );
+                assert!(
+                    template.contains("/reasoningEngines/eng/"),
+                    "the binding hangs the template under the engine's real id: {template}"
                 );
             }
             other => panic!("expected a GCP Agent Platform binding, got {other:?}"),
