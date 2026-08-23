@@ -103,7 +103,14 @@ impl LiveConfig {
             service_overrides: None,
             project_number: None,
         };
-        Arc::new(AgentPlatformClient::new(reqwest::Client::new(), config))
+        // A per-request timeout, comfortably above the ~30s :execute proxy window: without one a
+        // single stalled request hangs the whole test forever, since the poll budget bounds the
+        // loop but not one call.
+        let http = reqwest::Client::builder()
+            .timeout(Duration::from_secs(90))
+            .build()
+            .expect("a client with a request timeout builds");
+        Arc::new(AgentPlatformClient::new(http, config))
     }
 }
 
