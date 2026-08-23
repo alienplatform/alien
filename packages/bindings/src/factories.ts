@@ -593,3 +593,16 @@ export function createRemoteKeyFactory(bindings: RawRemoteBindingsHandle) {
     return key
   }
 }
+
+/** Build the remote Sandbox factory around one native bindings handle. */
+export function createRemoteSandboxFactory(bindings: RawRemoteBindingsHandle) {
+  const sandboxes = new Map<string, Sandbox>()
+  return (name: string): Sandbox => {
+    let sandbox = sandboxes.get(name)
+    if (!sandbox) {
+      sandbox = makeSandbox(lazyHandle(() => bindings.sandbox(name)))
+      sandboxes.set(name, sandbox)
+    }
+    return sandbox
+  }
+}

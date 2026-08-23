@@ -230,3 +230,112 @@ describe("Bindings.forRemoteCustomer (real addon)", () => {
     expect(customerManagerAuthorizations).toEqual(Array(2).fill(`Bearer ${customerBindingToken}`))
   })
 })
+
+const sandboxBindingToken = "sandbox-binding-token"
+
+let sandboxManagerServer: Server | undefined
+let sandboxPlatformServer: Server | undefined
+let sandboxManagerOrigin: string
+let sandboxPlatformOrigin: string
+const sandboxResolveBodies: unknown[] = []
+const sandboxBindingTokenBodies: unknown[] = []
+
+/**
+ * The napi surface is declared in a generated `index.d.ts` that is gitignored, so
+ * `RawRemoteBindingsHandle` is hand-written and nothing type-checks it against Rust. Only a
+ * call through the real addon catches a renamed or missing method.
+ */
+describe("Bindings.sandbox (real addon)", () => {
+  beforeAll(async () => {
+    sandboxManagerServer = createServer(async (request, response) => {
+      if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
+        json(response, 404, { message: "not found" })
+        return
+      }
+      sandboxResolveBodies.push(await bodyOf(request))
+      const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString()
+      json(response, 200, {
+        service: "sandbox-aws",
+        binding: {
+          imageArn: "arn:aws:lambda:us-east-1:123456789012:microvm-image/alien-agent-image",
+          imageVersion: "7",
+          region: "us-east-1",
+          previewPorts: [8080],
+          idleSuspendSeconds: 300,
+          maxLifetimeSeconds: 3600,
+          allowEgress: true,
+        },
+        clientConfig: {
+          accountId: "123456789012",
+          region: "us-east-1",
+          credentials: {
+            type: "sessionCredentials",
+            accessKeyId: "AKIAFIXTURE",
+            secretAccessKey: "fixture-secret",
+            sessionToken: "fixture-session",
+            expiresAt,
+          },
+        },
+        expiresAt,
+      })
+    })
+    sandboxManagerOrigin = await listen(sandboxManagerServer)
+
+    sandboxPlatformServer = createServer(async (request, response) => {
+      if (request.method === "GET" && request.url === `/v1/deployments/${deploymentId}`) {
+        json(response, 200, {
+          id: deploymentId,
+          name: "remote-sandbox-test",
+          status: "running",
+          projectId,
+          platform: "aws",
+          deploymentProtocolVersion: 1,
+          deploymentGroupId,
+          purpose: "application",
+          releaseChannel: "production",
+          stackSettings: {},
+          retryRequested: false,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          managerId,
+          workspaceId,
+        })
+        return
+      }
+      if (request.method === "POST" && request.url === `/v1/managers/${managerId}/binding-token`) {
+        sandboxBindingTokenBodies.push(await bodyOf(request))
+        json(response, 200, {
+          accessToken: sandboxBindingToken,
+          expiresIn: 300,
+          tokenType: "Bearer",
+          managerUrl: sandboxManagerOrigin,
+          databaseId: null,
+          controlPlaneUrl: null,
+        })
+        return
+      }
+      json(response, 404, { message: "not found" })
+    })
+    sandboxPlatformOrigin = await listen(sandboxPlatformServer)
+  })
+
+  afterAll(async () => {
+    await Promise.all([close(sandboxPlatformServer), close(sandboxManagerServer)])
+  })
+
+  it("resolves a sandbox lease through the manager and hands back a usable handle", async () => {
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId,
+      token,
+      apiBaseUrl: sandboxPlatformOrigin,
+    })
+    const sandbox = bindings.sandbox("agent")
+
+    // Nothing is resolved until an operation runs, so this is the call that reaches the addon.
+    const capabilities = await sandbox.capabilities()
+
+    expect(capabilities).toContain("files")
+    expect(sandboxBindingTokenBodies).toEqual([{ deploymentId }])
+    expect(sandboxResolveBodies).toEqual([{ deploymentId, resourceId: "agent" }])
+  })
+})

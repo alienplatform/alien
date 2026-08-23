@@ -203,6 +203,13 @@ impl RemoteBindingsHandle {
         Ok(KeyHandle::new(key))
     }
 
+    /// Resolve the sandbox binding named `name`.
+    #[napi]
+    pub async fn sandbox(&self, name: String) -> napi::Result<SandboxHandle> {
+        let sandbox = self.inner.sandbox(&name).await.map_err(map_alien_error)?;
+        Ok(SandboxHandle::new(sandbox))
+    }
+
     /// Resolve the deployment's unique managed AI binding.
     #[napi]
     pub async fn ai(&self) -> napi::Result<RemoteAiLeaseJs> {
