@@ -14,3 +14,4 @@ const value: models.StackSettingsLogs = {};
 ```typescript
 const value: any = "<value>";
 ```
+

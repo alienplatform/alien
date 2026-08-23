@@ -1139,6 +1139,22 @@ export type CreateManagerResponseKubernetesUnion3 =
   | CreateManagerResponseKubernetes3
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type CreateManagerResponseLogs3 = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type CreateManagerResponseLogsUnion3 = CreateManagerResponseLogs3 | any;
+
 export const CreateManagerResponseTypeByoVnetAzure3 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -1329,6 +1345,7 @@ export type CreateManagerResponseStackSettings3 = {
    */
   heartbeats?: CreateManagerResponseHeartbeats3 | undefined;
   kubernetes?: CreateManagerResponseKubernetes3 | any | null | undefined;
+  logs?: CreateManagerResponseLogs3 | any | null | undefined;
   network?:
     | CreateManagerResponseNetworkByoVpcAws3
     | CreateManagerResponseNetworkByoVpcGcp3
@@ -1338,6 +1355,16 @@ export type CreateManagerResponseStackSettings3 = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -2361,6 +2388,22 @@ export type CreateManagerResponseKubernetesUnion2 =
   | CreateManagerResponseKubernetes2
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type CreateManagerResponseLogs2 = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type CreateManagerResponseLogsUnion2 = CreateManagerResponseLogs2 | any;
+
 export const CreateManagerResponseTypeByoVnetAzure2 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -2551,6 +2594,7 @@ export type CreateManagerResponseStackSettings2 = {
    */
   heartbeats?: CreateManagerResponseHeartbeats2 | undefined;
   kubernetes?: CreateManagerResponseKubernetes2 | any | null | undefined;
+  logs?: CreateManagerResponseLogs2 | any | null | undefined;
   network?:
     | CreateManagerResponseNetworkByoVpcAws2
     | CreateManagerResponseNetworkByoVpcGcp2
@@ -2560,6 +2604,16 @@ export type CreateManagerResponseStackSettings2 = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -3578,6 +3632,22 @@ export type CreateManagerResponseKubernetesUnion1 =
   | CreateManagerResponseKubernetes1
   | any;
 
+/**
+ * Application log handling for a deployment.
+ */
+export type CreateManagerResponseLogs1 = {
+  /**
+   * Normalize severity fields from supported structured application logs into
+   *
+   * @remarks
+   * the OTLP severity fields. The original log body is preserved. Disabled by
+   * default.
+   */
+  parseApplicationLevels?: boolean | undefined;
+};
+
+export type CreateManagerResponseLogsUnion1 = CreateManagerResponseLogs1 | any;
+
 export const CreateManagerResponseTypeByoVnetAzure1 = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
@@ -3768,6 +3838,7 @@ export type CreateManagerResponseStackSettings1 = {
    */
   heartbeats?: CreateManagerResponseHeartbeats1 | undefined;
   kubernetes?: CreateManagerResponseKubernetes1 | any | null | undefined;
+  logs?: CreateManagerResponseLogs1 | any | null | undefined;
   network?:
     | CreateManagerResponseNetworkByoVpcAws1
     | CreateManagerResponseNetworkByoVpcGcp1
@@ -3777,6 +3848,16 @@ export type CreateManagerResponseStackSettings1 = {
     | any
     | null
     | undefined;
+  /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   /**
    * How telemetry (logs, metrics, traces) is handled.
    */
@@ -5863,6 +5944,40 @@ export function createManagerResponseKubernetesUnion3FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseLogs3$inboundSchema: z.ZodType<
+  CreateManagerResponseLogs3,
+  unknown
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function createManagerResponseLogs3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogs3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogs3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogs3' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseLogsUnion3$inboundSchema: z.ZodType<
+  CreateManagerResponseLogsUnion3,
+  unknown
+> = z.union([z.lazy(() => CreateManagerResponseLogs3$inboundSchema), z.any()]);
+
+export function createManagerResponseLogsUnion3FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogsUnion3, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogsUnion3$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogsUnion3' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseTypeByoVnetAzure3$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseTypeByoVnetAzure3
 > = z.enum(CreateManagerResponseTypeByoVnetAzure3);
@@ -6093,6 +6208,9 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => CreateManagerResponseLogs3$inboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseNetworkByoVpcAws3$inboundSchema),
@@ -6102,6 +6220,9 @@ export const CreateManagerResponseStackSettings3$inboundSchema: z.ZodType<
       z.lazy(() => CreateManagerResponseNetworkCreate3$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: CreateManagerResponseTelemetry3$inboundSchema.optional(),
   updates: CreateManagerResponseUpdates3$inboundSchema.optional(),
@@ -7956,6 +8077,40 @@ export function createManagerResponseKubernetesUnion2FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseLogs2$inboundSchema: z.ZodType<
+  CreateManagerResponseLogs2,
+  unknown
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function createManagerResponseLogs2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogs2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogs2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogs2' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseLogsUnion2$inboundSchema: z.ZodType<
+  CreateManagerResponseLogsUnion2,
+  unknown
+> = z.union([z.lazy(() => CreateManagerResponseLogs2$inboundSchema), z.any()]);
+
+export function createManagerResponseLogsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseTypeByoVnetAzure2$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseTypeByoVnetAzure2
 > = z.enum(CreateManagerResponseTypeByoVnetAzure2);
@@ -8186,6 +8341,9 @@ export const CreateManagerResponseStackSettings2$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => CreateManagerResponseLogs2$inboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseNetworkByoVpcAws2$inboundSchema),
@@ -8195,6 +8353,9 @@ export const CreateManagerResponseStackSettings2$inboundSchema: z.ZodType<
       z.lazy(() => CreateManagerResponseNetworkCreate2$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: CreateManagerResponseTelemetry2$inboundSchema.optional(),
   updates: CreateManagerResponseUpdates2$inboundSchema.optional(),
@@ -10044,6 +10205,40 @@ export function createManagerResponseKubernetesUnion1FromJSON(
 }
 
 /** @internal */
+export const CreateManagerResponseLogs1$inboundSchema: z.ZodType<
+  CreateManagerResponseLogs1,
+  unknown
+> = z.object({
+  parseApplicationLevels: z.boolean().optional(),
+});
+
+export function createManagerResponseLogs1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogs1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogs1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogs1' from JSON`,
+  );
+}
+
+/** @internal */
+export const CreateManagerResponseLogsUnion1$inboundSchema: z.ZodType<
+  CreateManagerResponseLogsUnion1,
+  unknown
+> = z.union([z.lazy(() => CreateManagerResponseLogs1$inboundSchema), z.any()]);
+
+export function createManagerResponseLogsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<CreateManagerResponseLogsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateManagerResponseLogsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateManagerResponseLogsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateManagerResponseTypeByoVnetAzure1$inboundSchema: z.ZodEnum<
   typeof CreateManagerResponseTypeByoVnetAzure1
 > = z.enum(CreateManagerResponseTypeByoVnetAzure1);
@@ -10274,6 +10469,9 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
       z.any(),
     ]),
   ).optional(),
+  logs: z.nullable(
+    z.union([z.lazy(() => CreateManagerResponseLogs1$inboundSchema), z.any()]),
+  ).optional(),
   network: z.nullable(
     z.union([
       z.lazy(() => CreateManagerResponseNetworkByoVpcAws1$inboundSchema),
@@ -10283,6 +10481,9 @@ export const CreateManagerResponseStackSettings1$inboundSchema: z.ZodType<
       z.lazy(() => CreateManagerResponseNetworkCreate1$inboundSchema),
       z.any(),
     ]),
+  ).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
   ).optional(),
   telemetry: CreateManagerResponseTelemetry1$inboundSchema.optional(),
   updates: CreateManagerResponseUpdates1$inboundSchema.optional(),

@@ -4125,9 +4125,7 @@ mod tests {
 
     fn operator_test_manifest_with_stack_settings() -> String {
         let stack_settings = StackSettings {
-            logs: Some(alien_core::LogSettings {
-                parse_application_levels: true,
-            }),
+            updates: alien_core::UpdatesMode::ApprovalRequired,
             ..Default::default()
         };
         generate_operator_manifest(OperatorManifestOptions {
@@ -4592,7 +4590,7 @@ mod tests {
 
         assert_eq!(
             operator_env_value(&deployment, "STACK_SETTINGS"),
-            Some(r#"{"logs":{"parseApplicationLevels":true}}"#)
+            Some(r#"{"updates":"approval-required"}"#)
         );
         assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
     }

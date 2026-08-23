@@ -152,13 +152,6 @@ impl OperatorConfig {
             .map(|s| s.telemetry != TelemetryMode::Off)
             .unwrap_or(true)
     }
-
-    /// Whether collector logs should use recognized application-provided levels.
-    pub fn parses_application_log_levels(&self) -> bool {
-        self.stack_settings
-            .as_ref()
-            .is_some_and(StackSettings::parses_application_log_levels)
-    }
 }
 
 #[cfg(test)]
@@ -209,7 +202,6 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
-                logs: None,
                 public_endpoints: None,
             }))
             .api_server_port(8080)
@@ -267,7 +259,6 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
-                logs: None,
                 public_endpoints: None,
             }))
             .build();
@@ -292,7 +283,6 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
-                logs: None,
                 public_endpoints: None,
             }))
             .build();
@@ -317,7 +307,6 @@ mod tests {
                 kubernetes: None,
                 external_bindings: None,
                 compute: None,
-                logs: None,
                 public_endpoints: None,
             }))
             .build();

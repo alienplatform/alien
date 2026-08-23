@@ -14,3 +14,4 @@ const value: models.StackSettingsCompute = {};
 ```typescript
 const value: any = "<value>";
 ```
+

@@ -10,6 +10,7 @@ import { operationsInvoke } from "../funcs/operationsInvoke.js";
 import { operationsListPlugins } from "../funcs/operationsListPlugins.js";
 import { operationsPublishPlugin } from "../funcs/operationsPublishPlugin.js";
 import { operationsQueueAccessRequest } from "../funcs/operationsQueueAccessRequest.js";
+import { operationsSetBuiltinPlugins } from "../funcs/operationsSetBuiltinPlugins.js";
 import { operationsSetPluginEnabled } from "../funcs/operationsSetPluginEnabled.js";
 import { operationsUpdatePolicy } from "../funcs/operationsUpdatePolicy.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -40,6 +41,20 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.PublishOperationsPluginResponse> {
     return unwrapAsync(operationsPublishPlugin(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Replace the complete set of enabled built-in operations plugins for a project.
+   */
+  async setBuiltinPlugins(
+    request: operations.SetBuiltinOperationsPluginsRequest,
+    options?: RequestOptions,
+  ): Promise<models.SetBuiltinOperationsPluginsResponse> {
+    return unwrapAsync(operationsSetBuiltinPlugins(
       this,
       request,
       options,

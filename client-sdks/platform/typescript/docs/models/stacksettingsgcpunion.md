@@ -16,3 +16,4 @@ const value: models.StackSettingsGcp = {
 ```typescript
 const value: any = "<value>";
 ```
+

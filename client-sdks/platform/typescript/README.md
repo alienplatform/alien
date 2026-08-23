@@ -181,8 +181,8 @@ run();
 * [list](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
 * [create](docs/sdks/apikeys/README.md#create) - Create a new API key.
 * [get](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
-* [update](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
 * [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
+* [update](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
 * [deleteMultiple](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 
 ### [Auth](docs/sdks/auth/README.md)
@@ -206,8 +206,8 @@ run();
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [resolveTarget](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
-* [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 * [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
+* [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
 * [dispatch](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
@@ -229,8 +229,8 @@ run();
 
 * [list](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
 * [create](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
-* [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
 * [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
+* [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
@@ -240,14 +240,14 @@ run();
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
-* [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 * [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
+* [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
-* [ensureDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
 * [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
+* [ensureDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
-* [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 * [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
+* [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
@@ -305,14 +305,14 @@ run();
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
-* [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
 * [drainMachine](docs/sdks/machines/README.md#drainmachine)
+* [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
 
-* [create](docs/sdks/managers/README.md#create) - Create a new manager.
 * [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
+* [create](docs/sdks/managers/README.md#create) - Create a new manager.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -334,6 +334,7 @@ run();
 
 * [listPlugins](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 * [publishPlugin](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
+* [setBuiltinPlugins](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
 * [createBundleUploadUrl](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
 * [setPluginEnabled](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 * [getPolicy](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
@@ -360,8 +361,8 @@ run();
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-* [update](docs/sdks/projects/README.md#update) - Update a project.
 * [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
+* [update](docs/sdks/projects/README.md#update) - Update a project.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
@@ -450,12 +451,12 @@ run();
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 * [get](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
-* [update](docs/sdks/workspaces/README.md#update) - Update a workspace.
 * [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
+* [update](docs/sdks/workspaces/README.md#update) - Update a workspace.
 * [listMembers](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
-* [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
 * [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
+* [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
 * [getSettings](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
 * [updateSettings](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
@@ -611,6 +612,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`operationsListPlugins`](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 - [`operationsPublishPlugin`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 - [`operationsQueueAccessRequest`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
+- [`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
 - [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install

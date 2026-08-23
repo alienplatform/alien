@@ -14,3 +14,4 @@ const value: models.StackSettingsKubernetes = {};
 ```typescript
 const value: any = "<value>";
 ```
+

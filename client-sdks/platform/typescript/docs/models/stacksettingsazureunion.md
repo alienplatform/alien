@@ -16,3 +16,4 @@ const value: models.StackSettingsAzure = {
 ```typescript
 const value: any = "<value>";
 ```
+
