@@ -409,6 +409,14 @@ struct ListTemplatesResponse {
     next_page_token: Option<String>,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListEnginesResponse {
+    #[serde(default)]
+    reasoning_engines: Vec<ReasoningEngine>,
+    next_page_token: Option<String>,
+}
+
 // =================================================================================================
 // API
 // =================================================================================================
@@ -421,6 +429,9 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn create_engine(&self, display_name: &str) -> Result<Operation>;
     /// Delete a reasoning engine. Retries; a not-found is success.
     async fn delete_engine(&self, engine: &str) -> Result<()>;
+    /// List reasoning engines under the project, following pagination. Retries. Lets the orphan
+    /// sweep find engines a failed run abandoned, not only those a scratch log recorded.
+    async fn list_engines(&self) -> Result<Vec<ReasoningEngine>>;
 
     /// Create a template. Single-attempt; returns the operation to poll. Config is immutable.
     async fn create_template(
@@ -707,6 +718,33 @@ impl AgentPlatformApi for AgentPlatformClient {
             }
         }
         Ok(templates)
+    }
+
+    async fn list_engines(&self) -> Result<Vec<ReasoningEngine>> {
+        let path = self.engines_path();
+        let mut engines = Vec::new();
+        let mut page_token: Option<String> = None;
+
+        loop {
+            let query = page_token
+                .as_ref()
+                .map(|token| vec![("pageToken", token.clone())]);
+            let page: ListEnginesResponse = self
+                .base
+                .execute_request(Method::GET, &path, query, Option::<()>::None, "engines")
+                .await
+                .context(AgentPlatformErrorData::RequestFailed {
+                    operation: "list engines".to_string(),
+                    message: "project reasoning engines".to_string(),
+                })?;
+
+            engines.extend(page.reasoning_engines);
+            match page.next_page_token {
+                Some(token) if !token.is_empty() => page_token = Some(token),
+                _ => break,
+            }
+        }
+        Ok(engines)
     }
 
     async fn delete_template(&self, engine: &str, template: &str) -> Result<()> {
@@ -1320,6 +1358,50 @@ mod tests {
         assert_eq!(
             templates[1].name.as_deref(),
             Some("eng1/sandboxEnvironmentTemplates/t2")
+        );
+    }
+
+    const ENGINES_PATH: &str = "/projects/test-project/locations/us-central1/reasoningEngines";
+
+    #[tokio::test]
+    async fn list_engines_follows_pagination() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path(ENGINES_PATH).matches(|req| {
+                    req.query_params
+                        .as_ref()
+                        .is_none_or(|q| q.iter().all(|(k, _)| k != "pageToken"))
+                });
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "reasoningEngines": [{ "name": "projects/p/locations/us-central1/reasoningEngines/e1" }],
+                    "nextPageToken": "page2"
+                }));
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET)
+                    .path(ENGINES_PATH)
+                    .query_param("pageToken", "page2");
+                then.status(200).json_body_obj(&serde_json::json!({
+                    "reasoningEngines": [{ "name": "projects/p/locations/us-central1/reasoningEngines/e2" }]
+                }));
+            })
+            .await;
+
+        let engines = client(&server)
+            .list_engines()
+            .await
+            .expect("both pages should list");
+        assert_eq!(engines.len(), 2, "both pages were followed");
+        assert_eq!(
+            engines[0].name.as_deref(),
+            Some("projects/p/locations/us-central1/reasoningEngines/e1")
+        );
+        assert_eq!(
+            engines[1].name.as_deref(),
+            Some("projects/p/locations/us-central1/reasoningEngines/e2")
         );
     }
 

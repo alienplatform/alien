@@ -1,5 +1,7 @@
 use super::*;
-use alien_gcp_clients::gcp::agent_platform::{MockAgentPlatformApi, SandboxEnvironmentTemplate};
+use alien_gcp_clients::gcp::agent_platform::{
+    MockAgentPlatformApi, ReasoningEngine, SandboxEnvironmentTemplate,
+};
 use futures::StreamExt;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -399,6 +401,9 @@ impl AgentPlatformApi for WedgedAgent {
         unimplemented!()
     }
     async fn delete_engine(&self, _engine: &str) -> ClientResult<()> {
+        unimplemented!()
+    }
+    async fn list_engines(&self) -> ClientResult<Vec<ReasoningEngine>> {
         unimplemented!()
     }
     async fn create_template(

@@ -33,7 +33,7 @@
 //! window between create resolving and being recorded cannot be swept without an engine-list verb,
 //! which this backend does not expose.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,6 +54,9 @@ use alien_gcp_clients::gcp::agent_platform::{
 // ---- Configuration and clients ----------------------------------------------------------------
 
 const HANDOFF_ENV: &str = "ALIEN_SANDBOX_LIVE_RECONNECT";
+/// Display-name prefix on every engine and template this suite creates, so the sweep can find an
+/// orphan the scratch log never recorded.
+const LIVE_PREFIX: &str = "alien-sbx-live-";
 const TTL_SECONDS: u32 = 3600;
 
 /// The credentials a client needs, from the same `GOOGLE_TARGET_*` variables the rest of the E2E
@@ -144,7 +147,7 @@ impl Drop for EngineGuard {
 }
 
 async fn provision_engine(client: &Arc<AgentPlatformClient>) -> String {
-    let display = format!("alien-sbx-live-{}", uuid::Uuid::new_v4().simple());
+    let display = format!("{LIVE_PREFIX}{}", uuid::Uuid::new_v4().simple());
     let operation = client
         .create_engine(&display)
         .await
@@ -163,7 +166,7 @@ async fn provision_engine(client: &Arc<AgentPlatformClient>) -> String {
 fn template_body(image: &str, internet_access: bool) -> SandboxEnvironmentTemplate {
     SandboxEnvironmentTemplate {
         name: None,
-        display_name: Some(format!("alien-sbx-live-{}", uuid::Uuid::new_v4().simple())),
+        display_name: Some(format!("{LIVE_PREFIX}{}", uuid::Uuid::new_v4().simple())),
         custom_container_environment: Some(CustomContainerEnvironment {
             custom_container_spec: Some(CustomContainerSpec {
                 image_uri: image.to_string(),
@@ -805,13 +808,28 @@ async fn sweep_orphaned_engines() {
     let client = LiveConfig::from_env().client();
     let recorded = std::fs::read_to_string(sweep_log()).unwrap_or_default();
 
-    let mut failures = Vec::new();
-    for engine in recorded
+    // Two sources, deduped: engines a failed run recorded, and engines the API still lists under
+    // this suite's display-name prefix. The second catches one killed before it was ever recorded —
+    // the gap a log-only sweep leaves. Only this suite's prefix is reaped, never a stray engine.
+    let mut targets: BTreeSet<String> = recorded
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
-    {
-        if let Err(error) = client.delete_engine(last_segment(engine)).await {
+        .map(|line| last_segment(line).to_string())
+        .collect();
+    for engine in client.list_engines().await.expect("listing engines to sweep") {
+        let matches_suite = engine
+            .display_name
+            .as_deref()
+            .is_some_and(|name| name.starts_with(LIVE_PREFIX));
+        if let (true, Some(name)) = (matches_suite, engine.name.as_deref()) {
+            targets.insert(last_segment(name).to_string());
+        }
+    }
+
+    let mut failures = Vec::new();
+    for engine in &targets {
+        if let Err(error) = client.delete_engine(engine).await {
             failures.push(format!("{engine}: {error}"));
         }
     }
@@ -819,6 +837,6 @@ async fn sweep_orphaned_engines() {
 
     assert!(
         failures.is_empty(),
-        "every recorded engine must be gone after a sweep; still present: {failures:?}"
+        "every orphan engine must be gone after a sweep; still present: {failures:?}"
     );
 }
