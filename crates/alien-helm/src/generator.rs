@@ -124,8 +124,10 @@ pub struct OperatorManifestOptions<'a> {
     /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
     /// In `Namespace` scope this is also the namespace observed.
     pub install_namespace: Option<&'a str>,
-    /// The vendor's branded DNS domain (e.g. `acme.dev`), used to white-label
-    /// the access-request CRD (group/kind/plural). `None` → the Alien defaults.
+    /// The vendor's brand name (e.g. `acme`, or a real owned domain like
+    /// `acme.dev`), used to white-label the access-request CRD
+    /// (group/kind/plural). It's slugified, never resolved as DNS — any
+    /// stable customer-facing identity works. `None` → the Alien defaults.
     /// Same value the operator carries at runtime, so both agree on the CRD.
     pub label_domain: Option<&'a str>,
     pub scope: OperatorScope,
@@ -4358,9 +4360,11 @@ mod tests {
 
     #[test]
     fn access_request_crd_is_white_labeled_from_the_brand_domain() {
-        // A vendor whose branded domain is acme.dev gets AcmeAccessRequest, not
+        // A vendor branded acme.dev gets AcmeAccessRequest, not
         // AlienAccessRequest — the CRD, RBAC, and (elsewhere) the operator
-        // runtime all derive from the same domain.
+        // runtime all derive from the same brand slug. The brand's DNS shape
+        // is never required — it's slugified into the CRD group, never
+        // resolved.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
@@ -4386,11 +4390,11 @@ mod tests {
             .expect("manifest should include the access-request CRD");
         assert_eq!(
             yaml_path(&crd, &["metadata", "name"]).and_then(YamlValue::as_str),
-            Some("acmeaccessrequests.accessrequests.acme.dev")
+            Some("acmeaccessrequests.accessrequests.acme")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "group"]).and_then(YamlValue::as_str),
-            Some("accessrequests.acme.dev")
+            Some("accessrequests.acme")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "names", "kind"]).and_then(YamlValue::as_str),
@@ -4407,7 +4411,7 @@ mod tests {
             "no alien-named resource in a branded build"
         );
         assert!(
-            !text.contains("accessrequests.alien.dev"),
+            !text.contains("accessrequests.alien"),
             "no alien group in a branded build"
         );
 
@@ -4421,10 +4425,7 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| {
-                        g.iter()
-                            .any(|x| x.as_str() == Some("accessrequests.acme.dev"))
-                    })
+                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme")))
                     .unwrap_or(false)
             });
         assert!(
