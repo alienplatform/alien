@@ -4279,7 +4279,7 @@ mod tests {
             // The access-request CRD is the operator's own control resource: it
             // materializes access requests and records the approval window in
             // status, but never deletes them.
-            if api_groups == vec!["accessrequests.alien.dev"] {
+            if api_groups == vec!["accessrequests.alien"] {
                 assert!(
                     verbs.iter().all(|v| matches!(
                         *v,
