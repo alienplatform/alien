@@ -6,7 +6,6 @@ use crate::ui::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::Parser;
 use flate2::read::GzDecoder;
-use serde::Deserialize;
 use std::path::{Path, PathBuf};
 use tar::Archive;
 
@@ -69,47 +68,11 @@ fn fallback_templates() -> Vec<TemplateInfo> {
 }
 
 async fn fetch_templates() -> Result<Vec<TemplateInfo>> {
-    // Try fetching from GitHub Contents API
-    let url = "https://api.github.com/repos/alienplatform/alien/contents/examples?ref=main";
-    let client = reqwest::Client::new();
-    let response = client
-        .get(url)
-        .header("User-Agent", "alien-cli")
-        .header("Accept", "application/vnd.github.v3+json")
-        .send()
-        .await;
-
-    let response = match response {
-        Ok(r) if r.status().is_success() => r,
-        _ => return Ok(fallback_templates()),
-    };
-
-    #[derive(Deserialize)]
-    struct GithubEntry {
-        name: String,
-        #[serde(rename = "type")]
-        entry_type: String,
-    }
-
-    let entries: Vec<GithubEntry> = match response.json().await {
-        Ok(e) => e,
-        Err(_) => return Ok(fallback_templates()),
-    };
-
-    let dir_names: Vec<String> = entries
-        .into_iter()
-        .filter(|e| e.entry_type == "dir" && e.name != "node_modules")
-        .map(|e| e.name)
-        .collect();
-
-    if dir_names.is_empty() {
-        return Ok(fallback_templates());
-    }
-
-    Ok(fallback_templates()
-        .into_iter()
-        .filter(|template| dir_names.contains(&template.name))
-        .collect())
+    // The catalog is versioned with the CLI so every listed template is known
+    // to have compatible metadata and source. Reading main at runtime could
+    // expose templates a released CLI cannot understand, or silently return a
+    // partial catalog when one metadata request fails.
+    Ok(fallback_templates())
 }
 
 fn destination_for_init(cwd: &Path, directory: Option<&str>) -> PathBuf {

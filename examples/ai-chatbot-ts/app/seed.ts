@@ -73,9 +73,12 @@ async function run(): Promise<void> {
     await client.query("begin")
     try {
       await client.query(SCHEMA)
-      const { rows } = await client.query("select count(*)::int as count from customers")
-      if (rows[0].count === 0) {
+      const customers = await client.query("select count(*)::int as count from customers")
+      if (customers.rows[0].count === 0) {
         await client.query(CUSTOMERS)
+      }
+      const orders = await client.query("select count(*)::int as count from orders")
+      if (orders.rows[0].count === 0) {
         await client.query(ORDERS)
       }
       await client.query("commit")
