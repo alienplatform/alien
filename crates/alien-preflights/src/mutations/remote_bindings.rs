@@ -3,7 +3,7 @@
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
     Ai, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings, ResourceEntry,
-    ResourceLifecycle, Stack, StackState,
+    ResourceLifecycle, Sandbox, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -90,6 +90,11 @@ impl StackMutation for RemoteBindingsMutation {
     }
 }
 
+/// Refuses a deployment that pairs an isolated remote kind with any other published resource.
+///
+/// Every kind's grants attach to the one shared `-access` role, and the credential lease is a
+/// plain AssumeRole with no session policy, so resolving any binding hands the caller the whole
+/// role's authority. Isolation is the only thing bounding what one resolve is worth.
 fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Result<()> {
     let remote_resources = stack
         .resources
@@ -101,7 +106,10 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
         .filter(|(_, entry)| {
             matches!(
                 entry.config.resource_type(),
-                resource_type if resource_type == Key::RESOURCE_TYPE || resource_type == Ai::RESOURCE_TYPE
+                resource_type
+                    if resource_type == Key::RESOURCE_TYPE
+                        || resource_type == Ai::RESOURCE_TYPE
+                        || resource_type == Sandbox::RESOURCE_TYPE
             )
         })
         .collect::<Vec<_>>();
@@ -291,6 +299,57 @@ mod tests {
                 "the refusal must name the declaration to change, got: {error}"
             );
         }
+    }
+
+    /// Resolving any binding yields credentials for the whole shared `-access` role, so a vendor
+    /// granted bucket read on a stack like this would also receive arbitrary code execution.
+    #[tokio::test]
+    async fn a_remote_sandbox_rejects_another_published_resource() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add_with_remote_access(
+                Storage::new("exports".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect_err("a remote sandbox must reject another remotely published resource");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(
+            error.to_string().contains(
+                "a remotely published sandbox must be the deployment's only remoteAccess resource"
+            ),
+            "the sandbox must be named as the resource forcing isolation, got: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_remote_sandbox_allows_non_remote_application_resources() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .add(
+                Storage::new("internal".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Test), &config())
+            .await
+            .expect("non-remote application resources are allowed beside a remote sandbox");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "agents");
+        assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
     }
 
     #[tokio::test]
