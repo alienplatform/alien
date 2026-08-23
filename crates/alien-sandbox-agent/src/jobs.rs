@@ -295,7 +295,7 @@ fn frame_seq(frame: &Frame) -> Option<u64> {
 mod tests {
     use super::*;
 
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
     use std::time::Duration;
 
     use base64::engine::general_purpose::STANDARD;
@@ -420,6 +420,51 @@ mod tests {
             stdout_text(&done.frames).split_whitespace().collect::<Vec<_>>(),
             vec!["start", "end"],
             "both the pre- and post-sleep output must arrive"
+        );
+    }
+
+    /// A client that loses a response re-polls from a cursor it has already passed. Across several
+    /// overlapping windows — including one that rewinds behind the last — a window must begin at
+    /// exactly the frame after its cursor and never re-deliver one at or before it, so stitching
+    /// the deltas rebuilds the stream with no seq repeated and none skipped. The strictly-after
+    /// test polls a finished job at two fixed offsets; this walks a moving, overlapping cursor as
+    /// `run_detached` does.
+    #[tokio::test]
+    async fn overlapping_polls_reconstruct_the_stream_exactly_once() {
+        let registry = JobRegistry::new();
+        let id = start(
+            &registry,
+            &["/bin/sh", "-c", "echo a; echo b; echo c; echo d; echo e"],
+            10_000,
+        );
+        assert_eq!(
+            seqs(&wait_for_completion(&registry, &id).await.frames),
+            vec![0, 1, 2, 3, 4],
+            "five output lines, seq 0..=4"
+        );
+
+        let mut covered = BTreeSet::new();
+        for since in [None, Some(1), Some(0), Some(3), Some(2)] {
+            let delta = seqs(&registry.poll(&id, since).expect("the job exists").frames);
+            if let Some(since) = since {
+                assert!(
+                    delta.iter().all(|seq| *seq > since),
+                    "no duplication: a window past {since} re-delivered {delta:?}"
+                );
+                if let Some(&first) = delta.first() {
+                    assert_eq!(
+                        first,
+                        since + 1,
+                        "no gap: a window must begin at the frame right after its cursor"
+                    );
+                }
+            }
+            covered.extend(delta);
+        }
+        assert_eq!(
+            covered.into_iter().collect::<Vec<_>>(),
+            vec![0, 1, 2, 3, 4],
+            "the overlapping windows together cover every frame exactly once"
         );
     }
 

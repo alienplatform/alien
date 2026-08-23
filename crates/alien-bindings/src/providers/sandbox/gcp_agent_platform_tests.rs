@@ -592,6 +592,54 @@ async fn a_job_error_object_becomes_a_stream_error() {
     assert!(error.to_string().contains("deadlineExceeded"), "{error}");
 }
 
+/// The write-once / read-retries split, pinned in one test so neither half can pass on the
+/// absence of the other. A mutating `:execute` that fails is delivered exactly once — it may have
+/// already run, and re-sending it could double a side effect — while a read is polled until the
+/// session settles. Mutation check: give `execute_op` a retry loop and `execute`'s `.times(1)`
+/// fails; remove `terminate`'s poll and the read count collapses to one.
+#[tokio::test(start_paused = true)]
+async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let reads_seen = reads.clone();
+    let mut client = MockAgentPlatformApi::new();
+
+    client.expect_execute().times(1).returning(|_, _, _| Err(execute_refused()));
+    client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+    client.expect_get_sandbox().returning(move |_, id| {
+        // Present on the first two reads, gone on the third: the poll, not one read, decides.
+        if reads.fetch_add(1, Ordering::SeqCst) < 2 {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        } else {
+            Err(not_found())
+        }
+    });
+
+    let sut = provider(client);
+
+    let Err(command) = sut
+        .run_command(
+            "s1",
+            RunCommandRequest {
+                command: vec!["/bin/true".to_string()],
+                working_directory: None,
+                env: BTreeMap::new(),
+                deadline: Duration::from_secs(5),
+            },
+        )
+        .await
+    else {
+        panic!("a mutating command whose execute fails is refused, not retried into success");
+    };
+    assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
+
+    sut.terminate("s1").await.expect("the poll confirms the session is gone");
+
+    assert!(
+        reads_seen.load(Ordering::SeqCst) > 1,
+        "confirming the session gone took more than one read, so the read path retries"
+    );
+}
+
 /// Refuse-don't-destroy: a command against a gone session is refused and nothing is deleted.
 /// Mutation check: add a `delete_sandbox` to `run_command`'s failure path and `.never()` fails.
 #[tokio::test]
