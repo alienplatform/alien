@@ -8,6 +8,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { Bindings } from "../src/index.js"
+import {
+  loadAddon,
+  type RawRemoteBindingsHandle,
+  type RawRemoteBindingsHandleConstructor,
+  type RawSandboxHandle,
+} from "../src/loader.js"
 
 const deploymentId = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const managerId = "mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -337,5 +343,78 @@ describe("Bindings.sandbox (real addon)", () => {
     expect(capabilities).toContain("files")
     expect(sandboxBindingTokenBodies).toEqual([{ deploymentId }])
     expect(sandboxResolveBodies).toEqual([{ deploymentId, resourceId: "agent" }])
+  })
+})
+
+/** Own properties of any JS function, so never an addon-emitted static. */
+const functionOwnProperties = new Set(["arguments", "caller", "length", "name", "prototype"])
+
+/** The addon exports every handle class; `NativeAddon` types only the ones the wrapper calls. */
+function nativeClass(name: string): { prototype: object } {
+  const addon = loadAddon() as unknown as Record<string, { prototype: object } | undefined>
+  const exported = addon[name]
+  if (!exported) throw new Error(`the addon exports no class named '${name}'`)
+  return exported
+}
+
+function instanceMethodsOf(name: string): string[] {
+  return Object.getOwnPropertyNames(nativeClass(name).prototype)
+    .filter(member => member !== "constructor")
+    .sort()
+}
+
+function staticMethodsOf(name: string): string[] {
+  return Object.getOwnPropertyNames(nativeClass(name))
+    .filter(member => !functionOwnProperties.has(member))
+    .sort()
+}
+
+const remoteBindingsMembers: Record<keyof RawRemoteBindingsHandle, true> = {
+  ai: true,
+  key: true,
+  sandbox: true,
+  storage: true,
+}
+
+const remoteBindingsFactories: Record<keyof RawRemoteBindingsHandleConstructor, true> = {
+  forCustomer: true,
+  forDeployment: true,
+}
+
+const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
+  capabilities: true,
+  create: true,
+  get: true,
+  getOrCreate: true,
+  list: true,
+  mkdir: true,
+  readFile: true,
+  resume: true,
+  runCommand: true,
+  suspend: true,
+  terminate: true,
+  writeFile: true,
+}
+
+/**
+ * `Record<keyof Raw*, true>` pins each expected list to its interface at compile time, and the
+ * comparisons pin the interfaces to Rust at run time. Neither half alone catches a rename, and
+ * the generated `.d.ts` that would catch both is gitignored.
+ */
+describe("napi surface parity (real addon)", () => {
+  it("emits exactly the RemoteBindingsHandle members the loader declares", () => {
+    expect(instanceMethodsOf("RemoteBindingsHandle")).toEqual(
+      Object.keys(remoteBindingsMembers).sort(),
+    )
+  })
+
+  it("emits exactly the RemoteBindingsHandle factories the loader declares", () => {
+    expect(staticMethodsOf("RemoteBindingsHandle")).toEqual(
+      Object.keys(remoteBindingsFactories).sort(),
+    )
+  })
+
+  it("emits exactly the SandboxHandle members the loader declares", () => {
+    expect(instanceMethodsOf("SandboxHandle")).toEqual(Object.keys(sandboxMembers).sort())
   })
 })

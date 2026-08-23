@@ -313,7 +313,7 @@ mod tests {
     }
 
     /// A Sandbox declared the way Remote Bindings requires — `Frozen` with `remoteAccess` — is
-    /// what every downstream slice assumes exists. Lifecycle is per declaration, so nothing about
+    /// what the remaining remote-binding paths assume exists. Lifecycle is per declaration, so nothing about
     /// the type blocks it; this pins that the grant actually reaches the shared identity.
     #[tokio::test]
     async fn a_frozen_remote_sandbox_is_granted_the_remote_execute_set() {

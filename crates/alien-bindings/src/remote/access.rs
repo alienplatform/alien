@@ -30,7 +30,7 @@ pub(crate) enum RemoteBindingCapability {
     /// naming the wrong capability at a call site is a compile error rather than a 4xx.
     #[expect(
         dead_code,
-        reason = "constructed by the follow-up that widens the wire enum"
+        reason = "constructed once the wire enum carries the sandbox capability"
     )]
     Sandbox,
 }

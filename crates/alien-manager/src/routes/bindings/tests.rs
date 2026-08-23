@@ -296,7 +296,7 @@ fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
     }
 }
 
-/// The wire contract slice D reads. `service` selects the variant, so a rename is a silent
+/// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent
 /// breakage for every remote client.
 #[test]
 fn remote_sandbox_response_carries_the_service_tag_and_no_extra_credentials() {
