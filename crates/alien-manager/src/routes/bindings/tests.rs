@@ -278,6 +278,25 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
     );
 }
 
+/// Preflight refuses a remote binding by its permission set's platform coverage, while this route
+/// hardcodes AWS. Widening either alone brings back a deployment that installs a grant the other
+/// end will not honour.
+#[test]
+fn remote_sandbox_resolve_agrees_with_the_permission_set_platform_coverage() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(open_sandbox_binding(), platform),
+            platform,
+        );
+
+        assert_eq!(
+            alien_permissions::permission_set_covers_platform("sandbox/remote-execute", platform),
+            remote_sandbox_binding(&deployment, "agents").is_ok(),
+            "{platform}"
+        );
+    }
+}
+
 #[test]
 fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
     for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {

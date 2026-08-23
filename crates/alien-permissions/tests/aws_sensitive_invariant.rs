@@ -1,4 +1,4 @@
-use alien_permissions::list_permission_set_ids;
+use alien_permissions::{list_permission_set_ids, SENSITIVE_MICROVM_ACTIONS};
 
 const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "s3:GetObject",
