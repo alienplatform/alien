@@ -143,3 +143,90 @@ describe("Bindings.forRemoteDeployment (real addon)", () => {
     expect(managerAuthorizations).toEqual(Array(2).fill(`Bearer ${bindingToken}`))
   })
 })
+
+const externalId = "ext_customer_01"
+const customerToken = "remote-customer-token"
+const customerBindingToken = "customer-binding-token"
+
+let customerManagerServer: Server | undefined
+let customerPlatformServer: Server | undefined
+let customerManagerOrigin: string
+let customerPlatformOrigin: string
+const customerPlatformAuthorizations: Array<string | undefined> = []
+const customerManagerAuthorizations: Array<string | undefined> = []
+const externalAccessBodies: unknown[] = []
+const customerResolveBodies: unknown[] = []
+
+describe("Bindings.forRemoteCustomer (real addon)", () => {
+  beforeAll(async () => {
+    customerManagerServer = createServer(async (request, response) => {
+      customerManagerAuthorizations.push(request.headers.authorization)
+      if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
+        json(response, 404, { message: "not found" })
+        return
+      }
+      customerResolveBodies.push(await bodyOf(request))
+      json(response, 403, {
+        code: "FORBIDDEN",
+        message: "Remote access was revoked",
+        retryable: false,
+        internal: false,
+        httpStatusCode: 403,
+      })
+    })
+    customerManagerOrigin = await listen(customerManagerServer)
+
+    customerPlatformServer = createServer(async (request, response) => {
+      customerPlatformAuthorizations.push(request.headers.authorization)
+      if (
+        request.method === "POST" &&
+        request.url === `/v1/projects/${projectId}/remote-bindings/access`
+      ) {
+        externalAccessBodies.push(await bodyOf(request))
+        json(response, 200, {
+          deploymentId,
+          resourceId: "uploads",
+          accessToken: customerBindingToken,
+          expiresIn: 300,
+          tokenType: "Bearer",
+          managerUrl: customerManagerOrigin,
+        })
+        return
+      }
+      json(response, 404, { message: "not found" })
+    })
+    customerPlatformOrigin = await listen(customerPlatformServer)
+  })
+
+  afterAll(async () => {
+    await Promise.all([close(customerPlatformServer), close(customerManagerServer)])
+  })
+
+  it("selects the customer's deployment by external ID and preserves the manager's denial", async () => {
+    const bindings = await Bindings.forRemoteCustomer({
+      project: projectId,
+      externalId,
+      token: customerToken,
+      apiBaseUrl: customerPlatformOrigin,
+    })
+    await expect(bindings.storage("uploads").head("missing.txt")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Remote access was revoked",
+      retryable: false,
+    })
+    // The rejection reselects by external ID rather than by deployment id, so the
+    // second access request is the same one.
+    expect(externalAccessBodies).toEqual([
+      { externalId, capability: "storage" },
+      { externalId, capability: "storage" },
+    ])
+    // The caller never supplies a deployment id on this path, so its presence in
+    // the resolve body proves the manager was reached through the selection response.
+    expect(customerResolveBodies).toEqual([
+      { deploymentId, resourceId: "uploads" },
+      { deploymentId, resourceId: "uploads" },
+    ])
+    expect(customerPlatformAuthorizations).toEqual(Array(2).fill(`Bearer ${customerToken}`))
+    expect(customerManagerAuthorizations).toEqual(Array(2).fill(`Bearer ${customerBindingToken}`))
+  })
+})

@@ -154,7 +154,7 @@ pub struct RemoteBindingsHandle {
 impl RemoteBindingsHandle {
     /// Select a customer's Storage deployment by Project and external ID.
     #[napi(factory)]
-    pub async fn for_environment(
+    pub async fn for_customer(
         project: String,
         external_id: String,
         token: String,
