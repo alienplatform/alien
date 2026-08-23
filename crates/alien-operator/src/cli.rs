@@ -445,11 +445,17 @@ async fn run(
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
         .maybe_app_version(args.operator_release_version)
-        .maybe_label_domain(
-            embedded_config
-                .as_ref()
-                .and_then(|config| config.label_domain.clone()),
-        )
+        .maybe_label_domain(embedded_config.as_ref().and_then(|config| {
+            // `brand` is the already-slugged identity `access_request_crd_names`
+            // expects (see alien-core::access_request_crd) — packages-builder
+            // computes it once and embeds both fields, but `label_domain` is
+            // the raw, pre-slug config value (e.g. a placeholder like
+            // "acme.local"), which can disagree with what the manifest
+            // generator derived the CRD/RBAC from. Prefer `brand`; fall back
+            // to `label_domain` only for older embedded binaries that
+            // predate the `brand` field.
+            config.brand.clone().or_else(|| config.label_domain.clone())
+        }))
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
