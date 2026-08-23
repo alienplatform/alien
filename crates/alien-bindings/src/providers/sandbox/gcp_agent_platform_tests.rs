@@ -18,7 +18,12 @@ fn provider(client: MockAgentPlatformApi) -> GcpAgentPlatformSandbox {
 }
 
 fn provider_from(client: Arc<dyn AgentPlatformApi>) -> GcpAgentPlatformSandbox {
-    GcpAgentPlatformSandbox::new(client, ENGINE_FULL.to_string(), TEMPLATE.to_string(), Some(3600))
+    GcpAgentPlatformSandbox::new(
+        client,
+        ENGINE_FULL.to_string(),
+        TEMPLATE.to_string(),
+        Some(3600),
+    )
 }
 
 fn sandbox_name(id: &str) -> String {
@@ -50,14 +55,23 @@ fn done_op(value: serde_json::Value) -> Operation {
 fn op_of(input: &[u8]) -> String {
     serde_json::from_slice::<serde_json::Value>(input)
         .ok()
-        .and_then(|value| value.get("op").and_then(|op| op.as_str()).map(str::to_string))
+        .and_then(|value| {
+            value
+                .get("op")
+                .and_then(|op| op.as_str())
+                .map(str::to_string)
+        })
         .unwrap_or_default()
 }
 
 fn ndjson(lines: &[serde_json::Value]) -> Vec<u8> {
     let mut body = Vec::new();
     for line in lines {
-        body.extend_from_slice(serde_json::to_string(line).expect("frame serializes").as_bytes());
+        body.extend_from_slice(
+            serde_json::to_string(line)
+                .expect("frame serializes")
+                .as_bytes(),
+        );
         body.push(b'\n');
     }
     body
@@ -188,7 +202,10 @@ async fn get_returns_none_when_the_sandbox_is_gone() {
         .expect_get_sandbox()
         .returning(|_, _| Err(not_found()));
 
-    let found = provider(client).get("s1").await.expect("a gone sandbox is a valid answer");
+    let found = provider(client)
+        .get("s1")
+        .await
+        .expect("a gone sandbox is a valid answer");
     assert!(found.is_none(), "a not-found sandbox is None, not an error");
 }
 
@@ -228,10 +245,11 @@ async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
         .withf(|_, sandbox, _| sandbox == "stale")
         .returning(|_, _, _| Err(execute_refused()));
 
-    client
-        .expect_create_sandbox()
-        .times(1)
-        .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("fresh") }))));
+    client.expect_create_sandbox().times(1).returning(|_, _| {
+        Ok(done_op(
+            serde_json::json!({ "name": sandbox_name("fresh") }),
+        ))
+    });
     client
         .expect_get_sandbox()
         .withf(|_, sandbox| sandbox == "fresh")
@@ -250,7 +268,10 @@ async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
         })
         .await
         .expect("a stale session is replaced");
-    assert_eq!(session.session_id, "fresh", "the fresh session is returned, not the stale id");
+    assert_eq!(
+        session.session_id, "fresh",
+        "the fresh session is returned, not the stale id"
+    );
 }
 
 /// A reconnect to a suspended session wakes it and hands it back, rather than creating a second
@@ -268,7 +289,10 @@ async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second
             Ok(sandbox_in_state(id, "STATE_RUNNING"))
         }
     });
-    client.expect_resume().times(1).returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    client
+        .expect_resume()
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
     client
         .expect_execute()
         .withf(|_, _, input| op_of(input) == "health")
@@ -287,7 +311,46 @@ async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second
     assert_eq!(session.state, SandboxSessionState::Running);
     // The reconnect path the capability flip promises: a woken session carries a real generation
     // read from the container it came back on, not the unprobed sentinel.
-    assert_ne!(session.generation, NO_GENERATION, "a woken session carries its container generation");
+    assert_ne!(
+        session.generation, NO_GENERATION,
+        "a woken session carries its container generation"
+    );
+}
+
+#[tokio::test]
+async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() {
+    let mut client = MockAgentPlatformApi::new();
+    // Paused before the wake and paused after it: the wake never brought the session up.
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
+    client
+        .expect_resume()
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    // The compensating suspend fails, so the woken session cannot be put back to sleep.
+    client
+        .expect_pause()
+        .times(1)
+        .returning(|_, _| Err(not_found()));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Ok(health_reply()));
+    // A second live sandbox must never be provisioned beside the one this call woke.
+    client.expect_create_sandbox().never();
+    client.expect_delete_sandbox().never();
+
+    let error = provider(client)
+        .get_or_create(CreateSessionRequest {
+            session_id: Some("paused".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("a resume that cannot be rolled back must fail, not leak a live session");
+    assert!(
+        error.to_string().contains("paused"),
+        "the failure names the woken session so it stays identifiable: {error}"
+    );
 }
 
 // ---- generation and health -------------------------------------------------------------------
@@ -320,9 +383,18 @@ async fn generation_tracks_the_container_boot_id() {
     let replaced = generation_for_boot("boot-id-bbbb").await;
     let same = generation_for_boot("boot-id-aaaa").await;
 
-    assert_ne!(first, replaced, "a replaced container changes the generation");
-    assert_eq!(first, same, "the same container keeps its generation across separate reads");
-    assert_ne!(first, NO_GENERATION, "a probed running session carries a real generation");
+    assert_ne!(
+        first, replaced,
+        "a replaced container changes the generation"
+    );
+    assert_eq!(
+        first, same,
+        "the same container keeps its generation across separate reads"
+    );
+    assert_ne!(
+        first, NO_GENERATION,
+        "a probed running session carries a real generation"
+    );
 }
 
 /// A running record whose agent reports an empty boot id has no identity to reconnect to, so `get`
@@ -423,10 +495,7 @@ impl AgentPlatformApi for WedgedAgent {
     async fn delete_template(&self, _engine: &str, _template: &str) -> ClientResult<()> {
         unimplemented!()
     }
-    async fn list_templates(
-        &self,
-        _engine: &str,
-    ) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
+    async fn list_templates(&self, _engine: &str) -> ClientResult<Vec<SandboxEnvironmentTemplate>> {
         unimplemented!()
     }
     async fn create_sandbox(
@@ -473,7 +542,10 @@ async fn list_maps_sandboxes_to_sessions() {
         ])
     });
 
-    let sessions = provider(client).list().await.expect("list is supported here");
+    let sessions = provider(client)
+        .list()
+        .await
+        .expect("list is supported here");
     assert_eq!(sessions.len(), 2);
     assert_eq!(sessions[0].session_id, "a");
     assert_eq!(sessions[0].state, SandboxSessionState::Running);
@@ -488,11 +560,13 @@ async fn list_maps_sandboxes_to_sessions() {
 #[tokio::test]
 async fn a_short_command_runs_synchronously_without_a_job() {
     let mut client = MockAgentPlatformApi::new();
-    client.expect_execute().returning(|_, _, input| match op_of(input).as_str() {
-        "exec" => Ok(ndjson(&[stdout_frame(0, b"hi"), exit_frame(0)])),
-        "jobStart" => panic!("a short command must not start a job"),
-        other => panic!("unexpected op {other}"),
-    });
+    client
+        .expect_execute()
+        .returning(|_, _, input| match op_of(input).as_str() {
+            "exec" => Ok(ndjson(&[stdout_frame(0, b"hi"), exit_frame(0)])),
+            "jobStart" => panic!("a short command must not start a job"),
+            other => panic!("unexpected op {other}"),
+        });
 
     let frames: Vec<_> = provider(client)
         .run_command(
@@ -509,8 +583,13 @@ async fn a_short_command_runs_synchronously_without_a_job() {
         .collect()
         .await;
 
-    assert!(matches!(frames.first(), Some(Ok(CommandOutput::Stdout { data, .. })) if data == b"hi"));
-    assert!(matches!(frames.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))));
+    assert!(
+        matches!(frames.first(), Some(Ok(CommandOutput::Stdout { data, .. })) if data == b"hi")
+    );
+    assert!(matches!(
+        frames.last(),
+        Some(Ok(CommandOutput::Exit { code: 0, .. }))
+    ));
 }
 
 /// A command longer than the synchronous window is detached as a job and polled to its exit; no
@@ -519,29 +598,31 @@ async fn a_short_command_runs_synchronously_without_a_job() {
 async fn a_long_command_uses_the_job_path() {
     let polls = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
-    client.expect_execute().returning(move |_, _, input| match op_of(input).as_str() {
-        "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
-        "jobPoll" => {
-            let poll = polls.fetch_add(1, Ordering::SeqCst);
-            if poll == 0 {
-                Ok(serde_json::to_vec(&serde_json::json!({
-                    "running": true,
-                    "frames": [stdout_frame(0, b"work")],
-                }))
-                .unwrap())
-            } else {
-                Ok(serde_json::to_vec(&serde_json::json!({
-                    "running": false,
-                    "frames": [],
-                    "exitCode": 0,
-                    "truncated": false,
-                }))
-                .unwrap())
+    client
+        .expect_execute()
+        .returning(move |_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => {
+                let poll = polls.fetch_add(1, Ordering::SeqCst);
+                if poll == 0 {
+                    Ok(serde_json::to_vec(&serde_json::json!({
+                        "running": true,
+                        "frames": [stdout_frame(0, b"work")],
+                    }))
+                    .unwrap())
+                } else {
+                    Ok(serde_json::to_vec(&serde_json::json!({
+                        "running": false,
+                        "frames": [],
+                        "exitCode": 0,
+                        "truncated": false,
+                    }))
+                    .unwrap())
+                }
             }
-        }
-        "exec" => panic!("a long command must not run synchronously"),
-        other => panic!("unexpected op {other}"),
-    });
+            "exec" => panic!("a long command must not run synchronously"),
+            other => panic!("unexpected op {other}"),
+        });
 
     let frames: Vec<_> = provider(client)
         .run_command(
@@ -558,8 +639,13 @@ async fn a_long_command_uses_the_job_path() {
         .collect()
         .await;
 
-    assert!(matches!(frames.first(), Some(Ok(CommandOutput::Stdout { data, .. })) if data == b"work"));
-    assert!(matches!(frames.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))));
+    assert!(
+        matches!(frames.first(), Some(Ok(CommandOutput::Stdout { data, .. })) if data == b"work")
+    );
+    assert!(matches!(
+        frames.last(),
+        Some(Ok(CommandOutput::Exit { code: 0, .. }))
+    ));
 }
 
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
@@ -567,16 +653,18 @@ async fn a_long_command_uses_the_job_path() {
 #[tokio::test(start_paused = true)]
 async fn a_job_error_object_becomes_a_stream_error() {
     let mut client = MockAgentPlatformApi::new();
-    client.expect_execute().returning(|_, _, input| match op_of(input).as_str() {
-        "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
-        "jobPoll" => Ok(serde_json::to_vec(&serde_json::json!({
-            "running": false,
-            "frames": [],
-            "error": { "code": "deadlineExceeded", "message": "exceeded its 60000ms deadline" },
-        }))
-        .unwrap()),
-        other => panic!("unexpected op {other}"),
-    });
+    client
+        .expect_execute()
+        .returning(|_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&serde_json::json!({
+                "running": false,
+                "frames": [],
+                "error": { "code": "deadlineExceeded", "message": "exceeded its 60000ms deadline" },
+            }))
+            .unwrap()),
+            other => panic!("unexpected op {other}"),
+        });
 
     let frames: Vec<_> = provider(client)
         .run_command(
@@ -593,7 +681,11 @@ async fn a_job_error_object_becomes_a_stream_error() {
         .collect()
         .await;
 
-    let error = frames.last().expect("a terminal item").as_ref().expect_err("an error object is a failure");
+    let error = frames
+        .last()
+        .expect("a terminal item")
+        .as_ref()
+        .expect_err("an error object is a failure");
     assert!(error.to_string().contains("deadlineExceeded"), "{error}");
 }
 
@@ -608,8 +700,14 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
     let reads_seen = reads.clone();
     let mut client = MockAgentPlatformApi::new();
 
-    client.expect_execute().times(1).returning(|_, _, _| Err(execute_refused()));
-    client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+    client
+        .expect_execute()
+        .times(1)
+        .returning(|_, _, _| Err(execute_refused()));
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Ok(()));
     client.expect_get_sandbox().returning(move |_, id| {
         // Present on the first two reads, gone on the third: the poll, not one read, decides.
         if reads.fetch_add(1, Ordering::SeqCst) < 2 {
@@ -637,7 +735,9 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
     };
     assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
 
-    sut.terminate("s1").await.expect("the poll confirms the session is gone");
+    sut.terminate("s1")
+        .await
+        .expect("the poll confirms the session is gone");
 
     assert!(
         reads_seen.load(Ordering::SeqCst) > 1,
@@ -650,7 +750,9 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
 #[tokio::test]
 async fn a_command_on_a_gone_session_is_refused_and_deletes_nothing() {
     let mut client = MockAgentPlatformApi::new();
-    client.expect_execute().returning(|_, _, _| Err(not_found()));
+    client
+        .expect_execute()
+        .returning(|_, _, _| Err(not_found()));
     client.expect_delete_sandbox().never();
 
     // The synchronous exec fails before a stream exists, so the refusal is the call's own error.
@@ -720,14 +822,18 @@ async fn write_files_sends_contents_base64_and_accepts_an_empty_body() {
         .withf(|_, _, input| {
             let value: serde_json::Value = serde_json::from_slice(input).unwrap();
             op_of(input) == "writeFile"
-                && value.get("contentsBase64").and_then(|v| v.as_str()) == Some(&BASE64.encode(b"data"))
+                && value.get("contentsBase64").and_then(|v| v.as_str())
+                    == Some(&BASE64.encode(b"data"))
                 && value.get("contents").is_none()
         })
         .times(1)
         .returning(|_, _, _| Ok(Vec::new()));
 
     provider(client)
-        .write_files("s1", BTreeMap::from([("a.txt".to_string(), b"data".to_vec())]))
+        .write_files(
+            "s1",
+            BTreeMap::from([("a.txt".to_string(), b"data".to_vec())]),
+        )
         .await
         .expect("an empty body is a successful write");
 }
@@ -740,7 +846,10 @@ async fn mkdir_accepts_an_empty_body() {
         .withf(|_, _, input| op_of(input) == "mkdir")
         .returning(|_, _, _| Ok(Vec::new()));
 
-    provider(client).mkdir("s1", "out").await.expect("mkdir succeeds on an empty body");
+    provider(client)
+        .mkdir("s1", "out")
+        .await
+        .expect("mkdir succeeds on an empty body");
 }
 
 #[tokio::test]
@@ -750,11 +859,16 @@ async fn read_file_decodes_the_agent_reply() {
         .expect_execute()
         .withf(|_, _, input| op_of(input) == "readFile")
         .returning(|_, _, _| {
-            Ok(serde_json::to_vec(&serde_json::json!({ "contentsBase64": BASE64.encode(b"file body") }))
-                .unwrap())
+            Ok(serde_json::to_vec(
+                &serde_json::json!({ "contentsBase64": BASE64.encode(b"file body") }),
+            )
+            .unwrap())
         });
 
-    let contents = provider(client).read_file("s1", "a.txt").await.expect("read succeeds");
+    let contents = provider(client)
+        .read_file("s1", "a.txt")
+        .await
+        .expect("read succeeds");
     assert_eq!(contents, b"file body");
 }
 
@@ -763,8 +877,14 @@ async fn read_file_decodes_the_agent_reply() {
 #[tokio::test]
 async fn suspend_and_resume_await_their_operations() {
     let mut client = MockAgentPlatformApi::new();
-    client.expect_pause().times(1).returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    client.expect_resume().times(1).returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    client
+        .expect_pause()
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
+    client
+        .expect_resume()
+        .times(1)
+        .returning(|_, _| Ok(done_op(serde_json::json!({}))));
 
     let provider = provider(client);
     provider.suspend("s1").await.expect("suspend completes");
@@ -774,13 +894,19 @@ async fn suspend_and_resume_await_their_operations() {
 #[tokio::test]
 async fn snapshot_returns_the_snapshot_name() {
     let mut client = MockAgentPlatformApi::new();
-    let name = "projects/p/locations/us-central1/reasoningEngines/eng1/sandboxEnvironmentSnapshots/snap1";
+    let name =
+        "projects/p/locations/us-central1/reasoningEngines/eng1/sandboxEnvironmentSnapshots/snap1";
     client
         .expect_snapshot()
-        .withf(|engine, sandbox, display| engine == "eng1" && sandbox == "s1" && !display.is_empty())
+        .withf(|engine, sandbox, display| {
+            engine == "eng1" && sandbox == "s1" && !display.is_empty()
+        })
         .returning(move |_, _, _| Ok(done_op(serde_json::json!({ "name": name }))));
 
-    let returned = provider(client).snapshot("s1").await.expect("snapshot completes");
+    let returned = provider(client)
+        .snapshot("s1")
+        .await
+        .expect("snapshot completes");
     assert_eq!(returned, name);
 }
 
@@ -792,7 +918,10 @@ async fn snapshot_returns_the_snapshot_name() {
 async fn terminate_confirms_by_polling_to_not_found() {
     let reads = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
-    client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Ok(()));
     client.expect_get_sandbox().returning(move |_, id| {
         // Present on the first read, gone on the second: an accepted delete is not a completed one.
         if reads.fetch_add(1, Ordering::SeqCst) == 0 {
@@ -802,20 +931,28 @@ async fn terminate_confirms_by_polling_to_not_found() {
         }
     });
 
-    provider(client).terminate("s1").await.expect("a session that goes absent is confirmed gone");
+    provider(client)
+        .terminate("s1")
+        .await
+        .expect("a session that goes absent is confirmed gone");
 }
 
 #[tokio::test(start_paused = true)]
 async fn terminate_reports_unconfirmed_when_the_session_stays_present() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_delete_sandbox().returning(|_, _| Ok(()));
-    client.expect_get_sandbox().returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+    client
+        .expect_get_sandbox()
+        .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
 
     let error = provider(client)
         .terminate("s1")
         .await
         .expect_err("a session still present after the poll is not contained");
-    assert!(error.to_string().contains("may still be running"), "{error}");
+    assert!(
+        error.to_string().contains("may still be running"),
+        "{error}"
+    );
 }
 
 // ---- unit guards ------------------------------------------------------------------------------
@@ -824,19 +961,31 @@ async fn terminate_reports_unconfirmed_when_the_session_stays_present() {
 /// map to the boolean. Mutation check: return `Ok` for AllowDomains and this fails.
 #[test]
 fn egress_refuses_domain_scoping_and_names_the_modes() {
-    let error = egress_control_config("sbx-7", &SandboxEgress::AllowDomains { domains: vec!["x.io".into()] })
-        .expect_err("domain-scoped egress has no representation");
+    let error = egress_control_config(
+        "sbx-7",
+        &SandboxEgress::AllowDomains {
+            domains: vec!["x.io".into()],
+        },
+    )
+    .expect_err("domain-scoped egress has no representation");
     assert_eq!(error.code, "INVALID_INPUT", "{error}");
     let rendered = error.to_string();
     assert!(rendered.contains("sbx-7"), "names the sandbox: {rendered}");
-    assert!(rendered.contains("allow") && rendered.contains("deny"), "names both modes: {rendered}");
+    assert!(
+        rendered.contains("allow") && rendered.contains("deny"),
+        "names both modes: {rendered}"
+    );
 
     assert_eq!(
-        egress_control_config("s", &SandboxEgress::Deny).expect("deny maps").internet_access,
+        egress_control_config("s", &SandboxEgress::Deny)
+            .expect("deny maps")
+            .internet_access,
         Some(false)
     );
     assert_eq!(
-        egress_control_config("s", &SandboxEgress::Allow).expect("allow maps").internet_access,
+        egress_control_config("s", &SandboxEgress::Allow)
+            .expect("allow maps")
+            .internet_access,
         Some(true)
     );
 }
@@ -845,7 +994,14 @@ fn egress_refuses_domain_scoping_and_names_the_modes() {
 /// `is_addressable_id` to accept '/' and the traversal ids below stop being refused.
 #[tokio::test]
 async fn a_session_id_that_could_escape_its_sandbox_is_refused() {
-    for id in ["../other", "a/b", "has space", "", "with?query", "with#frag"] {
+    for id in [
+        "../other",
+        "a/b",
+        "has space",
+        "",
+        "with?query",
+        "with#frag",
+    ] {
         let error = provider(MockAgentPlatformApi::new())
             .get(id)
             .await
@@ -861,8 +1017,13 @@ fn an_output_without_a_terminal_frame_is_an_unknown_outcome() {
     let frames = parse_exec_frames(&ndjson(&[stdout_frame(0, b"partial")])).expect("frames parse");
     assert_eq!(frames.len(), 2);
     frames[0].as_ref().expect("the stdout frame still arrives");
-    let error = frames[1].as_ref().expect_err("a truncated stream is not success");
-    assert!(error.to_string().contains("without a terminal frame"), "{error}");
+    let error = frames[1]
+        .as_ref()
+        .expect_err("a truncated stream is not success");
+    assert!(
+        error.to_string().contains("without a terminal frame"),
+        "{error}"
+    );
 }
 
 /// A body that is not frames at all is the agent's refusal, not a command's output.
@@ -877,7 +1038,10 @@ fn a_non_frame_body_is_reported_as_a_refusal() {
 /// the outer `RequestFailed` variant.
 #[test]
 fn not_found_is_read_from_the_source_chain() {
-    assert!(is_not_found(&not_found()), "a wrapped 404 is a gone session");
+    assert!(
+        is_not_found(&not_found()),
+        "a wrapped 404 is a gone session"
+    );
     assert!(
         !is_not_found(&execute_refused()),
         "an ordinary execute failure is not a gone session"
@@ -887,5 +1051,9 @@ fn not_found_is_read_from_the_source_chain() {
 #[test]
 fn the_engine_is_reduced_to_a_bare_segment() {
     let provider = provider(MockAgentPlatformApi::new());
-    assert_eq!(provider.engine(), "eng1", "the full resource name is reduced to the engine id");
+    assert_eq!(
+        provider.engine(),
+        "eng1",
+        "the full resource name is reduced to the engine id"
+    );
 }

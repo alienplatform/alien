@@ -222,14 +222,14 @@ impl GcpAgentPlatformSandbox {
                 return finish_operation(operation, &name, current);
             }
             tokio::time::sleep(OPERATION_POLL_INTERVAL).await;
-            current = self
-                .client
-                .get_operation(&name)
-                .await
-                .context(ErrorData::SandboxUnreachable {
-                    operation: operation.to_string(),
-                    reason: format!("could not read operation '{name}'"),
-                })?;
+            current =
+                self.client
+                    .get_operation(&name)
+                    .await
+                    .context(ErrorData::SandboxUnreachable {
+                        operation: operation.to_string(),
+                        reason: format!("could not read operation '{name}'"),
+                    })?;
         }
 
         if current.done == Some(true) {
@@ -363,7 +363,11 @@ impl GcpAgentPlatformSandbox {
     /// Every failure after the sandbox exists reaches here, so `create` has one delete rather than
     /// one beside each `?`. The delete's own failure names the leak without replacing the finding
     /// that caused it. A not-found delete is already success in the client.
-    async fn discard(&self, session_id: &str, reason: AlienError<ErrorData>) -> AlienError<ErrorData> {
+    async fn discard(
+        &self,
+        session_id: &str,
+        reason: AlienError<ErrorData>,
+    ) -> AlienError<ErrorData> {
         let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await else {
             return reason;
         };
@@ -391,9 +395,7 @@ impl GcpAgentPlatformSandbox {
             let Some(sandbox) = self.read_sandbox(CREATE, session_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "sessionGone".to_string(),
-                    reason: format!(
-                        "session '{session_id}' disappeared while it was coming up"
-                    ),
+                    reason: format!("session '{session_id}' disappeared while it was coming up"),
                 }));
             };
             match session_state(CREATE, sandbox.state.as_deref())? {
@@ -403,7 +405,9 @@ impl GcpAgentPlatformSandbox {
                 SandboxSessionState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                         failure: "sessionTerminated".to_string(),
-                        reason: format!("session '{session_id}' reached a terminal state while starting"),
+                        reason: format!(
+                            "session '{session_id}' reached a terminal state while starting"
+                        ),
                     }));
                 }
                 // Waited on rather than woken: a fresh sandbox has no idle-suspend policy to pause
@@ -506,7 +510,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     display_name: request.session_id.clone(),
                     sandbox_environment_template: Some(self.template.clone()),
                     sandbox_environment_snapshot: None,
-                    ttl: self.session_ttl_seconds.map(|seconds| format!("{seconds}s")),
+                    ttl: self
+                        .session_ttl_seconds
+                        .map(|seconds| format!("{seconds}s")),
                 },
             )
             .await
@@ -515,15 +521,17 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 reason: "the Agent Platform API refused a sandbox create".to_string(),
             })?;
 
-        let created: SandboxEnvironment = serde_json::from_value(self.await_operation(CREATE, started).await?)
-            .map_err(|error| {
-                AlienError::new(ErrorData::UnexpectedResponseFormat {
-                    provider: "gcp-agent-platform".to_string(),
-                    binding_name: CREATE.to_string(),
-                    field: "response".to_string(),
-                    response_json: format!("the create operation resolved to a non-sandbox: {error}"),
-                })
-            })?;
+        let created: SandboxEnvironment = serde_json::from_value(
+            self.await_operation(CREATE, started).await?,
+        )
+        .map_err(|error| {
+            AlienError::new(ErrorData::UnexpectedResponseFormat {
+                provider: "gcp-agent-platform".to_string(),
+                binding_name: CREATE.to_string(),
+                field: "response".to_string(),
+                response_json: format!("the create operation resolved to a non-sandbox: {error}"),
+            })
+        })?;
 
         // The caller's requested id is not authoritative — the API allocates the name, and the
         // last segment is the id every later verb addresses it by. One this client cannot send is
@@ -594,8 +602,17 @@ impl Sandbox for GcpAgentPlatformSandbox {
                                 return Ok(woken)
                             }
                             _ => {
+                                // The wake could not be undone: leaving it live beside a fresh
+                                // session is a leak the caller gets no id for. Fail so the woken
+                                // session stays identifiable rather than provisioning a second one.
                                 if let Err(error) = self.suspend(id).await {
-                                    warn!(session = %id, %error, "could not re-suspend a session this call woke");
+                                    return Err(error.context(ErrorData::SandboxCommandFailed {
+                                        failure: "resumeRollbackFailed".to_string(),
+                                        reason: format!(
+                                            "{GET_OR_CREATE}: woke session '{id}' but could not \
+                                             confirm it healthy or put it back to sleep"
+                                        ),
+                                    }));
                                 }
                             }
                         }
@@ -616,14 +633,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {
-        let sandboxes = self
-            .client
-            .list_sandboxes(&self.engine)
-            .await
-            .context(ErrorData::SandboxUnreachable {
+        let sandboxes = self.client.list_sandboxes(&self.engine).await.context(
+            ErrorData::SandboxUnreachable {
                 operation: "sandbox.list".to_string(),
                 reason: "the Agent Platform API did not answer a sandbox list".to_string(),
-            })?;
+            },
+        )?;
 
         // A sandbox this provider cannot fully read — an unaddressable name or an unrecognised
         // state — is left out rather than surfaced as a handle to nothing or failing the whole
@@ -755,28 +770,24 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
         Self::checked_session_id("sandbox.suspend", session_id)?;
-        let started = self
-            .client
-            .pause(&self.engine, session_id)
-            .await
-            .context(ErrorData::SandboxCommandFailed {
+        let started = self.client.pause(&self.engine, session_id).await.context(
+            ErrorData::SandboxCommandFailed {
                 failure: "suspendFailed".to_string(),
                 reason: format!("sandbox.suspend: session '{session_id}' could not be paused"),
-            })?;
+            },
+        )?;
         self.await_operation("sandbox.suspend", started).await?;
         Ok(())
     }
 
     async fn resume(&self, session_id: &str) -> Result<()> {
         Self::checked_session_id("sandbox.resume", session_id)?;
-        let started = self
-            .client
-            .resume(&self.engine, session_id)
-            .await
-            .context(ErrorData::SandboxCommandFailed {
+        let started = self.client.resume(&self.engine, session_id).await.context(
+            ErrorData::SandboxCommandFailed {
                 failure: "resumeFailed".to_string(),
                 reason: format!("sandbox.resume: session '{session_id}' could not be resumed"),
-            })?;
+            },
+        )?;
         self.await_operation("sandbox.resume", started).await?;
         Ok(())
     }
@@ -796,17 +807,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 reason: format!("sandbox.snapshot: session '{session_id}' could not be captured"),
             })?;
 
-        let snapshot: SandboxSnapshot = serde_json::from_value(
-            self.await_operation("sandbox.snapshot", started).await?,
-        )
-        .map_err(|error| {
-            AlienError::new(ErrorData::UnexpectedResponseFormat {
-                provider: "gcp-agent-platform".to_string(),
-                binding_name: "sandbox.snapshot".to_string(),
-                field: "response".to_string(),
-                response_json: format!("the snapshot operation resolved to a non-snapshot: {error}"),
-            })
-        })?;
+        let snapshot: SandboxSnapshot =
+            serde_json::from_value(self.await_operation("sandbox.snapshot", started).await?)
+                .map_err(|error| {
+                    AlienError::new(ErrorData::UnexpectedResponseFormat {
+                        provider: "gcp-agent-platform".to_string(),
+                        binding_name: "sandbox.snapshot".to_string(),
+                        field: "response".to_string(),
+                        response_json: format!(
+                            "the snapshot operation resolved to a non-snapshot: {error}"
+                        ),
+                    })
+                })?;
 
         snapshot.name.ok_or_else(|| {
             AlienError::new(ErrorData::UnexpectedResponseFormat {
@@ -857,9 +869,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
 /// One step of a detached job's poll loop, yielding output frames as they arrive and a terminal
 /// item once the job ends.
-async fn job_poll_step(
-    mut state: JobPollState,
-) -> Option<(Result<CommandOutput>, JobPollState)> {
+async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>, JobPollState)> {
     loop {
         if let Some(item) = state.pending.pop_front() {
             return Some((item, state));
@@ -879,26 +889,34 @@ async fn job_poll_step(
                     &cancel_body(&state.job_id),
                 )
                 .await;
-            state.pending.push_back(Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "deadlineExceeded".to_string(),
-                reason: "the command's deadline elapsed before its job reported an outcome"
-                    .to_string(),
-            })));
+            state
+                .pending
+                .push_back(Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "deadlineExceeded".to_string(),
+                    reason: "the command's deadline elapsed before its job reported an outcome"
+                        .to_string(),
+                })));
             state.finished = true;
             continue;
         }
 
         let body = match state
             .client
-            .execute(&state.engine, &state.session_id, &poll_body(&state.job_id, state.since_seq))
+            .execute(
+                &state.engine,
+                &state.session_id,
+                &poll_body(&state.job_id, state.since_seq),
+            )
             .await
         {
             Ok(body) => body,
             Err(error) => {
-                state.pending.push_back(Err(GcpAgentPlatformSandbox::execute_failed(
-                    RUN_COMMAND,
-                    error,
-                )));
+                state
+                    .pending
+                    .push_back(Err(GcpAgentPlatformSandbox::execute_failed(
+                        RUN_COMMAND,
+                        error,
+                    )));
                 state.finished = true;
                 continue;
             }
@@ -907,12 +925,14 @@ async fn job_poll_step(
         let poll: JobPoll = match serde_json::from_slice(&body) {
             Ok(poll) => poll,
             Err(_) => {
-                state.pending.push_back(Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
-                    provider: "gcp-agent-platform".to_string(),
-                    binding_name: RUN_COMMAND.to_string(),
-                    field: "jobPoll".to_string(),
-                    response_json: truncated(&body),
-                })));
+                state.pending.push_back(Err(AlienError::new(
+                    ErrorData::UnexpectedResponseFormat {
+                        provider: "gcp-agent-platform".to_string(),
+                        binding_name: RUN_COMMAND.to_string(),
+                        field: "jobPoll".to_string(),
+                        response_json: truncated(&body),
+                    },
+                )));
                 state.finished = true;
                 continue;
             }
@@ -988,14 +1008,23 @@ struct JobError {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", tag = "t")]
 enum WireFrame {
-    Stdout { seq: u64, data: String },
-    Stderr { seq: u64, data: String },
+    Stdout {
+        seq: u64,
+        data: String,
+    },
+    Stderr {
+        seq: u64,
+        data: String,
+    },
     Exit {
         code: i32,
         #[serde(default)]
         truncated: bool,
     },
-    Error { code: String, message: String },
+    Error {
+        code: String,
+        message: String,
+    },
 }
 
 impl WireFrame {
@@ -1023,10 +1052,12 @@ impl WireFrame {
             Self::Exit { code, truncated } => Ok(CommandOutput::Exit { code, truncated }),
             // An error frame is the command's outcome, so it surfaces as an error rather than a
             // stream that simply stopped.
-            Self::Error { code, message } => Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: code,
-                reason: message,
-            })),
+            Self::Error { code, message } => {
+                Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: code,
+                    reason: message,
+                }))
+            }
         }
     }
 }
@@ -1199,26 +1230,25 @@ fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionS
             provider: "gcp-agent-platform".to_string(),
             binding_name: operation.to_string(),
             field: "state".to_string(),
-            response_json: other.map_or_else(|| "absent".to_string(), |state| format!("\"{state}\"")),
+            response_json: other
+                .map_or_else(|| "absent".to_string(), |state| format!("\"{state}\"")),
         })),
     }
 }
 
 /// Turns a completed operation into its response payload, or the error it reported.
-fn finish_operation(
-    operation: &str,
-    name: &str,
-    op: Operation,
-) -> Result<serde_json::Value> {
+fn finish_operation(operation: &str, name: &str, op: Operation) -> Result<serde_json::Value> {
     match op.result {
         Some(OperationResult::Response { response }) => Ok(response),
-        Some(OperationResult::Error { error }) => Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: "operationFailed".to_string(),
-            reason: format!(
-                "{operation}: operation '{name}' failed (grpc {}): {}",
-                error.code, error.message
-            ),
-        })),
+        Some(OperationResult::Error { error }) => {
+            Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "operationFailed".to_string(),
+                reason: format!(
+                    "{operation}: operation '{name}' failed (grpc {}): {}",
+                    error.code, error.message
+                ),
+            }))
+        }
         None => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "gcp-agent-platform".to_string(),
             binding_name: operation.to_string(),
@@ -1256,7 +1286,10 @@ fn truncated(body: &[u8]) -> String {
     if text.len() <= LIMIT {
         return text.to_string();
     }
-    let end = (0..=LIMIT).rev().find(|at| text.is_char_boundary(*at)).unwrap_or(0);
+    let end = (0..=LIMIT)
+        .rev()
+        .find(|at| text.is_char_boundary(*at))
+        .unwrap_or(0);
     format!("{}…", &text[..end])
 }
 

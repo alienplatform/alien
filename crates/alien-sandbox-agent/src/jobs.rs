@@ -61,6 +61,9 @@ struct Buffer {
     frames: Vec<Frame>,
     /// `None` until the terminal frame arrives or the job is cancelled.
     outcome: Option<JobOutcome>,
+    /// Set once a poll has returned the terminal outcome, so the cap never evicts a result a
+    /// caller has not yet read.
+    terminal_delivered: bool,
 }
 
 struct Job {
@@ -68,7 +71,7 @@ struct Job {
     /// Taken by the first cancel. Dropping the collector's receiver is what kills the group, so the
     /// signal only has to reach the collector once.
     cancel: Mutex<Option<oneshot::Sender<()>>>,
-    /// Start order, so the oldest finished job is the one evicted under the cap.
+    /// Start order, so the oldest evictable job is the one reclaimed under the cap.
     ordinal: u64,
 }
 
@@ -111,6 +114,7 @@ impl JobRegistry {
             buffer: Mutex::new(Buffer {
                 frames: Vec::new(),
                 outcome: None,
+                terminal_delivered: false,
             }),
             cancel: Mutex::new(None),
             ordinal: self.ordinal.fetch_add(1, Ordering::Relaxed),
@@ -127,7 +131,14 @@ impl JobRegistry {
         *job.cancel.lock().expect("no panic holds a job lock") = Some(cancel_tx);
 
         tokio::spawn(async move {
-            exec::stream(&request, Some(&working_directory), identity, output_cap, frames_tx).await;
+            exec::stream(
+                &request,
+                Some(&working_directory),
+                identity,
+                output_cap,
+                frames_tx,
+            )
+            .await;
         });
         tokio::spawn(collect(frames_rx, cancel_rx, job));
 
@@ -145,7 +156,7 @@ impl JobRegistry {
     /// what reports it; a caller must not treat a gap as a frame still to come.
     pub fn poll(&self, id: &str, since_seq: Option<u64>) -> Option<JobSnapshot> {
         let job = Arc::clone(self.lock().get(id)?);
-        let buffer = job.buffer.lock().expect("no panic holds a job lock");
+        let mut buffer = job.buffer.lock().expect("no panic holds a job lock");
         let frames = buffer
             .frames
             .iter()
@@ -155,10 +166,12 @@ impl JobRegistry {
             })
             .cloned()
             .collect();
-        Some(JobSnapshot {
-            frames,
-            outcome: buffer.outcome.clone(),
-        })
+        let outcome = buffer.outcome.clone();
+        // The caller has now seen the terminal result, so the cap may reclaim this slot.
+        if outcome.is_some() {
+            buffer.terminal_delivered = true;
+        }
+        Some(JobSnapshot { frames, outcome })
     }
 
     /// Signals a job to cancel, killing its process group. Returns whether the job existed.
@@ -181,6 +194,19 @@ impl JobRegistry {
         self.len() == 0
     }
 
+    /// Whether a job has reached a terminal outcome, read without a poll so a test can await
+    /// completion without marking the result delivered.
+    #[cfg(test)]
+    fn is_finished(&self, id: &str) -> bool {
+        self.lock().get(id).is_some_and(|job| {
+            job.buffer
+                .lock()
+                .expect("no panic holds a job lock")
+                .outcome
+                .is_some()
+        })
+    }
+
     fn lock(&self) -> MutexGuard<'_, HashMap<String, Arc<Job>>> {
         self.jobs.lock().expect("no panic holds the registry lock")
     }
@@ -194,19 +220,18 @@ impl JobRegistry {
             return Ok(());
         }
 
-        let oldest_finished = jobs
+        // Only a finished job whose terminal result a caller has already read: evicting an
+        // unread result would turn the next poll into `JobNotFound` and lose the real exit code.
+        let oldest_evictable = jobs
             .iter()
             .filter(|(_, job)| {
-                job.buffer
-                    .lock()
-                    .expect("no panic holds a job lock")
-                    .outcome
-                    .is_some()
+                let buffer = job.buffer.lock().expect("no panic holds a job lock");
+                buffer.outcome.is_some() && buffer.terminal_delivered
             })
             .min_by_key(|(_, job)| job.ordinal)
             .map(|(id, _)| id.clone());
 
-        match oldest_finished {
+        match oldest_evictable {
             Some(id) => {
                 jobs.remove(&id);
                 Ok(())
@@ -391,7 +416,9 @@ mod tests {
             "the job must exit cleanly"
         );
         assert_eq!(
-            stdout_text(&done.frames).split_whitespace().collect::<Vec<_>>(),
+            stdout_text(&done.frames)
+                .split_whitespace()
+                .collect::<Vec<_>>(),
             vec!["a", "b", "c"],
             "the full output must survive across polls"
         );
@@ -417,7 +444,9 @@ mod tests {
             done.outcome
         );
         assert_eq!(
-            stdout_text(&done.frames).split_whitespace().collect::<Vec<_>>(),
+            stdout_text(&done.frames)
+                .split_whitespace()
+                .collect::<Vec<_>>(),
             vec!["start", "end"],
             "both the pre- and post-sleep output must arrive"
         );
@@ -474,10 +503,18 @@ mod tests {
     #[tokio::test]
     async fn poll_returns_frames_strictly_after_since_seq() {
         let registry = JobRegistry::new();
-        let id = start(&registry, &["/bin/sh", "-c", "echo a; echo b; echo c; echo d"], 10_000);
+        let id = start(
+            &registry,
+            &["/bin/sh", "-c", "echo a; echo b; echo c; echo d"],
+            10_000,
+        );
 
         let all = wait_for_completion(&registry, &id).await;
-        assert_eq!(seqs(&all.frames), vec![0, 1, 2, 3], "four output lines, seq 0..=3");
+        assert_eq!(
+            seqs(&all.frames),
+            vec![0, 1, 2, 3],
+            "four output lines, seq 0..=3"
+        );
 
         let after_one = registry.poll(&id, Some(1)).expect("the job exists");
         assert_eq!(
@@ -506,8 +543,7 @@ mod tests {
     #[tokio::test]
     async fn cancel_kills_the_forked_child_too() {
         let registry = JobRegistry::new();
-        let marker =
-            std::env::temp_dir().join(format!("alien-job-cancel-{}", std::process::id()));
+        let marker = std::env::temp_dir().join(format!("alien-job-cancel-{}", std::process::id()));
         let _ = std::fs::remove_file(&marker);
 
         // The grandchild is backgrounded and outlives the shell's own foreground sleep. stdout is
@@ -521,7 +557,10 @@ mod tests {
         tokio::time::sleep(Duration::from_millis(500)).await;
         let before = std::fs::metadata(&marker).map(|m| m.len());
 
-        assert!(registry.cancel(&id), "cancelling a live job reports it existed");
+        assert!(
+            registry.cancel(&id),
+            "cancelling a live job reports it existed"
+        );
 
         // Give the kill time to land, then confirm the marker stops growing.
         tokio::time::sleep(Duration::from_millis(500)).await;
@@ -549,8 +588,8 @@ mod tests {
         );
     }
 
-    /// A finished-but-uncollected job is evicted to make room once the cap is reached, so retention
-    /// is bounded rather than growing with every job a session ever ran.
+    /// A finished job whose result has been read is evicted to make room once the cap is reached,
+    /// so retention is bounded rather than growing with every job a session ever ran.
     #[tokio::test]
     async fn a_full_registry_evicts_the_oldest_finished_job() {
         let registry = JobRegistry::with_capacity(2);
@@ -576,6 +615,48 @@ mod tests {
         assert!(
             registry.poll(&third, None).is_some(),
             "the job that forced the eviction is retained"
+        );
+    }
+
+    /// A finished job no poll has read is never evicted: dropping it would turn the caller's next
+    /// poll into a not-found and lose the real exit code, so the cap refuses a new start instead.
+    #[tokio::test]
+    async fn an_unread_finished_job_is_not_evicted() {
+        let registry = JobRegistry::with_capacity(1);
+
+        let first = start(&registry, &["/bin/echo", "one"], 10_000);
+        for _ in 0..2400 {
+            if registry.is_finished(&first) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(
+            registry.is_finished(&first),
+            "the job reaches a terminal state"
+        );
+
+        // At the cap with the only result still unread, a new start is refused, not evicted.
+        let refused = registry.start(
+            request(&["/bin/echo", "two"], 10_000),
+            std::env::temp_dir(),
+            same_identity(),
+            1 << 20,
+        );
+        assert_eq!(
+            refused
+                .expect_err("an unread finished result must not be evicted")
+                .code,
+            "JOB_LIMIT_REACHED"
+        );
+
+        // Reading it makes the slot reclaimable, so the next start then succeeds.
+        assert!(registry.poll(&first, None).unwrap().outcome.is_some());
+        start(&registry, &["/bin/echo", "three"], 10_000);
+        assert_eq!(
+            registry.len(),
+            1,
+            "the read result was reclaimed for the new job"
         );
     }
 
@@ -632,7 +713,11 @@ mod tests {
         let id = registry
             .start(
                 request(
-                    &["/bin/sh", "-c", "for i in 1 2 3 4 5 6 7 8; do echo aaaaaaaaaa; done"],
+                    &[
+                        "/bin/sh",
+                        "-c",
+                        "for i in 1 2 3 4 5 6 7 8; do echo aaaaaaaaaa; done",
+                    ],
                     10_000,
                 ),
                 std::env::temp_dir(),
@@ -643,12 +728,20 @@ mod tests {
 
         let done = wait_for_completion(&registry, &id).await;
         assert!(
-            matches!(done.outcome, Some(JobOutcome::Exited { truncated: true, .. })),
+            matches!(
+                done.outcome,
+                Some(JobOutcome::Exited {
+                    truncated: true,
+                    ..
+                })
+            ),
             "output past the cap must be flagged truncated: {:?}",
             done.outcome
         );
 
-        let last = *seqs(&done.frames).last().expect("some output is kept below the cap");
+        let last = *seqs(&done.frames)
+            .last()
+            .expect("some output is kept below the cap");
         assert!(
             registry
                 .poll(&id, Some(last))
