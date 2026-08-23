@@ -1,0 +1,57 @@
+{
+  "id": "sandbox/remote-execute",
+  "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
+  "platforms": {
+    // AWS alone. A GCP sandbox is a launcher subprocess inside the app's own Cloud Run instance,
+    // so there is no parent a remote caller could address; on Azure the sandbox group is created
+    // by the runtime controller, and setup can scope no role assignment to a group that does not
+    // exist yet — see the same note in `sandbox/management`.
+    "aws": [
+      {
+        "label": "session-lifecycle",
+        "description": "Start, suspend, resume, and terminate sessions of the selected sandbox.",
+        "grant": {
+          // No `lambda:PassNetworkConnector`, which is the third action a RunMicrovm carrying an
+          // egress connector is authorized as. It takes no resource type and no condition key, so
+          // granting it would let the remote caller start the session on a connector the customer
+          // did not declare. A sandbox that denies egress therefore cannot start a session
+          // remotely; the manager refuses it at resolve time rather than at AccessDenied.
+          "actions": [
+            "lambda:RunMicrovm",
+            "lambda:SuspendMicrovm",
+            "lambda:ResumeMicrovm",
+            "lambda:TerminateMicrovm"
+          ]
+        },
+        // Resource-scoped only, unlike `sandbox/execute`, and this is the whole boundary. The
+        // manager hands a remote caller raw session credentials, so `owned_microvm`'s image check
+        // runs in code the caller can decline to call; a stack-wide pattern would match every
+        // sibling sandbox's image and let one deployment's caller address another's sessions.
+        "binding": {
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      },
+      {
+        "label": "reach-inside-a-session",
+        "description": "Read a session's state and mint the token the sandbox agent protocol travels on.",
+        "grant": {
+          // The same pair as `sandbox/execute`, and it carries the same weight: minting a MicroVM
+          // auth token is access to session contents. `CreateMicrovmShellAuthToken` stays out for
+          // the same reason it does there — an interactive shell is not part of this surface.
+          "actions": ["lambda:CreateMicrovmAuthToken", "lambda:GetMicrovm"]
+        },
+        "binding": {
+          "resource": {
+            "resources": [
+              "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

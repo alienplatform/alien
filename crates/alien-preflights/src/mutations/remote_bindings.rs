@@ -127,8 +127,8 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
 mod tests {
     use super::*;
     use alien_core::{
-        Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, StackSettings,
-        Storage,
+        Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key, ManagementConfig, Sandbox,
+        SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings, Storage,
     };
 
     fn config() -> DeploymentConfig {
@@ -191,6 +191,52 @@ mod tests {
             bindings.grants[0].permission_set,
             "storage/remote-data-write"
         );
+    }
+
+    /// A Sandbox declared the way Remote Bindings requires — `Frozen` with `remoteAccess` — is
+    /// what every downstream slice assumes exists. Lifecycle is per declaration, so nothing about
+    /// the type blocks it; this pins that the grant actually reaches the shared identity.
+    #[tokio::test]
+    async fn a_frozen_remote_sandbox_is_granted_the_remote_execute_set() {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu:24.04".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("byo-sandbox".to_string())
+            .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+            .build();
+        let state = StackState::new(Platform::Test);
+
+        let entry = stack.resources.get("agents").expect("declared sandbox");
+        assert!(entry.remote_access, "the declaration opted in");
+        assert_eq!(entry.lifecycle, ResourceLifecycle::Frozen);
+        let definition = alien_core::remote_bindings::remote_binding_for_entry(entry)
+            .expect("a Frozen remoteAccess Sandbox is a Remote Bindings resource");
+        assert_eq!(
+            definition.kind,
+            alien_core::remote_bindings::RemoteBindingKind::Sandbox
+        );
+
+        assert!(RemoteBindingsMutation.should_run(&stack, &state, &config()));
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &state, &config())
+            .await
+            .expect("a sandbox is not an isolated remote kind, so the mutation runs");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "agents");
+        assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
+        assert_eq!(bindings.grants[0].revision, definition.revision);
     }
 
     #[tokio::test]

@@ -291,8 +291,9 @@ fn critical_e2e_provider_operations_are_declared() {
             azure_predefined_roles: &[],
         },
         OperationCoverage {
-            // The auth token is the credential the agent protocol travels on, so it is the one
-            // grant that reaches inside a session and must stay in execute alone.
+            // The auth token is the credential the agent protocol travels on, so holding one is
+            // access to session contents. Which sets may mint it is pinned by
+            // `only_session_reaching_sandbox_sets_mint_microvm_auth_tokens`.
             permission_set_id: "sandbox/execute",
             aws_actions: &["lambda:CreateMicrovmAuthToken"],
             gcp_permissions: &[],

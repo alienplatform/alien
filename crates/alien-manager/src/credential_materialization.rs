@@ -45,6 +45,7 @@ pub(crate) enum RemoteBindingCredentialScope {
     AwsAi,
     GcpAi,
     AzureAi,
+    AwsSandbox,
 }
 
 impl std::fmt::Debug for MaterializedCredentialLease {
@@ -226,6 +227,7 @@ fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platfo
         RemoteBindingCredentialScope::AwsS3 => Platform::Aws,
         RemoteBindingCredentialScope::AwsKms => Platform::Aws,
         RemoteBindingCredentialScope::AwsAi => Platform::Aws,
+        RemoteBindingCredentialScope::AwsSandbox => Platform::Aws,
         RemoteBindingCredentialScope::GcpGcs => Platform::Gcp,
         RemoteBindingCredentialScope::GcpCloudKms => Platform::Gcp,
         RemoteBindingCredentialScope::GcpAi => Platform::Gcp,

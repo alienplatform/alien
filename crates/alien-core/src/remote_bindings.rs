@@ -5,6 +5,7 @@ pub enum RemoteBindingKind {
     Storage,
     Key,
     Ai,
+    Sandbox,
 }
 
 /// One resource type's provider-neutral Remote Bindings contract.
@@ -49,6 +50,17 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         kind: RemoteBindingKind::Ai,
         description: "Invoke models through this AI resource",
         setup_support_resource_types: &["azure_resource_group", "service_activation"],
+        revision: 1,
+    },
+    RemoteBindingDefinition {
+        resource_type: "sandbox",
+        permission_set: "sandbox/remote-execute",
+        kind: RemoteBindingKind::Sandbox,
+        description:
+            "Create and terminate sessions in this sandbox, and run arbitrary code inside them",
+        // A sandbox's parent is the MicroVM image its own emitter builds, and an open-egress
+        // sandbox attaches no VPC connector, so setup owes this binding no other resource.
+        setup_support_resource_types: &[],
         revision: 1,
     },
 ];
