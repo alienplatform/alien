@@ -42,7 +42,11 @@ pub const AGENT_FILENAME: &str = "alien-sandbox-agent";
 pub fn dockerfile(base_image: &str) -> Result<String> {
     // Checked here rather than by the callers: this is the one place the value crosses into
     // generated content, and a reference carrying a newline writes its own Dockerfile directives.
-    if base_image.is_empty() || base_image.chars().any(|c| c.is_whitespace() || c.is_control()) {
+    if base_image.is_empty()
+        || base_image
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
         return Err(AlienError::new(ErrorData::BuildConfigInvalid {
             message: format!("base image reference '{base_image}' is not a valid image reference"),
         }));
@@ -71,7 +75,8 @@ ENV ALIEN_SANDBOX_ROOT={SESSION_ROOT} \
     ALIEN_SANDBOX_PORT={AGENT_PORT} \
     ALIEN_SANDBOX_AUTHORIZATION=transport \
     ALIEN_SANDBOX_EXEC_UID={EXEC_UID} \
-    ALIEN_SANDBOX_EXEC_GID={EXEC_UID}
+    ALIEN_SANDBOX_EXEC_GID={EXEC_UID} \
+    ALIEN_SANDBOX_ISOLATION=uid-split
 
 EXPOSE {AGENT_PORT}
 ENTRYPOINT ["{AGENT_PATH}"]
@@ -109,9 +114,12 @@ pub fn write_bundle(destination: &Path, base_image: &str, agent_binary: &Path) -
         .into_alien_error()
         .context(failed("write", destination))?;
 
-    zip.start_file("Dockerfile", SimpleFileOptions::default().unix_permissions(0o644))
-        .into_alien_error()
-        .context(failed("write", destination))?;
+    zip.start_file(
+        "Dockerfile",
+        SimpleFileOptions::default().unix_permissions(0o644),
+    )
+    .into_alien_error()
+    .context(failed("write", destination))?;
     zip.write_all(dockerfile(base_image)?.as_bytes())
         .into_alien_error()
         .context(failed("write", destination))?;
@@ -147,7 +155,6 @@ mod tests {
 
     use super::*;
 
-
     /// The properties below are the image's half of the supervisor boundary. A base image is
     /// caller-supplied, so these assertions are about what Alien adds on top of it.
     fn rendered() -> String {
@@ -165,7 +172,9 @@ mod tests {
     fn the_agent_binary_is_root_owned_and_not_writable_by_the_exec_uid() {
         let dockerfile = rendered();
         assert!(
-            dockerfile.contains(&format!("COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} {AGENT_PATH}")),
+            dockerfile.contains(&format!(
+                "COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} {AGENT_PATH}"
+            )),
             "the agent must be root-owned and mode 0755:\n{dockerfile}"
         );
     }
@@ -189,6 +198,7 @@ mod tests {
             &format!("ALIEN_SANDBOX_EXEC_UID={EXEC_UID}"),
             &format!("ALIEN_SANDBOX_EXEC_GID={EXEC_UID}"),
             &"ALIEN_SANDBOX_AUTHORIZATION=transport".to_string(),
+            &"ALIEN_SANDBOX_ISOLATION=uid-split".to_string(),
         ] {
             assert!(dockerfile.contains(expected.as_str()), "missing {expected}");
         }
@@ -232,7 +242,10 @@ mod tests {
         assert_eq!(names, vec!["Dockerfile", AGENT_FILENAME]);
 
         for name in &names {
-            assert!(!name.contains('/'), "the archive must be flat, found '{name}'");
+            assert!(
+                !name.contains('/'),
+                "the archive must be flat, found '{name}'"
+            );
         }
 
         let mut dockerfile_entry = archive.by_name("Dockerfile").expect("Dockerfile entry");

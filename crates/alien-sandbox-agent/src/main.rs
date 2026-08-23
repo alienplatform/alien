@@ -36,6 +36,9 @@ const ENV_OUTPUT_CAP: &str = "ALIEN_SANDBOX_OUTPUT_CAP";
 const ENV_EXEC_UID: &str = "ALIEN_SANDBOX_EXEC_UID";
 /// Its primary group.
 const ENV_EXEC_GID: &str = "ALIEN_SANDBOX_EXEC_GID";
+/// Which isolation model is in force: `uid-split` or `platform`. Declared, never defaulted — it
+/// selects a security model, so an unset value must fail to start rather than silently pick one.
+const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
 
 /// Bytes of each stream kept when the environment does not say.
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -53,7 +56,10 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(address)
         .await
         .into_alien_error()
-        .context(failed("bind the agent listener", "the agent could not take its port".to_string()))?;
+        .context(failed(
+            "bind the agent listener",
+            "the agent could not take its port".to_string(),
+        ))?;
 
     tracing::info!("sandbox agent listening on {address}");
 
@@ -61,9 +67,62 @@ async fn main() -> Result<()> {
         listener,
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
-        .await
-        .into_alien_error()
-        .context(failed("serve the agent protocol", "the agent stopped serving".to_string()))
+    .await
+    .into_alien_error()
+    .context(failed(
+        "serve the agent protocol",
+        "the agent stopped serving".to_string(),
+    ))
+}
+
+/// Which boundary keeps untrusted code away from the agent that supervises it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Isolation {
+    /// The command runs under a uid distinct from the agent's, and the drop to it must work, so the
+    /// agent's binary and state stay unreachable to it.
+    UidSplit,
+    /// The container or VM is the only boundary: the command runs as the agent's own user because
+    /// the platform allows no other. Accepted only where a uid split is impossible.
+    Platform,
+}
+
+fn load_isolation() -> Result<Isolation> {
+    match required(ENV_ISOLATION)?.as_str() {
+        "uid-split" => Ok(Isolation::UidSplit),
+        "platform" => Ok(Isolation::Platform),
+        other => Err(invalid(
+            ENV_ISOLATION,
+            &format!("'{other}' is not one of: uid-split, platform"),
+        )),
+    }
+}
+
+/// The identity rules, kept pure so they can be tested without touching process state. Root is
+/// refused in both models; the agent's own uid/gid is refused only under uid-split, where a
+/// command sharing the agent's identity is the escalation the split exists to prevent. Platform
+/// accepts it because the platform runs everything as one user — the concession is same-uid, never
+/// root.
+fn enforce_exec_identity(
+    isolation: Isolation,
+    exec: ExecIdentity,
+    agent_uid: u32,
+    agent_gid: u32,
+) -> Result<()> {
+    if exec.uid == 0 {
+        return Err(invalid(ENV_EXEC_UID, "must not be root"));
+    }
+    if exec.gid == 0 {
+        return Err(invalid(ENV_EXEC_GID, "must not be the root group"));
+    }
+    if isolation == Isolation::UidSplit {
+        if exec.uid == agent_uid {
+            return Err(invalid(ENV_EXEC_UID, "must not be the agent's own user"));
+        }
+        if exec.gid == agent_gid {
+            return Err(invalid(ENV_EXEC_GID, "must not be the agent's own group"));
+        }
+    }
+    Ok(())
 }
 
 fn load_state() -> Result<AgentState> {
@@ -71,13 +130,10 @@ fn load_state() -> Result<AgentState> {
 
     // Canonical up front, because every path check compares against it. A root that is itself a
     // symlink would make each comparison a false negative.
-    let session_root = root
-        .canonicalize()
-        .into_alien_error()
-        .context(failed(
-            &format!("resolve {ENV_ROOT} '{}'", root.display()),
-            "the session root must exist before the agent starts".to_string(),
-        ))?;
+    let session_root = root.canonicalize().into_alien_error().context(failed(
+        &format!("resolve {ENV_ROOT} '{}'", root.display()),
+        "the session root must exist before the agent starts".to_string(),
+    ))?;
 
     let output_cap = match std::env::var(ENV_OUTPUT_CAP) {
         Ok(_) => parse(ENV_OUTPUT_CAP)?,
@@ -92,30 +148,14 @@ fn load_state() -> Result<AgentState> {
         gid: parse(ENV_EXEC_GID)?,
     };
 
-    if exec_identity.uid == 0 {
-        return Err(invalid(ENV_EXEC_UID, "must not be root"));
-    }
+    let isolation = load_isolation()?;
 
-    // Group 0 reaches the agent's own files wherever they carry group permission, which is most
-    // of what refusing uid 0 is there to prevent.
-    if exec_identity.gid == 0 {
-        return Err(invalid(ENV_EXEC_GID, "must not be the root group"));
-    }
-
-    // Refusing root is not enough where the agent itself is not root: running commands as the
-    // agent's own identity is the same escalation with a different number, and the bundle
-    // documents that configuration as a supported way to run on a shared kernel.
+    // SAFETY: both are always-successful getters with no arguments.
     #[cfg(unix)]
-    {
-        // SAFETY: both are always-successful getters with no arguments.
-        let (agent_uid, agent_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
-        if exec_identity.uid == agent_uid {
-            return Err(invalid(ENV_EXEC_UID, "must not be the agent's own user"));
-        }
-        if exec_identity.gid == agent_gid {
-            return Err(invalid(ENV_EXEC_GID, "must not be the agent's own group"));
-        }
-    }
+    let (agent_uid, agent_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    #[cfg(not(unix))]
+    let (agent_uid, agent_gid) = (u32::MAX, u32::MAX);
+    enforce_exec_identity(isolation, exec_identity, agent_uid, agent_gid)?;
 
     Ok(AgentState {
         session_root,
@@ -156,11 +196,12 @@ fn load_authorization() -> Result<AgentAuthorization> {
         }
         "capability" => {
             let encoded = required(ENV_PUBLIC_KEY)?;
-            let bytes = BASE64.decode(&encoded).map_err(|error| {
-                invalid(ENV_PUBLIC_KEY, &format!("not valid base64: {error}"))
+            let bytes = BASE64
+                .decode(&encoded)
+                .map_err(|error| invalid(ENV_PUBLIC_KEY, &format!("not valid base64: {error}")))?;
+            let public_key = PublicKey::from_slice(&bytes).map_err(|error| {
+                invalid(ENV_PUBLIC_KEY, &format!("not an Ed25519 key: {error}"))
             })?;
-            let public_key = PublicKey::from_slice(&bytes)
-                .map_err(|error| invalid(ENV_PUBLIC_KEY, &format!("not an Ed25519 key: {error}")))?;
 
             Ok(AgentAuthorization::Capability {
                 public_key,
@@ -201,5 +242,44 @@ fn failed(operation: &str, reason: String) -> ErrorData {
     ErrorData::OperationFailed {
         operation: operation.to_string(),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exec(uid: u32, gid: u32) -> ExecIdentity {
+        ExecIdentity { uid, gid }
+    }
+
+    #[test]
+    fn platform_accepts_the_agents_own_user() {
+        enforce_exec_identity(Isolation::Platform, exec(1000, 1000), 1000, 1000)
+            .expect("platform runs the command as the agent's own user");
+    }
+
+    #[test]
+    fn uid_split_refuses_the_agents_own_user() {
+        let error = enforce_exec_identity(Isolation::UidSplit, exec(1000, 1000), 1000, 1000)
+            .expect_err("uid-split refuses the agent's own user");
+        assert!(error.to_string().contains("agent's own user"), "{error}");
+    }
+
+    #[test]
+    fn uid_split_accepts_a_distinct_user() {
+        // The AWS shape: the agent runs as root, the command as an unprivileged uid.
+        enforce_exec_identity(Isolation::UidSplit, exec(60000, 60000), 0, 0)
+            .expect("a distinct exec uid is exactly what uid-split is for");
+    }
+
+    #[test]
+    fn root_is_refused_in_both_models() {
+        for isolation in [Isolation::UidSplit, Isolation::Platform] {
+            enforce_exec_identity(isolation, exec(0, 5), 1000, 1000)
+                .expect_err("root uid is refused regardless of the model");
+            enforce_exec_identity(isolation, exec(5, 0), 1000, 1000)
+                .expect_err("root gid is refused regardless of the model");
+        }
     }
 }
