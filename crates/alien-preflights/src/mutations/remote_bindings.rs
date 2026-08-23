@@ -45,6 +45,7 @@ impl StackMutation for RemoteBindingsMutation {
         _config: &DeploymentConfig,
     ) -> Result<Stack> {
         validate_isolated_remote_resource(&stack, self.description())?;
+        validate_remote_sandboxes_allow_egress(&stack, self.description())?;
 
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -123,6 +124,28 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
     }))
 }
 
+/// Refuses a remotely published sandbox whose binding a deployment cannot deliver.
+///
+/// The declaration has to fail here rather than install a role carrying arbitrary code execution
+/// for a binding the manager will then refuse to resolve.
+fn validate_remote_sandboxes_allow_egress(stack: &Stack, mutation_name: &str) -> Result<()> {
+    for (resource_id, entry) in &stack.resources {
+        if !entry.has_remote_bindings()
+            || alien_core::remote_bindings::remote_binding_is_deliverable(entry)
+        {
+            continue;
+        }
+        return Err(AlienError::new(ErrorData::StackMutationFailed {
+            mutation_name: mutation_name.to_string(),
+            message: "a remotely published sandbox must declare egress 'allow'; a sandbox that \
+                      routes its traffic through an egress connector cannot be reached remotely"
+                .to_string(),
+            resource_id: Some(resource_id.clone()),
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,23 +216,26 @@ mod tests {
         );
     }
 
+    fn sandbox(egress: SandboxEgress) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu:24.04".to_string(),
+            })
+            .egress(egress)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build()
+    }
+
     /// A Sandbox declared the way Remote Bindings requires — `Frozen` with `remoteAccess` — is
     /// what every downstream slice assumes exists. Lifecycle is per declaration, so nothing about
     /// the type blocks it; this pins that the grant actually reaches the shared identity.
     #[tokio::test]
     async fn a_frozen_remote_sandbox_is_granted_the_remote_execute_set() {
-        let sandbox = Sandbox::new("agents".to_string())
-            .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
-            })
-            .egress(SandboxEgress::Allow)
-            .session(SandboxSessionPolicy {
-                max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
-            })
-            .build();
         let stack = Stack::new("byo-sandbox".to_string())
-            .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
             .build();
         let state = StackState::new(Platform::Test);
 
@@ -227,7 +253,7 @@ mod tests {
         let mutated = RemoteBindingsMutation
             .mutate(stack, &state, &config())
             .await
-            .expect("a sandbox is not an isolated remote kind, so the mutation runs");
+            .expect("an open-egress sandbox alone in its deployment is a valid remote binding");
         let bindings = mutated
             .resources
             .get(REMOTE_BINDINGS_ID)
@@ -237,6 +263,34 @@ mod tests {
         assert_eq!(bindings.grants[0].resource_id, "agents");
         assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
         assert_eq!(bindings.grants[0].revision, definition.revision);
+    }
+
+    /// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`, so a session on an egress
+    /// connector cannot be started remotely. The deployment has to fail here rather than install a
+    /// role carrying arbitrary code execution for a binding the manager will then refuse.
+    #[tokio::test]
+    async fn a_remote_sandbox_that_restricts_egress_is_refused() {
+        for egress in [
+            SandboxEgress::Deny,
+            SandboxEgress::AllowDomains {
+                domains: vec!["registry.npmjs.org".to_string()],
+            },
+        ] {
+            let stack = Stack::new("byo-sandbox".to_string())
+                .add_with_remote_access(sandbox(egress), ResourceLifecycle::Frozen)
+                .build();
+
+            let error = RemoteBindingsMutation
+                .mutate(stack, &StackState::new(Platform::Test), &config())
+                .await
+                .expect_err("a restricted-egress sandbox must not reach a deployed remote grant");
+
+            assert_eq!(error.code, "STACK_MUTATION_FAILED");
+            assert!(
+                error.to_string().contains("must declare egress 'allow'"),
+                "the refusal must name the declaration to change, got: {error}"
+            );
+        }
     }
 
     #[tokio::test]

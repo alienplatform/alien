@@ -7,9 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    Ai, Key, Kv, LifecycleRule, PermissionProfile, Queue, RemoteBindings, ResourceLifecycle,
-    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
+    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy,
+    ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
 
@@ -458,4 +458,63 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
     }
 
     assert_terraform_valid(&module, "aws_remote_sandbox");
+}
+
+/// A sandbox that routes egress through a connector is not remotely reachable, because
+/// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`. Preflight refuses such a
+/// stack; the emitter agrees, so a stack that reaches here another way installs no usable grant.
+#[test]
+fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+        })
+        .egress(SandboxEgress::Deny)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox-deny".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("awscc_lambda_network_connector\" \"agents\"")
+            && rendered.contains("\"aws_iam_role\" \"access\""),
+        "the deny connector and the Remote Bindings identity must still render:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("access_agents_remote_execute"),
+        "an egress-restricted sandbox must carry no remote execute grant:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("lambda:CreateMicrovmAuthToken"),
+        "nothing in the module may mint session credentials for this sandbox:\n{rendered}"
+    );
 }

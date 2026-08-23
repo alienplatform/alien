@@ -436,7 +436,9 @@ impl TfEmitter for AwsSandboxEmitter {
 /// parts here.
 fn emit_remote_bindings_policy(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
     let (Some(definition), Some(access_label)) = (
-        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
+            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
+            .flatten(),
         remote_bindings_label(ctx),
     ) else {
         return Ok(());

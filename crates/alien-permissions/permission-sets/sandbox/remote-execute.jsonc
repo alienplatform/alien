@@ -14,8 +14,11 @@
           // No `lambda:PassNetworkConnector`, which is the third action a RunMicrovm carrying an
           // egress connector is authorized as. It takes no resource type and no condition key, so
           // granting it would let the remote caller start the session on a connector the customer
-          // did not declare. A sandbox that denies egress therefore cannot start a session
-          // remotely; the manager refuses it at resolve time rather than at AccessDenied.
+          // did not declare.
+          //
+          // Only an open-egress sandbox is therefore remotely reachable. That is a deliberate
+          // product decision, not a gap: preflight refuses a `remoteAccess` sandbox that restricts
+          // egress, and both setup emitters withhold this set from one, so it never attaches.
           "actions": [
             "lambda:RunMicrovm",
             "lambda:SuspendMicrovm",

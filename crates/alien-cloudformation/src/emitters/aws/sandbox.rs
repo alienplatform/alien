@@ -318,7 +318,9 @@ impl CfEmitter for AwsSandboxEmitter {
 /// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
 fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
     let (Some(definition), Some(access_logical_id)) = (
-        alien_core::remote_bindings::remote_binding_for_entry(ctx.resource),
+        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
+            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
+            .flatten(),
         ctx.stack.resources().find_map(|(id, entry)| {
             (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
                 .then(|| ctx.name_for(id))

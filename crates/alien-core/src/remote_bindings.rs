@@ -1,4 +1,4 @@
-use crate::{ResourceEntry, ResourceLifecycle, ResourceType};
+use crate::{ResourceEntry, ResourceLifecycle, ResourceType, Sandbox, SandboxEgress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
@@ -77,6 +77,19 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
     (entry.remote_access && entry.lifecycle == ResourceLifecycle::Frozen)
         .then(|| remote_binding_definition(&entry.config.resource_type()))
         .flatten()
+}
+
+/// Whether a declaration's remote binding is one a deployment can actually deliver.
+///
+/// A sandbox reaches the network through an egress connector, and starting a session on one is
+/// additionally authorized as `lambda:PassNetworkConnector` — which AWS scopes to no resource and
+/// no condition key, so `sandbox/remote-execute` withholds it. Preflight refuses such a stack;
+/// emitters and generated docs read this so nothing advertises a grant that cannot be used.
+pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
+    entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .is_none_or(|sandbox| matches!(sandbox.egress, SandboxEgress::Allow))
 }
 
 pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {
