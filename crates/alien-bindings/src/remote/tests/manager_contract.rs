@@ -385,3 +385,227 @@ async fn remote_ai_returns_a_typed_redacted_bedrock_lease() {
         assert!(!debug.contains(secret));
     }
 }
+
+const SANDBOX_IMAGE_ARN: &str =
+    "arn:aws:lambda:us-east-1:123456789012:microvm-image/alien-agent-image";
+
+/// One `sandbox-aws` resolve response, with the two fields whose handling the refusal tests
+/// vary left as parameters.
+fn sandbox_lease_body(
+    expires_at: DateTime<Utc>,
+    preview_ports: serde_json::Value,
+    allow_egress: bool,
+) -> serde_json::Value {
+    json!({
+        "service": "sandbox-aws",
+        "binding": {
+            "imageArn": SANDBOX_IMAGE_ARN,
+            "imageVersion": "7",
+            "region": "us-east-1",
+            "previewPorts": preview_ports,
+            "idleSuspendSeconds": 300,
+            "maxLifetimeSeconds": 3600,
+            "allowEgress": allow_egress,
+        },
+        "clientConfig": {
+            "accountId": "123456789012",
+            "region": "us-west-2",
+            "credentials": {
+                "type": "sessionCredentials",
+                "accessKeyId": "SENTINEL_ACCESS_KEY",
+                "secretAccessKey": "SENTINEL_SECRET_KEY",
+                "sessionToken": "SENTINEL_SESSION_TOKEN",
+                "expiresAt": expires_at.to_rfc3339(),
+            },
+        },
+        "expiresAt": expires_at.to_rfc3339(),
+    })
+}
+
+fn sandbox_resolve_request() -> RecordedRequest {
+    RecordedRequest {
+        method: "POST".to_string(),
+        path: "/v1/bindings/resolve".to_string(),
+        authorization: Some(format!("Bearer {GENERATED_MANAGER_TOKEN}")),
+        body: Some(json!({
+            "deploymentId": DEPLOYMENT_ID,
+            "resourceId": "agent",
+        })),
+    }
+}
+
+#[tokio::test]
+async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_aws_provider() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        sandbox_lease_body(expires_at, json!([8080, 3000]), true),
+    )));
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: requests.clone(),
+    })
+    .await;
+
+    let adapter = GeneratedManagerBindingResolver;
+    let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
+        url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),
+        http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
+            .expect("build generated contract client"),
+        refresh_at: expires_at,
+        generation: 0,
+    };
+    let lease = adapter
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("agent"),
+        )
+        .await
+        .expect("generated client should decode a sandbox lease");
+    let ResolvedRemoteBinding::SandboxAws {
+        binding,
+        client_config,
+        expires_at: lease_expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for a sandbox");
+    };
+    let value = |raw: &str| alien_core::BindingValue::Value(raw.to_string());
+    assert_eq!(binding.image_arn, value(SANDBOX_IMAGE_ARN));
+    assert_eq!(binding.image_version, value("7"));
+    assert_eq!(binding.region, value("us-east-1"));
+    assert_eq!(binding.preview_ports, vec![8080, 3000]);
+    assert_eq!(binding.idle_suspend_seconds, Some(300));
+    assert_eq!(binding.max_lifetime_seconds, Some(3600));
+    assert!(binding.allow_egress);
+    assert_eq!(binding.execution_role_arn, None);
+    assert!(binding.egress_connector_arns.is_empty());
+    assert_eq!(client_config.account_id, "123456789012");
+    assert_eq!(client_config.region, "us-west-2");
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::AwsCredentials::SessionCredentials {
+        access_key_id,
+        secret_access_key,
+        session_token,
+        expires_at: credential_expires_at,
+    } = client_config.credentials
+    else {
+        panic!("generated client returned a non-session AWS credential for a sandbox");
+    };
+    assert_eq!(access_key_id, "SENTINEL_ACCESS_KEY");
+    assert_eq!(secret_access_key, "SENTINEL_SECRET_KEY");
+    assert_eq!(session_token, "SENTINEL_SESSION_TOKEN");
+    assert_eq!(credential_expires_at, expires_at.to_rfc3339());
+    assert_eq!(lease_expires_at.to_rfc3339(), expires_at.to_rfc3339());
+
+    let bindings = RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct bindings from assigned Manager access");
+    let sandbox = bindings
+        .sandbox("agent")
+        .await
+        .expect("resolve the sandbox binding through Manager");
+    assert_eq!(
+        sandbox.capabilities(),
+        alien_core::SandboxCapabilities::for_platform(alien_core::Platform::Aws)
+            .expect("AWS has a sandbox backend"),
+        "a remote sandbox must expose the same surface as the in-cloud one"
+    );
+    let debug = format!("{sandbox:?}");
+    assert!(
+        debug.contains(SANDBOX_IMAGE_ARN) && debug.contains("8080"),
+        "the resolved topology should reach the provider: {debug}"
+    );
+    for secret in [
+        "SENTINEL_ACCESS_KEY",
+        "SENTINEL_SECRET_KEY",
+        "SENTINEL_SESSION_TOKEN",
+    ] {
+        assert!(
+            !debug.contains(secret),
+            "a sandbox handle must not render its credential lease"
+        );
+    }
+
+    assert_eq!(
+        requests
+            .lock()
+            .expect("generated contract requests lock")
+            .as_slice(),
+        &[sandbox_resolve_request(), sandbox_resolve_request()],
+        "a sandbox resolve is resource-scoped, with no selector of its own"
+    );
+}
+
+#[tokio::test]
+async fn remote_sandbox_lease_is_refused_when_it_declares_restricted_egress() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        sandbox_lease_body(expires_at, json!([8080]), false),
+    )));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: Arc::new(StdMutex::new(Vec::new())),
+    })
+    .await;
+    let bindings = RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct bindings from assigned Manager access");
+
+    // The remote contract carries no connectors, so `allowEgress: false` describes a sandbox
+    // whose sessions would start unrouted and reach the internet.
+    let error = bindings
+        .sandbox("agent")
+        .await
+        .expect_err("a sandbox declaring restricted egress must not be handed to a caller");
+    assert_eq!(error.code, "BINDING_CONFIG_INVALID");
+    assert!(
+        format!("{error}").contains("egressConnectorArns"),
+        "the refusal should name the field it read: {error}"
+    );
+}
+
+#[tokio::test]
+async fn remote_sandbox_lease_is_refused_when_a_preview_port_does_not_fit() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        sandbox_lease_body(expires_at, json!([70000]), true),
+    )));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: Arc::new(StdMutex::new(Vec::new())),
+    })
+    .await;
+    let bindings = RemoteBindings::from_manager_access(
+        DEPLOYMENT_ID,
+        &manager_url,
+        GENERATED_MANAGER_TOKEN,
+        expires_at,
+    )
+    .expect("construct bindings from assigned Manager access");
+
+    // Narrowing 70000 into a port would mint ingress for 4464, which no declaration named.
+    let error = bindings
+        .sandbox("agent")
+        .await
+        .expect_err("an out-of-range preview port must refuse the whole lease");
+    assert_eq!(error.code, "REMOTE_ACCESS_FAILED");
+    let rendered = format!("{error}");
+    assert!(
+        rendered.contains("previewPorts") && rendered.contains("70000"),
+        "the refusal should name the field and the value it read: {rendered}"
+    );
+}

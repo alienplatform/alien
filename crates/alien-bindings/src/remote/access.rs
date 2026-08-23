@@ -19,6 +19,39 @@ pub(super) enum RemoteBindingSelector<'a> {
     Ai,
 }
 
+/// The capability an external-environment access request asks Platform for.
+///
+/// Platform selects the deployment by its purpose, so this decides which of a project's
+/// deployments the returned Manager capability addresses.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RemoteBindingCapability {
+    Storage,
+    /// Reachable once Platform's external-access schema accepts it; the variant exists so that
+    /// naming the wrong capability at a call site is a compile error rather than a 4xx.
+    #[expect(
+        dead_code,
+        reason = "constructed by the follow-up that widens the wire enum"
+    )]
+    Sandbox,
+}
+
+impl RemoteBindingCapability {
+    fn into_request_capability(
+        self,
+    ) -> Result<alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability> {
+        match self {
+            Self::Storage => Ok(
+                alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Storage,
+            ),
+            // Platform's external-access schema still accepts `storage` alone. Refusing beats
+            // asking for storage under a sandbox's name and reaching the wrong deployment.
+            Self::Sandbox => Err(remote_configuration_error(
+                "request external environment access for a Sandbox capability",
+            )),
+        }
+    }
+}
+
 const DEFAULT_PLATFORM_API_URL: &str = "https://api.alien.dev";
 const MANAGER_ACCESS_MAX_AGE_SECONDS: i64 = 300;
 const MANAGER_TOKEN_REFRESH_SKEW_SECONDS: i64 = 30;
@@ -42,6 +75,7 @@ enum PlatformAccessSelector {
     ExternalEnvironment {
         project: String,
         external_id: String,
+        capability: RemoteBindingCapability,
     },
 }
 
@@ -138,6 +172,7 @@ impl RemoteBindingSource {
     pub(super) async fn discover_external_environment(
         project: &str,
         external_id: &str,
+        capability: RemoteBindingCapability,
         platform_token: &str,
         api_base_url: Option<&str>,
         resolver_kind: ManagerResolverKind,
@@ -159,6 +194,7 @@ impl RemoteBindingSource {
             &platform,
             project,
             external_id,
+            capability,
             allow_insecure_manager_url,
             clock.as_ref(),
             0,
@@ -169,6 +205,7 @@ impl RemoteBindingSource {
             access_selector: PlatformAccessSelector::ExternalEnvironment {
                 project: project.to_string(),
                 external_id: external_id.to_string(),
+                capability,
             },
             platform: Some(platform),
             manager: RwLock::new(manager),
@@ -258,11 +295,13 @@ impl RemoteBindingSource {
             PlatformAccessSelector::ExternalEnvironment {
                 project,
                 external_id,
+                capability,
             } => {
                 discover_external_environment_manager_access(
                     platform,
                     project,
                     external_id,
+                    *capability,
                     self.allow_insecure_manager_url,
                     self.clock.as_ref(),
                     next_generation,
@@ -477,6 +516,7 @@ async fn discover_external_environment_manager_access(
     platform: &alien_platform_api::Client,
     project: &str,
     external_id: &str,
+    capability: RemoteBindingCapability,
     allow_insecure: bool,
     clock: &dyn Clock,
     generation: u64,
@@ -487,9 +527,7 @@ async fn discover_external_environment_manager_access(
         .id_or_name(project)
         .body(
             alien_platform_api::types::RemoteBindingsExternalAccessRequest::builder()
-                .capability(
-                    alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Storage,
-                )
+                .capability(capability.into_request_capability()?)
                 .external_id(external_id),
         )
         .send()
