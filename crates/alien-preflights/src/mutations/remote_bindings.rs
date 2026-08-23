@@ -2,9 +2,8 @@
 
 use crate::{error::ErrorData, error::Result, StackMutation};
 use alien_core::{
-    Ai, Build, Container, Daemon, DeploymentConfig, Key, Platform, RemoteBindingGrant,
-    RemoteBindings, ResourceEntry, ResourceLifecycle, ResourceRef, Sandbox, Stack, StackState,
-    Worker,
+    links_of, Ai, DeploymentConfig, Key, Platform, RemoteBindingGrant, RemoteBindings,
+    ResourceEntry, ResourceLifecycle, Sandbox, Stack, StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -188,7 +187,9 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// lifecycle — only ever arrives as an explicit profile grant.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
-        compute_links(entry).is_some_and(|links| links.iter().any(|link| link.id() == sandbox_id))
+        links_of(&entry.config)
+            .iter()
+            .any(|link| link.id() == sandbox_id)
     });
     if let Some((consumer_id, _)) = linked_by {
         return Some(format!("resource '{consumer_id}' links it"));
@@ -212,29 +213,13 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
         })
 }
 
-/// The resources this stack's own compute declares it reaches.
-fn compute_links(entry: &ResourceEntry) -> Option<&[ResourceRef]> {
-    if let Some(worker) = entry.config.downcast_ref::<Worker>() {
-        Some(&worker.links)
-    } else if let Some(container) = entry.config.downcast_ref::<Container>() {
-        Some(&container.links)
-    } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
-        Some(&daemon.links)
-    } else {
-        entry
-            .config
-            .downcast_ref::<Build>()
-            .map(|build| build.links.as_slice())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionProfile, Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key,
         ManagementConfig, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings,
-        Storage, WorkerCode,
+        Storage, Worker, WorkerCode,
     };
 
     fn config() -> DeploymentConfig {
@@ -313,8 +298,8 @@ mod tests {
     }
 
     /// A Sandbox declared the way Remote Bindings requires — `Frozen` with `remoteAccess` — is
-    /// what the remaining remote-binding paths assume exists. Lifecycle is per declaration, so nothing about
-    /// the type blocks it; this pins that the grant actually reaches the shared identity.
+    /// what the remaining remote-binding paths assume exists. Lifecycle is per declaration, so
+    /// nothing about the type blocks it; this pins that the grant reaches the shared identity.
     #[tokio::test]
     async fn a_frozen_remote_sandbox_is_granted_the_remote_execute_set() {
         let stack = Stack::new("byo-sandbox".to_string())
