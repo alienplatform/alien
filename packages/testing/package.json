@@ -1,6 +1,6 @@
 {
   "name": "@alienplatform/testing",
-  "version": "3.3.17",
+  "version": "3.3.18",
   "description": "Testing framework for Alien applications",
   "author": "Alien Software, Inc. <hi@alien.dev>",
   "license": "FSL-1.1-Apache-2.0",
