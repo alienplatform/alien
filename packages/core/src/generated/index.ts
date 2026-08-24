@@ -160,7 +160,11 @@ export type { CustomCertificateConfig } from "./zod/custom-certificate-config-sc
 export type { CustomDomainConfig } from "./zod/custom-domain-config-schema.js";
 export type { DaemonCode } from "./zod/daemon-code-schema.js";
 export type { DaemonHeartbeatData } from "./zod/daemon-heartbeat-data-schema.js";
+export type { DaemonMachineRolloutHeartbeatData } from "./zod/daemon-machine-rollout-heartbeat-data-schema.js";
+export type { DaemonMachineRolloutHeartbeatStatus } from "./zod/daemon-machine-rollout-heartbeat-status-schema.js";
 export type { DaemonOutputs } from "./zod/daemon-outputs-schema.js";
+export type { DaemonRolloutHeartbeatData } from "./zod/daemon-rollout-heartbeat-data-schema.js";
+export type { DaemonRolloutHeartbeatStatus } from "./zod/daemon-rollout-heartbeat-status-schema.js";
 export type { DaemonRuntimeMount } from "./zod/daemon-runtime-mount-schema.js";
 export type { DaemonRuntime } from "./zod/daemon-runtime-schema.js";
 export type { Daemon } from "./zod/daemon-schema.js";
@@ -583,7 +587,11 @@ export { CustomCertificateConfigSchema } from "./zod/custom-certificate-config-s
 export { CustomDomainConfigSchema } from "./zod/custom-domain-config-schema.js";
 export { DaemonCodeSchema } from "./zod/daemon-code-schema.js";
 export { DaemonHeartbeatDataSchema } from "./zod/daemon-heartbeat-data-schema.js";
+export { DaemonMachineRolloutHeartbeatDataSchema } from "./zod/daemon-machine-rollout-heartbeat-data-schema.js";
+export { DaemonMachineRolloutHeartbeatStatusSchema } from "./zod/daemon-machine-rollout-heartbeat-status-schema.js";
 export { DaemonOutputsSchema } from "./zod/daemon-outputs-schema.js";
+export { DaemonRolloutHeartbeatDataSchema } from "./zod/daemon-rollout-heartbeat-data-schema.js";
+export { DaemonRolloutHeartbeatStatusSchema } from "./zod/daemon-rollout-heartbeat-status-schema.js";
 export { DaemonRuntimeMountSchema } from "./zod/daemon-runtime-mount-schema.js";
 export { DaemonRuntimeSchema } from "./zod/daemon-runtime-schema.js";
 export { DaemonSchema } from "./zod/daemon-schema.js";

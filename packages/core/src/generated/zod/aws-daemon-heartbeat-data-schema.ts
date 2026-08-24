@@ -4,6 +4,7 @@
 */
 
 import * as z from "zod";
+import { DaemonRolloutHeartbeatDataSchema } from "./daemon-rollout-heartbeat-data-schema.js";
 import { ManagedRuntimeEventSnapshotSchema } from "./managed-runtime-event-snapshot-schema.js";
 import { ManagedRuntimeUnitStatusSchema } from "./managed-runtime-unit-status-schema.js";
 import { WorkloadHeartbeatStatusSchema } from "./workload-heartbeat-status-schema.js";
@@ -27,6 +28,9 @@ get "events"(){
 "horizonStatusReason": z.string().nullish(),
 "latestUpdateTimestamp": z.string(),
 "observedImage": z.string().nullish(),
+get "rollout"(){
+                return z.union([DaemonRolloutHeartbeatDataSchema, z.null()]).optional()
+              },
 get "status"(){
                 return WorkloadHeartbeatStatusSchema
               },
