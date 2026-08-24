@@ -1848,11 +1848,52 @@ impl BindingsProviderApi for BindingsProvider {
                 Ok(sandbox)
             }
             #[cfg(feature = "gcp")]
-            SandboxBinding::Gcp(gcp_binding) => {
-                use crate::providers::sandbox::gcp::GcpSandbox;
+            SandboxBinding::GcpAgentPlatform(gcp_binding) => {
+                use crate::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
+                use alien_gcp_clients::agent_platform::AgentPlatformClient;
 
+                let gcp_config = self.client_config.gcp_config().ok_or_else(|| {
+                    AlienError::new(ErrorData::ClientConfigInvalid {
+                        platform: Platform::Gcp,
+                        message: "GCP config not available".to_string(),
+                    })
+                })?;
+
+                let engine = gcp_binding
+                    .engine
+                    .into_value(binding_name, "engine")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to resolve engine from the Agent Platform sandbox binding",
+                    ))?;
+                let template = gcp_binding
+                    .template
+                    .into_value(binding_name, "template")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to resolve template from the Agent Platform sandbox binding",
+                    ))?;
+                let region = gcp_binding
+                    .region
+                    .into_value(binding_name, "region")
+                    .context(ErrorData::config_invalid(
+                        binding_name,
+                        "Failed to resolve region from the Agent Platform sandbox binding",
+                    ))?;
+
+                // The engine is regional with no global alias, so the endpoint is built from the
+                // binding's region, not the deployment's — signing against the wrong one 404s.
+                let mut config = gcp_config.clone();
+                config.region = region;
+
+                let client = AgentPlatformClient::new(reqwest::Client::new(), config);
                 let sandbox: Arc<dyn crate::traits::Sandbox> =
-                    Arc::new(GcpSandbox::new(binding_name, &gcp_binding)?);
+                    Arc::new(GcpAgentPlatformSandbox::new(
+                        Arc::new(client),
+                        engine,
+                        template,
+                        gcp_binding.session_ttl_seconds,
+                    ));
                 Ok(sandbox)
             }
             #[cfg(feature = "azure")]
@@ -2021,7 +2062,7 @@ impl BindingsProviderApi for BindingsProvider {
             #[cfg(not(feature = "azure"))]
             SandboxBinding::Azure(_) => Err(not_built("azure")),
             #[cfg(not(feature = "gcp"))]
-            SandboxBinding::Gcp(_) => Err(not_built("gcp")),
+            SandboxBinding::GcpAgentPlatform(_) => Err(not_built("gcp")),
             #[cfg(not(feature = "kubernetes"))]
             SandboxBinding::Kubernetes(_) => Err(not_built("kubernetes")),
             #[cfg(not(feature = "local"))]

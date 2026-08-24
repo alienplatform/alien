@@ -18,6 +18,7 @@ chrono = { workspace = true }
 futures = { workspace = true }
 ed25519-compact = { workspace = true }
 axum = { workspace = true, features = ["tokio", "http1", "json", "query"] }
+uuid = { workspace = true, features = ["v4"] }
 
 [[bin]]
 name = "alien-sandbox-agent"

@@ -175,6 +175,33 @@
           }
         }
       }
+    ],
+    "gcp": [
+      {
+        // The durable parent (reasoningEngine): create and delete only — the template controller
+        // is handed the engine name and never reads it back, so no get/list here. The
+        // release-owned template: create, delete, and the reads the controller reconciles with —
+        // list to find the template a prior attempt left, get to read its state. No
+        // sandboxEnvironments verb — provisioning must not reach a live session.
+        "grant": {
+          "permissions": [
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.sandboxEnvironmentTemplates.delete",
+            "aiplatform.sandboxEnvironmentTemplates.get",
+            "aiplatform.sandboxEnvironmentTemplates.list",
+            "aiplatform.reasoningEngines.create",
+            "aiplatform.reasoningEngines.delete"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
     ]
   }
 }

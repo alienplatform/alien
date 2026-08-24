@@ -25,11 +25,21 @@ mod kubernetes_spec;
 #[cfg(feature = "kubernetes")]
 mod kubernetes_warm_pool;
 #[cfg(feature = "kubernetes")]
-pub use kubernetes_warm_pool::*;
-#[cfg(feature = "kubernetes")]
 pub use kubernetes_spec::*;
+#[cfg(feature = "kubernetes")]
+pub use kubernetes_warm_pool::*;
 
 #[cfg(feature = "local")]
 mod local;
 #[cfg(feature = "local")]
 pub use local::*;
+
+#[cfg(feature = "gcp")]
+mod gcp_agent_platform_template;
+#[cfg(feature = "gcp")]
+pub use gcp_agent_platform_template::*;
+
+#[cfg(feature = "gcp")]
+mod gcp_agent_platform_engine;
+#[cfg(feature = "gcp")]
+pub use gcp_agent_platform_engine::*;

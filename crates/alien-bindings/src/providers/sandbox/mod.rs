@@ -14,7 +14,7 @@ pub mod aws;
 pub mod azure;
 
 #[cfg(feature = "gcp")]
-pub mod gcp;
+pub mod gcp_agent_platform;
 
 #[cfg(feature = "kubernetes")]
 pub mod kubernetes;

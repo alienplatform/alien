@@ -102,8 +102,32 @@
           }
         }
       }
+    ],
+    "gcp": [
+      {
+        // Session lifecycle only. The execute verb is withheld deliberately: it is the one that
+        // reaches session content, so a management identity carrying it would collapse the split
+        // this resource relies on.
+        "grant": {
+          "permissions": [
+            "aiplatform.sandboxEnvironments.create",
+            "aiplatform.sandboxEnvironments.delete",
+            "aiplatform.sandboxEnvironments.get",
+            "aiplatform.sandboxEnvironments.list",
+            "aiplatform.sandboxEnvironments.pause",
+            "aiplatform.sandboxEnvironments.resume",
+            "aiplatform.sandboxEnvironments.snapshot"
+          ]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
     ]
-    // No GCP entry, and nothing to add: a GCP sandbox is a launcher subprocess inside the app's
-    // own Cloud Run instance, so it creates no GCP resource and makes no GCP API call.
   }
 }

@@ -34,7 +34,6 @@ get "publicEndpoints"(){
 get "readinessProbe"(){
                 return z.union([ReadinessProbeSchema, z.null()]).optional()
               },
-"sandboxLauncher": z.optional(z.boolean().describe("Whether this worker hosts sandbox sessions.\n\nSet by preflight, not by an application: on GCP a sandbox is a subprocess of the Cloud Run\ninstance running the app, and the instance can only launch one if its container declares\nit. Declaring it by hand would be a permission the workload does not need.")),
 "timeoutSeconds": z.optional(z.int().min(1).max(3600).default(180).describe("Maximum execution time for the worker in seconds.\nConstraints: 1‑3600 seconds (platform-specific limits may apply)\nDefault: 180")),
 get "triggers"(){
                 return z.array(WorkerTriggerSchema.describe("Defines what triggers a worker execution.")).describe("List of triggers that define what events automatically invoke this worker.\nIf empty, the worker is only invokable directly via HTTP calls or platform-specific invocation APIs.\nWhen configured, the worker will be automatically invoked when any of the specified trigger conditions are met.")

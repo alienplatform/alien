@@ -258,6 +258,10 @@ impl<'de> Deserialize<'de> for Resource {
                 serde_json::from_value::<crate::resources::AzureResourceGroup>(value)
                     .map_err(serde::de::Error::custom)?,
             ),
+            "gcp_agent_platform_engine" => Box::new(
+                serde_json::from_value::<crate::resources::GcpAgentPlatformEngine>(value)
+                    .map_err(serde::de::Error::custom)?,
+            ),
             "azure_storage_account" => Box::new(
                 serde_json::from_value::<crate::resources::AzureStorageAccount>(value)
                     .map_err(serde::de::Error::custom)?,
@@ -300,6 +304,7 @@ impl<'de> Deserialize<'de> for Resource {
                         "remote-stack-management",
                         "resource-access",
                         "azure_resource_group",
+                        "gcp_agent_platform_engine",
                         "azure_storage_account",
                         "azure_container_apps_environment",
                         "azure_service_bus_namespace",

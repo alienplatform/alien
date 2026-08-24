@@ -104,14 +104,14 @@ mod tests {
         }
     }
 
-    /// GCP runs sandboxes as subprocesses of the app's own Cloud Run instance, which applies no
-    /// per-sandbox ceiling. A stack that declares one reads as bounded while the sandbox is not.
+    /// Azure applies no per-sandbox ceiling. A stack that declares one reads as bounded while the
+    /// sandbox is not, so plan time refuses it rather than letting it run unbounded.
     #[tokio::test]
     async fn ceilings_on_a_platform_that_ignores_them_fail_at_plan_time() {
         let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::Deny));
 
         let result = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Gcp)
+            .check(&stack, Platform::Azure)
             .await
             .expect("check runs");
 

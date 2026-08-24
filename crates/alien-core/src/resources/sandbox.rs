@@ -148,6 +148,22 @@ pub enum SandboxEgress {
     },
 }
 
+impl SandboxEgress {
+    /// The single outbound switch for a backend that has no host matcher, or `None` for a mode a
+    /// boolean cannot carry.
+    ///
+    /// `AllowDomains` needs a host list, so it maps to nothing and each caller refuses it in its
+    /// own error naming the sandbox. One source for what a mode means, so a template and a session
+    /// cannot disagree on it.
+    pub fn internet_access_switch(&self) -> Option<bool> {
+        match self {
+            SandboxEgress::Allow => Some(true),
+            SandboxEgress::Deny => Some(false),
+            SandboxEgress::AllowDomains { .. } => None,
+        }
+    }
+}
+
 /// How long a session may live and when it is suspended.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -201,6 +217,12 @@ pub struct SandboxCapabilities {
     /// Kubernetes sandbox pod drops every capability — which is also what denies `ptrace` by
     /// construction, so granting it there would remove a lock to add one.
     pub supervisor_pid_namespace: bool,
+    /// The process supervising a command is a different identity from the command.
+    ///
+    /// False where a command runs as the agent's own user: it can then read the supervisor's
+    /// environment and signal it. Separate from `supervisorPidNamespace`, which is about
+    /// visibility rather than identity — a backend can have one without the other.
+    pub supervisor_isolation: bool,
 }
 
 impl SandboxCapabilities {
@@ -230,6 +252,9 @@ impl SandboxCapabilities {
                 // `CAP_SYS_ADMIN`. It can drop privilege (`CAP_SETUID`/`CAP_SETGID` are held) and
                 // it cannot create a namespace. No backend offers this today.
                 supervisor_pid_namespace: false,
+                // The agent runs as uid 0 and `setuid`s the command to uid 60000, so the command
+                // runs under a different identity than the process supervising it.
+                supervisor_isolation: true,
             }),
             Platform::Azure => Ok(Self {
                 files: true,
@@ -256,24 +281,11 @@ impl SandboxCapabilities {
                 session_lifetime: false,
                 // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
                 supervisor_pid_namespace: false,
+                // No Alien process runs the command at all — the platform's own data plane does,
+                // so there is no separate supervisor identity to speak of.
+                supervisor_isolation: false,
             }),
-            // A Cloud Run sandbox id is scoped to one instance, and session affinity does not
-            // hold one across turns. That is the absence of a reconnect guarantee, not a
-            // degraded one.
-            Platform::Gcp => Ok(Self {
-                files: true,
-                reconnect: false,
-                preview: false,
-                suspend_resume: false,
-                snapshot: false,
-                domain_egress_rules: false,
-                egress_deny: true,
-                enforced_limits: false,
-                process_limit: false,
-                session_lifetime: false,
-                // A Cloud Run sandbox is a subprocess of the workload; nothing of ours is inside.
-                supervisor_pid_namespace: false,
-            }),
+            Platform::Gcp => Ok(Self::gcp_agent_platform()),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
             Platform::Kubernetes => Ok(Self {
@@ -293,6 +305,11 @@ impl SandboxCapabilities {
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
+                // The pod pins one uid (`run_as_user: 65534` on both pod and container) with
+                // `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no
+                // process can setuid to split the command off from a supervisor. No uid split is
+                // possible, so none exists.
+                supervisor_isolation: false,
             }),
             Platform::Local => Ok(Self {
                 files: true,
@@ -307,14 +324,53 @@ impl SandboxCapabilities {
                 process_limit: true,
                 session_lifetime: false,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
-                // there is no supervisor sharing the sandbox to isolate from.
+                // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
+                // The supervisor is the manager on the host, outside the container entirely, and
+                // `docker exec` runs the command as the workload uid — a different identity by
+                // construction.
+                supervisor_isolation: true,
             }),
             Platform::Machines | Platform::Test => {
                 Err(AlienError::new(ErrorData::SandboxPlatformUnsupported {
                     platform: platform.to_string(),
                 }))
             }
+        }
+    }
+
+    /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
+    pub fn gcp_agent_platform() -> Self {
+        Self {
+            // Agent file operations move over the session envelope.
+            files: true,
+            // Reaching a session across processes is safe because `generation` is derived from the
+            // container boot id read through the agent's health op, so a caller detects a container
+            // replaced under a stable session name rather than reconnecting to a blank one.
+            reconnect: true,
+            // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
+            preview: false,
+            // `:pause` and `:resume` preserve the running container.
+            suspend_resume: true,
+            // A session's state can be captured and used to create another.
+            snapshot: true,
+            // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
+            domain_egress_rules: false,
+            // A declared `deny` blocks both routed egress and DNS.
+            egress_deny: true,
+            // The declared ceilings are enforced, but by terminating the session on breach rather
+            // than by refusing the allocation — a caller reading `true` should expect the session
+            // to die, not a clean error at the point of the request.
+            enforced_limits: true,
+            // No ceiling on process count is observed.
+            process_limit: false,
+            // `ttl` maps to a session `expireTime` the platform terminates at.
+            session_lifetime: true,
+            // No PID-namespace isolation between the command and anything supervising it.
+            supervisor_pid_namespace: false,
+            // No separate supervisor identity: the command is not run under a different identity
+            // than the process supervising it.
+            supervisor_isolation: false,
         }
     }
 
@@ -332,6 +388,7 @@ impl SandboxCapabilities {
             SandboxCapability::ProcessLimit => self.process_limit,
             SandboxCapability::SessionLifetime => self.session_lifetime,
             SandboxCapability::SupervisorPidNamespace => self.supervisor_pid_namespace,
+            SandboxCapability::SupervisorIsolation => self.supervisor_isolation,
         };
 
         if available {
@@ -372,6 +429,8 @@ pub enum SandboxCapability {
     SessionLifetime,
     /// A command runs in its own PID namespace, isolated from the agent supervising it
     SupervisorPidNamespace,
+    /// A command runs under a different identity than the process supervising it
+    SupervisorIsolation,
 }
 
 impl SandboxCapability {
@@ -389,6 +448,7 @@ impl SandboxCapability {
             Self::ProcessLimit => "processLimit",
             Self::SessionLifetime => "sessionLifetime",
             Self::SupervisorPidNamespace => "supervisorPidNamespace",
+            Self::SupervisorIsolation => "supervisorIsolation",
         }
     }
 }
@@ -930,11 +990,11 @@ mod tests {
     fn capability_sets_are_per_platform() {
         let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
         assert!(
-            !gcp.reconnect,
-            "a GCP session id is scoped to one instance, so reconnect is absent"
+            gcp.reconnect,
+            "generation from the container boot id makes a session reachable across processes"
         );
         assert!(!gcp.preview);
-        assert!(!gcp.enforced_limits);
+        assert!(gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
         assert!(azure.files, "every backend moves files");
@@ -962,6 +1022,93 @@ mod tests {
         assert!(
             !k8s.preview,
             "the session-scoped ingress gateway does not exist yet"
+        );
+    }
+
+    /// Whether the process supervising a command is a separate identity from the command.
+    ///
+    /// Values are measured, not inferred. AWS: the agent runs as uid 0 with
+    /// `CapEff: 00000000a80425fb` and `setuid`s the command to uid 60000, so the two differ.
+    /// Kubernetes: the sandbox pod pins `run_as_user: 65534` on both pod and container with
+    /// `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no uid split is
+    /// possible (`kubernetes_spec.rs`). Local: `docker exec` runs as the workload uid while the
+    /// manager supervises from the host. Azure and Agent Platform have no in-sandbox supervisor.
+    #[test]
+    fn supervisor_isolation_is_per_platform() {
+        let value = |platform| {
+            SandboxCapabilities::for_platform(platform)
+                .expect("supported")
+                .supervisor_isolation
+        };
+
+        assert!(value(Platform::Aws), "root agent setuids the command to 60000");
+        assert!(value(Platform::Local), "the supervisor is on the host, outside the container");
+        assert!(!value(Platform::Kubernetes), "a single pinned uid cannot be split");
+        assert!(!value(Platform::Azure), "no Alien process runs the command");
+        assert!(
+            !value(Platform::Gcp),
+            "no separate supervisor identity runs the command"
+        );
+    }
+
+    /// The point of the field: AWS and GCP report the *same* `supervisor_pid_namespace` (neither
+    /// has `CAP_SYS_ADMIN`), so that axis alone reads them as equivalent. They are not — AWS
+    /// separates the command's identity from the supervisor's and Agent Platform does not.
+    #[test]
+    fn supervisor_isolation_separates_aws_from_a_subprocess_backend() {
+        let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
+        let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+
+        assert_eq!(
+            aws.supervisor_pid_namespace, gcp.supervisor_pid_namespace,
+            "the older axis cannot tell them apart"
+        );
+        assert!(aws.supervisor_isolation, "AWS setuids the command off the supervisor");
+        assert!(
+            !gcp.supervisor_isolation,
+            "the command runs under no separate supervisor identity"
+        );
+    }
+
+    /// The Agent Platform row, each value against the behaviour it was measured from. `reconnect`
+    /// is the tripwire: it is `true` only because `generation` is derived from the container boot
+    /// id read through the agent's health op, so a caller detects a replaced container instead of
+    /// reconnecting to a blank one. It is also the body of the `Platform::Gcp` arm, asserted below.
+    #[test]
+    fn gcp_agent_platform_row_matches_measured_backend() {
+        let row = SandboxCapabilities::gcp_agent_platform();
+
+        assert!(row.files, "agent file ops move over the session envelope");
+        assert!(
+            row.reconnect,
+            "generation is derived from the container boot id, so a session is reachable across \
+             processes"
+        );
+        assert!(!row.preview, "the only ingress is :execute; no port-scoped capability");
+        assert!(row.suspend_resume, ":pause and :resume preserve the container");
+        assert!(row.snapshot, "session state can be captured and restored into a new session");
+        assert!(
+            !row.domain_egress_rules,
+            "VPC and DNS peering is not a hostname allowlist"
+        );
+        assert!(row.egress_deny, "a declared deny blocks both egress and DNS");
+        assert!(
+            row.enforced_limits,
+            "ceilings are enforced, by terminating the session on breach"
+        );
+        assert!(!row.process_limit, "no process-count ceiling is observed");
+        assert!(row.session_lifetime, "ttl maps to a session expireTime");
+        assert!(!row.supervisor_pid_namespace, "no PID-namespace isolation");
+        assert!(
+            !row.supervisor_isolation,
+            "the command is not run under a separate supervisor identity"
+        );
+
+        // Agent Platform is the registered GCP backend, so the arm returns exactly this row.
+        let live = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+        assert_eq!(
+            live, row,
+            "the Platform::Gcp arm is the Agent Platform capability row"
         );
     }
 
@@ -1067,8 +1214,8 @@ mod tests {
     fn a_platform_that_cannot_enforce_limits_still_takes_a_sandbox_without_them() {
         let declared = sandbox_with(SandboxEgress::Deny, Vec::new());
         declared
-            .validate_for_platform(Platform::Gcp)
-            .expect_err("declaring ceilings GCP cannot enforce is rejected");
+            .validate_for_platform(Platform::Azure)
+            .expect_err("declaring ceilings Azure cannot enforce is rejected");
 
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
@@ -1082,7 +1229,7 @@ mod tests {
             .build();
 
         undeclared
-            .validate_for_platform(Platform::Gcp)
+            .validate_for_platform(Platform::Azure)
             .expect("a sandbox naming no ceilings takes the platform's own");
 
         // A backend still gets a concrete set, so nothing downstream has to invent one.
@@ -1104,12 +1251,11 @@ mod tests {
     }
 
     #[test]
-    fn gcp_rejects_a_sandbox_declaring_enforced_limits() {
+    fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
         let sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
-        let error = sandbox
+        sandbox
             .validate_for_platform(Platform::Gcp)
-            .expect_err("GCP cannot enforce ceilings on a subprocess sandbox");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            .expect("Agent Platform enforces declared ceilings, by terminating on breach");
     }
 
     #[test]
@@ -1531,5 +1677,21 @@ mod tests {
 
         declared(vec!["api.example.com".to_string()])
             .expect("a named domain is what an allowlist is for");
+    }
+
+    /// The two expressible modes map to the boolean; a host list maps to nothing so the caller has
+    /// to refuse rather than silently pick a side.
+    #[test]
+    fn internet_access_switch_maps_only_the_two_expressible_modes() {
+        assert_eq!(SandboxEgress::Allow.internet_access_switch(), Some(true));
+        assert_eq!(SandboxEgress::Deny.internet_access_switch(), Some(false));
+        assert_eq!(
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()]
+            }
+            .internet_access_switch(),
+            None,
+            "a host list has no boolean and must not be approximated"
+        );
     }
 }

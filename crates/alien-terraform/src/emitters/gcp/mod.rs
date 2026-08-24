@@ -31,7 +31,7 @@ pub use network::GcpNetworkEmitter;
 pub use queue::GcpQueueEmitter;
 pub use remote_bindings::GcpRemoteBindingsEmitter;
 pub use remote_stack_management::GcpRemoteStackManagementEmitter;
-pub use sandbox::GcpSandboxEmitter;
+pub use sandbox::GcpAgentPlatformSandboxEmitter;
 pub use service_account::GcpServiceAccountEmitter;
 pub use service_activation::GcpServiceActivationEmitter;
 pub use storage::GcpStorageEmitter;

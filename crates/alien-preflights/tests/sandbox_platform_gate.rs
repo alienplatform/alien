@@ -12,8 +12,8 @@ use alien_core::{
 use alien_preflights::runner::PreflightRunner;
 
 fn stack_with(sandbox: Sandbox) -> Stack {
-    // GCP is the platform whose ceilings are unenforceable, and it also requires a Cloud Run host
-    // for any sandbox at all. The worker is here so the gate under test is the one that fires.
+    // Azure's sandbox ceilings are unenforceable, so a declared ceiling must fail the gate. The
+    // worker rounds out the stack; the gate under test is the sandbox capability one.
     Stack::new("sandbox-gate".to_string())
         .permissions(PermissionsConfig::new().with_profile("execution", PermissionProfile::new()))
         .add(
@@ -32,7 +32,7 @@ fn stack_with(sandbox: Sandbox) -> Stack {
 fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
     let builder = Sandbox::new("agent".to_string())
         .code(SandboxCode::Image {
-            image: "ubuntu:24.04".to_string(),
+            image: "ubuntu".to_string(),
         })
         .egress(SandboxEgress::Deny)
         .session(SandboxSessionPolicy {
@@ -45,9 +45,8 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
     }
 }
 
-/// A GCP sandbox runs as a subprocess of the app's own Cloud Run instance, which applies no
-/// per-sandbox ceiling. Declaring one has to fail before anything is provisioned, or the stack
-/// reads as bounded while the sandbox is not.
+/// Azure applies no per-sandbox ceiling. Declaring one has to fail before anything is provisioned,
+/// or the stack reads as bounded while the sandbox is not.
 #[tokio::test]
 async fn declared_ceilings_fail_preflight_on_a_platform_that_ignores_them() {
     let stack = stack_with(sandbox(Some(SandboxLimits {
@@ -58,7 +57,7 @@ async fn declared_ceilings_fail_preflight_on_a_platform_that_ignores_them() {
     })));
 
     let summary = PreflightRunner::new()
-        .run_compile_time_checks(&stack, Platform::Gcp)
+        .run_compile_time_checks(&stack, Platform::Azure)
         .await
         .expect("compile-time checks run");
 
@@ -81,7 +80,7 @@ async fn declared_ceilings_fail_preflight_on_a_platform_that_ignores_them() {
 #[tokio::test]
 async fn the_same_stack_without_ceilings_passes_preflight() {
     let summary = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(sandbox(None)), Platform::Gcp)
+        .run_compile_time_checks(&stack_with(sandbox(None)), Platform::Azure)
         .await
         .expect("compile-time checks run");
 

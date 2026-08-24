@@ -11,7 +11,7 @@ use std::sync::Arc;
 use axum::body::Body;
 use axum::extract::{ConnectInfo, Query, State};
 use axum::http::{HeaderMap, StatusCode};
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -24,6 +24,7 @@ use tokio::sync::mpsc;
 use crate::error::ErrorData;
 use crate::exec::{self, ExecIdentity, ExecRequest, Frame, FRAME_CHANNEL_DEPTH};
 use crate::files;
+use crate::jobs::{JobOutcome, JobRegistry, JobSnapshot};
 use crate::paths::resolve_within_root;
 use alien_core::sandbox_capability::{SandboxOperationClass, SandboxSessionIdentity};
 use alien_core::sandbox_capability_token;
@@ -83,14 +84,20 @@ pub struct AgentState {
     pub exec_identity: ExecIdentity,
     /// Bytes of each stream kept before output is truncated
     pub output_cap: usize,
+    /// Detached jobs this session is running or retaining for later polls
+    pub jobs: JobRegistry,
 }
 
-/// Liveness and the version the agent speaks.
+/// Liveness, the version the agent speaks, and the container it runs in.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     /// The protocol version this agent implements
     pub protocol_version: u32,
+    /// The kernel boot id of the container this agent runs in. Stable across calls and processes
+    /// on one kernel, so a caller compares it across reads to tell its container from a blank one
+    /// that replaced it under the same session name.
+    pub boot_id: String,
 }
 
 /// Optional version assertion from the caller.
@@ -135,6 +142,100 @@ pub struct MkdirBody {
     pub path: String,
 }
 
+/// The id a started job answers to.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobStartResponse {
+    /// Identifier for later polls and cancellation
+    pub job_id: String,
+}
+
+/// Which job to poll, and from where.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobPollBody {
+    /// The job to read
+    pub job_id: String,
+    /// Return frames strictly after this sequence; absent returns from the first frame
+    #[serde(default)]
+    pub since_seq: Option<u64>,
+}
+
+/// A job's output so far, and how it ended once it has.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobPollResponse {
+    /// Whether the command is still running
+    pub running: bool,
+    /// Output frames after the polled sequence
+    pub frames: Vec<Frame>,
+    /// Exit code, present once a job has exited on its own
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit_code: Option<i32>,
+    /// Set when output was cut short by the output cap; present once a job has exited
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncated: Option<bool>,
+    /// How a job failed, present when it ended without exiting normally
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JobErrorBody>,
+}
+
+/// Why a job did not exit normally.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobErrorBody {
+    /// Machine-readable cause, e.g. `deadlineExceeded`
+    pub code: String,
+    /// Human-readable detail
+    pub message: String,
+}
+
+impl From<JobSnapshot> for JobPollResponse {
+    fn from(snapshot: JobSnapshot) -> Self {
+        match snapshot.outcome {
+            None => Self {
+                running: true,
+                frames: snapshot.frames,
+                exit_code: None,
+                truncated: None,
+                error: None,
+            },
+            Some(JobOutcome::Exited { code, truncated }) => Self {
+                running: false,
+                frames: snapshot.frames,
+                exit_code: Some(code),
+                truncated: Some(truncated),
+                error: None,
+            },
+            Some(JobOutcome::Failed { code, message }) => Self {
+                running: false,
+                frames: snapshot.frames,
+                exit_code: None,
+                truncated: None,
+                error: Some(JobErrorBody { code, message }),
+            },
+        }
+    }
+}
+
+/// Which job to cancel.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct JobCancelBody {
+    /// The job to cancel
+    pub job_id: String,
+}
+
+/// The discriminating fields of an [`agent_platform`] envelope, read before its operation body.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct EnvelopeHead {
+    /// Protocol version the caller intends to speak. Refused when unsupported, never guessed.
+    v: Option<u32>,
+    /// Which operation the body carries. Absent or unknown is refused, never defaulted.
+    op: Option<String>,
+}
+
 /// Builds the agent's router.
 pub fn router(state: Arc<AgentState>) -> Router {
     // Base64 inflates by 4/3; the rest is the JSON envelope. Without this axum's 2MB default
@@ -152,14 +253,22 @@ pub fn router(state: Arc<AgentState>) -> Router {
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
         .route("/v1/mkdir", post(mkdir))
+        .route("/v1/jobs/start", post(job_start))
+        .route("/v1/jobs/poll", post(job_poll))
+        .route("/v1/jobs/cancel", post(job_cancel))
+        // The GCP Agent Platform proxies `:execute` to `POST /` with the body verbatim and can set
+        // neither path nor method, so the one route it can reach carries every operation, chosen
+        // by `op`. Placed before the body-limit layer so an envelope `writeFile` shares the same
+        // ceiling as `/v1/files` rather than falling back to axum's default.
+        .route("/", post(agent_platform))
         .layer(axum::extract::DefaultBodyLimit::max(body_limit))
         .with_state(state)
 }
 
 /// Liveness, and the one place protocol versions are reconciled.
 ///
-/// Unauthenticated: it reports the version and nothing about the session, so requiring a
-/// capability would only stop a liveness probe from working.
+/// Unauthenticated: it reports the version and the container boot id — kernel identity, not session
+/// contents — so requiring a capability would only stop a liveness probe from working.
 async fn health(
     Query(query): Query<HealthQuery>,
 ) -> std::result::Result<Json<HealthResponse>, ApiError> {
@@ -176,9 +285,36 @@ async fn health(
         }
     }
 
+    // Failing closed: a caller that cannot read the container identity must not reconnect to a
+    // possibly-replaced container, so an unreadable boot id is an error, not a blank field.
+    let boot_id = container_boot_id().map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::OperationFailed {
+            operation: "read container boot id".to_string(),
+            reason: error.to_string(),
+        }))
+    })?;
+
     Ok(Json(HealthResponse {
         protocol_version: PROTOCOL_VERSION,
+        boot_id,
     }))
+}
+
+/// The kernel boot id of the container this agent runs in.
+///
+/// `/proc/sys/kernel/random/boot_id` is stable across calls and processes on one kernel and
+/// changes only when the container is replaced, which is the identity a caller's `generation` is
+/// derived from.
+#[cfg(target_os = "linux")]
+fn container_boot_id() -> std::io::Result<String> {
+    std::fs::read_to_string("/proc/sys/kernel/random/boot_id").map(|id| id.trim().to_string())
+}
+
+/// A non-Linux dev build has no `/proc` boot id and never runs a real sandbox reconnect, so a
+/// fixed sentinel stands in rather than a per-run value that would read as a fresh container.
+#[cfg(not(target_os = "linux"))]
+fn container_boot_id() -> std::io::Result<String> {
+    Ok("dev-build-no-boot-id".to_string())
 }
 
 /// The image's readiness and validation hooks.
@@ -297,6 +433,152 @@ async fn mkdir(
     files::mkdir(&state.session_root, &body.path).await?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// Starts a command as a detached job whose output is polled for rather than streamed.
+///
+/// The provider chooses this over `/v1/exec` when a command's deadline is longer than one proxied
+/// call can stay open. The command runs under the same deadline; only its lifetime is detached.
+async fn job_start(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(request): Json<ExecRequest>,
+) -> std::result::Result<Json<JobStartResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    // Resolved here, as in `run_command`, so a refused directory answers with an error rather than a
+    // job whose first frame is a failure.
+    let working_directory = match &request.working_directory {
+        Some(path) => resolve_within_root(&state.session_root, path)?,
+        None => state.session_root.clone(),
+    };
+
+    let job_id = state
+        .jobs
+        .start(request, working_directory, state.exec_identity, state.output_cap)?;
+
+    Ok(Json(JobStartResponse { job_id }))
+}
+
+/// Returns a job's output after a sequence, and its ending once it has one.
+async fn job_poll(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<JobPollBody>,
+) -> std::result::Result<Json<JobPollResponse>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    let snapshot = state.jobs.poll(&body.job_id, body.since_seq).ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::JobNotFound {
+            job_id: body.job_id.clone(),
+        }))
+    })?;
+
+    Ok(Json(JobPollResponse::from(snapshot)))
+}
+
+/// Cancels a job, killing its process group.
+async fn job_cancel(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Json(body): Json<JobCancelBody>,
+) -> std::result::Result<Json<serde_json::Value>, ApiError> {
+    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
+
+    if !state.jobs.cancel(&body.job_id) {
+        return Err(ApiError::from(AlienError::new(ErrorData::JobNotFound {
+            job_id: body.job_id,
+        })));
+    }
+
+    Ok(Json(serde_json::json!({})))
+}
+
+/// The single endpoint the GCP Agent Platform can reach, dispatching by the envelope's `op`.
+///
+/// The version is reconciled and the `op` resolved before any handler runs; each arm then hands
+/// off to the matching `/v1/*` handler, so the response — the exec NDJSON stream included — is the
+/// same bytes that route produces, and authorization stays that handler's job.
+async fn agent_platform(
+    State(state): State<Arc<AgentState>>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> std::result::Result<Response, ApiError> {
+    let head: EnvelopeHead = serde_json::from_slice(&body).map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("envelope is not valid JSON: {error}"),
+        }))
+    })?;
+
+    let requested = head.v.ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "an envelope must carry a protocol version 'v'".to_string(),
+        }))
+    })?;
+    if requested != PROTOCOL_VERSION {
+        return Err(ApiError::from(AlienError::new(
+            ErrorData::ProtocolVersionMismatch {
+                requested,
+                supported: PROTOCOL_VERSION,
+            },
+        )));
+    }
+
+    let op = head.op.ok_or_else(|| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: "an envelope must name an 'op'".to_string(),
+        }))
+    })?;
+
+    // The operation's fields are re-read from the same bytes into the body the matching `/v1/*`
+    // handler takes; that works only because those types ignore the envelope's `v`/`op`. Adding
+    // `deny_unknown_fields` to one would break this dispatch at runtime, with nothing to catch it.
+    match op.as_str() {
+        "exec" => run_command(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?)).await,
+        "readFile" => Ok(read_file(State(state), ConnectInfo(peer), headers, Query(reparse(&body)?))
+            .await?
+            .into_response()),
+        "writeFile" => Ok(
+            write_file(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "mkdir" => Ok(mkdir(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+            .await?
+            .into_response()),
+        "jobStart" => Ok(
+            job_start(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "jobPoll" => Ok(
+            job_poll(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "jobCancel" => Ok(
+            job_cancel(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
+                .await?
+                .into_response(),
+        ),
+        "health" => Ok(health(Query(HealthQuery { version: None })).await?.into_response()),
+        other => Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("unknown op '{other}'"),
+        }))),
+    }
+}
+
+/// Reads the operation's own fields out of an envelope body once its `op` has selected the type.
+fn reparse<T: serde::de::DeserializeOwned>(body: &Bytes) -> std::result::Result<T, ApiError> {
+    serde_json::from_slice(body).map_err(|error| {
+        ApiError::from(AlienError::new(ErrorData::RequestInvalid {
+            reason: format!("envelope body did not match its op: {error}"),
+        }))
+    })
 }
 
 /// Verifies the request may reach this session, or refuses it.

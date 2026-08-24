@@ -169,6 +169,15 @@ impl GcpServiceActivationMutation {
                         "aiplatform.googleapis.com".to_string(),
                     );
                 }
+                "sandbox" => {
+                    // Agent Platform sandboxes are Vertex reasoning engines; a stack with a
+                    // sandbox but no ai resource would otherwise never enable aiplatform. Same
+                    // key as "ai", so a stack with both enables it once.
+                    services.insert(
+                        "enable-aiplatform".to_string(),
+                        "aiplatform.googleapis.com".to_string(),
+                    );
+                }
                 "queue" => {
                     services.insert(
                         "enable-pubsub".to_string(),

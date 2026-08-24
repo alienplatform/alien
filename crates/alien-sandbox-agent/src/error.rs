@@ -74,6 +74,32 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A poll or cancel named a job the session is not holding.
+    #[error(
+        code = "JOB_NOT_FOUND",
+        message = "No such job: {job_id}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 404
+    )]
+    JobNotFound {
+        /// The job id as the caller supplied it
+        job_id: String,
+    },
+
+    /// Every job slot holds a still-running job, so a new one cannot be started yet.
+    #[error(
+        code = "JOB_LIMIT_REACHED",
+        message = "The session is running its maximum of {limit} jobs; retry once one finishes",
+        retryable = "true",
+        internal = "false",
+        http_status_code = 429
+    )]
+    JobLimitReached {
+        /// The ceiling on concurrent jobs
+        limit: usize,
+    },
+
     /// The caller and the agent do not speak the same protocol version.
     #[error(
         code = "PROTOCOL_VERSION_MISMATCH",
