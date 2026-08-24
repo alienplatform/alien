@@ -4,6 +4,7 @@
 //! session. Nothing is negotiated at runtime: the process that placed this agent in the sandbox
 //! is the only thing that gets to decide what session it serves and what authorises a request.
 
+use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -12,7 +13,9 @@ use alien_core::sandbox_capability::SandboxSessionIdentity;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_sandbox_agent::error::{ErrorData, Result};
 use alien_sandbox_agent::exec::ExecIdentity;
+use alien_sandbox_agent::jobs::JobRegistry;
 use alien_sandbox_agent::server::{router, AgentAuthorization, AgentState};
+use axum::serve::{Listener, ListenerExt};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use ed25519_compact::PublicKey;
@@ -35,6 +38,9 @@ const ENV_OUTPUT_CAP: &str = "ALIEN_SANDBOX_OUTPUT_CAP";
 const ENV_EXEC_UID: &str = "ALIEN_SANDBOX_EXEC_UID";
 /// Its primary group.
 const ENV_EXEC_GID: &str = "ALIEN_SANDBOX_EXEC_GID";
+/// Which isolation model is in force: `uid-split` or `platform`. Declared, never defaulted — it
+/// selects a security model, so an unset value must fail to start rather than silently pick one.
+const ENV_ISOLATION: &str = "ALIEN_SANDBOX_ISOLATION";
 
 /// Bytes of each stream kept when the environment does not say.
 const DEFAULT_OUTPUT_CAP: usize = 4 * 1024 * 1024;
@@ -49,8 +55,7 @@ async fn main() -> Result<()> {
     // All interfaces: on AWS the agent is reached from outside the guest, and a
     // loopback bind would make it unreachable.
     let address = SocketAddr::from((Ipv4Addr::UNSPECIFIED, port));
-    let listener = tokio::net::TcpListener::bind(address)
-        .await
+    let std_listener = std::net::TcpListener::bind(address)
         .into_alien_error()
         .context(failed(
             "bind the agent listener",
@@ -60,7 +65,10 @@ async fn main() -> Result<()> {
     tracing::info!("sandbox agent listening on {address}");
 
     axum::serve(
-        listener,
+        // tap_io is a no-op that wraps the listener in axum's TapIo, which is what makes the
+        // SocketAddr connect-info available for a custom listener (the orphan rule blocks impls
+        // straight onto SocketAddr).
+        BlockingListener::new(std_listener, address).tap_io(|_| {}),
         router(state).into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
@@ -69,6 +77,112 @@ async fn main() -> Result<()> {
         "serve the agent protocol",
         "the agent stopped serving".to_string(),
     ))
+}
+
+/// A listener whose accept blocks in the `accept(2)` syscall instead of waiting on an epoll edge.
+///
+/// The GCP Agent Platform detaches and reattaches a sandbox's data plane on pause/resume. A tokio
+/// `TcpListener` registered with epoll then stops receiving readiness for the listen socket across
+/// that reattach and never accepts again — the process stays alive and the socket stays in LISTEN,
+/// but no connection is served. A blocking `accept()` re-wakes on the next connection regardless,
+/// which is why a plain blocking server survives the same transition. Each accepted connection is a
+/// fresh tokio stream, so only the long-lived listener needs this.
+struct BlockingListener {
+    inner: Arc<std::net::TcpListener>,
+    local: SocketAddr,
+}
+
+impl BlockingListener {
+    fn new(listener: std::net::TcpListener, local: SocketAddr) -> Self {
+        Self {
+            inner: Arc::new(listener),
+            local,
+        }
+    }
+}
+
+impl Listener for BlockingListener {
+    type Io = tokio::net::TcpStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        loop {
+            let listener = Arc::clone(&self.inner);
+            match tokio::task::spawn_blocking(move || listener.accept()).await {
+                Ok(Ok((stream, peer))) => {
+                    if let Err(error) = stream.set_nonblocking(true) {
+                        tracing::warn!(%error, "dropping a connection that would not go non-blocking");
+                        continue;
+                    }
+                    match tokio::net::TcpStream::from_std(stream) {
+                        Ok(stream) => return (stream, peer),
+                        Err(error) => {
+                            tracing::warn!(%error, "dropping a connection tokio would not adopt")
+                        }
+                    }
+                }
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "accept failed; retrying");
+                    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+                }
+                Err(error) => tracing::warn!(%error, "the accept task failed; retrying"),
+            }
+        }
+    }
+
+    fn local_addr(&self) -> io::Result<Self::Addr> {
+        Ok(self.local)
+    }
+}
+
+/// Which boundary keeps untrusted code away from the agent that supervises it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Isolation {
+    /// The command runs under a uid distinct from the agent's, and the drop to it must work, so the
+    /// agent's binary and state stay unreachable to it.
+    UidSplit,
+    /// The container or VM is the only boundary: the command runs as the agent's own user because
+    /// the platform allows no other. Accepted only where a uid split is impossible.
+    Platform,
+}
+
+fn load_isolation() -> Result<Isolation> {
+    match required(ENV_ISOLATION)?.as_str() {
+        "uid-split" => Ok(Isolation::UidSplit),
+        "platform" => Ok(Isolation::Platform),
+        other => Err(invalid(
+            ENV_ISOLATION,
+            &format!("'{other}' is not one of: uid-split, platform"),
+        )),
+    }
+}
+
+/// The identity rules, kept pure so they can be tested without touching process state. Root is
+/// refused in both models; the agent's own uid/gid is refused only under uid-split, where a
+/// command sharing the agent's identity is the escalation the split exists to prevent. Platform
+/// accepts it because the platform runs everything as one user — the concession is same-uid, never
+/// root.
+fn enforce_exec_identity(
+    isolation: Isolation,
+    exec: ExecIdentity,
+    agent_uid: u32,
+    agent_gid: u32,
+) -> Result<()> {
+    if exec.uid == 0 {
+        return Err(invalid(ENV_EXEC_UID, "must not be root"));
+    }
+    if exec.gid == 0 {
+        return Err(invalid(ENV_EXEC_GID, "must not be the root group"));
+    }
+    if isolation == Isolation::UidSplit {
+        if exec.uid == agent_uid {
+            return Err(invalid(ENV_EXEC_UID, "must not be the agent's own user"));
+        }
+        if exec.gid == agent_gid {
+            return Err(invalid(ENV_EXEC_GID, "must not be the agent's own group"));
+        }
+    }
+    Ok(())
 }
 
 fn load_state() -> Result<AgentState> {
@@ -94,36 +208,21 @@ fn load_state() -> Result<AgentState> {
         gid: parse(ENV_EXEC_GID)?,
     };
 
-    if exec_identity.uid == 0 {
-        return Err(invalid(ENV_EXEC_UID, "must not be root"));
-    }
+    let isolation = load_isolation()?;
 
-    // Group 0 reaches the agent's own files wherever they carry group permission, which is most
-    // of what refusing uid 0 is there to prevent.
-    if exec_identity.gid == 0 {
-        return Err(invalid(ENV_EXEC_GID, "must not be the root group"));
-    }
-
-    // Refusing root is not enough where the agent itself is not root: running commands as the
-    // agent's own identity is the same escalation with a different number, and the bundle
-    // documents that configuration as a supported way to run on a shared kernel.
+    // SAFETY: both are always-successful getters with no arguments.
     #[cfg(unix)]
-    {
-        // SAFETY: both are always-successful getters with no arguments.
-        let (agent_uid, agent_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
-        if exec_identity.uid == agent_uid {
-            return Err(invalid(ENV_EXEC_UID, "must not be the agent's own user"));
-        }
-        if exec_identity.gid == agent_gid {
-            return Err(invalid(ENV_EXEC_GID, "must not be the agent's own group"));
-        }
-    }
+    let (agent_uid, agent_gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+    #[cfg(not(unix))]
+    let (agent_uid, agent_gid) = (u32::MAX, u32::MAX);
+    enforce_exec_identity(isolation, exec_identity, agent_uid, agent_gid)?;
 
     Ok(AgentState {
         session_root,
         authorization: load_authorization()?,
         exec_identity,
         output_cap,
+        jobs: JobRegistry::new(),
     })
 }
 
@@ -203,5 +302,44 @@ fn failed(operation: &str, reason: String) -> ErrorData {
     ErrorData::OperationFailed {
         operation: operation.to_string(),
         reason,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn exec(uid: u32, gid: u32) -> ExecIdentity {
+        ExecIdentity { uid, gid }
+    }
+
+    #[test]
+    fn platform_accepts_the_agents_own_user() {
+        enforce_exec_identity(Isolation::Platform, exec(1000, 1000), 1000, 1000)
+            .expect("platform runs the command as the agent's own user");
+    }
+
+    #[test]
+    fn uid_split_refuses_the_agents_own_user() {
+        let error = enforce_exec_identity(Isolation::UidSplit, exec(1000, 1000), 1000, 1000)
+            .expect_err("uid-split refuses the agent's own user");
+        assert!(error.to_string().contains("agent's own user"), "{error}");
+    }
+
+    #[test]
+    fn uid_split_accepts_a_distinct_user() {
+        // The AWS shape: the agent runs as root, the command as an unprivileged uid.
+        enforce_exec_identity(Isolation::UidSplit, exec(60000, 60000), 0, 0)
+            .expect("a distinct exec uid is exactly what uid-split is for");
+    }
+
+    #[test]
+    fn root_is_refused_in_both_models() {
+        for isolation in [Isolation::UidSplit, Isolation::Platform] {
+            enforce_exec_identity(isolation, exec(0, 5), 1000, 1000)
+                .expect_err("root uid is refused regardless of the model");
+            enforce_exec_identity(isolation, exec(5, 0), 1000, 1000)
+                .expect_err("root gid is refused regardless of the model");
+        }
     }
 }

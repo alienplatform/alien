@@ -29,7 +29,7 @@ pub use gcp::{
     GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData,
     GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData, GcpNetworkImportData,
     GcpPostgresImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
-    GcpRemoteStackManagementImportData, GcpSandboxImportData, GcpServiceAccountImportData,
+    GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
     GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
@@ -186,7 +186,6 @@ mod schema_snapshots {
             ("gcp_network", schema::<GcpNetworkImportData>()),
             ("gcp_postgres", schema::<GcpPostgresImportData>()),
             ("gcp_queue", schema::<GcpQueueImportData>()),
-            ("gcp_sandbox", schema::<GcpSandboxImportData>()),
             (
                 "gcp_remote_stack_management",
                 schema::<GcpRemoteStackManagementImportData>(),

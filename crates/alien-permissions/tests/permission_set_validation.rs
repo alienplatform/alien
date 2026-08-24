@@ -442,8 +442,29 @@ fn validate_gcp_permissions(
     Ok(())
 }
 
+/// Permissions the upstream dataset has not published yet. The dataset is a community mirror
+/// fetched at test time and lags a preview service. Exact-match, not a prefix: a sandbox
+/// permission not on this list still fails, and `aiplatform.reasoningEngines.*` is published so a
+/// typo there is caught against the dataset.
+const GCP_UNPUBLISHED_PERMISSIONS: &[&str] = &[
+    // Agent-platform sandbox environments and their templates, in preview.
+    "aiplatform.sandboxEnvironmentTemplates.create",
+    "aiplatform.sandboxEnvironmentTemplates.delete",
+    "aiplatform.sandboxEnvironmentTemplates.get",
+    "aiplatform.sandboxEnvironmentTemplates.list",
+    "aiplatform.sandboxEnvironments.create",
+    "aiplatform.sandboxEnvironments.delete",
+    "aiplatform.sandboxEnvironments.get",
+    "aiplatform.sandboxEnvironments.list",
+    "aiplatform.sandboxEnvironments.pause",
+    "aiplatform.sandboxEnvironments.resume",
+    "aiplatform.sandboxEnvironments.snapshot",
+    "aiplatform.sandboxEnvironments.execute",
+];
+
 fn is_known_gcp_dataset_gap(permission: &str) -> bool {
-    matches!(permission, "iam.serviceAccounts.getAccessToken")
+    permission == "iam.serviceAccounts.getAccessToken"
+        || GCP_UNPUBLISHED_PERMISSIONS.contains(&permission)
 }
 
 /// Validate Azure actions in a permission set

@@ -510,7 +510,10 @@ mod tests {
     const DEADLINE_PLACEHOLDER: &str = "<deadline>";
     /// The nonce a session would draw. Announced on the first line of stderr, and repeated by
     /// the killer, exactly as the wrapper does.
-    const SESSION_NONCE: &str = "a1b2c3d4";
+    /// The width the wrapper draws — `od -N16` is 16 bytes, so 32 hex digits. Short of that is
+    /// not an announcement, and a fixture that used a short one pinned a weaker rule than the
+    /// session's.
+    const SESSION_NONCE: &str = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
 
     /// Wraps a scripted stderr the way a bounded session would return it.
     fn as_session_stderr(stderr: &str) -> String {

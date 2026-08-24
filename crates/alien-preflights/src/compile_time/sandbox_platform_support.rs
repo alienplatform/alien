@@ -80,7 +80,9 @@ mod tests {
     fn sandbox(id: &str, limits: Option<SandboxLimits>, egress: SandboxEgress) -> Sandbox {
         let builder = Sandbox::new(id.to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                // A bare name, because Azure takes a catalog entry rather than a reference and
+                // these cases are about egress and limits rather than about the image.
+                image: "ubuntu".to_string(),
             })
             .egress(egress)
             .session(SandboxSessionPolicy {
@@ -102,14 +104,14 @@ mod tests {
         }
     }
 
-    /// GCP runs sandboxes as subprocesses of the app's own Cloud Run instance, which applies no
-    /// per-sandbox ceiling. A stack that declares one reads as bounded while the sandbox is not.
+    /// Azure applies no per-sandbox ceiling. A stack that declares one reads as bounded while the
+    /// sandbox is not, so plan time refuses it rather than letting it run unbounded.
     #[tokio::test]
     async fn ceilings_on_a_platform_that_ignores_them_fail_at_plan_time() {
         let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::Deny));
 
         let result = SandboxPlatformSupportCheck
-            .check(&stack, Platform::Gcp)
+            .check(&stack, Platform::Azure)
             .await
             .expect("check runs");
 
@@ -136,8 +138,8 @@ mod tests {
         }
     }
 
-    /// No backend expresses a hostname allowlist, so the declaration is refused everywhere
-    /// rather than accepted and dropped.
+    /// Azure's egress proxy matches on host pattern; the other four filter by address or carry a
+    /// single switch, so the declaration is refused there rather than accepted and dropped.
     #[tokio::test]
     async fn domain_egress_rules_are_refused_where_they_cannot_be_expressed() {
         let stack = stack_with(sandbox(
@@ -150,9 +152,9 @@ mod tests {
 
         for platform in [
             Platform::Aws,
-            Platform::Azure,
             Platform::Gcp,
             Platform::Kubernetes,
+            Platform::Local,
         ] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack, platform)
@@ -163,6 +165,16 @@ mod tests {
                 "{platform} has no hostname allowlist and must refuse the declaration"
             );
         }
+
+        let azure = SandboxPlatformSupportCheck
+            .check(&stack, Platform::Azure)
+            .await
+            .expect("check runs");
+        assert!(
+            azure.success,
+            "Azure creates the sandbox under host rules: {:?}",
+            azure.errors
+        );
     }
 
     #[tokio::test]

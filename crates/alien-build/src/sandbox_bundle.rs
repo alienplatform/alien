@@ -75,7 +75,8 @@ ENV ALIEN_SANDBOX_ROOT={SESSION_ROOT} \
     ALIEN_SANDBOX_PORT={AGENT_PORT} \
     ALIEN_SANDBOX_AUTHORIZATION=transport \
     ALIEN_SANDBOX_EXEC_UID={EXEC_UID} \
-    ALIEN_SANDBOX_EXEC_GID={EXEC_UID}
+    ALIEN_SANDBOX_EXEC_GID={EXEC_UID} \
+    ALIEN_SANDBOX_ISOLATION=uid-split
 
 EXPOSE {AGENT_PORT}
 ENTRYPOINT ["{AGENT_PATH}"]
@@ -197,6 +198,7 @@ mod tests {
             &format!("ALIEN_SANDBOX_EXEC_UID={EXEC_UID}"),
             &format!("ALIEN_SANDBOX_EXEC_GID={EXEC_UID}"),
             &"ALIEN_SANDBOX_AUTHORIZATION=transport".to_string(),
+            &"ALIEN_SANDBOX_ISOLATION=uid-split".to_string(),
         ] {
             assert!(dockerfile.contains(expected.as_str()), "missing {expected}");
         }

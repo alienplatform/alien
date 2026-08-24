@@ -4572,7 +4572,6 @@ impl GcpWorkerController {
             .env(env)
             .resources(resources)
             .ports(ports)
-            .maybe_sandbox_launcher(cfg.sandbox_launcher.then_some(true))
             .build();
 
         let ingress = if cfg.public_endpoints.is_empty() {
@@ -4636,13 +4635,6 @@ impl GcpWorkerController {
             .template(template)
             .traffic(traffic)
             .invoker_iam_disabled(is_public)
-            // Cloud Run refuses `sandboxLauncher` outside Beta or later with
-            // `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not supported in the
-            // declared launch stage`, so the two are set together or not at all.
-            .maybe_launch_stage(
-                cfg.sandbox_launcher
-                    .then_some(alien_gcp_clients::cloudrun::LaunchStage::Beta),
-            )
             .build();
 
         Ok(service)
@@ -5685,10 +5677,10 @@ mod tests {
         Arc,
     };
 
-    use alien_client_core::{ErrorData as CloudClientErrorData, Result as CloudClientResult};
+    use alien_client_core::ErrorData as CloudClientErrorData;
     use alien_core::{
-        CertificateStatus, DnsRecordStatus, DomainMetadata, HttpMethod, Platform,
-        ResourceDomainInfo, ResourceStatus, Worker, WorkerOutputs,
+        CertificateStatus, DnsRecordStatus, DomainMetadata, Platform, ResourceDomainInfo,
+        ResourceStatus, Worker, WorkerOutputs,
     };
     use alien_error::AlienError;
     use alien_gcp_clients::cloudrun::{
@@ -5699,7 +5691,7 @@ mod tests {
     use alien_gcp_clients::longrunning::Operation as LongRunningOperation;
     use alien_gcp_clients::longrunning::{OperationResult, Status};
     use alien_gcp_clients::pubsub::MockPubSubApi;
-    use httpmock::{prelude::*, Mock};
+    use httpmock::prelude::*;
     use rstest::rstest;
 
     use super::{
@@ -5707,11 +5699,8 @@ mod tests {
         is_cross_project_image_pull_permission_error, CLOUD_RUN_SERVICE_NAME_MAX_LEN,
         GCP_RESOURCE_NAME_MAX_LEN,
     };
+    use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
-    use crate::core::{
-        controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
-        PlatformServiceProvider,
-    };
     use crate::worker::readiness_probe::test_utils::create_readiness_probe_mock;
     use crate::worker::{fixtures::*, GcpWorkerController};
     use crate::GcpWorkerState;
@@ -6400,60 +6389,6 @@ mod tests {
 
         // Verify outputs are no longer available
         assert!(executor.outputs().is_none());
-    }
-
-    /// A GCP sandbox session is a subprocess of the Cloud Run instance running the app, so an
-    /// instance that does not declare `sandboxLauncher` cannot start one — the deploy succeeds
-    /// and the first `create()` fails. Cloud Run also refuses the field outside Beta with
-    /// `FAILED_PRECONDITION: The feature 'Instant sandboxes' is not supported in the declared
-    /// launch stage`, so the two have to travel together.
-    #[tokio::test]
-    async fn a_sandbox_hosting_worker_declares_the_launcher_and_its_launch_stage() {
-        let mut worker = basic_function();
-        worker.sandbox_launcher = true;
-        let function_name = format!("test-{}", worker.id);
-
-        let mut mock_cloudrun = MockCloudRunApi::new();
-        mock_cloudrun
-            .expect_create_service()
-            .times(1)
-            .withf(|_, _, service: &Service, _| {
-                let container = &service
-                    .template
-                    .as_ref()
-                    .expect("a revision template")
-                    .containers[0];
-                container.sandbox_launcher == Some(true)
-                    && service.launch_stage == Some(alien_gcp_clients::cloudrun::LaunchStage::Beta)
-            })
-            .returning(|_, _, _, _| Ok(create_successful_operation_response("create-worker")));
-        mock_cloudrun
-            .expect_get_operation()
-            .returning(|_, _| Ok(create_completed_operation_response("create-worker")));
-        let name_for_get = function_name.clone();
-        mock_cloudrun
-            .expect_get_service()
-            .returning(move |_, _| Ok(create_successful_service_response(&name_for_get)));
-        mock_cloudrun
-            .expect_get_service_iam_policy()
-            .returning(|_, _| Ok(create_empty_iam_policy()));
-        mock_cloudrun
-            .expect_set_service_iam_policy()
-            .returning(|_, _, _| Ok(create_empty_iam_policy()));
-
-        let mock_provider = setup_mock_service_provider(Arc::new(mock_cloudrun), None);
-        let mut executor = SingleControllerExecutor::builder()
-            .resource(worker)
-            .controller(GcpWorkerController::default())
-            .platform(Platform::Gcp)
-            .service_provider(mock_provider)
-            .with_test_dependencies()
-            .build()
-            .await
-            .unwrap();
-
-        executor.run_until_terminal().await.unwrap();
-        assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
     #[tokio::test]

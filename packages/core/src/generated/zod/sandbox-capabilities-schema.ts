@@ -12,12 +12,13 @@ export const SandboxCapabilitiesSchema = z.object({
     "domainEgressRules": z.boolean().describe("Egress can be restricted to a hostname allowlist"),
 "egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped"),
 "enforcedLimits": z.boolean().describe("The platform enforces the declared cpu, memory and disk ceilings"),
-"files": z.boolean().describe("Files can be moved in and out of a session\n\nEvery backend but Azure, whose binding implements no transfer."),
+"files": z.boolean().describe("Files can be moved in and out of a session"),
 "preview": z.boolean().describe("An authenticated, port-scoped capability to reach a service inside the sandbox"),
 "processLimit": z.boolean().describe("The platform can cap how many processes a session runs"),
 "reconnect": z.boolean().describe("A later call can reach a session created by an earlier one"),
 "sessionLifetime": z.boolean().describe("The platform terminates a session at a declared wall-clock deadline"),
 "snapshot": z.boolean().describe("A session's full state can be captured and used to create another"),
+"supervisorIsolation": z.boolean().describe("The process supervising a command is a different identity from the command.\n\nFalse where a command runs as the agent's own user: it can then read the supervisor's\nenvironment and signal it. Separate from `supervisorPidNamespace`, which is about\nvisibility rather than identity — a backend can have one without the other."),
 "supervisorPidNamespace": z.boolean().describe("A command runs in its own PID namespace and cannot see or signal the agent's processes.\n\nOnly where an agent runs as root. Creating the namespace needs `CAP_SYS_ADMIN`, and the\nKubernetes sandbox pod drops every capability — which is also what denies `ptrace` by\nconstruction, so granting it there would remove a lock to add one."),
 "suspendResume": z.boolean().describe("Session state can be suspended and resumed")
     }).describe("What a platform's sandbox backend can actually do.\n\nPublished so portable code can branch before calling rather than discovering a gap through\nan error. Every field here corresponds to a capability that at least one platform lacks;\ncreate, exec and terminate are the guaranteed floor and are therefore not listed.")

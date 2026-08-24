@@ -48,6 +48,9 @@ pub use azure_storage_account::*;
 mod azure_resource_group;
 pub use azure_resource_group::*;
 
+mod gcp_agent_platform_engine;
+pub use gcp_agent_platform_engine::*;
+
 mod azure_container_apps_environment;
 pub use azure_container_apps_environment::*;
 

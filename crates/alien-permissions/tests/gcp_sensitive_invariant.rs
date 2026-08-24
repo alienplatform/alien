@@ -9,6 +9,8 @@ const SENSITIVE_IMPLICIT_PERMISSIONS: &[&str] = &[
     "artifactregistry.repositories.downloadArtifacts",
     "cloudbuild.builds.get",
     "cloudbuild.builds.list",
+    // Runs code and reads files inside a live sandbox session; belongs to sandbox/execute alone.
+    "aiplatform.sandboxEnvironments.execute",
 ];
 
 const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
@@ -72,6 +74,42 @@ fn gcp_implicit_management_sets_do_not_grant_sensitive_content() {
             }
         }
     }
+}
+
+/// The execute verb reaches session content, so it must appear in `sandbox/execute` and nowhere
+/// else. Positive and negative in one: the collected set is asserted to equal exactly that id.
+#[test]
+fn gcp_sandbox_execute_permission_is_confined_to_the_execute_set() {
+    const EXECUTE_PERMISSION: &str = "aiplatform.sandboxEnvironments.execute";
+
+    let mut sets_granting_execute: Vec<&str> = Vec::new();
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = alien_permissions::get_permission_set(permission_set_id)
+            .expect("permission set exists");
+        let Some(gcp_entries) = &permission_set.platforms.gcp else {
+            continue;
+        };
+
+        // Scan both lists unconditionally — an entry setting `permissions` and
+        // `residualPermissions` together could otherwise hide the grant in the unscanned one.
+        let grants_execute = gcp_entries.iter().any(|entry| {
+            let permissions = entry.grant.permissions.as_deref().unwrap_or(&[]);
+            let residual = entry.grant.residual_permissions.as_deref().unwrap_or(&[]);
+            permissions
+                .iter()
+                .chain(residual)
+                .any(|permission| permission == EXECUTE_PERMISSION)
+        });
+        if grants_execute {
+            sets_granting_execute.push(permission_set_id);
+        }
+    }
+
+    assert_eq!(
+        sets_granting_execute,
+        vec!["sandbox/execute"],
+        "{EXECUTE_PERMISSION} reaches session content and must appear in sandbox/execute alone"
+    );
 }
 
 fn is_implicit_management_set(permission_set_id: &str) -> bool {

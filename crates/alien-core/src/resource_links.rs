@@ -242,6 +242,7 @@ mod tests {
         ("remote-stack-management", false),
         ("resource-access", false),
         ("azure_resource_group", false),
+        ("gcp_agent_platform_engine", false),
         ("azure_storage_account", false),
         ("azure_container_apps_environment", false),
         ("azure_service_bus_namespace", false),

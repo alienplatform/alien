@@ -5,6 +5,7 @@
 //! record, so a binding describes the parent only.
 
 use super::BindingValue;
+use crate::SandboxEgress;
 use serde::{Deserialize, Serialize};
 
 /// Represents a sandbox binding for creating and reaching sandbox sessions.
@@ -21,9 +22,9 @@ pub enum SandboxBinding {
     /// Azure Container Apps Sandboxes
     #[serde(rename = "sandbox-azure")]
     Azure(AzureSandboxBinding),
-    /// Cloud Run sandboxes, launched inside the workload's own instance
-    #[serde(rename = "sandbox-gcp")]
-    Gcp(GcpSandboxBinding),
+    /// GCP Agent Platform sandboxes, created as sessions under a durable Agent Engine
+    #[serde(rename = "sandbox-gcp-agent-platform")]
+    GcpAgentPlatform(GcpAgentPlatformSandboxBinding),
     /// Sandbox pods under a sandboxed runtime class
     #[serde(rename = "sandbox-kubernetes")]
     Kubernetes(KubernetesSandboxBinding),
@@ -91,21 +92,46 @@ pub struct AzureSandboxBinding {
     /// Resource group the sandbox group sits in. The data-plane path is scoped by it, and the
     /// Azure client config does not carry one.
     pub resource_group: BindingValue<String>,
+    /// Outbound policy every session is created with, as declared.
+    ///
+    /// Carried whole rather than as a flag: the data plane's default action is `Allow`, so a
+    /// session created without a policy is an open one, and a hostname list has no boolean to
+    /// travel in.
+    pub egress: SandboxEgress,
+    /// Idle seconds after which a session suspends, if the declaration asked for one.
+    ///
+    /// Carried because the data plane takes it at create and nowhere else: a policy that does not
+    /// travel with the create body is a declaration the sandbox never hears about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_suspend_seconds: Option<u32>,
+    /// Catalog disk image every session is created from, taken from the declaration's `code`.
+    ///
+    /// Carried rather than hardcoded in the provider because the declaration is the only place
+    /// that knows it, and a sandbox running an image its author did not choose is the one Azure
+    /// gap that fails without an error.
+    pub disk_image: BindingValue<String>,
 }
 
-/// GCP sandbox binding configuration.
+/// GCP Agent Platform sandbox binding configuration.
 ///
-/// There is no durable parent to address: a Cloud Run sandbox is a subprocess of the workload's
-/// own instance, created through a CLI on the container's filesystem.
+/// Sessions have a durable parent to address: an Agent Engine provisioned at deploy and reached
+/// through a regional endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct GcpSandboxBinding {
-    /// Path to the sandbox CLI inside the Cloud Run container
-    pub launcher_path: BindingValue<String>,
-    /// Whether sandboxes may reach the network. Carried in the binding rather than passed per
-    /// create: the launcher takes `--allow-egress` per sandbox, and a limit the application
-    /// supplies is a limit it can decline to supply.
-    pub allow_egress: BindingValue<bool>,
+pub struct GcpAgentPlatformSandboxBinding {
+    /// Agent Engine that parents every session. Sessions are created and enumerated under it,
+    /// so a binding without it can neither reach nor reap them.
+    pub engine: BindingValue<String>,
+    /// Template every session is created from. It carries the image digest, the ceilings and the
+    /// egress rules, so a session created without it runs an unpinned image with none applied.
+    pub template: BindingValue<String>,
+    /// Region selecting the regional aiplatform endpoint. The engine is regional with no global
+    /// alias, so the endpoint cannot be derived without it.
+    pub region: BindingValue<String>,
+    /// Seconds a session may live, from the declaration. Carried only when one was declared; an
+    /// absent value takes the service default, which is why it is not defaulted here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_ttl_seconds: Option<u32>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -168,23 +194,33 @@ impl SandboxBinding {
         data_plane_endpoint: impl Into<BindingValue<String>>,
         region: impl Into<BindingValue<String>>,
         resource_group: impl Into<BindingValue<String>>,
+        disk_image: impl Into<BindingValue<String>>,
+        egress: SandboxEgress,
+        idle_suspend_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
             sandbox_group: sandbox_group.into(),
             data_plane_endpoint: data_plane_endpoint.into(),
             region: region.into(),
             resource_group: resource_group.into(),
+            egress,
+            idle_suspend_seconds,
+            disk_image: disk_image.into(),
         })
     }
 
-    /// Creates a GCP sandbox binding.
-    pub fn gcp(
-        launcher_path: impl Into<BindingValue<String>>,
-        allow_egress: impl Into<BindingValue<bool>>,
+    /// Creates a GCP Agent Platform sandbox binding.
+    pub fn gcp_agent_platform(
+        engine: impl Into<BindingValue<String>>,
+        template: impl Into<BindingValue<String>>,
+        region: impl Into<BindingValue<String>>,
+        session_ttl_seconds: Option<u32>,
     ) -> Self {
-        Self::Gcp(GcpSandboxBinding {
-            launcher_path: launcher_path.into(),
-            allow_egress: allow_egress.into(),
+        Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
+            engine: engine.into(),
+            template: template.into(),
+            region: region.into(),
+            session_ttl_seconds,
         })
     }
 
@@ -239,8 +275,16 @@ mod tests {
                 "https://management.swedencentral.azuredevcompute.io",
                 "swedencentral",
                 "rg",
+                "ubuntu",
+                SandboxEgress::Deny,
+                None,
             ),
-            SandboxBinding::gcp("/usr/local/gcp/bin/sandbox", false),
+            SandboxBinding::gcp_agent_platform(
+                "projects/p/locations/us-central1/reasoningEngines/1",
+                "projects/p/locations/us-central1/sandboxTemplates/agent",
+                "us-central1",
+                Some(3600),
+            ),
             SandboxBinding::kubernetes(
                 "alien-sandboxes",
                 "gvisor",
@@ -263,12 +307,57 @@ mod tests {
         }
     }
 
+    /// The Agent Platform binding carries an egress-bearing template, so there is no safe default
+    /// for a missing required field: a binding stripped of one must fail to load rather than
+    /// deserialize into a session with no image, no limits and open egress. `sessionTtlSeconds` is
+    /// the one field that may be absent, and its absence must still parse.
+    #[test]
+    fn agent_platform_required_fields_have_no_default() {
+        let binding = SandboxBinding::gcp_agent_platform(
+            "projects/p/locations/us-central1/reasoningEngines/1",
+            "projects/p/locations/us-central1/sandboxTemplates/agent",
+            "us-central1",
+            Some(3600),
+        );
+        let full = serde_json::to_value(&binding).expect("serializes");
+
+        for required in ["engine", "template", "region"] {
+            let mut stripped = full.clone();
+            stripped
+                .as_object_mut()
+                .expect("binding serializes as an object")
+                .remove(required)
+                .expect("the field is present before it is stripped");
+            serde_json::from_value::<SandboxBinding>(stripped)
+                .expect_err(&format!("a binding missing '{required}' must not load"));
+        }
+
+        let mut without_ttl = full;
+        without_ttl
+            .as_object_mut()
+            .expect("binding serializes as an object")
+            .remove("sessionTtlSeconds")
+            .expect("the fixture set a ttl");
+        let restored: SandboxBinding =
+            serde_json::from_value(without_ttl).expect("an absent ttl still loads");
+        assert_eq!(
+            restored,
+            SandboxBinding::gcp_agent_platform(
+                "projects/p/locations/us-central1/reasoningEngines/1",
+                "projects/p/locations/us-central1/sandboxTemplates/agent",
+                "us-central1",
+                None,
+            ),
+            "an absent ttl deserializes as None"
+        );
+    }
+
     #[test]
     fn service_tags_are_prefixed_and_distinct() {
         let tags: Vec<String> = vec![
             SandboxBinding::aws("a", "1", "r"),
-            SandboxBinding::azure("g", "e", "r", "rg"),
-            SandboxBinding::gcp("p", true),
+            SandboxBinding::azure("g", "e", "r", "rg", "ubuntu", SandboxEgress::Deny, None),
+            SandboxBinding::gcp_agent_platform("e", "t", "us-central1", None),
             SandboxBinding::kubernetes("n", "gvisor", "s", "http://op:8080", "k", "/t"),
             SandboxBinding::local("u", "k", "t"),
         ]

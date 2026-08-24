@@ -61,6 +61,7 @@ use alien_azure_clients::{
 };
 use alien_error::Context;
 use alien_gcp_clients::{
+    agent_platform::{AgentPlatformApi, AgentPlatformClient},
     artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient},
     cloud_kms::{CloudKmsApi, CloudKmsClient},
     cloud_sql::{CloudSqlApi, CloudSqlClient},
@@ -191,6 +192,10 @@ pub trait PlatformServiceProvider: Send + Sync {
         config: &GcpClientConfig,
     ) -> Result<Arc<dyn GkeContainerApi>>;
     fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>>;
+    fn get_gcp_agent_platform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AgentPlatformApi>>;
 
     // Azure clients
     fn get_azure_application_gateway_client(
@@ -893,6 +898,16 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
 
     fn get_gcp_cloud_kms_client(&self, config: &GcpClientConfig) -> Result<Arc<dyn CloudKmsApi>> {
         Ok(Arc::new(CloudKmsClient::new(
+            reqwest::Client::new(),
+            config.clone(),
+        )))
+    }
+
+    fn get_gcp_agent_platform_client(
+        &self,
+        config: &GcpClientConfig,
+    ) -> Result<Arc<dyn AgentPlatformApi>> {
+        Ok(Arc::new(AgentPlatformClient::new(
             reqwest::Client::new(),
             config.clone(),
         )))

@@ -12,6 +12,10 @@ pub mod platform {
 }
 
 // Re-export all client APIs
+pub use gcp::agent_platform::{
+    AgentPlatformApi, AgentPlatformClient, AgentPlatformErrorData, ConnectionInfo, PollBudget,
+    SandboxCreateRequest, SandboxEnvironment, SandboxEnvironmentTemplate,
+};
 pub use gcp::artifactregistry::{ArtifactRegistryApi, ArtifactRegistryClient};
 pub use gcp::cloud_kms::{CloudKmsApi, CloudKmsClient};
 pub use gcp::cloud_sql::{CloudSqlApi, CloudSqlClient};

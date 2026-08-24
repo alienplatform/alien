@@ -56,6 +56,23 @@
           }
         }
       }
+    ],
+    "gcp": [
+      {
+        // Existence and state of the session, nothing inside it. get returns no payload, and the
+        // content-reaching execute verb stays in sandbox/execute alone.
+        "grant": {
+          "permissions": ["aiplatform.sandboxEnvironments.get"]
+        },
+        "binding": {
+          "stack": {
+            "scope": "projects/${projectName}"
+          },
+          "resource": {
+            "scope": "projects/${projectName}"
+          }
+        }
+      }
     ]
   }
 }

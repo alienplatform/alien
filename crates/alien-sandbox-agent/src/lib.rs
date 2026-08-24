@@ -2,6 +2,7 @@ pub mod confine;
 pub mod error;
 pub mod exec;
 pub mod files;
+pub mod jobs;
 pub mod paths;
 pub mod peer;
 pub mod pid_namespace;

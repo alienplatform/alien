@@ -222,6 +222,7 @@ impl SandboxHandle {
             process_limit,
             session_lifetime,
             supervisor_pid_namespace,
+            supervisor_isolation,
         } = self.inner.capabilities();
 
         [
@@ -234,6 +235,7 @@ impl SandboxHandle {
             (process_limit, "processLimit"),
             (session_lifetime, "sessionLifetime"),
             (supervisor_pid_namespace, "supervisorPidNamespace"),
+            (supervisor_isolation, "supervisorIsolation"),
         ]
         .into_iter()
         .filter(|(supported, _)| *supported)

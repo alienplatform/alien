@@ -991,6 +991,14 @@ fn deserialize_controller_by_tag(
         "KubernetesSandboxController" => {
             deser!(crate::sandbox::KubernetesSandboxController)
         }
+        #[cfg(feature = "gcp")]
+        "GcpAgentPlatformEngineController" => {
+            deser!(crate::sandbox::GcpAgentPlatformEngineController)
+        }
+        #[cfg(feature = "gcp")]
+        "GcpAgentPlatformTemplateController" => {
+            deser!(crate::sandbox::GcpAgentPlatformTemplateController)
+        }
         #[cfg(feature = "kubernetes")]
         "KubernetesClusterController" => {
             deser!(crate::kubernetes_cluster::KubernetesClusterController)

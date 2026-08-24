@@ -1,3 +1,4 @@
+pub mod agent_platform;
 pub mod api_client;
 pub mod artifactregistry;
 pub mod cloud_kms;

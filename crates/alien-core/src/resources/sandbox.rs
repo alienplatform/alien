@@ -25,7 +25,10 @@ pub enum SandboxCode {
     /// A prebuilt container image used as the sandbox root filesystem.
     #[serde(rename_all = "camelCase")]
     Image {
-        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`)
+        /// Image reference (e.g. `ubuntu:24.04`, `ghcr.io/myorg/sandbox:latest`).
+        ///
+        /// Two backends narrow it in opposite directions: AWS wants an `s3://` bundle, Azure a
+        /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
         image: String,
     },
     /// Source built into a sandbox image at deploy time.
@@ -130,14 +133,35 @@ pub enum SandboxEgress {
     /// Unrestricted outbound access to the public internet, and none to private ranges or the
     /// deployment's own network.
     ///
-    /// Link-local carries the same exception as `Deny`.
+    /// Link-local carries the same exception as `Deny`. AWS and Kubernetes deliver both halves.
+    /// Azure and GCP deliver the first only: one matches host patterns and the other is a single
+    /// switch, so neither can name an address range to exclude.
     Allow,
-    /// Outbound access only to the listed hostnames. No backend expresses this yet.
+    /// Outbound access only to the listed hostnames.
+    ///
+    /// Azure alone expresses it: its egress proxy matches on host pattern. The others filter by
+    /// CIDR or carry a single switch, and both would approximate the list rather than keep it.
     #[serde(rename_all = "camelCase")]
     AllowDomains {
         /// Hostnames the sandbox may reach
         domains: Vec<String>,
     },
+}
+
+impl SandboxEgress {
+    /// The single outbound switch for a backend that has no host matcher, or `None` for a mode a
+    /// boolean cannot carry.
+    ///
+    /// `AllowDomains` needs a host list, so it maps to nothing and each caller refuses it in its
+    /// own error naming the sandbox. One source for what a mode means, so a template and a session
+    /// cannot disagree on it.
+    pub fn internet_access_switch(&self) -> Option<bool> {
+        match self {
+            SandboxEgress::Allow => Some(true),
+            SandboxEgress::Deny => Some(false),
+            SandboxEgress::AllowDomains { .. } => None,
+        }
+    }
 }
 
 /// How long a session may live and when it is suspended.
@@ -168,8 +192,6 @@ pub struct SandboxSessionPolicy {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCapabilities {
     /// Files can be moved in and out of a session
-    ///
-    /// Every backend but Azure, whose binding implements no transfer.
     pub files: bool,
     /// A later call can reach a session created by an earlier one
     pub reconnect: bool,
@@ -195,6 +217,12 @@ pub struct SandboxCapabilities {
     /// Kubernetes sandbox pod drops every capability — which is also what denies `ptrace` by
     /// construction, so granting it there would remove a lock to add one.
     pub supervisor_pid_namespace: bool,
+    /// The process supervising a command is a different identity from the command.
+    ///
+    /// False where a command runs as the agent's own user: it can then read the supervisor's
+    /// environment and signal it. Separate from `supervisorPidNamespace`, which is about
+    /// visibility rather than identity — a backend can have one without the other.
+    pub supervisor_isolation: bool,
 }
 
 impl SandboxCapabilities {
@@ -224,42 +252,40 @@ impl SandboxCapabilities {
                 // `CAP_SYS_ADMIN`. It can drop privilege (`CAP_SETUID`/`CAP_SETGID` are held) and
                 // it cannot create a namespace. No backend offers this today.
                 supervisor_pid_namespace: false,
+                // The agent runs as uid 0 and `setuid`s the command to uid 60000, so the command
+                // runs under a different identity than the process supervising it.
+                supervisor_isolation: true,
             }),
-            // Azure the platform has all three — a per-port URL closed to anonymous traffic, a
-            // 0.54s resume, and a full-VM snapshot — and the binding provider implements none of
-            // them. The capability set describes what a caller can reach, not what the cloud
-            // could do, so these stay false until the provider catches up.
             Platform::Azure => Ok(Self {
-                files: false,
-                reconnect: true,
-                preview: false,
-                suspend_resume: false,
-                snapshot: false,
-                domain_egress_rules: false,
-                egress_deny: false,
-                enforced_limits: false,
-                process_limit: false,
-                session_lifetime: false,
-                // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
-                supervisor_pid_namespace: false,
-            }),
-            // A Cloud Run sandbox id is scoped to one instance, and session affinity does not
-            // hold one across turns. That is the absence of a reconnect guarantee, not a
-            // degraded one.
-            Platform::Gcp => Ok(Self {
                 files: true,
-                reconnect: false,
+                reconnect: true,
+                // A sandbox port carries a URL and an auth config, and the auth config offers two
+                // things: anonymous, or Entra ID with an allowlist of human email addresses.
+                // Neither is a credential scoped to a port for a fixed time, which is what a
+                // preview capability is. Returning the anonymous URL would publish the port.
                 preview: false,
-                suspend_resume: false,
+                suspend_resume: true,
+                // The one cloud of the five that could offer this, and the blocker is ours:
+                // `snapshot()` returns an id and `CreateSessionRequest` has no field to consume
+                // one, so no backend can complete the round trip. Nothing in the resource model
+                // owns such an artifact either, and Microsoft states snapshots are not garbage
+                // collected — an id with no owner is a bill that grows.
                 snapshot: false,
-                domain_egress_rules: false,
+                domain_egress_rules: true,
                 egress_deny: true,
                 enforced_limits: false,
                 process_limit: false,
+                // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
+                // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
+                // to prevent, so this is a decision rather than a gap.
                 session_lifetime: false,
-                // A Cloud Run sandbox is a subprocess of the workload; nothing of ours is inside.
+                // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
                 supervisor_pid_namespace: false,
+                // No Alien process runs the command at all — the platform's own data plane does,
+                // so there is no separate supervisor identity to speak of.
+                supervisor_isolation: false,
             }),
+            Platform::Gcp => Ok(Self::gcp_agent_platform()),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
             Platform::Kubernetes => Ok(Self {
@@ -279,6 +305,11 @@ impl SandboxCapabilities {
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
                 supervisor_pid_namespace: false,
+                // The pod pins one uid (`run_as_user: 65534` on both pod and container) with
+                // `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no
+                // process can setuid to split the command off from a supervisor. No uid split is
+                // possible, so none exists.
+                supervisor_isolation: false,
             }),
             Platform::Local => Ok(Self {
                 files: true,
@@ -293,14 +324,53 @@ impl SandboxCapabilities {
                 process_limit: true,
                 session_lifetime: false,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
-                // there is no supervisor sharing the sandbox to isolate from.
+                // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
+                // The supervisor is the manager on the host, outside the container entirely, and
+                // `docker exec` runs the command as the workload uid — a different identity by
+                // construction.
+                supervisor_isolation: true,
             }),
             Platform::Machines | Platform::Test => {
                 Err(AlienError::new(ErrorData::SandboxPlatformUnsupported {
                     platform: platform.to_string(),
                 }))
             }
+        }
+    }
+
+    /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
+    pub fn gcp_agent_platform() -> Self {
+        Self {
+            // Agent file operations move over the session envelope.
+            files: true,
+            // Reaching a session across processes is safe because `generation` is derived from the
+            // container boot id read through the agent's health op, so a caller detects a container
+            // replaced under a stable session name rather than reconnecting to a blank one.
+            reconnect: true,
+            // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
+            preview: false,
+            // `:pause` and `:resume` preserve the running container.
+            suspend_resume: true,
+            // A session's state can be captured and used to create another.
+            snapshot: true,
+            // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
+            domain_egress_rules: false,
+            // A declared `deny` blocks both routed egress and DNS.
+            egress_deny: true,
+            // The declared ceilings are enforced, but by terminating the session on breach rather
+            // than by refusing the allocation — a caller reading `true` should expect the session
+            // to die, not a clean error at the point of the request.
+            enforced_limits: true,
+            // No ceiling on process count is observed.
+            process_limit: false,
+            // `ttl` maps to a session `expireTime` the platform terminates at.
+            session_lifetime: true,
+            // No PID-namespace isolation between the command and anything supervising it.
+            supervisor_pid_namespace: false,
+            // No separate supervisor identity: the command is not run under a different identity
+            // than the process supervising it.
+            supervisor_isolation: false,
         }
     }
 
@@ -318,6 +388,7 @@ impl SandboxCapabilities {
             SandboxCapability::ProcessLimit => self.process_limit,
             SandboxCapability::SessionLifetime => self.session_lifetime,
             SandboxCapability::SupervisorPidNamespace => self.supervisor_pid_namespace,
+            SandboxCapability::SupervisorIsolation => self.supervisor_isolation,
         };
 
         if available {
@@ -358,6 +429,8 @@ pub enum SandboxCapability {
     SessionLifetime,
     /// A command runs in its own PID namespace, isolated from the agent supervising it
     SupervisorPidNamespace,
+    /// A command runs under a different identity than the process supervising it
+    SupervisorIsolation,
 }
 
 impl SandboxCapability {
@@ -375,6 +448,7 @@ impl SandboxCapability {
             Self::ProcessLimit => "processLimit",
             Self::SessionLifetime => "sessionLifetime",
             Self::SupervisorPidNamespace => "supervisorPidNamespace",
+            Self::SupervisorIsolation => "supervisorIsolation",
         }
     }
 }
@@ -459,9 +533,9 @@ impl Sandbox {
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
         let capabilities = SandboxCapabilities::for_platform(platform)?;
 
-        // No backend builds a sandbox image from source. Kubernetes turned this into an empty
-        // image string and a pod that could never schedule, which is the silent no-op the
-        // capability contract forbids — the failure has to land here instead.
+        // No backend builds a sandbox image from source: an empty image string schedules a pod
+        // that can never run, the silent no-op the capability contract forbids — the failure
+        // has to land here instead.
         if let SandboxCode::Source { .. } = &self.code {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
@@ -471,6 +545,11 @@ impl Sandbox {
                          prebuilt reference"
                     .to_string(),
             }));
+        }
+
+        // Read before the limits, because the image is declared whether or not any are.
+        if platform == Platform::Azure {
+            self.azure_catalog_image()?;
         }
 
         let Some(limits) = self.limits.as_ref() else {
@@ -523,6 +602,47 @@ impl Sandbox {
         }
 
         self.validate_capabilities(&capabilities, platform)
+    }
+
+    /// The catalog disk image Azure creates a session from.
+    ///
+    /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
+    /// tag or digest has nowhere to go. An allowlist, because the answer to "what else could be
+    /// in there" is a name the data plane rejects at the first session, long after the apply.
+    pub fn azure_catalog_image(&self) -> Result<&str> {
+        let refused = |value: &str, reason: &str| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code.image".to_string(),
+                value: value.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+
+        let SandboxCode::Image { image } = &self.code else {
+            return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: "code".to_string(),
+                value: "source".to_string(),
+                reason: "no sandbox backend builds an image from source yet".to_string(),
+            }));
+        };
+
+        let image = image.trim();
+        if image.is_empty() {
+            return Err(refused(image, "a sandbox has to name an image"));
+        }
+        if !image
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+        {
+            return Err(refused(
+                image,
+                "Azure creates a session from a public catalog disk image, so code.image must be \
+                 a bare catalog name such as 'ubuntu'",
+            ));
+        }
+        Ok(image)
     }
 
     /// The MicroVM size that keeps every declared ceiling, or why none does.
@@ -619,6 +739,21 @@ impl Sandbox {
         // `allow` asks for no restriction, so a backend that ignores it fails loudly on the first
         // blocked connection. `deny` asks for one, and a backend that ignores it puts untrusted
         // code on the internet with nothing to notice — so only this direction is gated.
+        // An empty list is not a restriction anyone wrote down: it renders as a deny-all wearing
+        // an allowlist's label, which reads at a glance as the opposite of what it does.
+        if let SandboxEgress::AllowDomains { domains } = &self.egress {
+            if domains.is_empty() {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "egress.domains".to_string(),
+                    value: "[]".to_string(),
+                    reason: "an allowlist naming no domain denies everything; declare \
+                             egress: deny if that is what was meant"
+                        .to_string(),
+                }));
+            }
+        }
+
         if matches!(self.egress, SandboxEgress::Deny) {
             capabilities.require(SandboxCapability::EgressDeny, platform)?;
         }
@@ -829,7 +964,7 @@ mod tests {
     fn sandbox_with(egress: SandboxEgress, preview_ports: Vec<u16>) -> Sandbox {
         Sandbox::new("agent-sbx".to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                image: "ubuntu".to_string(),
             })
             .limits(SandboxLimits {
                 cpu: "1".to_string(),
@@ -855,28 +990,28 @@ mod tests {
     fn capability_sets_are_per_platform() {
         let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
         assert!(
-            !gcp.reconnect,
-            "a GCP session id is scoped to one instance, so reconnect is absent"
+            gcp.reconnect,
+            "generation from the container boot id makes a session reachable across processes"
         );
         assert!(!gcp.preview);
-        assert!(!gcp.enforced_limits);
+        assert!(gcp.enforced_limits);
 
         let azure = SandboxCapabilities::for_platform(Platform::Azure).expect("azure is supported");
-        assert!(
-            !azure.files,
-            "the Azure binding implements no file transfer"
-        );
-        assert!(gcp.files, "every other backend moves files");
-        // The Azure binding renders neither an egress policy nor a ceiling, so a declaration of
-        // either is refused rather than accepted and dropped.
-        assert!(!azure.domain_egress_rules);
-        assert!(!azure.egress_deny);
+        assert!(azure.files, "every backend moves files");
+        assert!(gcp.files);
+        // Azure is the only backend whose egress policy matches on host pattern, and the only
+        // one where `deny` and a hostname list are the same object.
+        assert!(azure.domain_egress_rules);
+        assert!(azure.egress_deny);
+        // The data plane takes no ceiling, so a declaration of one is refused rather than
+        // accepted and dropped.
         assert!(!azure.enforced_limits);
-        // Azure the cloud has snapshot, preview and resume; the binding provider returns
-        // unsupported for all three. What a caller can reach is what the set describes.
+        assert!(azure.suspend_resume);
+        // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
+        // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
+        // neither of which is a port-scoped credential.
         assert!(!azure.snapshot);
         assert!(!azure.preview);
-        assert!(!azure.suspend_resume);
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
         assert!(!aws.snapshot, "AWS has no user-callable session snapshot");
@@ -887,6 +1022,117 @@ mod tests {
         assert!(
             !k8s.preview,
             "the session-scoped ingress gateway does not exist yet"
+        );
+    }
+
+    /// Whether the process supervising a command is a separate identity from the command.
+    ///
+    /// Values are measured, not inferred. AWS: the agent runs as uid 0 with
+    /// `CapEff: 00000000a80425fb` and `setuid`s the command to uid 60000, so the two differ.
+    /// Kubernetes: the sandbox pod pins `run_as_user: 65534` on both pod and container with
+    /// `capabilities.drop: [ALL]` and `allow_privilege_escalation: false`, so no uid split is
+    /// possible (`kubernetes_spec.rs`). Local: `docker exec` runs as the workload uid while the
+    /// manager supervises from the host. Azure and Agent Platform have no in-sandbox supervisor.
+    #[test]
+    fn supervisor_isolation_is_per_platform() {
+        let value = |platform| {
+            SandboxCapabilities::for_platform(platform)
+                .expect("supported")
+                .supervisor_isolation
+        };
+
+        assert!(
+            value(Platform::Aws),
+            "root agent setuids the command to 60000"
+        );
+        assert!(
+            value(Platform::Local),
+            "the supervisor is on the host, outside the container"
+        );
+        assert!(
+            !value(Platform::Kubernetes),
+            "a single pinned uid cannot be split"
+        );
+        assert!(!value(Platform::Azure), "no Alien process runs the command");
+        assert!(
+            !value(Platform::Gcp),
+            "no separate supervisor identity runs the command"
+        );
+    }
+
+    /// The point of the field: AWS and GCP report the *same* `supervisor_pid_namespace` (neither
+    /// has `CAP_SYS_ADMIN`), so that axis alone reads them as equivalent. They are not — AWS
+    /// separates the command's identity from the supervisor's and Agent Platform does not.
+    #[test]
+    fn supervisor_isolation_separates_aws_from_a_subprocess_backend() {
+        let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
+        let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+
+        assert_eq!(
+            aws.supervisor_pid_namespace, gcp.supervisor_pid_namespace,
+            "the older axis cannot tell them apart"
+        );
+        assert!(
+            aws.supervisor_isolation,
+            "AWS setuids the command off the supervisor"
+        );
+        assert!(
+            !gcp.supervisor_isolation,
+            "the command runs under no separate supervisor identity"
+        );
+    }
+
+    /// The Agent Platform row, each value against the behaviour it was measured from. `reconnect`
+    /// is the tripwire: it is `true` only because `generation` is derived from the container boot
+    /// id read through the agent's health op, so a caller detects a replaced container instead of
+    /// reconnecting to a blank one. It is also the body of the `Platform::Gcp` arm, asserted below.
+    #[test]
+    fn gcp_agent_platform_row_matches_measured_backend() {
+        let row = SandboxCapabilities::gcp_agent_platform();
+
+        assert!(row.files, "agent file ops move over the session envelope");
+        assert!(
+            row.reconnect,
+            "generation is derived from the container boot id, so a session is reachable across \
+             processes"
+        );
+        assert!(
+            !row.preview,
+            "the only ingress is :execute; no port-scoped capability"
+        );
+        assert!(
+            row.suspend_resume,
+            ":pause and :resume preserve the container"
+        );
+        assert!(
+            row.snapshot,
+            "session state can be captured and restored into a new session"
+        );
+        assert!(
+            !row.domain_egress_rules,
+            "VPC and DNS peering is not a hostname allowlist"
+        );
+        assert!(
+            row.egress_deny,
+            "a declared deny blocks both egress and DNS"
+        );
+        assert!(
+            row.enforced_limits,
+            "ceilings are enforced, by terminating the session on breach"
+        );
+        assert!(!row.process_limit, "no process-count ceiling is observed");
+        assert!(row.session_lifetime, "ttl maps to a session expireTime");
+        assert!(!row.supervisor_pid_namespace, "no PID-namespace isolation");
+        assert!(
+            !row.supervisor_isolation,
+            "the command is not run under a separate supervisor identity"
+        );
+
+        // Agent Platform is the registered GCP backend, so the arm returns exactly this row.
+        let live = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
+        assert_eq!(
+            live, row,
+            "the Platform::Gcp arm is the Agent Platform capability row"
         );
     }
 
@@ -913,11 +1159,11 @@ mod tests {
         assert!(rendered.contains("gcp"), "names the platform: {rendered}");
     }
 
-    /// No backend expresses a hostname allowlist: AWS and Kubernetes match CIDRs, and the Azure
-    /// binding renders no egress policy at all. Accepting one anywhere would leave a stack
+    /// Azure matches on hostname; AWS and Kubernetes match CIDRs, and Local and GCP have a
+    /// switch rather than a filter. Accepting a hostname list on those four would leave a stack
     /// reading as restricted while the sandbox reaches the whole internet.
     #[test]
-    fn a_hostname_allowlist_is_refused_on_every_backend() {
+    fn a_hostname_allowlist_is_refused_everywhere_it_would_be_approximated() {
         let sandbox = sandbox_with(
             SandboxEgress::AllowDomains {
                 domains: vec!["example.com".to_string()],
@@ -927,19 +1173,25 @@ mod tests {
 
         for platform in [
             Platform::Aws,
-            Platform::Azure,
             Platform::Gcp,
             Platform::Kubernetes,
             Platform::Local,
         ] {
             let error = sandbox
                 .validate_for_platform(platform)
-                .expect_err("no backend expresses a hostname allowlist");
+                .expect_err("only Azure expresses a hostname allowlist");
             assert_eq!(
                 error.code, "SANDBOX_CAPABILITY_UNSUPPORTED",
                 "on {platform:?}"
             );
         }
+
+        assert!(
+            SandboxCapabilities::for_platform(Platform::Azure)
+                .expect("supported")
+                .domain_egress_rules,
+            "Azure's egress policy matches on host pattern"
+        );
     }
 
     /// `deny` is the declaration that carries a security promise, so a backend that cannot keep
@@ -962,10 +1214,10 @@ mod tests {
                 .expect("deny is enforced here");
         }
 
-        // Declares no ceilings, so the only thing left for Azure to refuse is the egress mode.
+        // Declares no ceilings, which Azure refuses for its own reason, so this isolates egress.
         let egress_only = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
-                image: "alpine:3.20".to_string(),
+                image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
@@ -974,15 +1226,9 @@ mod tests {
             })
             .build();
 
-        let error = egress_only
+        egress_only
             .validate_for_platform(Platform::Azure)
-            .expect_err("the Azure binding renders no egress policy, so deny cannot be kept");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
-        assert!(
-            error.message.contains("egressDeny"),
-            "names the capability: {}",
-            error.message
-        );
+            .expect("Azure creates the sandbox under a Deny policy with full inspection");
     }
 
     /// Ceilings are rejected per-platform where unsupported — rejected when *declared*. With
@@ -992,12 +1238,12 @@ mod tests {
     fn a_platform_that_cannot_enforce_limits_still_takes_a_sandbox_without_them() {
         let declared = sandbox_with(SandboxEgress::Deny, Vec::new());
         declared
-            .validate_for_platform(Platform::Gcp)
-            .expect_err("declaring ceilings GCP cannot enforce is rejected");
+            .validate_for_platform(Platform::Azure)
+            .expect_err("declaring ceilings Azure cannot enforce is rejected");
 
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
-                image: "alpine:3.20".to_string(),
+                image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
@@ -1007,7 +1253,7 @@ mod tests {
             .build();
 
         undeclared
-            .validate_for_platform(Platform::Gcp)
+            .validate_for_platform(Platform::Azure)
             .expect("a sandbox naming no ceilings takes the platform's own");
 
         // A backend still gets a concrete set, so nothing downstream has to invent one.
@@ -1029,12 +1275,11 @@ mod tests {
     }
 
     #[test]
-    fn gcp_rejects_a_sandbox_declaring_enforced_limits() {
+    fn gcp_accepts_a_sandbox_declaring_enforced_limits() {
         let sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
-        let error = sandbox
+        sandbox
             .validate_for_platform(Platform::Gcp)
-            .expect_err("GCP cannot enforce ceilings on a subprocess sandbox");
-        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            .expect("Agent Platform enforces declared ceilings, by terminating on breach");
     }
 
     #[test]
@@ -1134,6 +1379,61 @@ mod tests {
             .expect("the ceiling itself is allowed");
     }
 
+    /// An image reference Azure cannot honour is refused while planning, not at the first session.
+    ///
+    /// `code.image`'s own documentation gives a tag and a registry path as examples — exactly
+    /// what Azure cannot take, so this is the shape a customer is most likely to declare.
+    #[test]
+    fn an_image_azure_cannot_pull_is_refused_while_planning() {
+        let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+        // Azure enforces no declared ceiling, so a sandbox carrying limits is refused before the
+        // image is ever read.
+        sandbox.limits = None;
+
+        for image in [
+            "ubuntu:24.04",
+            "ghcr.io/myorg/sandbox:latest",
+            "ubuntu@sha256:abc",
+            "",
+            "   ",
+            "ubuntu latest",
+            "ubuntu?x",
+        ] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            let error = sandbox
+                .validate_for_platform(Platform::Azure)
+                .expect_err("an image Azure has nowhere to put is refused");
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID", "image '{image}'");
+
+            // The same declaration is ordinary everywhere that pulls a reference.
+            sandbox
+                .validate_for_platform(Platform::Kubernetes)
+                .expect("a registry reference is what every other backend takes");
+        }
+
+        for image in ["ubuntu", "ubuntu-22.04", "debian_slim"] {
+            sandbox.code = SandboxCode::Image {
+                image: image.to_string(),
+            };
+            sandbox
+                .validate_for_platform(Platform::Azure)
+                .unwrap_or_else(|error| panic!("'{image}' is a catalog name: {error}"));
+        }
+
+        // Surrounding space is trimmed rather than carried into the create body.
+        sandbox.code = SandboxCode::Image {
+            image: " ubuntu ".to_string(),
+        };
+        assert_eq!(
+            sandbox
+                .azure_catalog_image()
+                .expect("a padded name is still a name"),
+            "ubuntu"
+        );
+    }
+
     /// A deadline is accepted only where the platform itself terminates on it — the kubelet's
     /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
     /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
@@ -1231,9 +1531,9 @@ mod tests {
         );
     }
 
-    /// `Source` is a public part of the type that no backend builds. Kubernetes used to turn it
-    /// into an empty image string, producing a pod that could never schedule — the refusal has to
-    /// happen at plan time and on every platform, not in one emitter.
+    /// `Source` is a public part of the type that no backend builds: an empty image string
+    /// schedules a pod that can never run, so the refusal has to happen at plan time and on
+    /// every platform, not in one emitter.
     #[test]
     fn source_code_is_refused_everywhere_rather_than_producing_a_broken_manifest() {
         let sandbox = Sandbox::new("agent".to_string())
@@ -1315,7 +1615,7 @@ mod tests {
         let original = sandbox_with(SandboxEgress::Deny, vec![]);
         let renamed = Sandbox::new("other".to_string())
             .code(SandboxCode::Image {
-                image: "ubuntu:24.04".to_string(),
+                image: "ubuntu".to_string(),
             })
             .limits(
                 original
@@ -1336,5 +1636,86 @@ mod tests {
         original
             .validate_update(&renamed)
             .expect_err("renaming a sandbox is not an update");
+    }
+
+    /// Azure declares an idle-suspend policy but not a wall-clock ceiling.
+    ///
+    /// The two travel together in `SandboxSessionPolicy` and are gated separately on purpose:
+    /// Azure suspends on idle and has no maximum lifetime, so accepting one and refusing the
+    /// other is the honest split rather than an inconsistency.
+    #[test]
+    fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
+        let with_policy = |session: SandboxSessionPolicy| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .session(session)
+                .build()
+                .validate_for_platform(Platform::Azure)
+        };
+
+        with_policy(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: Some(900),
+        })
+        .expect("Azure suspends a session on idle");
+
+        let error = with_policy(SandboxSessionPolicy {
+            max_lifetime_seconds: Some(3600),
+            idle_suspend_seconds: None,
+        })
+        .expect_err("Azure has no wall-clock ceiling to enforce one with");
+        assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+        assert!(
+            error.message.contains("sessionLifetime"),
+            "names the capability: {}",
+            error.message
+        );
+    }
+
+    /// An allowlist naming nothing is a deny-all wearing an allowlist's label.
+    ///
+    /// It renders as a `Deny` default with no rules — the shape the Azure provider adds a
+    /// catch-all to avoid — and a reader scanning the declaration sees "allowDomains" and reads
+    /// the opposite of what it does.
+    #[test]
+    fn an_allowlist_with_no_domains_is_refused() {
+        let declared = |domains: Vec<String>| {
+            Sandbox::new("sbx".to_string())
+                .code(SandboxCode::Image {
+                    image: "ubuntu".to_string(),
+                })
+                .egress(SandboxEgress::AllowDomains { domains })
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build()
+                .validate_for_platform(Platform::Azure)
+        };
+
+        let error = declared(vec![]).expect_err("an empty allowlist must be refused");
+        assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+
+        declared(vec!["api.example.com".to_string()])
+            .expect("a named domain is what an allowlist is for");
+    }
+
+    /// The two expressible modes map to the boolean; a host list maps to nothing so the caller has
+    /// to refuse rather than silently pick a side.
+    #[test]
+    fn internet_access_switch_maps_only_the_two_expressible_modes() {
+        assert_eq!(SandboxEgress::Allow.internet_access_switch(), Some(true));
+        assert_eq!(SandboxEgress::Deny.internet_access_switch(), Some(false));
+        assert_eq!(
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()]
+            }
+            .internet_access_switch(),
+            None,
+            "a host list has no boolean and must not be approximated"
+        );
     }
 }
