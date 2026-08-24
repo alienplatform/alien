@@ -16,7 +16,8 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentListItemResponse, GetDeploymentId, GetDeploymentWorkspace,
+    CreateDeploymentWorkspace, DaemonUpdatePolicy, DaemonUpdatePolicyInner, DaemonUpdateSettings,
+    DeploymentListItemResponse, GetDeploymentId, GetDeploymentWorkspace,
     ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
     PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
 };
@@ -79,6 +80,7 @@ impl DeploymentsArgs {
                 | DeploymentsCmd::Redeploy { json: true, .. }
                 | DeploymentsCmd::Pin { json: true, .. }
                 | DeploymentsCmd::SetChannel { json: true, .. }
+                | DeploymentsCmd::DaemonUpdates { json: true, .. }
         )
     }
 }
@@ -219,6 +221,24 @@ pub enum DeploymentsCmd {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
         /// Print the updated deployment as machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Configure deployment-scoped machine daemon updates
+    DaemonUpdates {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+        /// Enable guarded updates. The currently supported value is 1.
+        #[arg(
+            long,
+            conflicts_with = "parallel",
+            required_unless_present = "parallel"
+        )]
+        max_unavailable: Option<u32>,
+        /// Restore parallel daemon updates.
+        #[arg(long, conflicts_with = "max_unavailable")]
+        parallel: bool,
+        /// Print the resulting setting as machine-readable JSON.
         #[arg(long)]
         json: bool,
     },
@@ -410,6 +430,57 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             retry_deployment_task(&manager, &id, json).await
         }
+        DeploymentsCmd::DaemonUpdates {
+            id,
+            max_unavailable,
+            parallel,
+            json,
+        } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Daemon update policy requires platform mode.".to_string(),
+                }));
+            }
+            if max_unavailable.is_some_and(|value| value != 1) {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "max-unavailable".to_string(),
+                    message: "The currently supported value is 1.".to_string(),
+                }));
+            }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            let body = daemon_update_settings(parallel);
+            let response = client
+                .update_deployment_daemon_updates()
+                .id(String::from(deployment.id))
+                .workspace(&workspace)
+                .body(&body)
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "updating deployment daemon policy".to_string(),
+                    url: None,
+                })?
+                .into_inner();
+            if json {
+                return print_json(&response);
+            }
+            println!(
+                "{}",
+                success_line(if parallel {
+                    "Parallel daemon updates enabled."
+                } else {
+                    "Guarded daemon updates enabled (max unavailable: 1)."
+                })
+            );
+            Ok(())
+        }
         DeploymentsCmd::Redeploy { id, json } => {
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
@@ -543,6 +614,18 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             token_deployment_task(&client, &workspace_name, &id).await
         }
+    }
+}
+
+fn daemon_update_settings(parallel: bool) -> DaemonUpdateSettings {
+    DaemonUpdateSettings {
+        daemon_update_policy: if parallel {
+            DaemonUpdatePolicy(None)
+        } else {
+            DaemonUpdatePolicy(Some(DaemonUpdatePolicyInner {
+                max_unavailable: std::num::NonZeroU64::MIN,
+            }))
+        },
     }
 }
 
@@ -1887,7 +1970,6 @@ async fn create_deployment_task(
         external_bindings: None,
         kubernetes: None,
         public_endpoints: None,
-        logs: None,
     };
 
     let request = NewDeploymentRequest {
@@ -2294,6 +2376,60 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn daemon_update_policy_requires_an_explicit_mode() {
+        let rolling = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "daemon-updates",
+            "production/api",
+            "--max-unavailable",
+            "1",
+            "--json",
+        ])
+        .expect("rolling update policy should parse");
+        assert!(matches!(
+            rolling.cmd,
+            DeploymentsCmd::DaemonUpdates {
+                max_unavailable: Some(1),
+                parallel: false,
+                json: true,
+                ..
+            }
+        ));
+
+        let parallel = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "daemon-updates",
+            "production/api",
+            "--parallel",
+        ])
+        .expect("parallel policy should parse");
+        assert!(matches!(
+            parallel.cmd,
+            DeploymentsCmd::DaemonUpdates {
+                max_unavailable: None,
+                parallel: true,
+                ..
+            }
+        ));
+
+        assert!(DeploymentsArgs::try_parse_from([
+            "deployments",
+            "daemon-updates",
+            "production/api"
+        ])
+        .is_err());
+
+        assert_eq!(
+            serde_json::to_value(daemon_update_settings(false)).unwrap(),
+            serde_json::json!({ "daemonUpdatePolicy": { "maxUnavailable": 1 } })
+        );
+        assert_eq!(
+            serde_json::to_value(daemon_update_settings(true)).unwrap(),
+            serde_json::json!({ "daemonUpdatePolicy": null })
+        );
     }
 
     #[test]

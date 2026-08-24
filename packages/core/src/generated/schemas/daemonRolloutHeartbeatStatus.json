@@ -1,0 +1,1 @@
+{"type":"string","enum":["running","succeeded","failed"],"x-readme-ref-name":"DaemonRolloutHeartbeatStatus"}

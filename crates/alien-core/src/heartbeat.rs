@@ -767,6 +767,8 @@ pub struct AwsDaemonHeartbeatData {
     #[serde(default)]
     pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<DaemonRolloutHeartbeatData>,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
@@ -791,6 +793,8 @@ pub struct GcpDaemonHeartbeatData {
     #[serde(default)]
     pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<DaemonRolloutHeartbeatData>,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
@@ -815,6 +819,8 @@ pub struct AzureDaemonHeartbeatData {
     #[serde(default)]
     pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<DaemonRolloutHeartbeatData>,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
 }
@@ -839,8 +845,57 @@ pub struct MachinesDaemonHeartbeatData {
     #[serde(default)]
     pub observed_image: Option<String>,
     pub latest_update_timestamp: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rollout: Option<DaemonRolloutHeartbeatData>,
     pub daemon_instances: Vec<ManagedRuntimeUnitStatus>,
     pub events: Vec<ManagedRuntimeEventSnapshot>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonRolloutHeartbeatData {
+    pub id: String,
+    pub target_version: String,
+    pub status: DaemonRolloutHeartbeatStatus,
+    pub max_unavailable: u32,
+    pub started_at: String,
+    pub deadline_at: String,
+    pub updated_at: String,
+    pub machines: Vec<DaemonMachineRolloutHeartbeatData>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum DaemonRolloutHeartbeatStatus {
+    Running,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonMachineRolloutHeartbeatData {
+    pub machine_id: String,
+    pub status: DaemonMachineRolloutHeartbeatStatus,
+    pub replica_id: Option<String>,
+    pub error: Option<String>,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "lowercase")]
+pub enum DaemonMachineRolloutHeartbeatStatus {
+    Queued,
+    Stopping,
+    Starting,
+    Verifying,
+    Succeeded,
+    Failed,
+    Skipped,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

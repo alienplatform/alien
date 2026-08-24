@@ -160,7 +160,11 @@ export type { CustomCertificateConfig } from "./custom-certificate-config-schema
 export type { CustomDomainConfig } from "./custom-domain-config-schema.js";
 export type { DaemonCode } from "./daemon-code-schema.js";
 export type { DaemonHeartbeatData } from "./daemon-heartbeat-data-schema.js";
+export type { DaemonMachineRolloutHeartbeatData } from "./daemon-machine-rollout-heartbeat-data-schema.js";
+export type { DaemonMachineRolloutHeartbeatStatus } from "./daemon-machine-rollout-heartbeat-status-schema.js";
 export type { DaemonOutputs } from "./daemon-outputs-schema.js";
+export type { DaemonRolloutHeartbeatData } from "./daemon-rollout-heartbeat-data-schema.js";
+export type { DaemonRolloutHeartbeatStatus } from "./daemon-rollout-heartbeat-status-schema.js";
 export type { DaemonRuntimeMount } from "./daemon-runtime-mount-schema.js";
 export type { DaemonRuntime } from "./daemon-runtime-schema.js";
 export type { Daemon } from "./daemon-schema.js";
@@ -583,7 +587,11 @@ export { CustomCertificateConfigSchema } from "./custom-certificate-config-schem
 export { CustomDomainConfigSchema } from "./custom-domain-config-schema.js";
 export { DaemonCodeSchema } from "./daemon-code-schema.js";
 export { DaemonHeartbeatDataSchema } from "./daemon-heartbeat-data-schema.js";
+export { DaemonMachineRolloutHeartbeatDataSchema } from "./daemon-machine-rollout-heartbeat-data-schema.js";
+export { DaemonMachineRolloutHeartbeatStatusSchema } from "./daemon-machine-rollout-heartbeat-status-schema.js";
 export { DaemonOutputsSchema } from "./daemon-outputs-schema.js";
+export { DaemonRolloutHeartbeatDataSchema } from "./daemon-rollout-heartbeat-data-schema.js";
+export { DaemonRolloutHeartbeatStatusSchema } from "./daemon-rollout-heartbeat-status-schema.js";
 export { DaemonRuntimeMountSchema } from "./daemon-runtime-mount-schema.js";
 export { DaemonRuntimeSchema } from "./daemon-runtime-schema.js";
 export { DaemonSchema } from "./daemon-schema.js";

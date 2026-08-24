@@ -1,0 +1,1 @@
+{"type":"string","enum":["queued","stopping","starting","verifying","succeeded","failed","skipped"],"x-readme-ref-name":"DaemonMachineRolloutHeartbeatStatus"}
