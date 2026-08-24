@@ -12,11 +12,13 @@ use alien_azure_clients::azure::cognitive_services::{
 use alien_azure_clients::long_running_operation::OperationResult;
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    ai_catalog, bindings::AiBinding, Ai, AiAccessTest, AiAvailabilityBlocker,
-    AiAvailabilityObservation, AiAvailabilitySource, AiHeartbeatData, AiHeartbeatStatus,
-    AiModelAvailability, AiModelAvailabilityObservation, AiOutputs, AzureFoundryAiHeartbeatData,
-    HeartbeatBackend, ObservedHealth, Platform, ProviderLifecycleState, ResourceHeartbeat,
-    ResourceHeartbeatData, ResourceOutputs, ResourceStatus,
+    ai_catalog::{self, ClientApi},
+    bindings::AiBinding,
+    Ai, AiAccessTest, AiAvailabilityBlocker, AiAvailabilityObservation, AiAvailabilitySource,
+    AiHeartbeatData, AiHeartbeatStatus, AiModelAvailability, AiModelAvailabilityObservation,
+    AiOutputs, AzureFoundryAiHeartbeatData, HeartbeatBackend, ObservedHealth, Platform,
+    ProviderLifecycleState, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -44,7 +46,7 @@ fn azure_availability(
                 == Some("Succeeded");
             AiModelAvailabilityObservation {
                 public_model_id: model.public_id.to_string(),
-                client_apis: model.client_apis.to_vec(),
+                client_apis: ClientApi::ALL.to_vec(),
                 availability: if running {
                     AiModelAvailability::Available
                 } else {

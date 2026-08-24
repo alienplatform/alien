@@ -142,12 +142,21 @@ export const ModelsProvider = {
 } as const;
 export type ModelsProvider = ClosedEnum<typeof ModelsProvider>;
 
+export const ModelsCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type ModelsCredentialStatus = ClosedEnum<typeof ModelsCredentialStatus>;
+
 export type ModelsDirectProvider = {
   provider: ModelsProvider;
   providerEndpoint: string | null;
   keyFingerprint: string;
-  availableProviderModelIds: Array<string>;
-  verifiedAt: Date;
+  credentialStatus: ModelsCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogObservedAt: Date | null;
 };
 
 export const ModelsRootState = {
@@ -272,12 +281,21 @@ export const KeysProvider = {
 } as const;
 export type KeysProvider = ClosedEnum<typeof KeysProvider>;
 
+export const KeysCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type KeysCredentialStatus = ClosedEnum<typeof KeysCredentialStatus>;
+
 export type KeysDirectProvider = {
   provider: KeysProvider;
   providerEndpoint: string | null;
   keyFingerprint: string;
-  availableProviderModelIds: Array<string>;
-  verifiedAt: Date;
+  credentialStatus: KeysCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogObservedAt: Date | null;
 };
 
 export const KeysRootState = {
@@ -402,12 +420,23 @@ export const BucketsProvider = {
 } as const;
 export type BucketsProvider = ClosedEnum<typeof BucketsProvider>;
 
+export const BucketsCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type BucketsCredentialStatus = ClosedEnum<
+  typeof BucketsCredentialStatus
+>;
+
 export type BucketsDirectProvider = {
   provider: BucketsProvider;
   providerEndpoint: string | null;
   keyFingerprint: string;
-  availableProviderModelIds: Array<string>;
-  verifiedAt: Date;
+  credentialStatus: BucketsCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogObservedAt: Date | null;
 };
 
 export const BucketsRootState = {
@@ -534,12 +563,23 @@ export const RegistryProvider = {
 } as const;
 export type RegistryProvider = ClosedEnum<typeof RegistryProvider>;
 
+export const RegistryCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type RegistryCredentialStatus = ClosedEnum<
+  typeof RegistryCredentialStatus
+>;
+
 export type RegistryDirectProvider = {
   provider: RegistryProvider;
   providerEndpoint: string | null;
   keyFingerprint: string;
-  availableProviderModelIds: Array<string>;
-  verifiedAt: Date;
+  credentialStatus: RegistryCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogObservedAt: Date | null;
 };
 
 export const RegistryRootState = {
@@ -830,6 +870,11 @@ export const ModelsProvider$inboundSchema: z.ZodEnum<typeof ModelsProvider> = z
   .enum(ModelsProvider);
 
 /** @internal */
+export const ModelsCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof ModelsCredentialStatus
+> = z.enum(ModelsCredentialStatus);
+
+/** @internal */
 export const ModelsDirectProvider$inboundSchema: z.ZodType<
   ModelsDirectProvider,
   unknown
@@ -837,8 +882,13 @@ export const ModelsDirectProvider$inboundSchema: z.ZodType<
   provider: ModelsProvider$inboundSchema,
   providerEndpoint: z.nullable(z.string()),
   keyFingerprint: z.string(),
-  availableProviderModelIds: z.array(z.string()),
-  verifiedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  credentialStatus: ModelsCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function modelsDirectProviderFromJSON(
@@ -1012,6 +1062,11 @@ export const KeysProvider$inboundSchema: z.ZodEnum<typeof KeysProvider> = z
   .enum(KeysProvider);
 
 /** @internal */
+export const KeysCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof KeysCredentialStatus
+> = z.enum(KeysCredentialStatus);
+
+/** @internal */
 export const KeysDirectProvider$inboundSchema: z.ZodType<
   KeysDirectProvider,
   unknown
@@ -1019,8 +1074,13 @@ export const KeysDirectProvider$inboundSchema: z.ZodType<
   provider: KeysProvider$inboundSchema,
   providerEndpoint: z.nullable(z.string()),
   keyFingerprint: z.string(),
-  availableProviderModelIds: z.array(z.string()),
-  verifiedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  credentialStatus: KeysCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function keysDirectProviderFromJSON(
@@ -1192,6 +1252,11 @@ export const BucketsProvider$inboundSchema: z.ZodEnum<typeof BucketsProvider> =
   z.enum(BucketsProvider);
 
 /** @internal */
+export const BucketsCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof BucketsCredentialStatus
+> = z.enum(BucketsCredentialStatus);
+
+/** @internal */
 export const BucketsDirectProvider$inboundSchema: z.ZodType<
   BucketsDirectProvider,
   unknown
@@ -1199,8 +1264,13 @@ export const BucketsDirectProvider$inboundSchema: z.ZodType<
   provider: BucketsProvider$inboundSchema,
   providerEndpoint: z.nullable(z.string()),
   keyFingerprint: z.string(),
-  availableProviderModelIds: z.array(z.string()),
-  verifiedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  credentialStatus: BucketsCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function bucketsDirectProviderFromJSON(
@@ -1380,6 +1450,11 @@ export const RegistryProvider$inboundSchema: z.ZodEnum<
 > = z.enum(RegistryProvider);
 
 /** @internal */
+export const RegistryCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof RegistryCredentialStatus
+> = z.enum(RegistryCredentialStatus);
+
+/** @internal */
 export const RegistryDirectProvider$inboundSchema: z.ZodType<
   RegistryDirectProvider,
   unknown
@@ -1387,8 +1462,13 @@ export const RegistryDirectProvider$inboundSchema: z.ZodType<
   provider: RegistryProvider$inboundSchema,
   providerEndpoint: z.nullable(z.string()),
   keyFingerprint: z.string(),
-  availableProviderModelIds: z.array(z.string()),
-  verifiedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  credentialStatus: RegistryCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
 });
 
 export function registryDirectProviderFromJSON(

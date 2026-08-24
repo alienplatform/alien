@@ -1,15 +1,15 @@
 //! Whoami endpoint — returns identity from the unified auth Subject.
 
 use axum::{
-    Json, Router,
     extract::State,
     http::HeaderMap,
     response::{IntoResponse, Response},
     routing::get,
+    Json, Router,
 };
 use serde::Serialize;
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 use crate::auth::{Scope, SubjectKind};
 use crate::error::ErrorData;
 
@@ -95,6 +95,10 @@ async fn whoami(State(state): State<AppState>, headers: HeaderMap) -> Response {
         ),
         Scope::Commands { .. } => {
             return ErrorData::forbidden("Command credentials cannot inspect manager identity")
+                .into_response();
+        }
+        Scope::Telemetry { .. } => {
+            return ErrorData::forbidden("Telemetry credentials cannot inspect manager identity")
                 .into_response();
         }
     };

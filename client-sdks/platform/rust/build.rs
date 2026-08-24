@@ -14,8 +14,10 @@ fn run() {
     let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let src = std::path::Path::new(&manifest_dir).join("openapi.json");
     println!("cargo:rerun-if-changed={}", src.display());
-    let file = std::fs::File::open(&src).unwrap();
-    let spec = serde_json::from_reader(file).unwrap();
+    // Keep the specification in rustc's dependency graph as well as Cargo's
+    // build-script watch list so restored build caches cannot reuse code that
+    // was generated from an older API schema.
+    let spec = serde_json::from_str(include_str!("openapi.json")).unwrap();
     let mut generator = progenitor::Generator::new(
         GenerationSettings::new().with_interface(InterfaceStyle::Builder),
     );

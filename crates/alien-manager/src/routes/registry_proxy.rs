@@ -1114,6 +1114,13 @@ async fn validate_pull_access(
                 "Command credentials cannot access the registry proxy",
             ))
         }
+        Scope::Telemetry { .. } => {
+            return Err(oci_error(
+                StatusCode::FORBIDDEN,
+                "DENIED",
+                "Telemetry credentials cannot access the registry proxy",
+            ))
+        }
         Scope::Deployment {
             project_id,
             deployment_id,

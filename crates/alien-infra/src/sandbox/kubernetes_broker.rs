@@ -88,7 +88,11 @@ pub async fn claim_session(
         // so a claim arriving in that window can win a pod it cannot use. The label write has
         // already committed, and nothing would ever release a session the caller never received —
         // so put it back and try the next candidate, the same as losing the race on one.
-        let Some(address) = claimed.status.as_ref().and_then(|status| status.pod_ip.clone()) else {
+        let Some(address) = claimed
+            .status
+            .as_ref()
+            .and_then(|status| status.pod_ip.clone())
+        else {
             release_claim(pods, namespace, &name, &claimed).await;
             continue;
         };
@@ -133,12 +137,7 @@ pub async fn claim_session(
 /// Best effort on purpose: if this write loses or fails, the pod is one leaked slot that the
 /// health tick replaces, which is strictly better than aborting a claim a later candidate could
 /// have satisfied. Failing loudly here would trade a recoverable leak for a failed request.
-async fn release_claim(
-    pods: &Arc<dyn PodApi>,
-    namespace: &str,
-    name: &str,
-    claimed: &Pod,
-) {
+async fn release_claim(pods: &Arc<dyn PodApi>, namespace: &str, name: &str, claimed: &Pod) {
     let mut restored = claimed.clone();
     if let Some(labels) = restored.metadata.labels.as_mut() {
         labels.insert(
@@ -157,13 +156,12 @@ async fn signing_key(
     secret_name: &str,
     sandbox_id: &str,
 ) -> Result<ed25519_compact::SecretKey> {
-    let secret = secrets
-        .get_secret(namespace, secret_name)
-        .await
-        .context(ErrorData::CloudPlatformError {
+    let secret = secrets.get_secret(namespace, secret_name).await.context(
+        ErrorData::CloudPlatformError {
             message: format!("the capability key for '{sandbox_id}' is unreadable"),
             resource_id: Some(sandbox_id.to_string()),
-        })?;
+        },
+    )?;
 
     let bytes = secret
         .data
@@ -300,8 +298,12 @@ mod tests {
 
     fn pods_returning(items: Vec<Pod>) -> MockPodApi {
         let mut pods = MockPodApi::new();
-        pods.expect_list_pods()
-            .returning(move |_, _, _| Ok(List { items: items.clone(), metadata: Default::default() }));
+        pods.expect_list_pods().returning(move |_, _, _| {
+            Ok(List {
+                items: items.clone(),
+                metadata: Default::default(),
+            })
+        });
         pods
     }
 
@@ -312,7 +314,9 @@ mod tests {
             .returning(|_, _, pod| Ok(pod.clone()));
 
         let mut secrets = MockSecretsApi::new();
-        secrets.expect_get_secret().returning(|_, _| Ok(key_secret()));
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
 
         let claimed = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -336,7 +340,10 @@ mod tests {
     /// failing a create the pool can still satisfy.
     #[tokio::test]
     async fn losing_the_race_on_one_pod_moves_to_the_next() {
-        let mut pods = pods_returning(vec![idle_pod("pool-0", "10.1.2.3"), idle_pod("pool-1", "10.1.2.4")]);
+        let mut pods = pods_returning(vec![
+            idle_pod("pool-0", "10.1.2.3"),
+            idle_pod("pool-1", "10.1.2.4"),
+        ]);
         pods.expect_update_pod().returning(|_, name, pod| {
             if name == "pool-0" {
                 Err(AlienError::new(
@@ -350,7 +357,9 @@ mod tests {
         });
 
         let mut secrets = MockSecretsApi::new();
-        secrets.expect_get_secret().returning(|_, _| Ok(key_secret()));
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
 
         let claimed = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -373,7 +382,9 @@ mod tests {
     async fn an_empty_pool_says_it_refills() {
         let pods = pods_returning(Vec::new());
         let mut secrets = MockSecretsApi::new();
-        secrets.expect_get_secret().returning(|_, _| Ok(key_secret()));
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
 
         let error = claim_session(
             &(Arc::new(pods) as Arc<dyn PodApi>),
@@ -467,7 +478,10 @@ mod tests {
                 "both the sandbox and the session must be in the selector: {selector}"
             );
             let mut labels = crate::sandbox::idle_pod_labels("sbx");
-            labels.insert(crate::sandbox::LABEL_SESSION.to_string(), "session-7".to_string());
+            labels.insert(
+                crate::sandbox::LABEL_SESSION.to_string(),
+                "session-7".to_string(),
+            );
             Ok(List {
                 items: vec![Pod {
                     metadata: ObjectMeta {
@@ -505,7 +519,6 @@ mod tests {
             .expect("an unknown session is not an error");
     }
 
-
     /// A pod claimed before the kubelet gave it an address is put back, not abandoned.
     ///
     /// Pool pods are labelled idle at creation, so a claim can win one that has no `pod_ip` yet.
@@ -517,7 +530,10 @@ mod tests {
         let mut pods = MockPodApi::new();
         pods.expect_list_pods().returning(|_, _, _| {
             Ok(List {
-                items: vec![idle_pod_without_address("pool-0"), idle_pod("pool-1", "10.1.2.3")],
+                items: vec![
+                    idle_pod_without_address("pool-0"),
+                    idle_pod("pool-1", "10.1.2.3"),
+                ],
                 ..Default::default()
             })
         });
@@ -557,5 +573,4 @@ mod tests {
             "the claim must land on the pod that actually has an address"
         );
     }
-
 }

@@ -43,6 +43,7 @@ fn foundry_route() -> GatewayRoute {
         azure_endpoint: Some(endpoint),
         cred: AmbientCred::Bearer(BearerTokenCred::static_token(token)),
         upstream_base_override: None,
+        additional_headers: Default::default(),
     }
 }
 

@@ -16,10 +16,25 @@ export type DeploymentSetupItemSelectionItem = ClosedEnum<
   typeof DeploymentSetupItemSelectionItem
 >;
 
+export const DeploymentSetupItemSelectionProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type DeploymentSetupItemSelectionProviderAllowlist = ClosedEnum<
+  typeof DeploymentSetupItemSelectionProviderAllowlist
+>;
+
 export type DeploymentSetupItemSelection = {
   item: DeploymentSetupItemSelectionItem;
   required: boolean;
   releaseChannel?: string | undefined;
+  providerAllowlist?:
+    | Array<DeploymentSetupItemSelectionProviderAllowlist>
+    | undefined;
 };
 
 /** @internal */
@@ -28,10 +43,17 @@ export const DeploymentSetupItemSelectionItem$outboundSchema: z.ZodEnum<
 > = z.enum(DeploymentSetupItemSelectionItem);
 
 /** @internal */
+export const DeploymentSetupItemSelectionProviderAllowlist$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupItemSelectionProviderAllowlist> = z.enum(
+    DeploymentSetupItemSelectionProviderAllowlist,
+  );
+
+/** @internal */
 export type DeploymentSetupItemSelection$Outbound = {
   item: string;
   required: boolean;
   releaseChannel?: string | undefined;
+  providerAllowlist?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -42,6 +64,9 @@ export const DeploymentSetupItemSelection$outboundSchema: z.ZodType<
   item: DeploymentSetupItemSelectionItem$outboundSchema,
   required: z.boolean(),
   releaseChannel: z.string().optional(),
+  providerAllowlist: z.array(
+    DeploymentSetupItemSelectionProviderAllowlist$outboundSchema,
+  ).optional(),
 });
 
 export function deploymentSetupItemSelectionToJSON(

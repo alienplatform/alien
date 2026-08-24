@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
@@ -7,7 +9,7 @@ use crate::ui::{
     heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{is_valid_resource_prefix, RESOURCE_PREFIX_ERROR_MESSAGE};
+use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types::DeploymentResponse;
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
@@ -43,7 +45,18 @@ pub enum MonitoringMode {
 #[derive(Parser, Debug, Clone)]
 #[command(
     about = "Deployment commands",
-    long_about = "Manage deployments in the Alien platform."
+    long_about = "Manage deployments in the Alien platform.",
+    after_help = "EXAMPLES:
+    alien deployments list
+    alien deployments describe production/api
+    alien deployments resources production/api --json
+    alien deployments wait production/api --for ready --timeout 10m
+    alien deployments machines production/api --json
+
+RELATED COMMANDS:
+    alien logs --deployment production/api --follow
+    alien debug production/api -- <command>
+    alien commands --help"
 )]
 pub struct DeploymentsArgs {
     #[command(subcommand)]
@@ -59,6 +72,8 @@ impl DeploymentsArgs {
             &self.cmd,
             DeploymentsCmd::Ls { json: true, .. }
                 | DeploymentsCmd::Get { json: true, .. }
+                | DeploymentsCmd::Resources { json: true, .. }
+                | DeploymentsCmd::Wait { json: true, .. }
                 | DeploymentsCmd::Machines { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
                 | DeploymentsCmd::Redeploy { json: true, .. }
@@ -131,7 +146,7 @@ pub enum DeploymentsCmd {
         format: String,
     },
     /// List deployments
-    #[command(alias = "list")]
+    #[command(visible_alias = "list")]
     Ls {
         /// Project to list deployments for (optional, uses linked project by default)
         #[arg(long)]
@@ -142,11 +157,42 @@ pub enum DeploymentsCmd {
         json: bool,
     },
     /// Get deployment details
+    #[command(visible_aliases = ["describe", "show", "status"])]
     Get {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
 
         /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show a safe resource summary without resource configuration or secrets
+    Resources {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Print stable machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Wait until a deployment is ready or reaches a terminal state
+    Wait {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Condition to wait for
+        #[arg(long = "for", value_enum, default_value_t = DeploymentWaitCondition::Ready)]
+        condition: DeploymentWaitCondition,
+
+        /// Maximum wait duration, such as 30s, 10m, or 1h
+        #[arg(long, default_value = "10m", value_parser = parse_wait_duration)]
+        timeout: Duration,
+
+        /// Poll interval, such as 1s or 5s
+        #[arg(long, default_value = "2s", value_parser = parse_wait_duration)]
+        interval: Duration,
+
+        /// Print a stable machine-readable result
         #[arg(long)]
         json: bool,
     },
@@ -205,10 +251,21 @@ pub enum DeploymentsCmd {
         json: bool,
     },
     /// Create a deployment token (deployment-scoped API key)
+    #[command(visible_alias = "tokens")]
     Token {
         /// Deployment ID
         id: String,
     },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DeploymentWaitCondition {
+    /// Running with the desired release applied
+    Ready,
+    /// Any synchronized success or failure state
+    Terminal,
+    /// Fully deleted
+    Deleted,
 }
 
 pub(crate) fn parse_resource_prefix(value: &str) -> std::result::Result<String, String> {
@@ -239,41 +296,64 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         DeploymentsCmd::Get { id, json } => {
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
-                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
-                let client = ctx.sdk_client().await?;
-                let deployment = crate::platform_deployment_resolver::resolve(
-                    &ctx, &client, &workspace, &id, None, !json,
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
                 )
                 .await?;
-                if json {
-                    return print_json(&deployment);
-                }
-                println!(
-                    "{}",
-                    contextual_heading(
-                        "Showing deployment",
-                        &String::from(deployment.name.clone()),
-                        &[]
-                    )
-                );
-                println!("{} {}", dim_label("ID"), String::from(deployment.id));
-                println!("{} {}", dim_label("Status"), deployment.status);
-                println!("{} {}", dim_label("Platform"), deployment.platform);
-                println!(
-                    "{} {}",
-                    dim_label("Group"),
-                    String::from(deployment.deployment_group_id)
-                );
-                println!(
-                    "{} {}",
-                    dim_label("Manager"),
-                    String::from(deployment.manager_id)
-                );
-                println!("{} {}", dim_label("Created"), deployment.created_at);
-                return Ok(());
+                return get_deployment_task(
+                    &ctx,
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    json,
+                )
+                .await;
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             get_deployment_task(&ctx, &manager, &id, json).await
+        }
+        DeploymentsCmd::Resources { id, json } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                let deployment = resolve_deployment_reference(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                )
+                .await?;
+                return resources_task(&deployment, json);
+            }
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            let deployment = resolve_deployment_reference(&manager, &id).await?;
+            resources_task(&deployment, json)
+        }
+        DeploymentsCmd::Wait {
+            id,
+            condition,
+            timeout,
+            interval,
+            json,
+        } => {
+            #[cfg(feature = "platform")]
+            if ctx.is_platform() {
+                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+                    &ctx, &id, None, !json,
+                )
+                .await?;
+                return wait_for_deployment(
+                    &resolved.manager.client,
+                    &String::from(resolved.detail.id),
+                    condition,
+                    timeout,
+                    interval,
+                    json,
+                )
+                .await;
+            }
+            let manager = resolve_manager_client(&ctx, None, !json).await?;
+            wait_for_deployment(&manager, &id, condition, timeout, interval, json).await
         }
         DeploymentsCmd::Machines { id, json } => {
             if !ctx.is_platform() {
@@ -1289,6 +1369,254 @@ fn print_stack_resources(stack_state: &alien_core::StackState) {
     print_table(table);
 }
 
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct ResourceSummary {
+    name: String,
+    #[serde(rename = "type")]
+    resource_type: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    current_machines: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    desired_machines: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    capacity_groups: Option<Vec<CapacityGroupSummary>>,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct CapacityGroupSummary {
+    id: String,
+    current_machines: u32,
+    desired_machines: u32,
+    instance_type: String,
+}
+
+fn resources_task(deployment: &DeploymentResponse, json: bool) -> Result<()> {
+    let summaries = deployment
+        .stack_state
+        .as_ref()
+        .map(|value| {
+            serde_json::from_value::<alien_core::StackState>(value.clone())
+                .into_alien_error()
+                .context(ErrorData::JsonError {
+                    operation: "deserialization".to_string(),
+                    reason: "Failed to inspect deployment resources".to_string(),
+                })
+                .map(resource_summaries)
+        })
+        .transpose()?
+        .unwrap_or_default();
+
+    if json {
+        return print_json(&summaries);
+    }
+    if summaries.is_empty() {
+        println!("{}", dim_label("No resources have been created yet."));
+        return Ok(());
+    }
+
+    let mut table = make_table(&["Name", "Type", "Status", "Machines", "Details"]);
+    for resource in summaries {
+        let machines = match (resource.current_machines, resource.desired_machines) {
+            (Some(current), Some(desired)) => format!("{current}/{desired}"),
+            _ => "—".to_string(),
+        };
+        table.add_row(vec![
+            resource.name,
+            resource.resource_type,
+            resource.status,
+            machines,
+            resource.detail.unwrap_or_else(|| "—".to_string()),
+        ]);
+    }
+    print_table(table);
+    Ok(())
+}
+
+fn resource_summaries(stack_state: alien_core::StackState) -> Vec<ResourceSummary> {
+    let mut summaries: Vec<_> = stack_state
+        .resources
+        .into_iter()
+        .map(|(name, resource)| {
+            let capacity_groups = resource
+                .outputs
+                .as_ref()
+                .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
+                .map(|outputs| {
+                    outputs
+                        .capacity_group_statuses
+                        .iter()
+                        .map(|group| CapacityGroupSummary {
+                            id: group.group_id.clone(),
+                            current_machines: group.current_machines,
+                            desired_machines: group.desired_machines,
+                            instance_type: group.instance_type.clone(),
+                        })
+                        .collect::<Vec<_>>()
+                });
+            let current_machines = capacity_groups
+                .as_ref()
+                .map(|groups| groups.iter().map(|group| group.current_machines).sum());
+            let desired_machines = capacity_groups
+                .as_ref()
+                .map(|groups| groups.iter().map(|group| group.desired_machines).sum());
+            ResourceSummary {
+                name,
+                resource_type: resource.resource_type.clone(),
+                status: format_resource_status(resource.status).to_ascii_lowercase(),
+                detail: deployment_resource_detail(&resource),
+                current_machines,
+                desired_machines,
+                capacity_groups,
+            }
+        })
+        .collect();
+    summaries.sort_by(|left, right| left.name.cmp(&right.name));
+    summaries
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentWaitOutput {
+    deployment_id: String,
+    condition: &'static str,
+    status: String,
+    successful: bool,
+    current_release_id: Option<String>,
+    desired_release_id: Option<String>,
+    elapsed_seconds: f64,
+}
+
+async fn wait_for_deployment(
+    client: &alien_manager_api::Client,
+    reference: &str,
+    condition: DeploymentWaitCondition,
+    timeout: Duration,
+    interval: Duration,
+    json: bool,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_status = None;
+    loop {
+        let deployment = resolve_deployment_reference(client, reference).await?;
+        let status = parse_deployment_status(&deployment.status)?;
+        if !json && last_status.as_deref() != Some(deployment.status.as_str()) {
+            eprintln!("{} {}", dim_label("Deployment status:"), deployment.status);
+            last_status = Some(deployment.status.clone());
+        }
+
+        if wait_condition_met(condition, status, &deployment) {
+            let output = DeploymentWaitOutput {
+                deployment_id: deployment.id.clone(),
+                condition: condition.as_str(),
+                status: deployment.status.clone(),
+                successful: !status.is_failed(),
+                current_release_id: deployment.current_release_id.clone(),
+                desired_release_id: deployment.desired_release_id.clone(),
+                elapsed_seconds: started.elapsed().as_secs_f64(),
+            };
+            if json {
+                return print_json(&output);
+            }
+            println!(
+                "{}",
+                success_line(&format!(
+                    "Deployment reached {} ({}) in {:.1}s.",
+                    condition.as_str(),
+                    deployment.status,
+                    output.elapsed_seconds
+                ))
+            );
+            return Ok(());
+        }
+
+        if condition == DeploymentWaitCondition::Ready && status.is_synced() {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Deployment {} reached {} before becoming ready",
+                    deployment.id, deployment.status
+                ),
+                url: None,
+            }));
+        }
+        if started.elapsed() >= timeout {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Timed out after {:.1}s waiting for deployment {} to reach {} (last status: {})",
+                    timeout.as_secs_f64(),
+                    deployment.id,
+                    condition.as_str(),
+                    deployment.status
+                ),
+                url: None,
+            }));
+        }
+        tokio::time::sleep(interval.min(timeout.saturating_sub(started.elapsed()))).await;
+    }
+}
+
+fn parse_deployment_status(value: &str) -> Result<alien_core::DeploymentStatus> {
+    serde_json::from_value(serde_json::Value::String(value.to_string()))
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "deserialization".to_string(),
+            reason: format!("Unknown deployment status '{value}'"),
+        })
+}
+
+fn wait_condition_met(
+    condition: DeploymentWaitCondition,
+    status: alien_core::DeploymentStatus,
+    deployment: &DeploymentResponse,
+) -> bool {
+    match condition {
+        DeploymentWaitCondition::Ready => {
+            status == alien_core::DeploymentStatus::Running
+                && deployment
+                    .desired_release_id
+                    .as_ref()
+                    .is_none_or(|desired| deployment.current_release_id.as_ref() == Some(desired))
+        }
+        DeploymentWaitCondition::Terminal => status.is_synced(),
+        DeploymentWaitCondition::Deleted => status == alien_core::DeploymentStatus::Deleted,
+    }
+}
+
+impl DeploymentWaitCondition {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Ready => "ready",
+            Self::Terminal => "terminal",
+            Self::Deleted => "deleted",
+        }
+    }
+}
+
+fn parse_wait_duration(value: &str) -> std::result::Result<Duration, String> {
+    let trimmed = value.trim();
+    let unit_start = trimmed
+        .find(|character: char| !character.is_ascii_digit())
+        .ok_or_else(|| "duration must include a unit: s, m, or h".to_string())?;
+    let (amount, unit) = trimmed.split_at(unit_start);
+    let amount = amount
+        .parse::<u64>()
+        .map_err(|error| format!("invalid duration amount: {error}"))?;
+    let seconds = match unit {
+        "s" => amount,
+        "m" => amount.saturating_mul(60),
+        "h" => amount.saturating_mul(60 * 60),
+        _ => return Err("duration unit must be one of: s, m, h".to_string()),
+    };
+    if seconds == 0 {
+        return Err("duration must be greater than zero".to_string());
+    }
+    Ok(Duration::from_secs(seconds))
+}
+
 fn delete_confirmation_mode(yes: bool) -> Result<ConfirmationMode> {
     InteractionMode::current(false).confirmation_mode(
         yes,
@@ -1558,8 +1886,8 @@ async fn create_deployment_task(
         domains: None,
         external_bindings: None,
         kubernetes: None,
-        logs: None,
         public_endpoints: None,
+        logs: None,
     };
 
     let request = NewDeploymentRequest {
@@ -1926,6 +2254,94 @@ mod tests {
         let deployment = deployment_with_releases(Some("rel_a"), None);
 
         assert_eq!(deployment_reference(&deployment), "dep_1");
+    }
+
+    #[test]
+    fn agent_friendly_status_and_resource_commands_parse() {
+        let status =
+            DeploymentsArgs::try_parse_from(["deployments", "status", "production/api", "--json"])
+                .expect("status alias should parse");
+        assert!(matches!(status.cmd, DeploymentsCmd::Get { json: true, .. }));
+
+        let resources = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "resources",
+            "production/api",
+            "--json",
+        ])
+        .expect("resource summary should parse");
+        assert!(matches!(
+            resources.cmd,
+            DeploymentsCmd::Resources { json: true, .. }
+        ));
+
+        let wait = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "wait",
+            "production/api",
+            "--for",
+            "ready",
+            "--timeout",
+            "5m",
+            "--json",
+        ])
+        .expect("wait command should parse");
+        assert!(matches!(
+            wait.cmd,
+            DeploymentsCmd::Wait {
+                condition: DeploymentWaitCondition::Ready,
+                json: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn ready_wait_requires_release_convergence() {
+        let running = parse_deployment_status("running").expect("known status");
+        let converged = deployment_with_releases(Some("rel_a"), Some("rel_a"));
+        let pending = deployment_with_releases(Some("rel_a"), Some("rel_b"));
+        assert!(wait_condition_met(
+            DeploymentWaitCondition::Ready,
+            running,
+            &converged
+        ));
+        assert!(!wait_condition_met(
+            DeploymentWaitCondition::Ready,
+            running,
+            &pending
+        ));
+    }
+
+    #[test]
+    fn wait_duration_rejects_zero_and_missing_units() {
+        assert_eq!(parse_wait_duration("2m").unwrap(), Duration::from_secs(120));
+        assert!(parse_wait_duration("0s").is_err());
+        assert!(parse_wait_duration("30").is_err());
+    }
+
+    #[test]
+    fn resource_summary_json_has_no_arbitrary_configuration_fields() {
+        let summary = ResourceSummary {
+            name: "compute".to_string(),
+            resource_type: "compute".to_string(),
+            status: "ready".to_string(),
+            detail: None,
+            current_machines: Some(2),
+            desired_machines: Some(3),
+            capacity_groups: Some(vec![CapacityGroupSummary {
+                id: "general".to_string(),
+                current_machines: 2,
+                desired_machines: 3,
+                instance_type: "example-instance".to_string(),
+            }]),
+        };
+        let value = serde_json::to_value(summary).expect("summary should serialize");
+        assert_eq!(value["currentMachines"], 2);
+        assert_eq!(value["desiredMachines"], 3);
+        assert!(value.get("config").is_none());
+        assert!(value.get("outputs").is_none());
+        assert!(value.get("internalState").is_none());
     }
 
     #[test]

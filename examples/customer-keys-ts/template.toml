@@ -1,0 +1,3 @@
+name = "customer-keys-ts"
+description = "Encrypt data with a key controlled by each customer."
+language = "TypeScript"

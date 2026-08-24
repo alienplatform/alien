@@ -1,11 +1,17 @@
+#[cfg(feature = "platform")]
+pub mod api_keys;
 pub mod build;
 pub mod commands;
+#[cfg(feature = "platform")]
+pub mod customers;
 pub mod debug;
 pub mod debug_tunnel;
 pub mod deploy;
 pub mod deployments;
 pub mod destroy;
 pub mod dev_helpers;
+#[cfg(feature = "platform")]
+pub mod examples;
 pub mod init;
 pub mod logs;
 pub mod onboard;
@@ -14,6 +20,9 @@ pub mod packages;
 pub mod release;
 pub mod releases;
 pub mod render;
+pub mod status;
+#[cfg(feature = "platform")]
+pub mod usage;
 pub mod vault;
 pub mod whoami;
 
@@ -32,8 +41,12 @@ pub mod manager;
 #[cfg(feature = "platform")]
 pub mod operations;
 
+#[cfg(feature = "platform")]
+pub use api_keys::{api_keys_task, ApiKeysArgs};
 pub use build::{build_command, BuildArgs, BuildSubcommand};
 pub use commands::{commands_task, commands_task_dev, CommandsArgs};
+#[cfg(feature = "platform")]
+pub use customers::{customers_task, CustomersArgs};
 pub use debug::{debug_task, debug_task_dev, DebugArgs};
 pub use deploy::{deploy_task, DeployArgs};
 pub use deployments::{deployments_task, DeploymentsArgs};
@@ -46,6 +59,8 @@ pub use dev_helpers::{
     wait_for_dev_deployment_ready, wait_for_dev_deployment_ready_with_progress, write_dev_status,
     CliEnvVar, DevDeploymentLiveState, DevDeploymentSnapshot,
 };
+#[cfg(feature = "platform")]
+pub use examples::{examples_task, ExamplesArgs};
 pub use init::{init_task, InitArgs};
 pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};
@@ -54,5 +69,8 @@ pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};
 pub use releases::{releases_task, ReleasesArgs};
 pub use render::{render_task, RenderArgs};
+pub use status::{status_task, StatusArgs};
+#[cfg(feature = "platform")]
+pub use usage::{usage_task, UsageArgs};
 pub use vault::{vault_remote_task, vault_task, VaultArgs, VaultRemoteArgs};
 pub use whoami::{whoami_task, WhoamiArgs};

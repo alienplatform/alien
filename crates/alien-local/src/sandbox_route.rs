@@ -186,8 +186,7 @@ impl SandboxRoute {
             }
         }
 
-        let (route, template, shutdown, serving) =
-            Self::serve(manager, sandbox, template).await?;
+        let (route, template, shutdown, serving) = Self::serve(manager, sandbox, template).await?;
 
         routes.lock().expect("no panic holds this lock").insert(
             sandbox.to_string(),
@@ -276,9 +275,15 @@ impl SandboxRoute {
 
         let router = Router::new()
             .route("/v1/sessions", post(create_session).get(list_sessions))
-            .route("/v1/sessions/{session_id}", axum::routing::delete(terminate))
+            .route(
+                "/v1/sessions/{session_id}",
+                axum::routing::delete(terminate),
+            )
             .route("/v1/sessions/{session_id}/exec", post(exec))
-            .route("/v1/sessions/{session_id}/files", get(read_file).put(write_file))
+            .route(
+                "/v1/sessions/{session_id}/files",
+                get(read_file).put(write_file),
+            )
             .route("/v1/sessions/{session_id}/preview", get(preview))
             .with_state(state);
 
@@ -355,7 +360,11 @@ async fn write_token_file(path: &std::path::Path, token: &str) -> Result<()> {
 }
 
 fn generate_token() -> String {
-    format!("{}{}", uuid::Uuid::new_v4().simple(), uuid::Uuid::new_v4().simple())
+    format!(
+        "{}{}",
+        uuid::Uuid::new_v4().simple(),
+        uuid::Uuid::new_v4().simple()
+    )
 }
 
 /// Compares in constant time, so a caller cannot recover the token one byte at a time.
@@ -614,6 +623,9 @@ mod tests {
     #[test]
     fn tokens_are_not_reused_between_routes() {
         assert_ne!(generate_token(), generate_token());
-        assert!(generate_token().len() >= 64, "a guessable token is not a token");
+        assert!(
+            generate_token().len() >= 64,
+            "a guessable token is not a token"
+        );
     }
 }

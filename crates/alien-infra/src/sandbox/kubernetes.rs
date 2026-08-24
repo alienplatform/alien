@@ -69,13 +69,14 @@ impl KubernetesSandboxController {
             .get_kubernetes_runtime_class_client(kubernetes_config)
             .await?;
 
-        let available = client
-            .list_runtime_classes()
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to list RuntimeClasses".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let available =
+            client
+                .list_runtime_classes()
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to list RuntimeClasses".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         // Before any pod exists. On Autopilot an unschedulable pod is not rejected — node
         // auto-provisioning picks it up and it sits in Pending while nodes are billed.
@@ -92,7 +93,8 @@ impl KubernetesSandboxController {
         self.namespace = Some(namespace.clone());
 
         if self.capability_public_key.is_none() {
-            self.capability_public_key = Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
+            self.capability_public_key =
+                Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
         }
 
         info!(sandbox_id = %config.id, "Cluster can run sandboxes");
@@ -118,7 +120,9 @@ impl KubernetesSandboxController {
             ctx,
             &config,
             &namespace,
-            self.runtime_class.as_deref().unwrap_or(DEFAULT_RUNTIME_CLASS),
+            self.runtime_class
+                .as_deref()
+                .unwrap_or(DEFAULT_RUNTIME_CLASS),
             self.warm_pool_size.unwrap_or(DEFAULT_WARM_POOL_SIZE),
             self.capability_public_key.as_deref(),
         )
@@ -281,12 +285,14 @@ impl KubernetesSandboxController {
             BindingValue::value(SERVICE_ACCOUNT_TOKEN_PATH.to_string()),
         );
 
-        Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-            ErrorData::ResourceStateSerializationFailed {
-                resource_id: "binding".to_string(),
-                message: "Failed to serialize the sandbox binding".to_string(),
-            },
-        )?))
+        Ok(Some(
+            serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize the sandbox binding".to_string(),
+                },
+            )?,
+        ))
     }
 
     // ─────────────── TERMINAL STATES ──────────────────────────────────────
@@ -427,7 +433,11 @@ async fn list_session_pods(
         .await?;
 
     let pods = client
-        .list_pods(namespace, Some(format!("{LABEL_SANDBOX}={sandbox_id}")), None)
+        .list_pods(
+            namespace,
+            Some(format!("{LABEL_SANDBOX}={sandbox_id}")),
+            None,
+        )
         .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to list sandbox pods".to_string(),
@@ -583,13 +593,14 @@ async fn ensure_capability_keypair(
         // Losing this write means somebody else created the key first, which is the outcome the
         // read above is for — adopt theirs. Propagating instead would put a sandbox whose key is
         // live and usable into a terminal ProvisionFailed, for a race that already resolved.
-        let existing = client
-            .get_secret(namespace, &name)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("failed to store the capability key for '{sandbox_id}'"),
-                resource_id: Some(sandbox_id.to_string()),
-            })?;
+        let existing =
+            client
+                .get_secret(namespace, &name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!("failed to store the capability key for '{sandbox_id}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })?;
 
         let encoded = existing
             .data

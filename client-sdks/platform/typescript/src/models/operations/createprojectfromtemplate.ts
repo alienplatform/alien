@@ -483,8 +483,17 @@ export type CreateProjectFromTemplateDefaultManagers = {
   local?: string | null | undefined;
 };
 
+export const CreateProjectFromTemplateMethod = {
+  Framework: "framework",
+  RemoteOperator: "remote-operator",
+} as const;
+export type CreateProjectFromTemplateMethod = ClosedEnum<
+  typeof CreateProjectFromTemplateMethod
+>;
+
 export type CreateProjectFromTemplateDeployments = {
   enabled: boolean;
+  methods?: Array<CreateProjectFromTemplateMethod> | undefined;
 };
 
 export type CreateProjectFromTemplateKeys = {
@@ -1215,11 +1224,17 @@ export function createProjectFromTemplateDefaultManagersFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateMethod$inboundSchema: z.ZodEnum<
+  typeof CreateProjectFromTemplateMethod
+> = z.enum(CreateProjectFromTemplateMethod);
+
+/** @internal */
 export const CreateProjectFromTemplateDeployments$inboundSchema: z.ZodType<
   CreateProjectFromTemplateDeployments,
   unknown
 > = z.object({
   enabled: z.boolean(),
+  methods: z.array(CreateProjectFromTemplateMethod$inboundSchema).optional(),
 });
 
 export function createProjectFromTemplateDeploymentsFromJSON(

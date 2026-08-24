@@ -4,8 +4,8 @@
 //! parsing, signal handling, panic hooks, or the Windows service shim.
 
 use crate::error::{ErrorData, Result};
-use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::access_requests::AccessRequestSyncLoop;
+use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::operations_exec::OperationsExecLoop;
 use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
@@ -445,11 +445,17 @@ async fn run(
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
         .maybe_app_version(args.operator_release_version)
-        .maybe_label_domain(
-            embedded_config
-                .as_ref()
-                .and_then(|config| config.label_domain.clone()),
-        )
+        .maybe_label_domain(embedded_config.as_ref().and_then(|config| {
+            // `brand` is the already-slugged identity `access_request_crd_names`
+            // expects (see alien-core::access_request_crd) — packages-builder
+            // computes it once and embeds both fields, but `label_domain` is
+            // the raw, pre-slug config value (e.g. a placeholder like
+            // "acme.local"), which can disagree with what the manifest
+            // generator derived the CRD/RBAC from. Prefer `brand`; fall back
+            // to `label_domain` only for older embedded binaries that
+            // predate the `brand` field.
+            config.brand.clone().or_else(|| config.label_domain.clone())
+        }))
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
@@ -607,8 +613,7 @@ mod windows_entry {
     /// parameters — they ride these statics instead. Only one operator runs per
     /// process, so a single slot per hook is sufficient.
     static INIT_HOOK: std::sync::Mutex<Option<InitHook>> = std::sync::Mutex::new(None);
-    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> =
-        std::sync::Mutex::new(None);
+    static DEBUG_LOOP_HOOK: std::sync::Mutex<Option<DebugLoopHook>> = std::sync::Mutex::new(None);
     static ACCESS_REQUEST_LOOP_HOOK: std::sync::Mutex<Option<AccessRequestSyncLoopHook>> =
         std::sync::Mutex::new(None);
     static OPERATIONS_EXEC_LOOP_HOOK: std::sync::Mutex<Option<OperationsExecLoopHook>> =
@@ -622,10 +627,12 @@ mod windows_entry {
     ) -> ! {
         *INIT_HOOK.lock().expect("init hook lock") = Some(init_hook);
         *DEBUG_LOOP_HOOK.lock().expect("debug loop hook lock") = Some(debug_loop_hook);
-        *ACCESS_REQUEST_LOOP_HOOK.lock().expect("access-request loop hook lock") =
-            Some(access_request_loop_hook);
-        *OPERATIONS_EXEC_LOOP_HOOK.lock().expect("operations-exec loop hook lock") =
-            Some(operations_exec_loop_hook);
+        *ACCESS_REQUEST_LOOP_HOOK
+            .lock()
+            .expect("access-request loop hook lock") = Some(access_request_loop_hook);
+        *OPERATIONS_EXEC_LOOP_HOOK
+            .lock()
+            .expect("operations-exec loop hook lock") = Some(operations_exec_loop_hook);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .expect("failed to start service dispatcher");
         std::process::exit(0);

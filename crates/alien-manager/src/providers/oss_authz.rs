@@ -7,6 +7,7 @@
 use crate::auth::{Authz, DeploymentCreateCtx, Role, Scope, Subject, SubjectKind};
 use crate::traits::deployment_store::{DeploymentGroupRecord, DeploymentRecord};
 use crate::traits::release_store::ReleaseRecord;
+use crate::traits::TelemetrySignal;
 
 /// OSS policy: any authenticated token can read any release / deployment-group
 /// it has scope on. Mutations require a write role. Sync/telemetry endpoints
@@ -48,7 +49,8 @@ impl Authz for OssAuthz {
         // OSS single-tenant: any valid token reads any release. Deployment
         // tokens included — agents need their target release to deploy. A
         // commands capability is deliberately inert outside command routes.
-        !matches!(s.scope, Scope::Commands { .. }) && s.role != Role::CommandCapability
+        !matches!(s.scope, Scope::Commands { .. } | Scope::Telemetry { .. })
+            && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
@@ -79,7 +81,7 @@ impl Authz for OssAuthz {
                 deployment_id == &deployment.id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
-            Scope::Commands { .. } => false,
+            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -137,7 +139,7 @@ impl Authz for OssAuthz {
                 deployment_group_id,
                 ..
             } => deployment_group_id == &dg.id,
-            Scope::Deployment { .. } | Scope::Commands { .. } => false,
+            Scope::Deployment { .. } | Scope::Commands { .. } | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -195,7 +197,7 @@ impl Authz for OssAuthz {
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
             }
             Scope::DeploymentGroup { .. } => false,
-            Scope::Commands { .. } => false,
+            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -234,7 +236,7 @@ impl Authz for OssAuthz {
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
             Scope::Project { .. } => true,
-            Scope::Commands { .. } => false,
+            Scope::Commands { .. } | Scope::Telemetry { .. } => false,
         }
     }
 
@@ -244,18 +246,15 @@ impl Authz for OssAuthz {
 
     // -- Telemetry ingest --------------------------------------------------
 
-    fn can_ingest_telemetry_for(&self, s: &Subject, deployment_id: &str) -> bool {
-        // Only the deployment itself ingests its own telemetry.
-        matches!(
-            (&s.scope, s.role),
+    fn can_ingest_telemetry(&self, s: &Subject, signal: TelemetrySignal) -> bool {
+        match (&s.scope, s.role) {
             (
-                Scope::Deployment {
-                    deployment_id: scope_id,
-                    ..
-                },
-                Role::DeploymentManager | Role::DeploymentTelemetryWriter
-            ) if scope_id == deployment_id
-        )
+                Scope::Deployment { .. },
+                Role::DeploymentManager | Role::DeploymentTelemetryWriter,
+            ) => true,
+            (Scope::Telemetry { .. }, Role::TelemetryCapability) => signal == TelemetrySignal::Logs,
+            _ => false,
+        }
     }
 
     // -- Registry proxy ----------------------------------------------------
@@ -283,7 +282,7 @@ mod tests {
     use std::collections::HashMap;
 
     use super::*;
-    use crate::auth::{CommandCapability, SubjectKind};
+    use crate::auth::{CommandCapability, GatewayLogSource, SubjectKind, TelemetryCapability};
     use chrono::Utc;
 
     fn admin() -> Subject {
@@ -324,6 +323,21 @@ mod tests {
                 deployment_id: deployment_id.to_string(),
             },
             role: Role::DeploymentManager,
+            bearer_token: "bearer".to_string(),
+        }
+    }
+
+    fn gateway_telemetry(source: GatewayLogSource) -> Subject {
+        Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "gateway-runtime".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Telemetry {
+                project_id: "default".to_string(),
+                capability: TelemetryCapability::GatewayLogs { source },
+            },
+            role: Role::TelemetryCapability,
             bearer_token: "bearer".to_string(),
         }
     }
@@ -571,21 +585,38 @@ mod tests {
     }
 
     #[test]
-    fn telemetry_ingest_is_self_only() {
-        assert!(OssAuthz.can_ingest_telemetry_for(&deployment_token("d1"), "d1"));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&admin(), "d1"));
+    fn deployment_telemetry_credentials_accept_all_otlp_signals() {
+        let deployment = deployment_token("d1");
+        assert!(OssAuthz.can_ingest_telemetry(&deployment, TelemetrySignal::Logs));
+        assert!(OssAuthz.can_ingest_telemetry(&deployment, TelemetrySignal::Traces));
+        assert!(OssAuthz.can_ingest_telemetry(&deployment, TelemetrySignal::Metrics));
+        assert!(!OssAuthz.can_ingest_telemetry(&admin(), TelemetrySignal::Logs));
     }
 
     #[test]
-    fn telemetry_writer_can_only_ingest_own_telemetry() {
+    fn deployment_telemetry_writer_cannot_use_non_telemetry_apis() {
         let mut s = deployment_token("d1");
         s.role = Role::DeploymentTelemetryWriter;
 
-        assert!(OssAuthz.can_ingest_telemetry_for(&s, "d1"));
-        assert!(!OssAuthz.can_ingest_telemetry_for(&s, "d2"));
+        assert!(OssAuthz.can_ingest_telemetry(&s, TelemetrySignal::Logs));
 
         let dep = deployment("d1", "dg-a");
         assert!(!OssAuthz.can_sync_deployment(&s, &dep));
         assert!(!OssAuthz.can_read_deployment(&s, &dep));
+    }
+
+    #[test]
+    fn gateway_telemetry_capability_accepts_logs_only() {
+        let gateway = gateway_telemetry(GatewayLogSource::AiGateway);
+
+        assert!(OssAuthz.can_ingest_telemetry(&gateway, TelemetrySignal::Logs));
+        assert!(!OssAuthz.can_ingest_telemetry(&gateway, TelemetrySignal::Traces));
+        assert!(!OssAuthz.can_ingest_telemetry(&gateway, TelemetrySignal::Metrics));
+
+        let dep = deployment("d1", "dg-a");
+        assert!(!OssAuthz.can_read_release(&gateway, &release()));
+        assert!(!OssAuthz.can_read_deployment(&gateway, &dep));
+        assert!(!OssAuthz.can_sync_deployment(&gateway, &dep));
+        assert!(!OssAuthz.can_push_image(&gateway, "default", "repo"));
     }
 }

@@ -257,6 +257,7 @@ pub async fn route_from_remote_ai_lease(
         azure_endpoint: binding.azure_endpoint,
         cred,
         upstream_base_override: None,
+        additional_headers: Default::default(),
     })
 }
 
@@ -320,6 +321,7 @@ pub async fn resolve_route(
         azure_endpoint: binding.azure_endpoint,
         cred,
         upstream_base_override: None,
+        additional_headers: Default::default(),
     })
 }
 

@@ -4,11 +4,11 @@
 //! following the same pattern as `sync.rs` and `deployments.rs`.
 
 use axum::{
-    Router,
     extract::{Json, Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post, put},
+    Router,
 };
 use serde::Deserialize;
 
@@ -18,7 +18,7 @@ use alien_commands::types::*;
 
 use crate::error::ErrorData;
 
-use super::{AppState, auth};
+use super::{auth, AppState};
 
 // --- Helpers ---
 
@@ -664,7 +664,7 @@ async fn release_lease(
 mod tests {
     use super::*;
     use alien_commands::test_utils::{
-        TestCommandServer, test_storage_create_command, test_upload_complete_request,
+        test_storage_create_command, test_upload_complete_request, TestCommandServer,
     };
     use chrono::Utc;
 

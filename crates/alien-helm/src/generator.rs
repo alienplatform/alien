@@ -56,14 +56,18 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
-    /// Namespaced, read-only workload observation.
-    Observe,
+    /// Diagnose workloads without changing them.
+    Diagnostics,
+    /// Diagnose workloads and run explicitly approved Kubernetes remediation.
+    Remediation,
 }
 
 impl OperatorPermission {
     fn as_str(self) -> &'static str {
         match self {
-            Self::Observe => "observe",
+            // Both tiers are observe-only for deployment lifecycle. The tier
+            // changes operation RBAC, not ownership of the installed workload.
+            Self::Diagnostics | Self::Remediation => "observe",
         }
     }
 }
@@ -120,8 +124,10 @@ pub struct OperatorManifestOptions<'a> {
     /// `RawManifest`; ignored for `HelmTemplate`, which uses `.Release.Namespace`.
     /// In `Namespace` scope this is also the namespace observed.
     pub install_namespace: Option<&'a str>,
-    /// The vendor's branded DNS domain (e.g. `acme.dev`), used to white-label
-    /// the access-request CRD (group/kind/plural). `None` → the Alien defaults.
+    /// The vendor's brand name (e.g. `acme`, or a real owned domain like
+    /// `acme.dev`), used to white-label the access-request CRD
+    /// (group/kind/plural). It's slugified, never resolved as DNS — any
+    /// stable customer-facing identity works. `None` → the Alien defaults.
     /// Same value the operator carries at runtime, so both agree on the CRD.
     pub label_domain: Option<&'a str>,
     pub scope: OperatorScope,
@@ -252,7 +258,9 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
 }
 
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    validate_runtime_encryption_key(options.encryption_key)?;
+    if options.format == OperatorOutputFormat::RawManifest {
+        validate_runtime_encryption_key(options.encryption_key)?;
+    }
     validate_operator_options(&options)?;
 
     let stack_settings_json = options
@@ -307,6 +315,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         namespace,
         &operator_name,
         &labels,
+        options.format,
     ));
     // Cluster-wide (label) scope needs cluster-scoped read RBAC; namespace scope
     // stays a namespaced Role. Both grant read-only + the access-request CRD.
@@ -315,6 +324,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             &operator_name,
             &labels,
             &crd_names,
+            options.permission,
         ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
@@ -327,6 +337,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             &operator_name,
             &labels,
             &crd_names,
+            options.permission,
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
@@ -579,8 +590,15 @@ fn operator_service_account_doc(
     namespace: &str,
     operator_name: &str,
     labels: &BTreeMap<String, String>,
+    format: OperatorOutputFormat,
 ) -> String {
     let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, operator_name, labels);
+    if format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("  {{- with .Values.remoteOperator.serviceAccountAnnotations }}\n");
+        yaml.push_str("  annotations:\n");
+        yaml.push_str("    {{- toYaml . | nindent 4 }}\n");
+        yaml.push_str("  {{- end }}\n");
+    }
     yaml.push_str("automountServiceAccountToken: true\n");
     yaml
 }
@@ -590,6 +608,7 @@ fn operator_role_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
+    permission: OperatorPermission,
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -598,7 +617,7 @@ fn operator_role_doc(
         operator_name,
         labels,
     );
-    yaml.push_str(&operator_observe_rules(crd_names));
+    yaml.push_str(&operator_rules(crd_names, permission));
     yaml
 }
 
@@ -631,14 +650,12 @@ roleRef:
     yaml
 }
 
-/// Observe rules plus the writes the shipped operations builtins need, shared by
-/// the namespaced `Role` and the cluster-wide `ClusterRole`.
+/// Kubernetes operation rules shared by the namespaced `Role` and cluster-wide
+/// `ClusterRole`.
 ///
 /// Base access is read-only (`get/list/watch`; never `secrets`). On top of that
-/// the operator grants exactly what its `kubernetes` operations builtin needs to
-/// run the mutating operations it exposes — otherwise a customer-approved
-/// remediation (e.g. `restart-pod`) is dispatched to the operator only to be
-/// rejected by the apiserver with a 403:
+/// `Diagnostics` stops there. `Remediation` additionally grants exactly what
+/// the initial mutating Kubernetes operations require:
 ///   - `pods` `delete`   — `restart-pod` (the controller reschedules the pod)
 ///   - `pods/log` `get`  — `logs`
 ///   - workload `scale` `patch` — `scale` (the `scale` subresource)
@@ -653,8 +670,8 @@ roleRef:
 ///
 /// The access-request `apiGroups`/`resources` are white-labeled from `names` so
 /// a vendor build grants access to *their* CRD, matching the CRD doc below.
-fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
-    format!(
+fn operator_rules(names: &AccessRequestCrdNames, permission: OperatorPermission) -> String {
+    let mut rules = format!(
         r#"rules:
   - apiGroups: [""]
     resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
@@ -669,14 +686,8 @@ fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
     resources: ["pods"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["delete"]
-  - apiGroups: [""]
     resources: ["pods/log"]
     verbs: ["get"]
-  - apiGroups: ["apps"]
-    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
-    verbs: ["patch"]
   - apiGroups: ["{group}"]
     resources: ["{plural}"]
     verbs: ["get", "list", "watch", "create", "update", "patch"]
@@ -686,7 +697,19 @@ fn operator_observe_rules(names: &AccessRequestCrdNames) -> String {
 "#,
         group = names.group,
         plural = names.plural,
-    )
+    );
+    if permission == OperatorPermission::Remediation {
+        rules.push_str(
+            r#"  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
+    verbs: ["patch"]
+"#,
+        );
+    }
+    rules
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
@@ -823,9 +846,10 @@ fn operator_clusterrole_doc(
     operator_name: &str,
     labels: &BTreeMap<String, String>,
     crd_names: &AccessRequestCrdNames,
+    permission: OperatorPermission,
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
-    yaml.push_str(&operator_observe_rules(crd_names));
+    yaml.push_str(&operator_rules(crd_names, permission));
     yaml
 }
 
@@ -917,6 +941,11 @@ fn operator_deployment_doc(
     yaml.push_str("    metadata:\n");
     yaml.push_str("      labels:\n");
     append_operator_labels(&mut yaml, labels, 8);
+    if options.format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("        {{- with .Values.remoteOperator.podLabels }}\n");
+        yaml.push_str("        {{- toYaml . | nindent 8 }}\n");
+        yaml.push_str("        {{- end }}\n");
+    }
     yaml.push_str("    spec:\n");
     yaml.push_str(&format!(
         "      serviceAccountName: {}\n",
@@ -956,14 +985,13 @@ fn operator_deployment_doc(
     if let Some(label_selector) = label_selector {
         append_env_value(&mut yaml, "OPERATOR_LABEL_SELECTOR", label_selector);
     }
-    // Helm distributions surface the running app version as a value, so each install
-    // reports the release it's on. Raw manifests omit it; the vendor sets
-    // OPERATOR_RELEASE_VERSION themselves if they want version/rollout visibility.
+    // Use the host chart's standard appVersion so the pasted template does not
+    // require a vendor-specific values key. Raw manifests omit it.
     if options.format == OperatorOutputFormat::HelmTemplate {
         append_env_value(
             &mut yaml,
             "OPERATOR_RELEASE_VERSION",
-            "{{ .Values.alien.version }}",
+            "{{ .Chart.AppVersion }}",
         );
     }
     append_env_value(
@@ -4068,7 +4096,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
         .expect("operator manifest should render")
@@ -4091,7 +4119,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
         .expect("operator manifest should render")
@@ -4099,9 +4127,7 @@ mod tests {
 
     fn operator_test_manifest_with_stack_settings() -> String {
         let stack_settings = StackSettings {
-            logs: Some(alien_core::LogSettings {
-                parse_application_levels: true,
-            }),
+            updates: alien_core::UpdatesMode::ApprovalRequired,
             ..Default::default()
         };
         generate_operator_manifest(OperatorManifestOptions {
@@ -4117,7 +4143,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
         .expect("operator manifest should render")
@@ -4253,7 +4279,7 @@ mod tests {
             // The access-request CRD is the operator's own control resource: it
             // materializes access requests and records the approval window in
             // status, but never deletes them.
-            if api_groups == vec!["accessrequests.alien.dev"] {
+            if api_groups == vec!["accessrequests.alien"] {
                 assert!(
                     verbs.iter().all(|v| matches!(
                         *v,
@@ -4268,41 +4294,77 @@ mod tests {
                 continue;
             }
 
-            // Everything else is either read-only observation or one of the
-            // narrow writes the shipped operations builtins need. Verbs beyond
-            // this set would mean the operator was granted more than its
-            // operations require.
-            let allowed = ["get", "list", "watch", "delete", "patch"];
+            let allowed = ["get", "list", "watch"];
             for v in &verbs {
                 assert!(
                     allowed.contains(v),
-                    "unexpected verb '{v}' on rule for {resources:?}; \
-                     operator RBAC must stay within observe + the operations writes"
-                );
-            }
-            // The only mutating verbs are the exact ones the operations need:
-            // pods:delete (restart-pod), pods/log:get (logs), scale:patch (scale).
-            if verbs.contains(&"delete") {
-                assert_eq!(
-                    resources,
-                    vec!["pods"],
-                    "delete is only for restart-pod (pods)"
-                );
-            }
-            if verbs.contains(&"patch") {
-                assert!(
-                    resources.iter().all(|r| r.ends_with("/scale")),
-                    "patch outside the access-request CRD is only the scale subresource: {resources:?}"
+                    "diagnostic RBAC must be read-only; found '{v}' on {resources:?}"
                 );
             }
         }
     }
 
     #[test]
+    fn operator_remediation_adds_only_restart_and_scale_writes() {
+        let manifest = generate_operator_manifest(OperatorManifestOptions {
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            image: "registry.example.com/operator:test",
+            log_collector: None,
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: Some("test"),
+            install_namespace: Some("demo"),
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            permission: OperatorPermission::Remediation,
+            format: OperatorOutputFormat::RawManifest,
+        })
+        .expect("remediation manifest should render");
+        let docs = parse_manifest_docs(&manifest);
+        let role = docs_by_kind(&docs, "Role").remove(0);
+        let rules = role["rules"]
+            .as_sequence()
+            .expect("Role should include rules");
+
+        let writes = rules
+            .iter()
+            .filter_map(|rule| {
+                let verbs = rule["verbs"].as_sequence()?;
+                verbs
+                    .iter()
+                    .any(|verb| verb == "delete" || verb == "patch")
+                    .then(|| (rule["resources"].clone(), rule["verbs"].clone()))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            writes.len(),
+            4,
+            "two access-request rules plus restart and scale"
+        );
+        assert!(writes
+            .iter()
+            .any(|(resources, verbs)| { resources[0] == "pods" && verbs[0] == "delete" }));
+        assert!(writes.iter().any(|(resources, verbs)| {
+            resources.as_sequence().is_some_and(|items| {
+                items.iter().all(|item| {
+                    item.as_str()
+                        .is_some_and(|resource| resource.ends_with("/scale"))
+                })
+            }) && verbs[0] == "patch"
+        }));
+    }
+
+    #[test]
     fn access_request_crd_is_white_labeled_from_the_brand_domain() {
-        // A vendor whose branded domain is acme.dev gets AcmeAccessRequest, not
+        // A vendor branded acme.dev gets AcmeAccessRequest, not
         // AlienAccessRequest — the CRD, RBAC, and (elsewhere) the operator
-        // runtime all derive from the same domain.
+        // runtime all derive from the same brand slug. The brand's DNS shape
+        // is never required — it's slugified into the CRD group, never
+        // resolved.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
@@ -4316,7 +4378,7 @@ mod tests {
             label_domain: Some("acme.dev"),
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
         .expect("branded operator manifest should render");
@@ -4328,11 +4390,11 @@ mod tests {
             .expect("manifest should include the access-request CRD");
         assert_eq!(
             yaml_path(&crd, &["metadata", "name"]).and_then(YamlValue::as_str),
-            Some("acmeaccessrequests.accessrequests.acme.dev")
+            Some("acmeaccessrequests.accessrequests.acme")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "group"]).and_then(YamlValue::as_str),
-            Some("accessrequests.acme.dev")
+            Some("accessrequests.acme")
         );
         assert_eq!(
             yaml_path(&crd, &["spec", "names", "kind"]).and_then(YamlValue::as_str),
@@ -4349,7 +4411,7 @@ mod tests {
             "no alien-named resource in a branded build"
         );
         assert!(
-            !text.contains("accessrequests.alien.dev"),
+            !text.contains("accessrequests.alien"),
             "no alien group in a branded build"
         );
 
@@ -4363,10 +4425,7 @@ mod tests {
             .any(|r| {
                 r.get("apiGroups")
                     .and_then(YamlValue::as_sequence)
-                    .map(|g| {
-                        g.iter()
-                            .any(|x| x.as_str() == Some("accessrequests.acme.dev"))
-                    })
+                    .map(|g| g.iter().any(|x| x.as_str() == Some("accessrequests.acme")))
                     .unwrap_or(false)
             });
         assert!(
@@ -4532,7 +4591,7 @@ mod tests {
 
         assert_eq!(
             operator_env_value(&deployment, "STACK_SETTINGS"),
-            Some(r#"{"logs":{"parseApplicationLevels":true}}"#)
+            Some(r#"{"updates":"approval-required"}"#)
         );
         assert!(docs_by_kind(&docs, "DaemonSet").is_empty());
     }
@@ -4569,7 +4628,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("app.kubernetes.io/part-of=my-saas"),
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         })
         .expect("operator manifest should render");
@@ -4627,37 +4686,21 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::HelmTemplate,
         })
         .expect("helm template should render");
 
-        let docs = parse_manifest_docs(&manifest);
-        for doc in &docs {
-            // The CRD is cluster-scoped — no namespace on any output format.
-            if yaml_str(doc, "kind") == Some("CustomResourceDefinition") {
-                assert!(yaml_path(doc, &["metadata", "namespace"]).is_none());
-                continue;
-            }
-            assert_eq!(
-                yaml_path(doc, &["metadata", "namespace"]).and_then(YamlValue::as_str),
-                Some("{{ .Release.Namespace }}"),
-                "helm documents install into the release namespace"
-            );
-        }
-        let deployment = docs_by_kind(&docs, "Deployment")
-            .into_iter()
-            .next()
-            .unwrap();
-        assert_eq!(
-            operator_env_value(&deployment, "OPERATOR_NAME"),
-            Some("{{ .Release.Name }}"),
-            "each install registers under its own environment name"
+        assert!(manifest.contains("namespace: '{{ .Release.Namespace }}'"));
+        assert!(manifest.contains("value: '{{ .Release.Name }}'"));
+        assert!(manifest.contains("name: 'my-saas-operator'"));
+        assert!(
+            manifest.contains("{{- with .Values.remoteOperator.serviceAccountAnnotations }}"),
+            "Helm installs must be able to attach AWS, GCP, or Azure workload identity"
         );
-        // Object names still come from the project, not from any environment.
-        assert_eq!(
-            yaml_path(&deployment, &["metadata", "name"]).and_then(YamlValue::as_str),
-            Some("my-saas-operator")
+        assert!(
+            manifest.contains("{{- with .Values.remoteOperator.podLabels }}"),
+            "AKS workload identity requires a pod label in addition to the ServiceAccount"
         );
     }
 
@@ -4676,7 +4719,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
         assert!(
@@ -4697,7 +4740,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Namespace,
             label_selector: None,
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
         assert!(missing_env.is_err(), "raw output needs an environment name");
@@ -4716,7 +4759,7 @@ mod tests {
             label_domain: None,
             scope: OperatorScope::Cluster,
             label_selector: Some("   "),
-            permission: OperatorPermission::Observe,
+            permission: OperatorPermission::Diagnostics,
             format: OperatorOutputFormat::RawManifest,
         });
         assert!(

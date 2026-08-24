@@ -895,23 +895,26 @@ impl SingleControllerExecutorBuilder {
         let client_config = match self.client_config {
             Some(config) => config,
             None => match platform {
-            Platform::Aws => ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
-            Platform::Gcp => ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
-            Platform::Azure => ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
-            Platform::Test => ClientConfig::Test,
-            // Local controllers (e.g. Local Postgres) carry no cloud client; the no-cloud test
-            // config is enough to exercise their platform-agnostic handlers.
-            Platform::Local => ClientConfig::Test,
-            // Kubernetes has no mock config: every one of its controllers talks to an apiserver,
-            // so a test must supply a real one via `client_config`.
-            Platform::Kubernetes => {
-                return Err(AlienError::new(crate::error::ErrorData::CloudPlatformError {
-                    message: "Platform::Kubernetes needs an explicit client_config — its \
-                              controllers have no mockable surface".to_string(),
-                    resource_id: None,
-                }))
-            }
-            _ => panic!("Unsupported platform for testing: {:?}", platform),
+                Platform::Aws => ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+                Platform::Gcp => ClientConfig::Gcp(Box::new(GcpClientConfig::mock())),
+                Platform::Azure => ClientConfig::Azure(Box::new(AzureClientConfig::mock())),
+                Platform::Test => ClientConfig::Test,
+                // Local controllers (e.g. Local Postgres) carry no cloud client; the no-cloud test
+                // config is enough to exercise their platform-agnostic handlers.
+                Platform::Local => ClientConfig::Test,
+                // Kubernetes has no mock config: every one of its controllers talks to an apiserver,
+                // so a test must supply a real one via `client_config`.
+                Platform::Kubernetes => {
+                    return Err(AlienError::new(
+                        crate::error::ErrorData::CloudPlatformError {
+                            message: "Platform::Kubernetes needs an explicit client_config — its \
+                              controllers have no mockable surface"
+                                .to_string(),
+                            resource_id: None,
+                        },
+                    ))
+                }
+                _ => panic!("Unsupported platform for testing: {:?}", platform),
             },
         };
 

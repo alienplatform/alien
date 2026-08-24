@@ -4,6 +4,7 @@
 
 import { deploymentGroupsCreateDeploymentGroup } from "../funcs/deploymentGroupsCreateDeploymentGroup.js";
 import { deploymentGroupsCreateDeploymentGroupToken } from "../funcs/deploymentGroupsCreateDeploymentGroupToken.js";
+import { deploymentGroupsCreateExternalAIModelCheck } from "../funcs/deploymentGroupsCreateExternalAIModelCheck.js";
 import { deploymentGroupsCreateFirstPartyDeploymentSession } from "../funcs/deploymentGroupsCreateFirstPartyDeploymentSession.js";
 import { deploymentGroupsDeleteDeploymentGroup } from "../funcs/deploymentGroupsDeleteDeploymentGroup.js";
 import { deploymentGroupsDeleteExternalAIBinding } from "../funcs/deploymentGroupsDeleteExternalAIBinding.js";
@@ -12,6 +13,7 @@ import { deploymentGroupsEnsureDeploymentGroupByName } from "../funcs/deployment
 import { deploymentGroupsGetDeploymentGroup } from "../funcs/deploymentGroupsGetDeploymentGroup.js";
 import { deploymentGroupsGetDeploymentGroupByExternalId } from "../funcs/deploymentGroupsGetDeploymentGroupByExternalId.js";
 import { deploymentGroupsGetExternalAIBinding } from "../funcs/deploymentGroupsGetExternalAIBinding.js";
+import { deploymentGroupsGetExternalAIModelCheck } from "../funcs/deploymentGroupsGetExternalAIModelCheck.js";
 import { deploymentGroupsListDeploymentGroups } from "../funcs/deploymentGroupsListDeploymentGroups.js";
 import { deploymentGroupsPutExternalAIBinding } from "../funcs/deploymentGroupsPutExternalAIBinding.js";
 import { deploymentGroupsSetDeploymentGroupExternalId } from "../funcs/deploymentGroupsSetDeploymentGroupExternalId.js";
@@ -23,20 +25,6 @@ import { unwrapAsync } from "../types/fp.js";
 
 export class DeploymentGroups extends ClientSDK {
   /**
-   * Create a new deployment group
-   */
-  async createDeploymentGroup(
-    request?: operations.CreateDeploymentGroupRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentGroup> {
-    return unwrapAsync(deploymentGroupsCreateDeploymentGroup(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * List deployment groups
    */
   async listDeploymentGroups(
@@ -44,6 +32,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.ListDeploymentGroupsResponse> {
     return unwrapAsync(deploymentGroupsListDeploymentGroups(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create a new deployment group
+   */
+  async createDeploymentGroup(
+    request?: operations.CreateDeploymentGroupRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsCreateDeploymentGroup(
       this,
       request,
       options,
@@ -65,20 +67,6 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Get or create a deployment group by project and external ID
-   */
-  async ensureDeploymentGroupByExternalId(
-    request: operations.EnsureDeploymentGroupByExternalIdRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentGroup> {
-    return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByExternalId(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Get a deployment group by project and external ID
    */
   async getDeploymentGroupByExternalId(
@@ -86,6 +74,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DeploymentGroup> {
     return unwrapAsync(deploymentGroupsGetDeploymentGroupByExternalId(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get or create a deployment group by project and external ID
+   */
+  async ensureDeploymentGroupByExternalId(
+    request: operations.EnsureDeploymentGroupByExternalIdRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsEnsureDeploymentGroupByExternalId(
       this,
       request,
       options,
@@ -107,20 +109,6 @@ export class DeploymentGroups extends ClientSDK {
   }
 
   /**
-   * Update deployment group
-   */
-  async updateDeploymentGroup(
-    request: operations.UpdateDeploymentGroupRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentGroup> {
-    return unwrapAsync(deploymentGroupsUpdateDeploymentGroup(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Delete deployment group
    */
   async deleteDeploymentGroup(
@@ -128,6 +116,20 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(deploymentGroupsDeleteDeploymentGroup(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update deployment group
+   */
+  async updateDeploymentGroup(
+    request: operations.UpdateDeploymentGroupRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentGroup> {
+    return unwrapAsync(deploymentGroupsUpdateDeploymentGroup(
       this,
       request,
       options,
@@ -218,6 +220,34 @@ export class DeploymentGroups extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(deploymentGroupsDeleteExternalAIBinding(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Queue an explicit external model access check
+   */
+  async createExternalAIModelCheck(
+    request: operations.CreateExternalAIModelCheckRequest,
+    options?: RequestOptions,
+  ): Promise<models.ExternalAIModelCheck> {
+    return unwrapAsync(deploymentGroupsCreateExternalAIModelCheck(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get an external model access check
+   */
+  async getExternalAIModelCheck(
+    request: operations.GetExternalAIModelCheckRequest,
+    options?: RequestOptions,
+  ): Promise<models.ExternalAIModelCheck> {
+    return unwrapAsync(deploymentGroupsGetExternalAIModelCheck(
       this,
       request,
       options,

@@ -4,9 +4,9 @@
 //! a command **always** ends — by exit, by deadline, or by cancellation — and output is framed
 //! with one sequence across both streams so a caller can reconstruct production order.
 
-use std::collections::BTreeMap;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine as _;
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use alien_core::sandbox_process;
@@ -112,7 +112,9 @@ impl ExecRequest {
                 return Err(invalid("an environment entry contains a NUL byte"));
             }
             if key.is_empty() || key.contains('=') {
-                return Err(invalid("an environment name must be non-empty and contain no '='"));
+                return Err(invalid(
+                    "an environment name must be non-empty and contain no '='",
+                ));
             }
         }
 
@@ -348,7 +350,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_command_produces_output_then_exactly_one_terminal_frame() {
-        let frames = run(&request(&["/bin/echo", "hello"], 10_000), None, same_identity(), 1 << 20).await;
+        let frames = run(
+            &request(&["/bin/echo", "hello"], 10_000),
+            None,
+            same_identity(),
+            1 << 20,
+        )
+        .await;
 
         assert!(matches!(terminal(&frames), Frame::Exit { code: 0, .. }));
         let terminals = frames
@@ -360,7 +368,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_nonzero_exit_is_reported_as_its_real_code() {
-        let frames = run(&request(&["/bin/sh", "-c", "exit 3"], 10_000), None, same_identity(), 1 << 20).await;
+        let frames = run(
+            &request(&["/bin/sh", "-c", "exit 3"], 10_000),
+            None,
+            same_identity(),
+            1 << 20,
+        )
+        .await;
         assert!(matches!(terminal(&frames), Frame::Exit { code: 3, .. }));
     }
 
@@ -368,7 +382,13 @@ mod tests {
     /// occupying a session forever.
     #[tokio::test]
     async fn a_command_that_overruns_is_killed_and_reported() {
-        let frames = run(&request(&["/bin/sleep", "30"], 300), None, same_identity(), 1 << 20).await;
+        let frames = run(
+            &request(&["/bin/sleep", "30"], 300),
+            None,
+            same_identity(),
+            1 << 20,
+        )
+        .await;
 
         match terminal(&frames) {
             Frame::Error { code, .. } => assert_eq!(code, "deadlineExceeded"),
@@ -378,7 +398,13 @@ mod tests {
 
     #[tokio::test]
     async fn a_request_without_a_deadline_is_refused_before_spawning() {
-        let frames = run(&request(&["/bin/echo", "hi"], 0), None, same_identity(), 1 << 20).await;
+        let frames = run(
+            &request(&["/bin/echo", "hi"], 0),
+            None,
+            same_identity(),
+            1 << 20,
+        )
+        .await;
 
         match terminal(&frames) {
             Frame::Error { code, .. } => assert_eq!(code, "requestInvalid"),
@@ -397,7 +423,13 @@ mod tests {
     /// would corrupt binary output and hand a parse failure to hostile input.
     #[tokio::test]
     async fn output_is_base64_so_arbitrary_bytes_survive() {
-        let frames = run(&request(&["/bin/echo", "hello"], 10_000), None, same_identity(), 1 << 20).await;
+        let frames = run(
+            &request(&["/bin/echo", "hello"], 10_000),
+            None,
+            same_identity(),
+            1 << 20,
+        )
+        .await;
 
         let Frame::Stdout { data, .. } = &frames[0] else {
             panic!("expected stdout first, got {:?}", frames[0]);
@@ -412,7 +444,14 @@ mod tests {
     #[tokio::test]
     async fn excess_output_is_truncated_and_flagged_rather_than_silently_cut() {
         let frames = run(
-            &request(&["/bin/sh", "-c", "for i in $(seq 1 200); do echo aaaaaaaaaaaaaaaa; done"], 20_000),
+            &request(
+                &[
+                    "/bin/sh",
+                    "-c",
+                    "for i in $(seq 1 200); do echo aaaaaaaaaaaaaaaa; done",
+                ],
+                20_000,
+            ),
             None,
             same_identity(),
             64,
@@ -429,7 +468,10 @@ mod tests {
     #[tokio::test]
     async fn a_continuously_writing_command_blocks_instead_of_buffering() {
         let (sender, receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
-        let request = request(&["/bin/sh", "-c", "while true; do echo aaaaaaaa; done"], 30_000);
+        let request = request(
+            &["/bin/sh", "-c", "while true; do echo aaaaaaaa; done"],
+            30_000,
+        );
 
         let producer = tokio::spawn(async move {
             stream(&request, None, same_identity(), 1 << 30, sender).await;
@@ -512,7 +554,13 @@ mod tests {
     #[tokio::test]
     async fn a_command_runs_as_the_configured_uid() {
         let identity = same_identity();
-        let frames = run(&request(&["/usr/bin/id", "-u"], 10_000), None, identity, 1 << 20).await;
+        let frames = run(
+            &request(&["/usr/bin/id", "-u"], 10_000),
+            None,
+            identity,
+            1 << 20,
+        )
+        .await;
 
         assert_eq!(
             reported_uid(&frames),
@@ -524,7 +572,6 @@ mod tests {
     /// Reads the uid a `/usr/bin/id -u` run reported on its first stdout frame.
     #[cfg(unix)]
     fn reported_uid(frames: &[Frame]) -> u32 {
-
         let Frame::Stdout { data, .. } = &frames[0] else {
             panic!("expected stdout, got {:?}", frames[0]);
         };
@@ -541,8 +588,17 @@ mod tests {
     #[cfg(unix)]
     #[tokio::test]
     async fn a_command_is_refused_when_the_uid_cannot_be_dropped() {
-        let nobody = ExecIdentity { uid: 65534, gid: 65534 };
-        let frames = run(&request(&["/usr/bin/id", "-u"], 10_000), None, nobody, 1 << 20).await;
+        let nobody = ExecIdentity {
+            uid: 65534,
+            gid: 65534,
+        };
+        let frames = run(
+            &request(&["/usr/bin/id", "-u"], 10_000),
+            None,
+            nobody,
+            1 << 20,
+        )
+        .await;
 
         // Root can drop, so the refusal cannot be provoked there. Assert the other half of the
         // same invariant instead — the command never runs as the agent — so this asserts under

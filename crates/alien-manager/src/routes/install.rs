@@ -7,9 +7,9 @@
 //! (defaults to `latest`).
 
 use axum::{
-    Router,
     extract::{Query, State},
     response::{IntoResponse, Response},
+    Router,
 };
 use http::header;
 use serde::Deserialize;

@@ -63,6 +63,18 @@ export type SetupItemStatusAllowedProvider = ClosedEnum<
   typeof SetupItemStatusAllowedProvider
 >;
 
+export const SetupItemStatusProviderAllowlist = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type SetupItemStatusProviderAllowlist = ClosedEnum<
+  typeof SetupItemStatusProviderAllowlist
+>;
+
 export const SetupItemStatusClientApi = {
   OpenaiChat: "openai-chat",
   OpenaiResponses: "openai-responses",
@@ -80,6 +92,7 @@ export type SetupItemStatusModelRequirement = {
 
 export type SetupItemStatusConfiguration = {
   allowedProviders?: Array<SetupItemStatusAllowedProvider> | undefined;
+  providerAllowlist?: Array<SetupItemStatusProviderAllowlist> | undefined;
   modelRequirements?: Array<SetupItemStatusModelRequirement> | undefined;
 };
 
@@ -187,6 +200,11 @@ export const SetupItemStatusAllowedProvider$inboundSchema: z.ZodEnum<
 > = z.enum(SetupItemStatusAllowedProvider);
 
 /** @internal */
+export const SetupItemStatusProviderAllowlist$inboundSchema: z.ZodEnum<
+  typeof SetupItemStatusProviderAllowlist
+> = z.enum(SetupItemStatusProviderAllowlist);
+
+/** @internal */
 export const SetupItemStatusClientApi$inboundSchema: z.ZodEnum<
   typeof SetupItemStatusClientApi
 > = z.enum(SetupItemStatusClientApi);
@@ -217,6 +235,8 @@ export const SetupItemStatusConfiguration$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   allowedProviders: z.array(SetupItemStatusAllowedProvider$inboundSchema)
+    .optional(),
+  providerAllowlist: z.array(SetupItemStatusProviderAllowlist$inboundSchema)
     .optional(),
   modelRequirements: z.array(
     z.lazy(() => SetupItemStatusModelRequirement$inboundSchema),

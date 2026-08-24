@@ -14,9 +14,9 @@ mod key;
 mod kv;
 mod postgres;
 mod queue;
-mod sandbox;
 #[cfg(feature = "platform-sdk")]
 mod remote_storage;
+mod sandbox;
 mod storage;
 mod vault;
 
@@ -32,9 +32,9 @@ pub use key::KeyHandle;
 pub use kv::KvHandle;
 pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
-pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxSessionJs};
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
+pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxSessionJs};
 pub use storage::StorageHandle;
 pub use vault::VaultHandle;
 

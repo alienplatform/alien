@@ -204,8 +204,12 @@ mod tests {
         use std::io::{Error, ErrorKind};
 
         assert!(bind_says_local(Ok(())));
-        assert!(!bind_says_local(Err(Error::from(ErrorKind::AddrNotAvailable))));
-        assert!(bind_says_local(Err(Error::from(ErrorKind::PermissionDenied))));
+        assert!(!bind_says_local(Err(Error::from(
+            ErrorKind::AddrNotAvailable
+        ))));
+        assert!(bind_says_local(Err(Error::from(
+            ErrorKind::PermissionDenied
+        ))));
         assert!(bind_says_local(Err(Error::from(ErrorKind::Unsupported))));
     }
 
@@ -222,9 +226,18 @@ mod tests {
         assert!(decide(false, Some(60000), 60000));
 
         // In the guest: it has to be something other than the code the agent runs.
-        assert!(decide(true, Some(0), 60000), "another user in the guest is a caller");
-        assert!(!decide(true, Some(60000), 60000), "the supervised code is not a caller");
-        assert!(!decide(true, None, 60000), "an in-guest socket we cannot attribute is refused");
+        assert!(
+            decide(true, Some(0), 60000),
+            "another user in the guest is a caller"
+        );
+        assert!(
+            !decide(true, Some(60000), 60000),
+            "the supervised code is not a caller"
+        );
+        assert!(
+            !decide(true, None, 60000),
+            "an in-guest socket we cannot attribute is refused"
+        );
     }
 
     #[test]
@@ -265,6 +278,9 @@ mod tests {
     /// sandbox uid for a caller arriving on another interface, and refuse it.
     #[test]
     fn a_matching_port_on_another_address_is_not_attributed() {
-        assert_eq!(find_owner(TABLE, SocketAddr::from(([10, 0, 0, 5], 0x9224))), None);
+        assert_eq!(
+            find_owner(TABLE, SocketAddr::from(([10, 0, 0, 5], 0x9224))),
+            None
+        );
     }
 }

@@ -4,10 +4,18 @@ use crate::output::print_json;
 use crate::ui::{command, dim_label, make_table, print_table, success_line};
 use alien_error::{Context, IntoAlienError};
 use alien_platform_api::types::{
-    CreateProjectBody, CreateProjectBodyName, CreateProjectWorkspace, ListProjectsWorkspace,
+    ConfigureModelsRequest, ConfigureModelsRequestAllowedProvidersItem,
+    ConfigureModelsRequestRequirementsItem, ConfigureModelsRequestRequirementsItemClientApisItem,
+    ConfigureModelsRequestRequirementsItemPublicModelId, ConfigureProjectBucketsBody,
+    ConfigureProjectBucketsBodyAccess, ConfigureProjectDeploymentsBody,
+    ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
+    ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
+    ConfigureProjectRegistryBodyRepositoriesItem, CreateProjectBody, CreateProjectBodyName,
+    CreateProjectWorkspace, ListProjectsWorkspace,
 };
 use alien_platform_api::SdkResultExt;
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+use std::collections::BTreeSet;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -15,10 +23,14 @@ use clap::{Parser, Subcommand};
     long_about = "Manage projects in the Alien platform.",
     after_help = "EXAMPLES:
     alien projects create my-project
-    alien projects create my-project --json
-    alien projects ls
+    alien projects get my-project
+    alien projects describe my-project --json
+    alien projects list
     alien projects ls --json
-    alien --workspace my-workspace projects ls"
+    alien --workspace my-workspace projects ls
+    alien projects capabilities status
+    alien projects capabilities enable ai --model byo/claude-opus-5
+    alien projects capabilities enable encryption"
 )]
 pub struct ProjectArgs {
     /// Emit structured JSON output
@@ -37,8 +49,69 @@ pub enum ProjectCmd {
         name: String,
     },
     /// List projects
-    #[command(alias = "list")]
+    #[command(visible_alias = "list")]
     Ls,
+    /// Show project configuration and enabled capabilities
+    #[command(visible_aliases = ["describe", "show"])]
+    Get {
+        /// Project ID or name (defaults to the linked project)
+        project: Option<String>,
+    },
+    /// Inspect and enable project capabilities
+    Capabilities {
+        #[command(subcommand)]
+        command: CapabilityCommand,
+    },
+}
+
+#[derive(Subcommand, Debug, Clone)]
+pub enum CapabilityCommand {
+    /// Show configured capabilities and customer readiness
+    #[command(visible_aliases = ["get", "describe", "show"])]
+    Status,
+    /// Enable or replace one capability's configuration
+    Enable {
+        #[arg(value_enum)]
+        capability: CapabilityName,
+        /// AI model to offer. Repeat for multiple models.
+        #[arg(long = "model")]
+        models: Vec<String>,
+        /// AI model that every customer must connect. Also enables the model.
+        #[arg(long = "required-model")]
+        required_models: Vec<String>,
+        /// Allowed AI provider. Repeat for multiple providers.
+        #[arg(long = "provider", value_enum)]
+        providers: Vec<AiProvider>,
+        /// Registry repository allowlist entry. Repeat for multiple repositories.
+        #[arg(long = "repository")]
+        repositories: Vec<String>,
+        /// Permit registry pushes in addition to pulls.
+        #[arg(long)]
+        push: bool,
+    },
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CapabilityName {
+    #[value(alias = "application")]
+    Deployments,
+    #[value(alias = "models")]
+    Ai,
+    #[value(alias = "keys")]
+    Encryption,
+    #[value(alias = "storage")]
+    Buckets,
+    Registry,
+}
+
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProvider {
+    AwsBedrock,
+    GcpVertex,
+    AzureFoundry,
+    Anthropic,
+    Databricks,
+    Openai,
 }
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
@@ -52,7 +125,373 @@ pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
             create_project_task(&http, workspace_name.as_deref(), &name, args.json).await?
         }
         ProjectCmd::Ls => list_projects_task(&http, workspace_name.as_deref(), args.json).await?,
+        ProjectCmd::Get { project } => {
+            let (project_id, _) = ctx.resolve_project(project.as_deref(), !args.json).await?;
+            get_project_task(&http, workspace_name.as_deref(), &project_id, args.json).await?
+        }
+        ProjectCmd::Capabilities { command } => {
+            let (project_id, _) = ctx.resolve_project(None, !args.json).await?;
+            capabilities_task(
+                &http,
+                workspace_name.as_deref(),
+                &project_id,
+                command,
+                args.json,
+            )
+            .await?
+        }
     }
+
+    Ok(())
+}
+
+async fn capabilities_task(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    action: CapabilityCommand,
+    json: bool,
+) -> Result<()> {
+    match action {
+        CapabilityCommand::Status => {
+            let mut request = http
+                .sdk_client()
+                .get_project_capability_overview()
+                .id_or_name(project);
+            if let Some(workspace) = workspace {
+                request = request.workspace(workspace);
+            }
+            let overview = request
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to get project capability status".to_string(),
+                    url: None,
+                })?
+                .into_inner();
+            if json {
+                print_json(&overview)?;
+            } else {
+                let value = serde_json::to_value(&overview).into_alien_error().context(
+                    ErrorData::ConfigurationError {
+                        message: "Failed to render project capability status".to_string(),
+                    },
+                )?;
+                println!("{} {project}", dim_label("Project"));
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&value)
+                        .into_alien_error()
+                        .context(ErrorData::ConfigurationError {
+                            message: "Failed to render project capability status".to_string(),
+                        })?
+                );
+            }
+        }
+        CapabilityCommand::Enable {
+            capability,
+            models,
+            required_models,
+            providers,
+            repositories,
+            push,
+        } => {
+            validate_capability_options(
+                capability,
+                &models,
+                &required_models,
+                &providers,
+                &repositories,
+                push,
+            )?;
+            let client = http.sdk_client();
+            let result = match capability {
+                CapabilityName::Deployments => {
+                    let mut request = client
+                        .configure_project_deployments()
+                        .id_or_name(project)
+                        .body(&ConfigureProjectDeploymentsBody {
+                            enabled: true,
+                            methods: vec![ConfigureProjectDeploymentsBodyMethodsItem::Framework],
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable deployments".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
+                CapabilityName::Encryption => {
+                    let mut request = client
+                        .configure_project_keys()
+                        .id_or_name(project)
+                        .body(&ConfigureProjectKeysBody {
+                            application_encryption: true,
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable Encryption Gateway".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
+                CapabilityName::Buckets => {
+                    let mut request = client
+                        .configure_project_buckets()
+                        .id_or_name(project)
+                        .body(&ConfigureProjectBucketsBody {
+                            access: ConfigureProjectBucketsBodyAccess::ReadWrite,
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable buckets".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
+                CapabilityName::Ai => {
+                    let required = required_models.iter().cloned().collect::<BTreeSet<_>>();
+                    let all_models = models
+                        .into_iter()
+                        .chain(required_models)
+                        .collect::<BTreeSet<_>>();
+                    let requirements = all_models
+                        .into_iter()
+                        .map(|model| {
+                            Ok(ConfigureModelsRequestRequirementsItem {
+                                client_apis: vec![
+                                    ConfigureModelsRequestRequirementsItemClientApisItem::OpenaiChat,
+                                    ConfigureModelsRequestRequirementsItemClientApisItem::OpenaiResponses,
+                                    ConfigureModelsRequestRequirementsItemClientApisItem::AnthropicMessages,
+                                ],
+                                public_model_id: ConfigureModelsRequestRequirementsItemPublicModelId::try_from(model.clone())
+                                    .into_alien_error()
+                                    .context(ErrorData::ValidationError {
+                                        field: "model".to_string(),
+                                        message: format!("Invalid model ID {model}"),
+                                    })?,
+                                required: required.contains(&model),
+                            })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let allowed_providers = providers
+                        .into_iter()
+                        .map(AiProvider::into_sdk)
+                        .collect();
+                    let mut request = client
+                        .configure_project_models()
+                        .id_or_name(project)
+                        .body(&ConfigureModelsRequest {
+                            allowed_providers,
+                            requirements,
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable AI Gateway".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
+                CapabilityName::Registry => {
+                    let repositories = repositories
+                        .into_iter()
+                        .map(|repository| {
+                            ConfigureProjectRegistryBodyRepositoriesItem::try_from(repository)
+                                .into_alien_error()
+                                .context(ErrorData::ValidationError {
+                                    field: "repository".to_string(),
+                                    message: "Invalid repository allowlist entry".to_string(),
+                                })
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let mut request = client
+                        .configure_project_registry()
+                        .id_or_name(project)
+                        .body(&ConfigureProjectRegistryBody {
+                            credential_policy: if push {
+                                ConfigureProjectRegistryBodyCredentialPolicy::PushAndPull
+                            } else {
+                                ConfigureProjectRegistryBodyCredentialPolicy::PullOnly
+                            },
+                            repositories,
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable container registry".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
+            }
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize capability response".to_string(),
+            })?;
+
+            if json {
+                print_json(&result)?;
+            } else {
+                println!("{}", success_line("Project capability configured."));
+                println!(
+                    "{} {}",
+                    dim_label("Next"),
+                    command("alien projects capabilities status")
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+impl AiProvider {
+    fn into_sdk(self) -> ConfigureModelsRequestAllowedProvidersItem {
+        match self {
+            Self::AwsBedrock => ConfigureModelsRequestAllowedProvidersItem::AwsBedrock,
+            Self::GcpVertex => ConfigureModelsRequestAllowedProvidersItem::GcpVertex,
+            Self::AzureFoundry => ConfigureModelsRequestAllowedProvidersItem::AzureFoundry,
+            Self::Anthropic => ConfigureModelsRequestAllowedProvidersItem::Anthropic,
+            Self::Databricks => ConfigureModelsRequestAllowedProvidersItem::Databricks,
+            Self::Openai => ConfigureModelsRequestAllowedProvidersItem::Openai,
+        }
+    }
+}
+
+fn validate_capability_options(
+    capability: CapabilityName,
+    models: &[String],
+    required_models: &[String],
+    providers: &[AiProvider],
+    repositories: &[String],
+    push: bool,
+) -> Result<()> {
+    if capability == CapabilityName::Ai && models.is_empty() && required_models.is_empty() {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "model".to_string(),
+            message: "AI Gateway requires at least one --model or --required-model.".to_string(),
+        }));
+    }
+    if capability == CapabilityName::Registry && repositories.is_empty() {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "repository".to_string(),
+            message: "Container Registry requires at least one --repository allowlist entry."
+                .to_string(),
+        }));
+    }
+    if capability != CapabilityName::Ai
+        && (!models.is_empty() || !required_models.is_empty() || !providers.is_empty())
+    {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "capability".to_string(),
+            message: "--model, --required-model, and --provider are only valid for AI Gateway."
+                .to_string(),
+        }));
+    }
+    if capability != CapabilityName::Registry && (!repositories.is_empty() || push) {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "capability".to_string(),
+            message: "--repository and --push are only valid for Container Registry.".to_string(),
+        }));
+    }
+    Ok(())
+}
+
+async fn get_project_task(
+    http: &crate::auth::AuthHttp,
+    workspace: Option<&str>,
+    project: &str,
+    json: bool,
+) -> Result<()> {
+    let mut request = http.sdk_client().get_project().id_or_name(project);
+    if let Some(workspace) = workspace {
+        request = request.workspace(workspace);
+    }
+    let project = request
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("Failed to get project {project}"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        print_json(&project)?;
+        return Ok(());
+    }
+
+    println!("{} {}", dim_label("Project"), project.name.as_str());
+    println!("{} {}", dim_label("ID"), project.id.as_str());
+    println!(
+        "{} {}",
+        dim_label("Workspace"),
+        project.workspace_id.as_str()
+    );
+    println!(
+        "{} {}",
+        dim_label("Created"),
+        project.created_at.to_rfc3339()
+    );
+    println!();
+    println!("{}", dim_label("Capabilities"));
+    match project.project_capabilities {
+        Some(capabilities) => {
+            let value = serde_json::to_value(capabilities)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to render project capabilities".to_string(),
+                })?;
+            let enabled = value
+                .get("capabilities")
+                .and_then(serde_json::Value::as_object)
+                .map(|items| {
+                    let mut names = items.keys().cloned().collect::<Vec<_>>();
+                    names.sort();
+                    names
+                })
+                .unwrap_or_default();
+            if enabled.is_empty() {
+                println!("  {}", dim_label("None enabled"));
+            } else {
+                for capability in enabled {
+                    println!("  {capability}");
+                }
+            }
+        }
+        None => println!("  {}", dim_label("None enabled")),
+    }
+    println!();
+    println!(
+        "{} {}",
+        dim_label("Next"),
+        command("alien onboard <customer-name>")
+    );
 
     Ok(())
 }
@@ -174,6 +613,46 @@ mod tests {
         assert!(matches!(
             args.cmd,
             ProjectCmd::Create { name } if name == "example-project"
+        ));
+    }
+
+    #[test]
+    fn get_accepts_agent_friendly_aliases() {
+        for verb in ["get", "describe", "show"] {
+            let args = ProjectArgs::try_parse_from(["projects", verb, "example-project", "--json"])
+                .expect("project detail alias should parse");
+            assert!(args.json);
+            assert!(matches!(
+                args.cmd,
+                ProjectCmd::Get { project: Some(project) } if project == "example-project"
+            ));
+        }
+    }
+
+    #[test]
+    fn capability_aliases_are_agent_friendly() {
+        let args = ProjectArgs::try_parse_from([
+            "projects",
+            "capabilities",
+            "enable",
+            "models",
+            "--model",
+            "byo/claude-opus-5",
+            "--provider",
+            "anthropic",
+            "--json",
+        ])
+        .expect("AI capability aliases should parse");
+
+        assert!(args.json);
+        assert!(matches!(
+            args.cmd,
+            ProjectCmd::Capabilities {
+                command: CapabilityCommand::Enable {
+                    capability: CapabilityName::Ai,
+                    ..
+                }
+            }
         ));
     }
 }

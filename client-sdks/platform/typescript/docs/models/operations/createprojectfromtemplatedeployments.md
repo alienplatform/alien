@@ -12,6 +12,7 @@ let value: CreateProjectFromTemplateDeployments = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `enabled`          | *boolean*          | :heavy_check_mark: | N/A                |
+| Field                                                                                                      | Type                                                                                                       | Required                                                                                                   | Description                                                                                                |
+| ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `enabled`                                                                                                  | *boolean*                                                                                                  | :heavy_check_mark:                                                                                         | N/A                                                                                                        |
+| `methods`                                                                                                  | [operations.CreateProjectFromTemplateMethod](../../models/operations/createprojectfromtemplatemethod.md)[] | :heavy_minus_sign:                                                                                         | N/A                                                                                                        |

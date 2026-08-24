@@ -30,15 +30,20 @@ use crate::commands::packages::{packages_task, PackagesArgs};
 use crate::commands::platform::{
     link_task, login_task, logout_task, project_task, unlink_task, workspace_task, PlatformCommand,
 };
+#[cfg(feature = "platform")]
+use crate::commands::{
+    api_keys_task, customers_task, examples_task, usage_task, ApiKeysArgs, CustomersArgs,
+    ExamplesArgs, UsageArgs,
+};
 use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
-    prepare_dev_session_deployment, release_command, releases_task, render_task, vault_remote_task,
-    vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs,
-    DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs,
-    ReleaseArgs, ReleasesArgs, RenderArgs, WhoamiArgs,
+    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
+    vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand,
+    CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs,
+    LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -103,6 +108,7 @@ impl Cli {
             Some(Commands::Whoami(args)) => args.json,
             Some(Commands::Debug(args)) => args.wants_json_output(),
             Some(Commands::Deployments(args)) => args.wants_json_output(),
+            Some(Commands::Status(args)) => args.wants_json_output(),
             Some(Commands::Dev(dev)) => match &dev.subcommand {
                 Some(DevSubcommand::Release(args)) => args.json,
                 Some(DevSubcommand::Whoami(args)) => args.json,
@@ -124,6 +130,14 @@ impl Cli {
             Some(Commands::Operations(args)) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::Packages(args)) => args.json,
+            #[cfg(feature = "platform")]
+            Some(Commands::DeploymentGroups(args)) => args.wants_json_output(),
+            #[cfg(feature = "platform")]
+            Some(Commands::ApiKeys(args)) => args.wants_json_output(),
+            #[cfg(feature = "platform")]
+            Some(Commands::Examples(args)) => args.json,
+            #[cfg(feature = "platform")]
+            Some(Commands::Usage(args)) => args.wants_json_output(),
             _ => false,
         }
     }
@@ -144,6 +158,8 @@ pub enum Commands {
     /// Deployment commands
     #[command(alias = "deployment")]
     Deployments(DeploymentsArgs),
+    /// Show deployment status for the linked project or one deployment
+    Status(StatusArgs),
     /// Search deployment and manager logs
     Logs(LogsArgs),
     /// Release commands
@@ -183,6 +199,24 @@ pub enum Commands {
     /// List, inspect, and download project packages
     #[cfg(feature = "platform")]
     Packages(PackagesArgs),
+
+    /// List and inspect project deployment groups
+    #[cfg(feature = "platform")]
+    #[command(name = "deployment-groups", visible_aliases = ["customers", "customer"])]
+    DeploymentGroups(CustomersArgs),
+
+    /// Create, inspect, and revoke API keys
+    #[cfg(feature = "platform")]
+    #[command(name = "api-keys", visible_alias = "apikeys")]
+    ApiKeys(ApiKeysArgs),
+
+    /// Print executable integration examples
+    #[cfg(feature = "platform")]
+    Examples(ExamplesArgs),
+
+    /// Show AI and Encryption Gateway usage
+    #[cfg(feature = "platform")]
+    Usage(UsageArgs),
 }
 
 #[derive(Parser, Debug, Clone)]
@@ -1546,6 +1580,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
             Some(Commands::Deployments(args)) => deployments_task(args, ctx).await?,
+            Some(Commands::Status(args)) => status_task(args, ctx).await?,
             Some(Commands::Logs(args)) => logs_task(args, ctx).await?,
             Some(Commands::Releases(args)) => releases_task(args, ctx).await?,
             Some(Commands::Deploy(args)) => deploy_task(args, ctx).await?,
@@ -1570,6 +1605,14 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Operations(args)) => operations_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::Packages(args)) => packages_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::DeploymentGroups(args)) => customers_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::ApiKeys(args)) => api_keys_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::Examples(args)) => examples_task(args, ctx)?,
+            #[cfg(feature = "platform")]
+            Some(Commands::Usage(args)) => usage_task(args, ctx).await?,
         }
 
         Ok(())

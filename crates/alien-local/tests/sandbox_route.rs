@@ -79,7 +79,12 @@ async fn the_full_session_lifecycle_works_over_the_loopback_route() {
         .send()
         .await
         .expect("create request sends");
-    assert_eq!(created.status(), 200, "{}", created.text().await.unwrap_or_default());
+    assert_eq!(
+        created.status(),
+        200,
+        "{}",
+        created.text().await.unwrap_or_default()
+    );
 
     let listed: Vec<serde_json::Value> = harness
         .authed(harness.client.get(harness.url("/v1/sessions")))
@@ -153,7 +158,11 @@ async fn the_full_session_lifecycle_works_over_the_loopback_route() {
     // Preview is a published loopback port, resolved through the authenticated route rather
     // than guessed. An undeclared port must not resolve at all.
     let raw = harness
-        .authed(harness.client.get(harness.url("/v1/sessions/s1/preview?port=8080")))
+        .authed(
+            harness
+                .client
+                .get(harness.url("/v1/sessions/s1/preview?port=8080")),
+        )
         .send()
         .await
         .expect("preview sends");
@@ -168,7 +177,11 @@ async fn the_full_session_lifecycle_works_over_the_loopback_route() {
     );
 
     let undeclared = harness
-        .authed(harness.client.get(harness.url("/v1/sessions/s1/preview?port=9999")))
+        .authed(
+            harness
+                .client
+                .get(harness.url("/v1/sessions/s1/preview?port=9999")),
+        )
         .send()
         .await
         .expect("preview sends");
@@ -389,6 +402,9 @@ async fn a_create_in_flight_at_removal_is_visible_to_the_reap_that_follows() {
     );
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     let after = manager.list_sessions(SANDBOX_SLOW).await.expect("lists");
-    assert!(after.is_empty(), "a session appeared after the route was removed: {after:?}");
+    assert!(
+        after.is_empty(),
+        "a session appeared after the route was removed: {after:?}"
+    );
     manager.reap(SANDBOX_SLOW).await.expect("cleanup");
 }

@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  StackSettings,
+  StackSettings$Outbound,
+  StackSettings$outboundSchema,
+} from "./stacksettings.js";
 
 /**
  * raw: a kubectl-applyable manifest for one cluster. helm: a paste-into-your-chart template whose namespace and environment name come from Helm at install time.
@@ -37,7 +42,8 @@ export type RenderOperatorManifestRequestScope = ClosedEnum<
  * Operator permission tier
  */
 export const Permission = {
-  Observe: "observe",
+  Diagnostics: "diagnostics",
+  Remediation: "remediation",
 } as const;
 /**
  * Operator permission tier
@@ -92,6 +98,19 @@ export type RenderOperatorManifestRequest = {
    * Enable the node log collector DaemonSet for raw pod logs.
    */
   logCollector?: LogCollector | undefined;
+  /**
+   * User-customizable deployment settings specified at deploy time.
+   *
+   * @remarks
+   *
+   * These settings are provided by the customer via CloudFormation parameters,
+   * Terraform attributes, CLI flags, or Helm values. They customize how the
+   * deployment runs and what capabilities are enabled.
+   *
+   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+   * is platform-derived (from the Manager's ServiceAccount).
+   */
+  stackSettings?: StackSettings | undefined;
 };
 
 /** @internal */
@@ -138,6 +157,7 @@ export type RenderOperatorManifestRequest$Outbound = {
   operatorImagePackageId?: string | undefined;
   deploymentGroupToken: string;
   logCollector?: LogCollector$Outbound | undefined;
+  stackSettings?: StackSettings$Outbound | undefined;
 };
 
 /** @internal */
@@ -151,10 +171,11 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   namespace: z.string().optional(),
   scope: RenderOperatorManifestRequestScope$outboundSchema.default("namespace"),
   labelSelector: z.string().optional(),
-  permission: Permission$outboundSchema.default("observe"),
+  permission: Permission$outboundSchema.default("diagnostics"),
   operatorImagePackageId: z.string().optional(),
   deploymentGroupToken: z.string(),
   logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),
+  stackSettings: StackSettings$outboundSchema.optional(),
 });
 
 export function renderOperatorManifestRequestToJSON(

@@ -41,12 +41,9 @@ pub fn resolve_within_root(root: &Path, requested: &str) -> Result<PathBuf> {
     // Resolve the deepest existing ancestor, because the target itself may not exist yet on a
     // write. Whatever does exist is canonicalised, which is what collapses symlinks.
     let (existing, remainder) = deepest_existing(&joined);
-    let canonical_existing = existing.canonicalize().map_err(|error| {
-        refused(
-            requested,
-            &format!("path could not be resolved: {error}"),
-        )
-    })?;
+    let canonical_existing = existing
+        .canonicalize()
+        .map_err(|error| refused(requested, &format!("path could not be resolved: {error}")))?;
 
     if !canonical_existing.starts_with(root) {
         // The lexical check passed and this still escaped, which means a symlink. This is the
@@ -142,9 +139,17 @@ mod tests {
     fn upward_traversal_is_refused() {
         let (_dir, root) = root();
 
-        for path in ["/work/../../etc/passwd", "../escape", "/work/../..", "a/../../b"] {
+        for path in [
+            "/work/../../etc/passwd",
+            "../escape",
+            "/work/../..",
+            "a/../../b",
+        ] {
             match resolve_within_root(&root, path) {
-                Ok(resolved) => panic!("'{path}' resolved to {} instead of being refused", resolved.display()),
+                Ok(resolved) => panic!(
+                    "'{path}' resolved to {} instead of being refused",
+                    resolved.display()
+                ),
                 Err(error) => assert!(
                     error.to_string().contains("traverses upward"),
                     "'{path}' must be refused for traversal, got: {error}"
@@ -197,7 +202,10 @@ mod tests {
         let (_dir, root) = root();
         let outside = TempDir::new().expect("outside dir");
         let target = outside.path().join("planted.txt");
-        assert!(!target.exists(), "the target must not exist for this to be a dangling link");
+        assert!(
+            !target.exists(),
+            "the target must not exist for this to be a dangling link"
+        );
 
         std::os::unix::fs::symlink(&target, root.join("work/evil")).expect("symlink");
 

@@ -7,11 +7,11 @@ Operator permission tier
 ```typescript
 import { Permission } from "@alienplatform/platform-api/models";
 
-let value: Permission = "observe";
+let value: Permission = "remediation";
 ```
 
 ## Values
 
 ```typescript
-"observe"
+"diagnostics" | "remediation"
 ```

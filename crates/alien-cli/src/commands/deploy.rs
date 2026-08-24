@@ -30,6 +30,7 @@ use clap::Parser;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use tracing::info;
@@ -42,6 +43,9 @@ use uuid::Uuid;
     after_help = "EXAMPLES:
     # Deploy to your own AWS environment
     alien deploy --name production --platform aws --secret-input descopeAccessKey=...
+
+    # Deploy into an existing customer deployment group
+    alien deploy --deployment-group customer-123 --name production --platform aws
 
     # Create a Machines deployment and print a host join command
     alien deploy --name eu-prod --machines
@@ -63,6 +67,11 @@ pub struct DeployArgs {
     /// Deployment name for identification in tracking
     #[arg(long)]
     pub name: Option<String>,
+
+    /// Existing deployment group ID, name, or external ID for a new deployment.
+    /// The group is inferred when --token contains a deployment-group key.
+    #[arg(long, conflicts_with = "token")]
+    pub deployment_group: Option<String>,
 
     /// Target platform for the deployment (aws, gcp, azure, machines)
     #[arg(long, conflicts_with = "machines")]
@@ -463,6 +472,22 @@ fn create_platform_client(api_key: &str, base_url: &str) -> Result<SdkClient> {
 #[serde(rename_all = "camelCase")]
 struct ApiDeploymentGroup {
     id: String,
+    project_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiDeploymentGroupList {
+    items: Vec<ApiDeploymentGroupListItem>,
+    next_cursor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ApiDeploymentGroupListItem {
+    id: String,
+    name: String,
+    external_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -544,14 +569,28 @@ async fn create_self_deployment(
     let workspace = ctx.resolve_platform_workspace_context(true).await?;
     let (project_id, _project_link) = ctx.resolve_project(None, true).await?;
 
-    let deployment_group = ensure_self_deployment_group(
-        &auth.client,
-        &base_url,
-        workspace.query.as_deref(),
-        &resolved_args.name,
-        &project_id,
-    )
-    .await?;
+    let deployment_group = match args.deployment_group.as_deref() {
+        Some(reference) => {
+            resolve_self_deployment_group(
+                &auth.client,
+                &base_url,
+                workspace.query.as_deref(),
+                &project_id,
+                reference,
+            )
+            .await?
+        }
+        None => {
+            ensure_self_deployment_group(
+                &auth.client,
+                &base_url,
+                workspace.query.as_deref(),
+                &resolved_args.name,
+                &project_id,
+            )
+            .await?
+        }
+    };
     let session = create_first_party_deployment_session(
         &auth.client,
         &base_url,
@@ -591,6 +630,93 @@ async fn create_self_deployment(
         .context(ErrorData::ConfigurationError {
             message: "Failed to track newly created deployment".to_string(),
         })
+}
+
+async fn resolve_self_deployment_group(
+    http_client: &reqwest::Client,
+    base_url: &str,
+    workspace: Option<&str>,
+    project_id: &str,
+    reference: &str,
+) -> Result<ApiDeploymentGroup> {
+    if reference.starts_with("dg_") {
+        let path = format!("/v1/deployment-groups/{}", urlencoding::encode(reference));
+        let url = api_url(base_url, &path, workspace)?;
+        let response = http_client
+            .get(url)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to resolve deployment group {reference}"),
+                url: None,
+            })?;
+        let group: ApiDeploymentGroup =
+            parse_api_response(response, "Failed to resolve deployment group").await?;
+        if group.project_id != project_id {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "deployment-group".to_string(),
+                message: format!(
+                    "Deployment group '{reference}' belongs to a different project. Pass a group from the selected project."
+                ),
+            }));
+        }
+        return Ok(group);
+    }
+
+    let mut matches = Vec::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let mut url = api_url(base_url, "/v1/deployment-groups", workspace)?;
+        url.query_pairs_mut()
+            .append_pair("project", project_id)
+            .append_pair(
+                "limit",
+                &NonZeroU64::new(100)
+                    .expect("constant is non-zero")
+                    .to_string(),
+            );
+        if let Some(cursor) = cursor.as_deref() {
+            url.query_pairs_mut().append_pair("cursor", cursor);
+        }
+        let response = http_client
+            .get(url)
+            .send()
+            .await
+            .into_alien_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("Failed to resolve deployment group {reference}"),
+                url: None,
+            })?;
+        let groups: ApiDeploymentGroupList =
+            parse_api_response(response, "Failed to list deployment groups").await?;
+        matches.extend(groups.items.into_iter().filter(|group| {
+            group.name == reference || group.external_id.as_deref() == Some(reference)
+        }));
+        cursor = groups.next_cursor;
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    match matches.as_slice() {
+        [group] => Ok(ApiDeploymentGroup {
+            id: group.id.clone(),
+            project_id: project_id.to_string(),
+        }),
+        [] => Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-group".to_string(),
+            message: format!(
+                "Deployment group '{reference}' was not found in this project. Run `alien onboard <customer-name>` or pass an existing group ID, name, or external ID."
+            ),
+        })),
+        _ => Err(AlienError::new(ErrorData::ValidationError {
+            field: "deployment-group".to_string(),
+            message: format!(
+                "Deployment group reference '{reference}' is ambiguous. Pass the group ID instead."
+            ),
+        })),
+    }
 }
 
 async fn ensure_self_deployment_group(
@@ -1109,8 +1235,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         domains: None,
                         external_bindings: None,
                         kubernetes: None,
-                        logs: None,
                         public_endpoints: None,
+                        logs: None,
                     };
 
                         let create_response = sdk_client
@@ -1792,6 +1918,38 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deployment_group_selector_is_available_without_a_token() {
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--deployment-group",
+            "customer_123",
+            "--name",
+            "production",
+            "--platform",
+            "aws",
+        ])
+        .expect("authenticated deployment-group selection should parse");
+
+        assert_eq!(args.deployment_group.as_deref(), Some("customer_123"));
+    }
+
+    #[test]
+    fn deployment_group_selector_cannot_override_token_scope() {
+        DeployArgs::try_parse_from([
+            "deploy",
+            "--deployment-group",
+            "customer_123",
+            "--token",
+            "ax_test",
+            "--name",
+            "production",
+            "--platform",
+            "aws",
+        ])
+        .expect_err("deployment-group selector and scoped token must conflict");
+    }
 
     #[test]
     fn missing_relative_config_error_shows_resolved_path_rule() {

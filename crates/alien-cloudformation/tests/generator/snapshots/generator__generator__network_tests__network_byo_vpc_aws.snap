@@ -30,7 +30,6 @@ Metadata:
       - UpdatesMode
       - TelemetryMode
       - HeartbeatsMode
-      - ParseApplicationLevels
     ParameterLabels:
       AvailabilityZones:
         default: Availability zones
@@ -42,8 +41,6 @@ Metadata:
         default: Management role ARN
       NetworkMode:
         default: Network
-      ParseApplicationLevels:
-        default: Parse JSON log levels
       PrivateSubnetIds:
         default: Private subnet IDs
       PublicSubnetIds:
@@ -123,18 +120,7 @@ Parameters:
     AllowedValues:
     - "off"
     - "on"
-  ParseApplicationLevels:
-    Type: String
-    Description: Use a recognized top-level JSON level field as log severity while preserving the raw body.
-    Default: 'false'
-    AllowedValues:
-    - 'false'
-    - 'true'
 Conditions:
-  ParseApplicationLevelsEnabled:
-    Fn::Equals:
-    - Ref: ParseApplicationLevels
-    - 'true'
   NetworkModeCreate:
     Fn::Equals:
     - Ref: NetworkMode
@@ -198,12 +184,6 @@ Outputs:
           Ref: TelemetryMode
         heartbeats:
           Ref: HeartbeatsMode
-        logs:
-          parseApplicationLevels:
-            Fn::If:
-            - ParseApplicationLevelsEnabled
-            - true
-            - false
         network:
           Fn::If:
           - NetworkModeCreate

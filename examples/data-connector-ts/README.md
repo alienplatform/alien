@@ -1,6 +1,6 @@
 # Data Connector
 
-Query databases behind the customer's firewall. Connection credentials stay in the customer's vault -- your code uses them at runtime but never exposes them. Only query results leave the customer's network.
+Connect your product to databases and services that are not publicly reachable. Credentials stay in the remote environment's vault; the connector uses them at runtime and returns only the result your application needs.
 
 ## What's included
 
