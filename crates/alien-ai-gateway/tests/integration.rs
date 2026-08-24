@@ -263,13 +263,26 @@ async fn body_past_the_cap_never_reaches_the_upstream() {
 #[tokio::test]
 async fn direct_anthropic_translates_chat_and_injects_only_its_api_key() {
     let upstream = MockServer::start_async().await;
-    let messages = upstream
+    let native_messages = upstream
         .mock_async(|when, then| {
             when.method(POST)
                 .path("/v1/messages")
                 .header("x-api-key", "sk-ant-api03-test-secret")
                 .header("anthropic-version", "2023-06-01")
-                .body_contains("claude-sonnet-4-6");
+                .body_contains("\"max_tokens\":1");
+            then.status(200)
+                .header("content-type", "application/json")
+                .body(r#"{"id":"msg_direct","content":[{"type":"text","text":"pong"}]}"#);
+        })
+        .await;
+    let translated_messages = upstream
+        .mock_async(|when, then| {
+            when.method(POST)
+                .path("/v1/messages")
+                .header("x-api-key", "sk-ant-api03-test-secret")
+                .header("anthropic-version", "2023-06-01")
+                .body_contains("\"max_tokens\":4096")
+                .body_contains("\"text\":\"hi\"");
             then.status(200)
                 .header("content-type", "application/json")
                 .body(r#"{"id":"msg_direct","content":[{"type":"text","text":"pong"}]}"#);
@@ -294,11 +307,13 @@ async fn direct_anthropic_translates_chat_and_injects_only_its_api_key() {
         .expect("direct request");
     assert_eq!(response.status(), 200);
     assert!(response.text().await.unwrap().contains("msg_direct"));
-    messages.assert_async().await;
+    native_messages.assert_async().await;
 
     let translated_protocol = client
         .post(format!("{base}/direct/v1/chat/completions"))
-        .json(&json!({"model": "claude-sonnet-4.6", "messages": []}))
+        .json(
+            &json!({"model": "claude-sonnet-4.6", "messages": [{"role": "user", "content": "hi"}]}),
+        )
         .send()
         .await
         .expect("translated protocol response");
@@ -310,7 +325,7 @@ async fn direct_anthropic_translates_chat_and_injects_only_its_api_key() {
             .unwrap()["object"],
         "chat.completion"
     );
-    assert_eq!(messages.hits_async().await, 2);
+    translated_messages.assert_async().await;
 
     assert!(route_from_direct_anthropic("direct", "sk-ant-admin-test").is_err());
 }
