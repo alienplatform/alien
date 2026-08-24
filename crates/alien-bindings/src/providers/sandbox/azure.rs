@@ -428,13 +428,24 @@ impl Sandbox for AzureSandbox {
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
         Self::checked_session_id("sandbox.suspend", session_id)?;
+        const OPERATION: &str = "sandbox.suspend";
         // Accepted, not completed — the same contract the AWS backend follows. `get` reports
         // `Suspended` from the moment the stop is under way, so it answers "cannot take work",
         // not "has stopped"; only `terminate` confirms a session is actually gone.
-        self.client
-            .stop_sandbox(&self.sandbox_group, session_id)
-            .await
-            .map_err(|error| Self::failed("sandbox.suspend", error))
+        let Err(error) = self.client.stop_sandbox(&self.sandbox_group, session_id).await else {
+            return Ok(());
+        };
+
+        // A lost or transient response leaves the outcome unknown. Read the record: a session
+        // that is gone or already suspended means the stop took effect, so report success rather
+        // than a failure a retry would only see refused. A still-running one means it did not land.
+        match self.read_session(OPERATION, session_id).await? {
+            None => Ok(()),
+            Some(found) => match session_state(OPERATION, found.state.as_deref())? {
+                SandboxSessionState::Suspended => Ok(()),
+                _ => Err(Self::failed(OPERATION, error)),
+            },
+        }
     }
 
     async fn resume(&self, session_id: &str) -> Result<()> {
@@ -2642,6 +2653,41 @@ mod tests {
             .resume("s1")
             .await
             .expect("resume should reach a running session");
+    }
+
+    /// A lost or transient stop response is reconciled against the record, not reported as a
+    /// failure the caller cannot act on: a session that came back suspended means the stop landed.
+    #[tokio::test]
+    async fn suspend_owns_a_lost_stop_when_the_session_comes_back_suspended() {
+        // Stop errors, but the session reads Suspended — the stop took effect, so report success.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_stop_sandbox()
+            .times(1)
+            .returning(|_, _| Err(http_error(503, "gateway timeout")));
+        client.expect_get_sandbox().returning(|_, id| {
+            let mut sandbox = running(id, None);
+            sandbox.state = Some("Stopped".to_string());
+            Ok(sandbox)
+        });
+        sandbox_with(client)
+            .suspend("s1")
+            .await
+            .expect("a stop that landed is success even when its response was lost");
+
+        // Stop errors and the session is still Running — the stop did not land, so surface it.
+        let mut client = MockSandboxDataPlaneApi::new();
+        client
+            .expect_stop_sandbox()
+            .times(1)
+            .returning(|_, _| Err(http_error(503, "gateway timeout")));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(running(id, None)));
+        sandbox_with(client)
+            .suspend("s1")
+            .await
+            .expect_err("a stop that did not land must surface the failure");
     }
 
     /// A declared idle-suspend policy has to reach the create body.
