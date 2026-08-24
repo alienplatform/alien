@@ -896,7 +896,7 @@ fn extract_message(hit: &Value) -> String {
         .and_then(|body| body.get("message"))
         .and_then(Value::as_str)
     {
-        return message.to_string();
+        return tracing_json_message(message).unwrap_or_else(|| message.to_string());
     }
     if let Some(body) = hit.get("body").and_then(Value::as_str) {
         return body.to_string();
@@ -905,6 +905,19 @@ fn extract_message(hit: &Value) -> String {
         return body.to_string();
     }
     hit.to_string()
+}
+
+fn tracing_json_message(input: &str) -> Option<String> {
+    let record = serde_json::from_str::<Value>(input).ok()?;
+    let record = record.as_object()?;
+    record.get("timestamp")?.as_str()?;
+    record.get("level")?.as_str()?;
+    record
+        .get("fields")?
+        .as_object()?
+        .get("message")?
+        .as_str()
+        .map(str::to_string)
 }
 
 fn timestamp_from_nanos(timestamp_nanos: i64) -> Option<DateTime<Utc>> {
@@ -1277,5 +1290,36 @@ mod tests {
             entry.timestamp.unwrap().to_rfc3339(),
             "2023-11-14T22:13:20.123+00:00"
         );
+    }
+
+    #[test]
+    fn extracts_message_from_pre_normalization_tracing_record() {
+        let original = serde_json::json!({
+            "timestamp": "2026-08-24T09:12:53.647763Z",
+            "level": "DEBUG",
+            "fields": {
+                "message": "Processed pending jobs",
+                "job_count": 2
+            },
+            "target": "example_service::worker"
+        })
+        .to_string();
+        let hit = serde_json::json!({ "body": { "message": original } });
+
+        let entry = log_entry_from_hit(hit.clone());
+
+        assert_eq!(entry.message, "Processed pending jobs");
+        assert_eq!(entry.raw, hit);
+    }
+
+    #[test]
+    fn does_not_guess_a_message_from_generic_json() {
+        let original = r#"{"level":"INFO","message":"ready"}"#;
+        let hit = serde_json::json!({ "body": { "message": original } });
+
+        let entry = log_entry_from_hit(hit.clone());
+
+        assert_eq!(entry.message, original);
+        assert_eq!(entry.raw, hit);
     }
 }
