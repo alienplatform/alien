@@ -32,6 +32,14 @@ struct TemplateInfo {
 
 const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
+        "ai-chatbot-ts",
+        "Build a streaming AI chatbot over private Postgres data.",
+    ),
+    (
+        "ai-quickstart-ts",
+        "Call models available in the deployment's cloud from a Worker.",
+    ),
+    (
         "remote-worker-ts",
         "Run a private worker near sensitive data, internal services, or specialized compute.",
     ),
@@ -54,6 +62,26 @@ const KNOWN_TEMPLATES: &[(&str, &str)] = &[
     (
         "basic-worker-rs",
         "Start with one Rust worker and no infrastructure.",
+    ),
+    (
+        "byob-storage-ts",
+        "Use customer-owned object storage from a hosted backend.",
+    ),
+    (
+        "customer-keys-ts",
+        "Encrypt data with a key controlled by each customer.",
+    ),
+    (
+        "customer-models-ts",
+        "Let each customer connect models from their cloud account.",
+    ),
+    (
+        "github-agent",
+        "Build a GitHub integration agent with a hosted dashboard.",
+    ),
+    (
+        "nextjs-app",
+        "Deploy a complete Next.js application as a Container.",
     ),
 ];
 
@@ -608,8 +636,39 @@ pub async fn init_task(args: InitArgs) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{destination_for_init, display_directory};
+    use super::{destination_for_init, display_directory, KNOWN_TEMPLATES};
+    use std::collections::BTreeSet;
     use std::fs;
+    use std::path::PathBuf;
+
+    #[test]
+    fn catalog_contains_every_scaffoldable_example() {
+        let examples_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples");
+        let mut metadata_templates = BTreeSet::new();
+
+        for entry in fs::read_dir(examples_dir).expect("examples directory") {
+            let entry = entry.expect("example entry");
+            let metadata_path = entry.path().join("template.toml");
+            if !metadata_path.is_file() {
+                continue;
+            }
+
+            let metadata = fs::read_to_string(&metadata_path).expect("template metadata");
+            let metadata: toml::Value = toml::from_str(&metadata).expect("valid template metadata");
+            let name = metadata
+                .get("name")
+                .and_then(toml::Value::as_str)
+                .expect("template name");
+            metadata_templates.insert(name.to_string());
+        }
+
+        let catalog_templates = KNOWN_TEMPLATES
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(catalog_templates, metadata_templates);
+    }
 
     #[test]
     fn initializes_into_alien_directory_inside_existing_repository() {
