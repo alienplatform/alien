@@ -12,6 +12,10 @@ use serde_json::{json, Map, Value};
 
 use crate::error::{ErrorData, Result};
 
+// OpenAI leaves its output ceiling optional, while Anthropic requires one.
+// Use a bounded portable default rather than making valid OpenAI requests fail.
+const DEFAULT_MAX_OUTPUT_TOKENS: u64 = 4_096;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum WireProtocol {
     ChatCompletions,
@@ -868,6 +872,9 @@ fn chat_request_to_messages(payload: Value) -> Result<Value> {
     }
     rename(&mut obj, "max_completion_tokens", "max_tokens");
     rename(&mut obj, "max_tokens", "max_tokens");
+    if obj.get("max_tokens").is_none_or(Value::is_null) {
+        obj.insert("max_tokens".to_string(), json!(DEFAULT_MAX_OUTPUT_TOKENS));
+    }
     rename(&mut obj, "stop", "stop_sequences");
     if let Some(user) = obj.remove("user") {
         obj.insert("metadata".to_string(), json!({ "user_id": user }));
@@ -1288,6 +1295,55 @@ mod tests {
             json!({ "role": "user", "content": "hello" })
         );
         assert_eq!(translated["max_completion_tokens"], 42);
+    }
+
+    #[test]
+    fn optional_openai_output_limits_become_required_messages_limits() {
+        for (source, request) in [
+            (
+                WireProtocol::ChatCompletions,
+                json!({ "model": "model", "messages": [{ "role": "user", "content": "hello" }] }),
+            ),
+            (
+                WireProtocol::ChatCompletions,
+                json!({ "model": "model", "max_completion_tokens": null, "messages": [{ "role": "user", "content": "hello" }] }),
+            ),
+            (
+                WireProtocol::Responses,
+                json!({ "model": "model", "input": "hello" }),
+            ),
+            (
+                WireProtocol::Responses,
+                json!({ "model": "model", "max_output_tokens": null, "input": "hello" }),
+            ),
+        ] {
+            let translated = translate_request(request, source, WireProtocol::Messages).unwrap();
+
+            assert_eq!(translated["max_tokens"], DEFAULT_MAX_OUTPUT_TOKENS);
+        }
+    }
+
+    #[test]
+    fn explicit_openai_output_limits_are_preserved_for_messages() {
+        for (source, request) in [
+            (
+                WireProtocol::ChatCompletions,
+                json!({ "model": "model", "max_completion_tokens": 123, "messages": [] }),
+            ),
+            (
+                WireProtocol::Responses,
+                json!({ "model": "model", "max_output_tokens": 456, "input": "hello" }),
+            ),
+        ] {
+            let expected = match source {
+                WireProtocol::ChatCompletions => 123,
+                WireProtocol::Responses => 456,
+                WireProtocol::Messages => unreachable!(),
+            };
+            let translated = translate_request(request, source, WireProtocol::Messages).unwrap();
+
+            assert_eq!(translated["max_tokens"], expected);
+        }
     }
 
     #[test]
