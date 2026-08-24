@@ -1041,9 +1041,18 @@ mod tests {
                 .supervisor_isolation
         };
 
-        assert!(value(Platform::Aws), "root agent setuids the command to 60000");
-        assert!(value(Platform::Local), "the supervisor is on the host, outside the container");
-        assert!(!value(Platform::Kubernetes), "a single pinned uid cannot be split");
+        assert!(
+            value(Platform::Aws),
+            "root agent setuids the command to 60000"
+        );
+        assert!(
+            value(Platform::Local),
+            "the supervisor is on the host, outside the container"
+        );
+        assert!(
+            !value(Platform::Kubernetes),
+            "a single pinned uid cannot be split"
+        );
         assert!(!value(Platform::Azure), "no Alien process runs the command");
         assert!(
             !value(Platform::Gcp),
@@ -1063,7 +1072,10 @@ mod tests {
             aws.supervisor_pid_namespace, gcp.supervisor_pid_namespace,
             "the older axis cannot tell them apart"
         );
-        assert!(aws.supervisor_isolation, "AWS setuids the command off the supervisor");
+        assert!(
+            aws.supervisor_isolation,
+            "AWS setuids the command off the supervisor"
+        );
         assert!(
             !gcp.supervisor_isolation,
             "the command runs under no separate supervisor identity"
@@ -1084,14 +1096,26 @@ mod tests {
             "generation is derived from the container boot id, so a session is reachable across \
              processes"
         );
-        assert!(!row.preview, "the only ingress is :execute; no port-scoped capability");
-        assert!(row.suspend_resume, ":pause and :resume preserve the container");
-        assert!(row.snapshot, "session state can be captured and restored into a new session");
+        assert!(
+            !row.preview,
+            "the only ingress is :execute; no port-scoped capability"
+        );
+        assert!(
+            row.suspend_resume,
+            ":pause and :resume preserve the container"
+        );
+        assert!(
+            row.snapshot,
+            "session state can be captured and restored into a new session"
+        );
         assert!(
             !row.domain_egress_rules,
             "VPC and DNS peering is not a hostname allowlist"
         );
-        assert!(row.egress_deny, "a declared deny blocks both egress and DNS");
+        assert!(
+            row.egress_deny,
+            "a declared deny blocks both egress and DNS"
+        );
         assert!(
             row.enforced_limits,
             "ceilings are enforced, by terminating the session on breach"

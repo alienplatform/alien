@@ -322,7 +322,10 @@ impl Debug for ConnectionInfo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ConnectionInfo")
             .field("load_balancer_hostname", &self.load_balancer_hostname)
-            .field("routing_token", &self.routing_token.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "routing_token",
+                &self.routing_token.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
@@ -440,7 +443,11 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
         template: SandboxEnvironmentTemplate,
     ) -> Result<Operation>;
     /// Read a template. Retries.
-    async fn get_template(&self, engine: &str, template: &str) -> Result<SandboxEnvironmentTemplate>;
+    async fn get_template(
+        &self,
+        engine: &str,
+        template: &str,
+    ) -> Result<SandboxEnvironmentTemplate>;
     /// List templates under an engine, following pagination. Retries. Lets a replace find the old
     /// template it must delete, and a resumed provision adopt what an interrupted one left.
     async fn list_templates(&self, engine: &str) -> Result<Vec<SandboxEnvironmentTemplate>>;
@@ -448,7 +455,11 @@ pub trait AgentPlatformApi: Send + Sync + Debug {
     async fn delete_template(&self, engine: &str, template: &str) -> Result<()>;
 
     /// Create a sandbox. Single-attempt; returns the operation to poll.
-    async fn create_sandbox(&self, engine: &str, request: SandboxCreateRequest) -> Result<Operation>;
+    async fn create_sandbox(
+        &self,
+        engine: &str,
+        request: SandboxCreateRequest,
+    ) -> Result<Operation>;
     /// Read a sandbox. Retries.
     async fn get_sandbox(&self, engine: &str, sandbox: &str) -> Result<SandboxEnvironment>;
     /// List sandboxes under an engine, following pagination. Retries.
@@ -482,10 +493,7 @@ impl AgentPlatformClient {
     /// service override only when the config does not already carry one, so a test override wins.
     pub fn new(client: Client, config: GcpClientConfig) -> Self {
         let mut config = config;
-        let host = format!(
-            "https://{}-aiplatform.googleapis.com/v1",
-            config.region
-        );
+        let host = format!("https://{}-aiplatform.googleapis.com/v1", config.region);
         config
             .service_overrides
             .get_or_insert_with(|| ServiceOverrides {
@@ -535,11 +543,13 @@ impl AgentPlatformClient {
         let name = match &operation.name {
             Some(name) => name.clone(),
             None => {
-                return Err(AlienError::new(AgentPlatformErrorData::OperationIncomplete {
-                    operation: "<unnamed>".to_string(),
-                    attempts: 0,
-                    last_state: "the operation carried no resource name".to_string(),
-                }))
+                return Err(AlienError::new(
+                    AgentPlatformErrorData::OperationIncomplete {
+                        operation: "<unnamed>".to_string(),
+                        attempts: 0,
+                        last_state: "the operation carried no resource name".to_string(),
+                    },
+                ))
             }
         };
 
@@ -555,11 +565,13 @@ impl AgentPlatformClient {
         if current.done == Some(true) {
             return Self::finish_operation::<T>(current, &name);
         }
-        Err(AlienError::new(AgentPlatformErrorData::OperationIncomplete {
-            operation: name,
-            attempts: budget.max_attempts,
-            last_state: Self::describe_operation(&current),
-        }))
+        Err(AlienError::new(
+            AgentPlatformErrorData::OperationIncomplete {
+                operation: name,
+                attempts: budget.max_attempts,
+                last_state: Self::describe_operation(&current),
+            },
+        ))
     }
 
     /// Poll a template until it reaches `ACTIVE`, or report `TemplateNotActive` with the last state.
@@ -600,11 +612,13 @@ impl AgentPlatformClient {
                     operation: format!("operation '{name}' response"),
                     message: "response body did not match the expected type".to_string(),
                 }),
-            None => Err(AlienError::new(AgentPlatformErrorData::OperationIncomplete {
-                operation: name.to_string(),
-                attempts: 0,
-                last_state: "operation reported done without a result".to_string(),
-            })),
+            None => Err(AlienError::new(
+                AgentPlatformErrorData::OperationIncomplete {
+                    operation: name.to_string(),
+                    attempts: 0,
+                    last_state: "operation reported done without a result".to_string(),
+                },
+            )),
         }
     }
 
@@ -682,7 +696,11 @@ impl AgentPlatformApi for AgentPlatformClient {
             })
     }
 
-    async fn get_template(&self, engine: &str, template: &str) -> Result<SandboxEnvironmentTemplate> {
+    async fn get_template(
+        &self,
+        engine: &str,
+        template: &str,
+    ) -> Result<SandboxEnvironmentTemplate> {
         let path = format!("{}/{}", self.templates_path(engine), template);
         self.base
             .execute_request(Method::GET, &path, None, Option::<()>::None, template)
@@ -756,7 +774,11 @@ impl AgentPlatformApi for AgentPlatformClient {
         tolerate_not_found(result, "delete template")
     }
 
-    async fn create_sandbox(&self, engine: &str, request: SandboxCreateRequest) -> Result<Operation> {
+    async fn create_sandbox(
+        &self,
+        engine: &str,
+        request: SandboxCreateRequest,
+    ) -> Result<Operation> {
         let path = self.sandboxes_path(engine);
         self.base
             .execute_request_once(Method::POST, &path, None, Some(request), engine)
@@ -1004,7 +1026,11 @@ mod tests {
             .create_engine("engine-display")
             .await
             .expect_err("create should surface the failure");
-        assert_eq!(create.hits_async().await, 1, "create engine must be sent once");
+        assert_eq!(
+            create.hits_async().await,
+            1,
+            "create engine must be sent once"
+        );
     }
 
     #[tokio::test]
@@ -1012,7 +1038,8 @@ mod tests {
         let server = MockServer::start_async().await;
         let create = server
             .mock_async(|when, then| {
-                when.method(POST).path_contains("sandboxEnvironmentTemplates");
+                when.method(POST)
+                    .path_contains("sandboxEnvironmentTemplates");
                 then.status(503);
             })
             .await;
@@ -1020,7 +1047,11 @@ mod tests {
             .create_template(ENGINE, SandboxEnvironmentTemplate::default_for_test())
             .await
             .expect_err("create should surface the failure");
-        assert_eq!(create.hits_async().await, 1, "create template must be sent once");
+        assert_eq!(
+            create.hits_async().await,
+            1,
+            "create template must be sent once"
+        );
     }
 
     #[tokio::test]
@@ -1223,7 +1254,8 @@ mod tests {
         let poll = server
             .mock_async(|when, then| {
                 when.method(GET).path(OP_PATH);
-                then.status(200).json_body_obj(&serde_json::json!({ "name": OP_NAME }));
+                then.status(200)
+                    .json_body_obj(&serde_json::json!({ "name": OP_NAME }));
             })
             .await;
 
@@ -1245,7 +1277,11 @@ mod tests {
             "the error must name the operation for the caller to resume: {}",
             error.message
         );
-        assert_eq!(poll.hits_async().await, 3, "polling must stop at the budget");
+        assert_eq!(
+            poll.hits_async().await,
+            3,
+            "polling must stop at the budget"
+        );
     }
 
     /// An operation that completes with an error status reports `OperationFailed`, not success.
@@ -1271,7 +1307,11 @@ mod tests {
             .await
             .expect_err("an errored operation must fail");
         assert_eq!(error.code, "AGENT_PLATFORM_OPERATION_FAILED");
-        assert!(error.message.contains("quota exhausted"), "{}", error.message);
+        assert!(
+            error.message.contains("quota exhausted"),
+            "{}",
+            error.message
+        );
     }
 
     // ---- Delete tolerance. --------------------------------------------------------------------
@@ -1410,7 +1450,8 @@ mod tests {
         let server = MockServer::start_async().await;
         let list = server
             .mock_async(|when, then| {
-                when.method(GET).path_contains("sandboxEnvironmentTemplates");
+                when.method(GET)
+                    .path_contains("sandboxEnvironmentTemplates");
                 then.status(503);
             })
             .await;
@@ -1435,7 +1476,10 @@ mod tests {
         )
         .expect("running sandbox parses");
         assert_eq!(
-            running.connection_info.as_ref().and_then(|c| c.load_balancer_hostname.as_deref()),
+            running
+                .connection_info
+                .as_ref()
+                .and_then(|c| c.load_balancer_hostname.as_deref()),
             Some("h")
         );
 
@@ -1500,5 +1544,4 @@ mod tests {
             }
         }
     }
-
 }

@@ -470,9 +470,12 @@ async fn job_start(
         None => state.session_root.clone(),
     };
 
-    let job_id = state
-        .jobs
-        .start(request, working_directory, state.exec_identity, state.output_cap)?;
+    let job_id = state.jobs.start(
+        request,
+        working_directory,
+        state.exec_identity,
+        state.output_cap,
+    )?;
 
     Ok(Json(JobStartResponse { job_id }))
 }
@@ -486,11 +489,14 @@ async fn job_poll(
 ) -> std::result::Result<Json<JobPollResponse>, ApiError> {
     authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
 
-    let snapshot = state.jobs.poll(&body.job_id, body.since_seq).ok_or_else(|| {
-        ApiError::from(AlienError::new(ErrorData::JobNotFound {
-            job_id: body.job_id.clone(),
-        }))
-    })?;
+    let snapshot = state
+        .jobs
+        .poll(&body.job_id, body.since_seq)
+        .ok_or_else(|| {
+            ApiError::from(AlienError::new(ErrorData::JobNotFound {
+                job_id: body.job_id.clone(),
+            }))
+        })?;
 
     Ok(Json(JobPollResponse::from(snapshot)))
 }
@@ -554,34 +560,66 @@ async fn agent_platform(
     // handler takes; that works only because those types ignore the envelope's `v`/`op`. Adding
     // `deny_unknown_fields` to one would break this dispatch at runtime, with nothing to catch it.
     match op.as_str() {
-        "exec" => run_command(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?)).await,
-        "readFile" => Ok(read_file(State(state), ConnectInfo(peer), headers, Query(reparse(&body)?))
+        "exec" => {
+            run_command(
+                State(state),
+                ConnectInfo(peer),
+                headers,
+                Json(reparse(&body)?),
+            )
+            .await
+        }
+        "readFile" => Ok(read_file(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Query(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "writeFile" => Ok(write_file(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "mkdir" => Ok(mkdir(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "jobStart" => Ok(job_start(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "jobPoll" => Ok(job_poll(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "jobCancel" => Ok(job_cancel(
+            State(state),
+            ConnectInfo(peer),
+            headers,
+            Json(reparse(&body)?),
+        )
+        .await?
+        .into_response()),
+        "health" => Ok(health(Query(HealthQuery { version: None }))
             .await?
             .into_response()),
-        "writeFile" => Ok(
-            write_file(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
-                .await?
-                .into_response(),
-        ),
-        "mkdir" => Ok(mkdir(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
-            .await?
-            .into_response()),
-        "jobStart" => Ok(
-            job_start(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
-                .await?
-                .into_response(),
-        ),
-        "jobPoll" => Ok(
-            job_poll(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
-                .await?
-                .into_response(),
-        ),
-        "jobCancel" => Ok(
-            job_cancel(State(state), ConnectInfo(peer), headers, Json(reparse(&body)?))
-                .await?
-                .into_response(),
-        ),
-        "health" => Ok(health(Query(HealthQuery { version: None })).await?.into_response()),
         other => Err(ApiError::from(AlienError::new(ErrorData::RequestInvalid {
             reason: format!("unknown op '{other}'"),
         }))),

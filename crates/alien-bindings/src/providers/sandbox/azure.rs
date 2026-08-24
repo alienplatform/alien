@@ -398,7 +398,8 @@ impl Sandbox for AzureSandbox {
         // The one file operation that moves the caller's own content in. A write-then-run against
         // an id kept across a tightened declaration would land the payload in a sandbox with the
         // egress the declaration just removed, and the refusal would arrive a beat later.
-        self.judged_session("sandbox.writeFiles", session_id).await?;
+        self.judged_session("sandbox.writeFiles", session_id)
+            .await?;
 
         // One request per path, stopping at the first failure: the same partial application every
         // other backend performs, so a caller sees one contract rather than five.
@@ -432,7 +433,11 @@ impl Sandbox for AzureSandbox {
         // Accepted, not completed — the same contract the AWS backend follows. `get` reports
         // `Suspended` from the moment the stop is under way, so it answers "cannot take work",
         // not "has stopped"; only `terminate` confirms a session is actually gone.
-        let Err(error) = self.client.stop_sandbox(&self.sandbox_group, session_id).await else {
+        let Err(error) = self
+            .client
+            .stop_sandbox(&self.sandbox_group, session_id)
+            .await
+        else {
             return Ok(());
         };
 
@@ -838,7 +843,11 @@ impl AzureSandbox {
         if !resumed_here {
             return reason;
         }
-        let Err(failed) = self.client.stop_sandbox(&self.sandbox_group, session_id).await else {
+        let Err(failed) = self
+            .client
+            .stop_sandbox(&self.sandbox_group, session_id)
+            .await
+        else {
             return reason;
         };
         // A session that is already gone is the state this was trying to reach, and reporting it
@@ -1023,9 +1032,7 @@ fn checked_session_env(operation: &str, env: &BTreeMap<String, String>) -> Resul
 fn checked_env_name(operation: &str, name: &str) -> Result<()> {
     let usable = !name.is_empty()
         && !name.starts_with(|c: char| c.is_ascii_digit())
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '_');
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
     if usable {
         return Ok(());
     }
@@ -1070,7 +1077,10 @@ fn checked_path(operation: &str, path: &str) -> Result<String> {
     if relative.contains('\0') {
         return refused("contains a null byte");
     }
-    if relative.split('/').any(|part| part == ".." || part.is_empty()) {
+    if relative
+        .split('/')
+        .any(|part| part == ".." || part.is_empty())
+    {
         return refused("must not traverse");
     }
 
@@ -1818,7 +1828,10 @@ mod tests {
                 .expect("a shell runs")
         };
 
-        let plain = run(BTreeMap::from([("TOKEN".to_string(), "reached".to_string())]));
+        let plain = run(BTreeMap::from([(
+            "TOKEN".to_string(),
+            "reached".to_string(),
+        )]));
         assert_eq!(
             String::from_utf8_lossy(&plain.stdout),
             "reached",
@@ -2073,7 +2086,10 @@ mod tests {
             .expect_write_file()
             .times(1)
             .returning(|_, _, path, _| {
-                assert_eq!(path, "a.txt", "the first path in order is the one attempted");
+                assert_eq!(
+                    path, "a.txt",
+                    "the first path in order is the one attempted"
+                );
                 Err(AlienError::new(ClientErrorData::RemoteAccessDenied {
                     resource_type: "sandbox".to_string(),
                     resource_name: "s1".to_string(),
@@ -2112,7 +2128,10 @@ mod tests {
             .await
             .expect_err("a missing file is an error");
         assert_eq!(refused.code, "SANDBOX_COMMAND_FAILED", "{refused}");
-        assert!(!refused.retryable, "repeating a refusal repeats it: {refused}");
+        assert!(
+            !refused.retryable,
+            "repeating a refusal repeats it: {refused}"
+        );
 
         let mut client = MockSandboxDataPlaneApi::new();
         client.expect_read_file().times(1).returning(|_, _, _| {
@@ -2125,7 +2144,10 @@ mod tests {
             .await
             .expect_err("an unavailable data plane is an error");
         assert_eq!(unreachable.code, "SANDBOX_UNREACHABLE", "{unreachable}");
-        assert!(unreachable.retryable, "a read is safe to repeat: {unreachable}");
+        assert!(
+            unreachable.retryable,
+            "a read is safe to repeat: {unreachable}"
+        );
 
         let mut client = MockSandboxDataPlaneApi::new();
         settles_running(&mut client, None);
@@ -2443,7 +2465,10 @@ mod tests {
             .times(1)
             .returning(move |_, _| Ok(running("s1", Some(echoed.clone()))));
         settles_running(&mut client, Some(elsewhere));
-        client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+        client
+            .expect_delete_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
 
         let error = sandbox_denying(
             client,
@@ -2565,7 +2590,10 @@ mod tests {
                 .times(1)
                 .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
             settles_running(&mut client, Some(came_up_with.clone()));
-            client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+            client
+                .expect_delete_sandbox()
+                .times(1)
+                .returning(|_, _| Ok(()));
 
             let error = sandbox_denying(client, asked_for())
                 .create(CreateSessionRequest::default())
@@ -2578,21 +2606,24 @@ mod tests {
         // The same policy without the extra permission creates normally, so the rule above is
         // refusing the addition rather than refusing everything.
         let mut client = MockSandboxDataPlaneApi::new();
-        client.expect_create_sandbox().times(1).returning(move |_, _| {
-            Ok(running(
-                "s1",
-                Some(EgressPolicy {
-                    default_action: "Deny".to_string(),
-                    unmodelled: Default::default(),
-                    host_rules: vec![EgressHostRule {
-                        pattern: "api.example.com".to_string(),
-                        action: "Allow".to_string(),
-                    }],
-                    rules: Vec::new(),
-                    traffic_inspection: Some("Full".to_string()),
-                }),
-            ))
-        });
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, _| {
+                Ok(running(
+                    "s1",
+                    Some(EgressPolicy {
+                        default_action: "Deny".to_string(),
+                        unmodelled: Default::default(),
+                        host_rules: vec![EgressHostRule {
+                            pattern: "api.example.com".to_string(),
+                            action: "Allow".to_string(),
+                        }],
+                        rules: Vec::new(),
+                        traffic_inspection: Some("Full".to_string()),
+                    }),
+                ))
+            });
         settles_running(
             &mut client,
             Some(EgressPolicy {
@@ -2754,8 +2785,13 @@ mod tests {
                 state: Some("Hibernated".to_string()),
             })
         };
-        client.expect_create_sandbox().times(1).returning(move |_, _| unreadable());
-        client.expect_get_sandbox().returning(move |_, _| unreadable());
+        client
+            .expect_create_sandbox()
+            .times(1)
+            .returning(move |_, _| unreadable());
+        client
+            .expect_get_sandbox()
+            .returning(move |_, _| unreadable());
         client
             .expect_delete_sandbox()
             .withf(|_, id| id == "orphan")
@@ -2814,7 +2850,10 @@ mod tests {
                 .times(1)
                 .returning(move |_, _| Ok(running("s1", Some(effective.clone()))));
             settles_running(&mut client, Some(came_up_with.clone()));
-            client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+            client
+                .expect_delete_sandbox()
+                .times(1)
+                .returning(|_, _| Ok(()));
 
             let error = sandbox_denying(client, declared())
                 .create(CreateSessionRequest::default())
@@ -3507,7 +3546,10 @@ mod tests {
 
         // Safe to address once: reaped.
         let mut client = minted("x".repeat(80).leak());
-        client.expect_delete_sandbox().times(1).returning(|_, _| Ok(()));
+        client
+            .expect_delete_sandbox()
+            .times(1)
+            .returning(|_, _| Ok(()));
         let error = sandbox_with(client)
             .create(CreateSessionRequest::default())
             .await
@@ -3599,15 +3641,18 @@ mod tests {
         });
 
         let mut attempts = 0;
-        client.expect_resume_sandbox().times(2).returning(move |_, _| {
-            attempts += 1;
-            if attempts == 1 {
-                // The 409 a sandbox still stopping answers.
-                Err(http_error(409, "SandboxNotStopped"))
-            } else {
-                Ok(())
-            }
-        });
+        client
+            .expect_resume_sandbox()
+            .times(2)
+            .returning(move |_, _| {
+                attempts += 1;
+                if attempts == 1 {
+                    // The 409 a sandbox still stopping answers.
+                    Err(http_error(409, "SandboxNotStopped"))
+                } else {
+                    Ok(())
+                }
+            });
 
         sandbox_with(client)
             .resume("racing-the-idle-policy")

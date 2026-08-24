@@ -209,13 +209,14 @@ impl AzureClientBase {
             String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string()
         });
 
-        let resp = client
-            .execute(req)
-            .await
-            .into_alien_error()
-            .context(ErrorData::HttpRequestFailed {
-                message: format!("Azure {}: HTTP error for {}", op, res_name),
-            })?;
+        let resp =
+            client
+                .execute(req)
+                .await
+                .into_alien_error()
+                .context(ErrorData::HttpRequestFailed {
+                    message: format!("Azure {}: HTTP error for {}", op, res_name),
+                })?;
         let status = resp.status();
         if status.is_success() || status == StatusCode::CREATED || status == StatusCode::ACCEPTED {
             return Ok(resp);
@@ -326,10 +327,9 @@ impl AzureClientBase {
 
                 // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
+                let request_body = req_clone.body().and_then(|b| b.as_bytes()).map(|b| {
+                    String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string()
+                });
 
                 let resp = client.execute(req_clone).await.into_alien_error().context(
                     ErrorData::HttpRequestFailed {
@@ -477,10 +477,9 @@ impl AzureClientBase {
 
                 // Capture request details before execution consumes the request
                 let request_url = req_clone.url().to_string();
-                let request_body = req_clone
-                    .body()
-                    .and_then(|b| b.as_bytes())
-                    .map(|b| String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string());
+                let request_body = req_clone.body().and_then(|b| b.as_bytes()).map(|b| {
+                    String::from_utf8_lossy(&b[..b.len().min(MAX_ECHOED_REQUEST_BODY)]).to_string()
+                });
 
                 let resp = client.execute(req_clone).await.into_alien_error().context(
                     ErrorData::HttpRequestFailed {

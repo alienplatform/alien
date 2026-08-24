@@ -862,8 +862,8 @@ mod tests {
             .get_binding_params()
             .expect("binding serializes")
             .expect("a running template has a binding");
-        let binding: alien_core::bindings::SandboxBinding =
-            serde_json::from_value(params).expect("binding parses back to the Agent Platform binding type");
+        let binding: alien_core::bindings::SandboxBinding = serde_json::from_value(params)
+            .expect("binding parses back to the Agent Platform binding type");
 
         match binding {
             alien_core::bindings::SandboxBinding::GcpAgentPlatform(b) => {

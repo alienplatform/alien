@@ -89,7 +89,11 @@ fn register_gcp(registry: &mut TfRegistry) {
     );
     registry.register(Build::RESOURCE_TYPE, p, gcp::GcpBuildEmitter);
     registry.register(Worker::RESOURCE_TYPE, p, gcp::GcpWorkerEmitter);
-    registry.register(Sandbox::RESOURCE_TYPE, p, gcp::GcpAgentPlatformSandboxEmitter);
+    registry.register(
+        Sandbox::RESOURCE_TYPE,
+        p,
+        gcp::GcpAgentPlatformSandboxEmitter,
+    );
     registry.register(
         ServiceActivation::RESOURCE_TYPE,
         p,

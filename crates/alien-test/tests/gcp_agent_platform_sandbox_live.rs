@@ -685,7 +685,12 @@ async fn egress_deny_blocks_the_network_including_dns() {
 
     // DNS alone, and the resolver's own exit code is captured so a missing binary (127) cannot be
     // mistaken for a blocked network — that mistake is exactly the false PASS this row must avoid.
-    let resolve = shell(&provider, &sid, "getent hosts github.com >/dev/null 2>&1; echo rc=$?").await;
+    let resolve = shell(
+        &provider,
+        &sid,
+        "getent hosts github.com >/dev/null 2>&1; echo rc=$?",
+    )
+    .await;
     assert_eq!(resolve.exit_code, 0, "the probe wrapper itself runs");
     let stdout = String::from_utf8_lossy(&resolve.stdout);
     let rc: i32 = stdout
@@ -693,7 +698,10 @@ async fn egress_deny_blocks_the_network_including_dns() {
         .strip_prefix("rc=")
         .and_then(|code| code.parse().ok())
         .unwrap_or_else(|| panic!("the probe reported no resolver exit code: {stdout}"));
-    assert_ne!(rc, 127, "the resolver must exist, so a nonzero code is a blocked network, not a missing binary");
+    assert_ne!(
+        rc, 127,
+        "the resolver must exist, so a nonzero code is a blocked network, not a missing binary"
+    );
     assert_ne!(rc, 0, "a closed sandbox cannot resolve github.com");
 
     provider
@@ -784,10 +792,7 @@ async fn snapshot_restore_carries_pre_snapshot_state_only() {
         "the pre-snapshot state is present"
     );
     assert!(
-        provider
-            .read_file(&restored_id, "/after")
-            .await
-            .is_err(),
+        provider.read_file(&restored_id, "/after").await.is_err(),
         "the post-snapshot mutation is absent from the restore"
     );
 
@@ -838,7 +843,11 @@ async fn sweep_orphaned_engines() {
         .filter(|line| !line.is_empty())
         .map(|line| last_segment(line).to_string())
         .collect();
-    for engine in client.list_engines().await.expect("listing engines to sweep") {
+    for engine in client
+        .list_engines()
+        .await
+        .expect("listing engines to sweep")
+    {
         let matches_suite = engine
             .display_name
             .as_deref()

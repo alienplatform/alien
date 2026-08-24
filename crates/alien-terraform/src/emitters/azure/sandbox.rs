@@ -130,7 +130,10 @@ mod tests {
                 ResourceLifecycle::Frozen,
             )
             .build();
-        let resource = stack.resources.get("agents").expect("the sandbox is in the stack");
+        let resource = stack
+            .resources
+            .get("agents")
+            .expect("the sandbox is in the stack");
         let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
         let settings = StackSettings::default();
         let ctx = EmitContext {
@@ -218,9 +221,6 @@ mod tests {
         assert!(declared.contains("idleSuspendSeconds = 900"), "{declared}");
 
         let undeclared = binding_with(SandboxEgress::Allow, None);
-        assert!(
-            !undeclared.contains("idleSuspendSeconds"),
-            "{undeclared}"
-        );
+        assert!(!undeclared.contains("idleSuspendSeconds"), "{undeclared}");
     }
 }

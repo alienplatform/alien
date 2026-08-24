@@ -13,10 +13,10 @@ use crate::azure::common::{AzureClientBase, AzureRequestBuilder};
 use crate::azure::token_cache::AzureTokenCache;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{Context, IntoAlienError};
-use std::collections::BTreeMap;
 use async_trait::async_trait;
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -345,7 +345,10 @@ impl AzureSandboxDataPlaneClient {
         verb: &str,
         operation: &str,
     ) -> Result<()> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!("{}/{verb}", self.sandbox_path(group, sandbox_id)),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -398,7 +401,10 @@ impl AzureSandboxDataPlaneClient {
 #[async_trait]
 impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     async fn create_sandbox(&self, group: &str, request: CreateSandbox) -> Result<Sandbox> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!("{}/sandboxes", self.group_path(group)),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -424,7 +430,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn get_sandbox(&self, group: &str, sandbox_id: &str) -> Result<Sandbox> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.sandbox_path(group, sandbox_id),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -440,7 +449,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn delete_sandbox(&self, group: &str, sandbox_id: &str) -> Result<()> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &self.sandbox_path(group, sandbox_id),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -465,7 +477,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
         command: &str,
         working_directory: Option<String>,
     ) -> Result<ExecResult> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!(
                 "{}/executeShellCommand",
@@ -494,7 +509,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn read_file(&self, group: &str, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!("{}/files", self.sandbox_path(group, sandbox_id)),
             Some(vec![
@@ -505,20 +523,24 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
 
         let request = AzureRequestBuilder::new(Method::GET, url).build()?;
         let signed = self.base.sign_request(request, &token).await?;
-        let response = self.base.execute_request(signed, "ReadFile", sandbox_id).await?;
+        let response = self
+            .base
+            .execute_request(signed, "ReadFile", sandbox_id)
+            .await?;
 
         // Bytes, not JSON: the body is the file, and `parse` would try to read an image or a
         // tarball as a document. Collected chunk by chunk so the ceiling is enforced against
         // what has arrived rather than after the whole file is already in memory.
         let mut response = response;
         let mut contents: Vec<u8> = Vec::new();
-        while let Some(chunk) = response
-            .chunk()
-            .await
-            .into_alien_error()
-            .context(ErrorData::GenericError {
-                message: "Azure ADC ReadFile: the response body ended early".to_string(),
-            })?
+        while let Some(chunk) =
+            response
+                .chunk()
+                .await
+                .into_alien_error()
+                .context(ErrorData::GenericError {
+                    message: "Azure ADC ReadFile: the response body ended early".to_string(),
+                })?
         {
             contents.extend_from_slice(&chunk);
             if contents.len() > MAX_FILE_BYTES {
@@ -551,7 +573,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
             }));
         }
 
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         // `createDirs` is what makes a write create its parents, which is the cross-backend
         // contract. The SDK also takes a `mode`, deliberately not sent: its accepted format is
         // undocumented, and a wrong one would fail every write.
@@ -589,7 +614,10 @@ impl SandboxDataPlaneApi for AzureSandboxDataPlaneClient {
     }
 
     async fn mkdir(&self, group: &str, sandbox_id: &str, path: &str) -> Result<()> {
-        let token = self.token_cache.get_bearer_token_with_scope(ADC_SCOPE).await?;
+        let token = self
+            .token_cache
+            .get_bearer_token_with_scope(ADC_SCOPE)
+            .await?;
         let url = self.base.build_url(
             &format!("{}/files/mkdir", self.sandbox_path(group, sandbox_id)),
             Some(vec![("api-version", API_VERSION.into())]),
@@ -822,7 +850,10 @@ mod tests {
                 then.status(200);
             })
             .await;
-        client.mkdir("grp", "s1", "src").await.expect("the mkdir should succeed");
+        client
+            .mkdir("grp", "s1", "src")
+            .await
+            .expect("the mkdir should succeed");
         mkdir.assert_async().await;
     }
 
@@ -855,7 +886,10 @@ mod tests {
             })
             .await;
         assert_eq!(
-            client.read_file("grp", "s1", "image.png").await.expect("reads"),
+            client
+                .read_file("grp", "s1", "image.png")
+                .await
+                .expect("reads"),
             bytes
         );
     }
@@ -932,7 +966,10 @@ mod tests {
         // sandbox instead of refusing the body.
         assert_eq!(body["egressPolicy"]["defaultAction"], "Deny");
         assert_eq!(body["egressPolicy"]["trafficInspection"], "Full");
-        assert_eq!(body["egressPolicy"]["hostRules"][0]["pattern"], "api.example.com");
+        assert_eq!(
+            body["egressPolicy"]["hostRules"][0]["pattern"],
+            "api.example.com"
+        );
 
         let bare = create_body(&CreateSandbox::default());
         assert!(
@@ -981,7 +1018,10 @@ mod tests {
 
         assert_eq!(policy.rules.len(), 1);
         assert_eq!(
-            policy.rules[0].action.as_ref().map(|action| action.action_type.as_str()),
+            policy.rules[0]
+                .action
+                .as_ref()
+                .map(|action| action.action_type.as_str()),
             Some("Allow")
         );
     }
@@ -1007,7 +1047,10 @@ mod tests {
                 then.status(202);
             })
             .await;
-        client.stop_sandbox("grp", "s1").await.expect("stop is accepted");
+        client
+            .stop_sandbox("grp", "s1")
+            .await
+            .expect("stop is accepted");
         stop.assert_async().await;
 
         let resume = server
@@ -1017,7 +1060,10 @@ mod tests {
                 then.status(202);
             })
             .await;
-        client.resume_sandbox("grp", "s1").await.expect("resume is accepted");
+        client
+            .resume_sandbox("grp", "s1")
+            .await
+            .expect("resume is accepted");
         resume.assert_async().await;
     }
 

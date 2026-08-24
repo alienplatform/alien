@@ -129,7 +129,8 @@ impl DeadlineReport {
             // line the command chose would be adopted in its place. No transport here delivers
             // one today; the cost of not depending on that is one trim.
             let line = line.strip_suffix('\r').unwrap_or(line);
-            let is_nonce = line.len() == NONCE_HEXITS && line.chars().all(|c| c.is_ascii_hexdigit());
+            let is_nonce =
+                line.len() == NONCE_HEXITS && line.chars().all(|c| c.is_ascii_hexdigit());
             is_nonce.then(|| {
                 let after = stderr
                     .split('\n')
@@ -250,7 +251,10 @@ mod tests {
     #[test]
     fn only_the_session_can_report_a_deadline() {
         // The shell writes its own notice after the signal, so the repeat is not always last.
-        let killed = match DeadlineReport::read(Some(137), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n") {
+        let killed = match DeadlineReport::read(
+            Some(137),
+            "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4Killed\n",
+        ) {
             Bounded::Ran { killed, stderr } => {
                 assert_eq!(stderr, "boom\nKilled\n");
                 killed
@@ -261,7 +265,10 @@ mod tests {
 
         // A command echoing something nonce-shaped repeats nothing the session announced.
         assert!(matches!(
-            DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\ndeadbeef\n"),
+            DeadlineReport::read(
+                Some(0),
+                "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\ndeadbeef\n"
+            ),
             Bounded::Ran { killed: false, .. }
         ));
     }
@@ -329,8 +336,10 @@ mod tests {
     /// that beat its deadline into a deadline failure and throw away what it returned.
     #[test]
     fn a_command_that_finished_as_the_killer_fired_keeps_its_result() {
-        let Bounded::Ran { killed, stderr } = DeadlineReport::read(Some(0), "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4")
-        else {
+        let Bounded::Ran { killed, stderr } = DeadlineReport::read(
+            Some(0),
+            "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4\nboom\na1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4",
+        ) else {
             panic!("the command ran");
         };
         assert!(
@@ -405,7 +414,9 @@ mod tests {
         );
         let run = std::process::Command::new("/bin/sh")
             .arg("-c")
-            .arg(DeadlineReport::bounded_program(std::time::Duration::from_secs(5)))
+            .arg(DeadlineReport::bounded_program(
+                std::time::Duration::from_secs(5),
+            ))
             .arg("sh")
             .arg("printenv")
             .arg("nonce")

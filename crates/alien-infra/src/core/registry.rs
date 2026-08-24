@@ -777,9 +777,9 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             alien_core::GcpAgentPlatformEngine::RESOURCE_TYPE,
             Platform::Gcp,
-            Box::new(
-                DefaultControllerFactory::<crate::sandbox::GcpAgentPlatformEngineController>::new(),
-            ),
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::GcpAgentPlatformEngineController,
+            >::new()),
         );
 
         // Register the GCP Agent Platform sandbox (template) controller.
@@ -787,9 +787,9 @@ impl ResourceRegistry {
         registry.register_controller_factory(
             alien_core::Sandbox::RESOURCE_TYPE,
             Platform::Gcp,
-            Box::new(
-                DefaultControllerFactory::<crate::sandbox::GcpAgentPlatformTemplateController>::new(),
-            ),
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::GcpAgentPlatformTemplateController,
+            >::new()),
         );
 
         // Register KubernetesCluster controller. The cluster is selected or

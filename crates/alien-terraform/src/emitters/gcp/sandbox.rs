@@ -106,7 +106,9 @@ mod tests {
     mod agent_platform {
         use super::super::*;
         use alien_core::bindings::SandboxBinding;
-        use alien_core::{ResourceLifecycle, SandboxCode, SandboxSessionPolicy, Stack, StackSettings};
+        use alien_core::{
+            ResourceLifecycle, SandboxCode, SandboxSessionPolicy, Stack, StackSettings,
+        };
         use indexmap::IndexMap;
         use std::collections::BTreeSet;
 
@@ -126,7 +128,10 @@ mod tests {
                     ResourceLifecycle::Frozen,
                 )
                 .build();
-            let resource = stack.resources.get("agents").expect("the sandbox is in the stack");
+            let resource = stack
+                .resources
+                .get("agents")
+                .expect("the sandbox is in the stack");
             let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
             let settings = StackSettings::default();
             let ctx = EmitContext {

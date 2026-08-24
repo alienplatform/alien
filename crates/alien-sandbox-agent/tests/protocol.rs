@@ -74,11 +74,11 @@ impl Agent {
 
         tokio::spawn(async move {
             axum::serve(
-            listener,
-            router(served).into_make_service_with_connect_info::<SocketAddr>(),
-        )
-        .await
-        .expect("serve");
+                listener,
+                router(served).into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .await
+            .expect("serve");
         });
 
         Self {
@@ -288,7 +288,10 @@ async fn a_command_streams_its_output_and_a_real_exit_code() {
     let frames = frames(&response.text().await.expect("body"));
     let terminal = frames.last().expect("terminal");
     assert_eq!(terminal["t"], "exit");
-    assert_eq!(terminal["code"], 7, "the real exit code, not a normalised one");
+    assert_eq!(
+        terminal["code"], 7,
+        "the real exit code, not a normalised one"
+    );
 
     let decoded: Vec<String> = frames
         .iter()
@@ -363,7 +366,10 @@ async fn path_traversal_is_refused_over_the_protocol() {
     let client = reqwest::Client::new();
 
     let read = client
-        .get(format!("{}/v1/files?path=/../../etc/passwd", agent.base_url))
+        .get(format!(
+            "{}/v1/files?path=/../../etc/passwd",
+            agent.base_url
+        ))
         .bearer_auth(agent.capability())
         .send()
         .await
@@ -427,7 +433,10 @@ async fn transport_authorization_needs_no_capability() {
         authorization: AgentAuthorization::Transport,
         // Not the test's own uid: the agent and the code it runs are different users in a real
         // image, and the caller here stands in for one arriving through the transport.
-        exec_identity: ExecIdentity { uid: 60000, gid: 60000 },
+        exec_identity: ExecIdentity {
+            uid: 60000,
+            gid: 60000,
+        },
         output_cap: 1 << 20,
         jobs: JobRegistry::new(),
     });
@@ -496,7 +505,11 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
         .await
         .expect("responds");
 
-    assert_eq!(response.status(), 403, "the agent must not serve its own supervised code");
+    assert_eq!(
+        response.status(),
+        403,
+        "the agent must not serve its own supervised code"
+    );
     assert!(
         !root.join("work").exists(),
         "a refused request must not have done its work anyway"
@@ -560,7 +573,9 @@ async fn exec_through_the_envelope_is_byte_identical_to_v1() {
     let enveloped = client
         .post(format!("{}/", agent.base_url))
         .bearer_auth(agent.capability())
-        .json(&json!({"v": 1, "op": "exec", "command": ["/bin/echo", "hello"], "deadlineMs": 10_000}))
+        .json(
+            &json!({"v": 1, "op": "exec", "command": ["/bin/echo", "hello"], "deadlineMs": 10_000}),
+        )
         .send()
         .await
         .expect("responds");
@@ -652,7 +667,10 @@ async fn mkdir_through_the_envelope_is_byte_identical_to_v1_and_lands() {
         .expect("responds");
 
     assert_eq!(wire(versioned).await, wire(enveloped).await);
-    assert!(agent.root.join("work/env").is_dir(), "the envelope mkdir landed");
+    assert!(
+        agent.root.join("work/env").is_dir(),
+        "the envelope mkdir landed"
+    );
 }
 
 /// `health` carries no capability on either route, so the envelope arm must reach it without one —
@@ -689,7 +707,11 @@ async fn an_absent_op_is_refused() {
 
     assert_eq!(response.status(), 400);
     assert!(
-        response.text().await.expect("body").contains("must name an 'op'"),
+        response
+            .text()
+            .await
+            .expect("body")
+            .contains("must name an 'op'"),
         "the refusal must say an op is required"
     );
 }
@@ -729,7 +751,8 @@ async fn an_unsupported_version_is_refused() {
     assert_eq!(response.status(), 400);
     let body = response.text().await.expect("body");
     assert!(
-        body.contains(&format!("v{}", PROTOCOL_VERSION + 1)) && body.contains(&format!("v{PROTOCOL_VERSION}")),
+        body.contains(&format!("v{}", PROTOCOL_VERSION + 1))
+            && body.contains(&format!("v{PROTOCOL_VERSION}")),
         "the error must name both versions: {body}"
     );
 }
@@ -774,7 +797,11 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
         .await
         .expect("responds");
 
-    assert_eq!(response.status(), 403, "the envelope must not serve the agent's own supervised code");
+    assert_eq!(
+        response.status(),
+        403,
+        "the envelope must not serve the agent's own supervised code"
+    );
     assert!(
         !root.join("work").exists(),
         "a refused envelope must not have done its work anyway"
@@ -832,9 +859,8 @@ async fn a_job_completes_and_its_output_is_polled_across_calls() {
                 since = Some(since.map_or(seq, |s| s.max(seq)));
             }
             if let Some(data) = frame["data"].as_str() {
-                collected.push(
-                    String::from_utf8(BASE64.decode(data).expect("base64")).expect("utf8"),
-                );
+                collected
+                    .push(String::from_utf8(BASE64.decode(data).expect("base64")).expect("utf8"));
             }
         }
 
@@ -846,8 +872,14 @@ async fn a_job_completes_and_its_output_is_polled_across_calls() {
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 
-    assert!(!running, "the job must reach a terminal state within the poll budget");
-    let text: Vec<&str> = collected.iter().flat_map(|line| line.split_whitespace()).collect();
+    assert!(
+        !running,
+        "the job must reach a terminal state within the poll budget"
+    );
+    let text: Vec<&str> = collected
+        .iter()
+        .flat_map(|line| line.split_whitespace())
+        .collect();
     assert_eq!(text, vec!["one", "two"], "every line survives being polled");
 }
 
@@ -904,5 +936,8 @@ async fn starting_a_job_without_a_capability_is_refused() {
         .expect("responds");
 
     assert_eq!(response.status(), 401);
-    assert!(agent.state.jobs.is_empty(), "a refused start creates no job");
+    assert!(
+        agent.state.jobs.is_empty(),
+        "a refused start creates no job"
+    );
 }

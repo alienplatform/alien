@@ -65,12 +65,13 @@ impl LocalSandboxController {
 
         // The session template is fixed here rather than accepted per create: a client-supplied
         // limit is a limit the client can decline to send, and this sandbox runs its code.
-        let route = alien_local::SandboxRoute::ensure(manager, &config.id, session_template(&config)?)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Failed to serve the local sandbox route".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let route =
+            alien_local::SandboxRoute::ensure(manager, &config.id, session_template(&config)?)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Failed to serve the local sandbox route".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         self.route_url = Some(route.base_url.clone());
         self.token_path = Some(route.token_path.display().to_string());
@@ -110,13 +111,14 @@ impl LocalSandboxController {
 
         // "Healthy" on a platform with nothing durable means the runtime is still there to
         // create sessions in; the session count itself is not a health signal.
-        let sessions = manager
-            .list_sessions(&config.id)
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: "Docker sandbox health check failed".to_string(),
-                resource_id: Some(config.id.clone()),
-            })?;
+        let sessions =
+            manager
+                .list_sessions(&config.id)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: "Docker sandbox health check failed".to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
 
         debug!(sandbox_id = %config.id, sessions = sessions.len(), "Sandbox health check passed");
 
@@ -261,12 +263,14 @@ impl LocalSandboxController {
             BindingValue::value(token_path.clone()),
         );
 
-        Ok(Some(serde_json::to_value(binding).into_alien_error().context(
-            ErrorData::ResourceStateSerializationFailed {
-                resource_id: "binding".to_string(),
-                message: "Failed to serialize sandbox binding parameters".to_string(),
-            },
-        )?))
+        Ok(Some(
+            serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize sandbox binding parameters".to_string(),
+                },
+            )?,
+        ))
     }
 }
 
@@ -450,7 +454,10 @@ mod tests {
         let registry = crate::core::ResourceRegistry::with_built_ins();
 
         let controller = registry
-            .get_controller(alien_core::Sandbox::RESOURCE_TYPE, alien_core::Platform::Local)
+            .get_controller(
+                alien_core::Sandbox::RESOURCE_TYPE,
+                alien_core::Platform::Local,
+            )
             .expect("Local must have a registered Sandbox controller");
         assert_eq!(controller.controller_type(), "LocalSandboxController");
     }
