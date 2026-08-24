@@ -14367,6 +14367,63 @@
         },
         "additionalProperties": false
       },
+      "RemoteAwsSandboxBinding": {
+        "type": "object",
+        "description": "Concrete MicroVM sandbox topology returned to remote clients.\n\nDeliberately without the execution role and the egress connectors of the in-cloud binding: the\nprovider passes no role, and a binding carrying connectors is refused before it reaches here.",
+        "required": [
+          "imageArn",
+          "imageVersion",
+          "region",
+          "previewPorts",
+          "allowEgress"
+        ],
+        "properties": {
+          "allowEgress": {
+            "type": "boolean",
+            "description": "Whether the declaration asked for open egress. Always true here, and sent rather than\nimplied so the client's own fail-open check on an empty connector list still has an answer."
+          },
+          "idleSuspendSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Idle seconds after which a session suspends, where the declaration asked for one.",
+            "minimum": 0
+          },
+          "imageArn": {
+            "type": "string",
+            "description": "MicroVM image the credential lease authorizes sessions against."
+          },
+          "imageVersion": {
+            "type": "string",
+            "description": "Image version sessions are enumerated by together with the image."
+          },
+          "maxLifetimeSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Wall-clock ceiling on a session, where the declaration asked for one.",
+            "minimum": 0
+          },
+          "previewPorts": {
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            },
+            "description": "Ports a session capability may be minted for."
+          },
+          "region": {
+            "type": "string",
+            "description": "Region the MicroVMs run in."
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteAzureClientConfig": {
         "type": "object",
         "description": "Response-safe Azure client configuration containing one storage-audience\naccess token for the stack's Remote Bindings identity.",
@@ -14990,6 +15047,33 @@
                 "type": "string",
                 "enum": [
                   "foundry"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "AWS Lambda MicroVM sandbox and an AWS session.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAwsSandboxBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAwsClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sandbox-aws"
                 ]
               }
             }

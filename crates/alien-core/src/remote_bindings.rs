@@ -1,10 +1,11 @@
-use crate::{ResourceEntry, ResourceLifecycle, ResourceType};
+use crate::{ResourceEntry, ResourceLifecycle, ResourceType, Sandbox, SandboxEgress};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
     Storage,
     Key,
     Ai,
+    Sandbox,
 }
 
 /// One resource type's provider-neutral Remote Bindings contract.
@@ -51,6 +52,17 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         setup_support_resource_types: &["azure_resource_group", "service_activation"],
         revision: 1,
     },
+    RemoteBindingDefinition {
+        resource_type: "sandbox",
+        permission_set: "sandbox/remote-execute",
+        kind: RemoteBindingKind::Sandbox,
+        description:
+            "Create and terminate sessions in this sandbox, and run arbitrary code inside them",
+        // A sandbox's parent is the MicroVM image its own emitter builds, and an open-egress
+        // sandbox attaches no VPC connector, so setup owes this binding no other resource.
+        setup_support_resource_types: &[],
+        revision: 1,
+    },
 ];
 
 pub fn remote_binding_definition(
@@ -65,6 +77,19 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
     (entry.remote_access && entry.lifecycle == ResourceLifecycle::Frozen)
         .then(|| remote_binding_definition(&entry.config.resource_type()))
         .flatten()
+}
+
+/// Whether a declaration's remote binding is one a deployment can actually deliver.
+///
+/// A sandbox reaches the network through an egress connector, and starting a session on one is
+/// additionally authorized as `lambda:PassNetworkConnector` — which AWS scopes to no resource and
+/// no condition key, so `sandbox/remote-execute` withholds it. Preflight refuses such a stack;
+/// emitters and generated docs read this so nothing advertises a grant that cannot be used.
+pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
+    entry
+        .config
+        .downcast_ref::<Sandbox>()
+        .is_none_or(|sandbox| matches!(sandbox.egress, SandboxEgress::Allow))
 }
 
 pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {

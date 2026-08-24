@@ -8,6 +8,12 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http"
 import { afterAll, beforeAll, describe, expect, it } from "vitest"
 import { Bindings } from "../src/index.js"
+import {
+  loadAddon,
+  type RawRemoteBindingsHandle,
+  type RawRemoteBindingsHandleConstructor,
+  type RawSandboxHandle,
+} from "../src/loader.js"
 
 const deploymentId = "dep_aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 const managerId = "mgr_bbbbbbbbbbbbbbbbbbbbbbbbbbbb"
@@ -141,5 +147,274 @@ describe("Bindings.forRemoteDeployment (real addon)", () => {
     ])
     expect(platformAuthorizations).toEqual(Array(4).fill(`Bearer ${token}`))
     expect(managerAuthorizations).toEqual(Array(2).fill(`Bearer ${bindingToken}`))
+  })
+})
+
+const externalId = "ext_customer_01"
+const customerToken = "remote-customer-token"
+const customerBindingToken = "customer-binding-token"
+
+let customerManagerServer: Server | undefined
+let customerPlatformServer: Server | undefined
+let customerManagerOrigin: string
+let customerPlatformOrigin: string
+const customerPlatformAuthorizations: Array<string | undefined> = []
+const customerManagerAuthorizations: Array<string | undefined> = []
+const externalAccessBodies: unknown[] = []
+const customerResolveBodies: unknown[] = []
+
+describe("Bindings.forRemoteCustomer (real addon)", () => {
+  beforeAll(async () => {
+    customerManagerServer = createServer(async (request, response) => {
+      customerManagerAuthorizations.push(request.headers.authorization)
+      if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
+        json(response, 404, { message: "not found" })
+        return
+      }
+      customerResolveBodies.push(await bodyOf(request))
+      json(response, 403, {
+        code: "FORBIDDEN",
+        message: "Remote access was revoked",
+        retryable: false,
+        internal: false,
+        httpStatusCode: 403,
+      })
+    })
+    customerManagerOrigin = await listen(customerManagerServer)
+
+    customerPlatformServer = createServer(async (request, response) => {
+      customerPlatformAuthorizations.push(request.headers.authorization)
+      if (
+        request.method === "POST" &&
+        request.url === `/v1/projects/${projectId}/remote-bindings/access`
+      ) {
+        externalAccessBodies.push(await bodyOf(request))
+        json(response, 200, {
+          deploymentId,
+          resourceId: "uploads",
+          accessToken: customerBindingToken,
+          expiresIn: 300,
+          tokenType: "Bearer",
+          managerUrl: customerManagerOrigin,
+        })
+        return
+      }
+      json(response, 404, { message: "not found" })
+    })
+    customerPlatformOrigin = await listen(customerPlatformServer)
+  })
+
+  afterAll(async () => {
+    await Promise.all([close(customerPlatformServer), close(customerManagerServer)])
+  })
+
+  it("selects the customer's deployment by external ID and preserves the manager's denial", async () => {
+    const bindings = await Bindings.forRemoteCustomer({
+      project: projectId,
+      externalId,
+      token: customerToken,
+      apiBaseUrl: customerPlatformOrigin,
+    })
+    await expect(bindings.storage("uploads").head("missing.txt")).rejects.toMatchObject({
+      code: "FORBIDDEN",
+      message: "Remote access was revoked",
+      retryable: false,
+    })
+    // The rejection reselects by external ID rather than by deployment id, so the
+    // second access request is the same one.
+    expect(externalAccessBodies).toEqual([
+      { externalId, capability: "storage" },
+      { externalId, capability: "storage" },
+    ])
+    // The caller never supplies a deployment id on this path, so its presence in
+    // the resolve body proves the manager was reached through the selection response.
+    expect(customerResolveBodies).toEqual([
+      { deploymentId, resourceId: "uploads" },
+      { deploymentId, resourceId: "uploads" },
+    ])
+    expect(customerPlatformAuthorizations).toEqual(Array(2).fill(`Bearer ${customerToken}`))
+    expect(customerManagerAuthorizations).toEqual(Array(2).fill(`Bearer ${customerBindingToken}`))
+  })
+})
+
+const sandboxBindingToken = "sandbox-binding-token"
+
+let sandboxManagerServer: Server | undefined
+let sandboxPlatformServer: Server | undefined
+let sandboxManagerOrigin: string
+let sandboxPlatformOrigin: string
+const sandboxResolveBodies: unknown[] = []
+const sandboxBindingTokenBodies: unknown[] = []
+
+/**
+ * The napi surface is declared in a generated `index.d.ts` that is gitignored, so
+ * `RawRemoteBindingsHandle` is hand-written and nothing type-checks it against Rust. Only a
+ * call through the real addon catches a renamed or missing method.
+ */
+describe("Bindings.sandbox (real addon)", () => {
+  beforeAll(async () => {
+    sandboxManagerServer = createServer(async (request, response) => {
+      if (request.method !== "POST" || request.url !== "/v1/bindings/resolve") {
+        json(response, 404, { message: "not found" })
+        return
+      }
+      sandboxResolveBodies.push(await bodyOf(request))
+      const expiresAt = new Date(Date.now() + 5 * 60_000).toISOString()
+      json(response, 200, {
+        service: "sandbox-aws",
+        binding: {
+          imageArn: "arn:aws:lambda:us-east-1:123456789012:microvm-image/alien-agent-image",
+          imageVersion: "7",
+          region: "us-east-1",
+          previewPorts: [8080],
+          idleSuspendSeconds: 300,
+          maxLifetimeSeconds: 3600,
+          allowEgress: true,
+        },
+        clientConfig: {
+          accountId: "123456789012",
+          region: "us-east-1",
+          credentials: {
+            type: "sessionCredentials",
+            accessKeyId: "AKIAFIXTURE",
+            secretAccessKey: "fixture-secret",
+            sessionToken: "fixture-session",
+            expiresAt,
+          },
+        },
+        expiresAt,
+      })
+    })
+    sandboxManagerOrigin = await listen(sandboxManagerServer)
+
+    sandboxPlatformServer = createServer(async (request, response) => {
+      if (request.method === "GET" && request.url === `/v1/deployments/${deploymentId}`) {
+        json(response, 200, {
+          id: deploymentId,
+          name: "remote-sandbox-test",
+          status: "running",
+          projectId,
+          platform: "aws",
+          deploymentProtocolVersion: 1,
+          deploymentGroupId,
+          purpose: "application",
+          releaseChannel: "production",
+          stackSettings: {},
+          retryRequested: false,
+          createdAt: "2026-01-01T00:00:00Z",
+          updatedAt: "2026-01-01T00:00:00Z",
+          managerId,
+          workspaceId,
+        })
+        return
+      }
+      if (request.method === "POST" && request.url === `/v1/managers/${managerId}/binding-token`) {
+        sandboxBindingTokenBodies.push(await bodyOf(request))
+        json(response, 200, {
+          accessToken: sandboxBindingToken,
+          expiresIn: 300,
+          tokenType: "Bearer",
+          managerUrl: sandboxManagerOrigin,
+          databaseId: null,
+          controlPlaneUrl: null,
+        })
+        return
+      }
+      json(response, 404, { message: "not found" })
+    })
+    sandboxPlatformOrigin = await listen(sandboxPlatformServer)
+  })
+
+  afterAll(async () => {
+    await Promise.all([close(sandboxPlatformServer), close(sandboxManagerServer)])
+  })
+
+  it("resolves a sandbox lease through the manager and hands back a usable handle", async () => {
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId,
+      token,
+      apiBaseUrl: sandboxPlatformOrigin,
+    })
+    const sandbox = bindings.sandbox("agent")
+
+    // Nothing is resolved until an operation runs, so this is the call that reaches the addon.
+    const capabilities = await sandbox.capabilities()
+
+    expect(capabilities).toContain("files")
+    expect(sandboxBindingTokenBodies).toEqual([{ deploymentId }])
+    expect(sandboxResolveBodies).toEqual([{ deploymentId, resourceId: "agent" }])
+  })
+})
+
+/** Own properties of any JS function, so never an addon-emitted static. */
+const functionOwnProperties = new Set(["arguments", "caller", "length", "name", "prototype"])
+
+/** The addon exports every handle class; `NativeAddon` types only the ones the wrapper calls. */
+function nativeClass(name: string): { prototype: object } {
+  const addon = loadAddon() as unknown as Record<string, { prototype: object } | undefined>
+  const exported = addon[name]
+  if (!exported) throw new Error(`the addon exports no class named '${name}'`)
+  return exported
+}
+
+function instanceMethodsOf(name: string): string[] {
+  return Object.getOwnPropertyNames(nativeClass(name).prototype)
+    .filter(member => member !== "constructor")
+    .sort()
+}
+
+function staticMethodsOf(name: string): string[] {
+  return Object.getOwnPropertyNames(nativeClass(name))
+    .filter(member => !functionOwnProperties.has(member))
+    .sort()
+}
+
+const remoteBindingsMembers: Record<keyof RawRemoteBindingsHandle, true> = {
+  ai: true,
+  key: true,
+  sandbox: true,
+  storage: true,
+}
+
+const remoteBindingsFactories: Record<keyof RawRemoteBindingsHandleConstructor, true> = {
+  forCustomer: true,
+  forDeployment: true,
+}
+
+const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
+  capabilities: true,
+  create: true,
+  get: true,
+  getOrCreate: true,
+  list: true,
+  mkdir: true,
+  readFile: true,
+  resume: true,
+  runCommand: true,
+  suspend: true,
+  terminate: true,
+  writeFile: true,
+}
+
+/**
+ * `Record<keyof Raw*, true>` pins each expected list to its interface at compile time, and the
+ * comparisons pin the interfaces to Rust at run time. Neither half alone catches a rename, and
+ * the generated `.d.ts` that would catch both is gitignored.
+ */
+describe("napi surface parity (real addon)", () => {
+  it("emits exactly the RemoteBindingsHandle members the loader declares", () => {
+    expect(instanceMethodsOf("RemoteBindingsHandle")).toEqual(
+      Object.keys(remoteBindingsMembers).sort(),
+    )
+  })
+
+  it("emits exactly the RemoteBindingsHandle factories the loader declares", () => {
+    expect(staticMethodsOf("RemoteBindingsHandle")).toEqual(
+      Object.keys(remoteBindingsFactories).sort(),
+    )
+  })
+
+  it("emits exactly the SandboxHandle members the loader declares", () => {
+    expect(instanceMethodsOf("SandboxHandle")).toEqual(Object.keys(sandboxMembers).sort())
   })
 })

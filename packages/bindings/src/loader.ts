@@ -242,6 +242,7 @@ export interface RawBindingsHandle {
 export interface RawRemoteBindingsHandle {
   storage(name: string): Promise<RawRemoteStorageHandle>
   key(name: string): Promise<RawKeyHandle>
+  sandbox(name: string): Promise<RawSandboxHandle>
   ai(): Promise<RawRemoteAiLease>
 }
 

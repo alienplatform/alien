@@ -154,7 +154,7 @@ pub struct RemoteBindingsHandle {
 impl RemoteBindingsHandle {
     /// Select a customer's Storage deployment by Project and external ID.
     #[napi(factory)]
-    pub async fn for_environment(
+    pub async fn for_customer(
         project: String,
         external_id: String,
         token: String,
@@ -201,6 +201,13 @@ impl RemoteBindingsHandle {
     pub async fn key(&self, name: String) -> napi::Result<KeyHandle> {
         let key = self.inner.key(&name).await.map_err(map_alien_error)?;
         Ok(KeyHandle::new(key))
+    }
+
+    /// Resolve the sandbox binding named `name`.
+    #[napi]
+    pub async fn sandbox(&self, name: String) -> napi::Result<SandboxHandle> {
+        let sandbox = self.inner.sandbox(&name).await.map_err(map_alien_error)?;
+        Ok(SandboxHandle::new(sandbox))
     }
 
     /// Resolve the deployment's unique managed AI binding.

@@ -1,8 +1,12 @@
 import { z } from "zod"
 import { unwrapNapiError } from "./errors.js"
-import { createRemoteKeyFactory, createRemoteStorageFactory } from "./factories.js"
+import {
+  createRemoteKeyFactory,
+  createRemoteSandboxFactory,
+  createRemoteStorageFactory,
+} from "./factories.js"
 import { loadAddon } from "./loader.js"
-import type { Key, RemoteStorage } from "./types.js"
+import type { Key, RemoteStorage, Sandbox } from "./types.js"
 
 const aiBindingSchema = z.discriminatedUnion("service", [
   z.object({ service: z.literal("bedrock"), region: z.string().min(1) }),
@@ -61,15 +65,18 @@ export class Bindings {
   readonly #storage: (name: string) => RemoteStorage
   readonly #key: (name: string) => Key
   readonly #ai: () => Promise<RemoteAiLease>
+  readonly #sandbox: (name: string) => Sandbox
 
   private constructor(
     storage: (name: string) => RemoteStorage,
     key: (name: string) => Key,
     ai: () => Promise<RemoteAiLease>,
+    sandbox: (name: string) => Sandbox,
   ) {
     this.#storage = storage
     this.#key = key
     this.#ai = ai
+    this.#sandbox = sandbox
   }
 
   /** Select a customer's Storage by Project and stable external ID. */
@@ -121,6 +128,7 @@ export class Bindings {
             .parse(lease.expiresAt),
         }
       },
+      createRemoteSandboxFactory(bindings),
     )
   }
 
@@ -137,5 +145,10 @@ export class Bindings {
   /** Resolve the deployment's unique managed AI binding. */
   ai(): Promise<RemoteAiLease> {
     return this.#ai()
+  }
+
+  /** Resolve a remote Sandbox binding by resource name. */
+  sandbox(name: string): Sandbox {
+    return this.#sandbox(name)
   }
 }

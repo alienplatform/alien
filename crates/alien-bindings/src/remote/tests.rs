@@ -178,6 +178,7 @@ impl Fixture {
                 RemoteBindingSource::discover_external_environment(
                     PROJECT_ID,
                     EXTERNAL_ID,
+                    RemoteBindingCapability::Storage,
                     PLATFORM_TOKEN,
                     Some(&self.api_url),
                     ManagerResolverKind::LocalFixture,

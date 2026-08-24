@@ -5,8 +5,8 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    Network, NetworkSettings, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
-    SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
+    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
+    SandboxEgress, SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
 };
 
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
@@ -413,4 +413,137 @@ fn the_sandbox_templates_render_whole() {
         );
         insta::assert_snapshot!(name, yaml);
     }
+}
+
+/// The grant a remote caller's credentials are bounded by.
+///
+/// The setup package is where the Remote Bindings identity gets its policies, so without this the
+/// manager mints a session against a role that carries none.
+#[test]
+fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(
+            sandbox_fixture(SandboxEgress::Allow),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote sandbox",
+    );
+
+    let policy = template
+        .resources
+        .get("AgentsRemoteExecutePolicy")
+        .expect("the remote grant must attach to the Remote Bindings role");
+    assert_eq!(policy.resource_type, "AWS::IAM::Policy");
+    let roles =
+        serde_json::to_string(policy.properties.get("Roles").expect("Roles")).expect("serializes");
+    assert!(
+        roles.contains("AccessRole"),
+        "the grant belongs to the shared Remote Bindings identity: {roles}"
+    );
+
+    let document = serde_json::to_string(
+        policy
+            .properties
+            .get("PolicyDocument")
+            .expect("PolicyDocument"),
+    )
+    .expect("serializes");
+    for action in [
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:GetMicrovm",
+    ] {
+        assert!(document.contains(action), "{action} is missing: {document}");
+    }
+    assert!(
+        document.contains("microvm-image:${AWS::StackName}-agents"),
+        "the grant must name this sandbox's own image: {document}"
+    );
+    for withheld in [
+        "lambda:PassNetworkConnector",
+        "iam:PassRole",
+        "lambda:CreateMicrovmShellAuthToken",
+        "microvm-image:${AWS::StackName}-*",
+    ] {
+        assert!(
+            !document.contains(withheld),
+            "{withheld} must stay out of the remote grant: {document}"
+        );
+    }
+}
+
+/// A sandbox that routes egress through a connector is not remotely reachable, because
+/// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`. Preflight refuses such a
+/// stack; the emitter agrees, so a stack that reaches here another way installs no usable grant.
+#[test]
+fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("byo-sandbox-deny".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            sandbox_fixture(SandboxEgress::Deny),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    // Not `render_built_ins_template`: a bindings-only stack skips the standard conditions, which
+    // the created network's own resources reference, so cfn-lint refuses the template this shape
+    // produces. That is the pre-existing gap the refusal above closes, not the subject here.
+    let template = try_render_built_ins(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote sandbox deny",
+    )
+    .expect("the template renders");
+
+    let logical_ids = template.resources.keys().collect::<Vec<_>>();
+    assert!(
+        template.resources.contains_key("Agents")
+            && template.resources.contains_key("AgentsEgressConnector"),
+        "the sandbox and its deny connector must still render: {logical_ids:?}"
+    );
+    assert!(
+        template.resources.contains_key("AccessRole"),
+        "the Remote Bindings identity must still render: {logical_ids:?}"
+    );
+    assert!(
+        !template.resources.contains_key("AgentsRemoteExecutePolicy"),
+        "an egress-restricted sandbox must carry no remote execute grant: {logical_ids:?}"
+    );
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    assert!(
+        !rendered.contains("lambda:CreateMicrovmAuthToken"),
+        "no policy in the template may mint session credentials for this sandbox: {rendered}"
+    );
 }

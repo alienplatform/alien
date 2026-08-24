@@ -18,12 +18,12 @@ use tracing::debug;
 use crate::error::{ErrorData, Result};
 use crate::provider::BindingsProvider;
 use crate::refreshing::{KeyProviderApi, RefreshingKey, RefreshingStorage, StorageProviderApi};
-use crate::traits::{BindingsProviderApi, Key, Storage};
+use crate::traits::{BindingsProviderApi, Key, Sandbox, Storage};
 
 mod access;
 mod manager_conversion;
 
-use access::{ManagerResolverKind, RemoteBindingSource};
+use access::{ManagerResolverKind, RemoteBindingCapability, RemoteBindingSource};
 
 #[cfg(test)]
 use access::{
@@ -78,11 +78,12 @@ impl RemoteBindingsProvider {
         Self::discover(deployment_id, token, api_base_url, Arc::new(SystemClock)).await
     }
 
-    /// Selects a external environment's Storage deployment by Project and external ID and
-    /// creates a lazy remote provider.
+    /// Selects a external environment's deployment for one capability by Project and external
+    /// ID and creates a lazy remote provider.
     pub(crate) async fn for_remote_environment(
         project: &str,
         external_id: &str,
+        capability: RemoteBindingCapability,
         token: &str,
         api_base_url: Option<&str>,
     ) -> Result<Self> {
@@ -92,6 +93,7 @@ impl RemoteBindingsProvider {
                 RemoteBindingSource::discover_external_environment(
                     project,
                     external_id,
+                    capability,
                     token,
                     api_base_url,
                     ManagerResolverKind::Generated,
@@ -296,6 +298,7 @@ impl RemoteBindings {
                 RemoteBindingsProvider::for_remote_environment(
                     project,
                     external_id,
+                    RemoteBindingCapability::Storage,
                     token,
                     api_base_url,
                 )
@@ -362,6 +365,20 @@ impl RemoteBindings {
             self.provider.clone(),
             resource_id.to_string(),
         )))
+    }
+
+    /// Loads a Sandbox binding for running untrusted code in the customer's cloud.
+    ///
+    /// No refreshing wrapper, mirroring the in-cloud accessor: a sandbox handle addresses a
+    /// control plane rather than holding data-plane credentials, and each session capability is
+    /// minted per call. The handle keeps the credential lease that was current when it was
+    /// created, so call this again once that lease expires.
+    ///
+    /// The cached lease is served while it is unexpired even if a refresh fails, as Storage
+    /// does: a caller already holding the handle keeps that authority either way, so refusing
+    /// during a Manager blip withholds nothing.
+    pub async fn sandbox(&self, resource_id: &str) -> Result<Arc<dyn Sandbox>> {
+        self.provider.resolver(resource_id).await.sandbox().await
     }
 
     /// Loads one short-lived managed AI binding lease.
@@ -439,6 +456,14 @@ enum ResolvedRemoteBinding {
         binding: alien_core::FoundryAiBinding,
         #[serde(rename = "clientConfig")]
         client_config: Box<alien_core::AzureClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
+    #[serde(rename = "sandbox-aws")]
+    SandboxAws {
+        binding: Box<alien_core::AwsSandboxBinding>,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AwsClientConfig>,
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
@@ -603,9 +628,21 @@ impl ResolvedRemoteBinding {
                     expires_at,
                 )
             }
+            Self::SandboxAws {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_aws_remote_client_config(&client_config, expires_at)?;
+                (
+                    alien_core::ClientConfig::Aws(client_config),
+                    serialize_remote_binding(alien_core::SandboxBinding::Aws(*binding))?,
+                    expires_at,
+                )
+            }
             Self::Bedrock { .. } | Self::Vertex { .. } | Self::Foundry { .. } => {
                 return Err(AlienError::new(ErrorData::RemoteAccessFailed {
-                    operation: "use an AI lease as a Storage or Key binding".to_string(),
+                    operation: "use an AI lease as a Storage, Key or Sandbox binding".to_string(),
                 }));
             }
             #[cfg(test)]
@@ -635,7 +672,7 @@ fn serialize_remote_binding(binding: impl Serialize) -> Result<serde_json::Value
 
 fn invalid_remote_lease(provider: &str, reason: &str) -> AlienError<ErrorData> {
     AlienError::new(ErrorData::RemoteAccessFailed {
-        operation: format!("validate {provider} remote Storage credential lease: {reason}"),
+        operation: format!("validate {provider} remote credential lease: {reason}"),
     })
 }
 
@@ -798,6 +835,7 @@ struct RemoteStorageResolver {
 enum RequestedBindingKind {
     Storage,
     Key,
+    Sandbox,
 }
 
 impl fmt::Debug for RemoteStorageResolver {
@@ -822,6 +860,14 @@ impl RemoteStorageResolver {
     async fn key(&self) -> Result<Arc<dyn Key>> {
         BindingsProviderApi::load_key(
             &*self.provider(RequestedBindingKind::Key).await?,
+            &self.resource_id,
+        )
+        .await
+    }
+
+    async fn sandbox(&self) -> Result<Arc<dyn Sandbox>> {
+        BindingsProviderApi::load_sandbox(
+            &*self.provider(RequestedBindingKind::Sandbox).await?,
             &self.resource_id,
         )
         .await
@@ -911,7 +957,7 @@ impl RemoteStorageResolver {
         if expires_at <= now {
             return Err(AlienError::new(ErrorData::RemoteAccessFailed {
                 operation: format!(
-                    "manager returned an expired lease for Storage binding '{}'",
+                    "manager returned an expired lease for remote binding '{}'",
                     self.resource_id
                 ),
             }));
@@ -929,6 +975,9 @@ impl RemoteStorageResolver {
             }
             RequestedBindingKind::Key => {
                 BindingsProviderApi::load_key(&*provider, &self.resource_id).await?;
+            }
+            RequestedBindingKind::Sandbox => {
+                BindingsProviderApi::load_sandbox(&*provider, &self.resource_id).await?;
             }
         }
         let lifetime = expires_at - now;

@@ -7,7 +7,7 @@
 use alien_core::{
     Ai, AiBinding, AwsClientConfig, AwsCredentials, AzureClientConfig, AzureCredentials,
     BindingValue, ClientConfig, DeploymentStatus, GcpClientConfig, GcpCredentials, Key, KeyBinding,
-    Platform, ResourceLifecycle, ResourceStatus, Storage, StorageBinding,
+    Platform, ResourceLifecycle, ResourceStatus, Sandbox, SandboxBinding, Storage, StorageBinding,
 };
 use alien_error::{Context, ContextError, IntoAlienError};
 use axum::{
@@ -138,6 +138,42 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
+    /// AWS Lambda MicroVM sandbox and an AWS session.
+    #[serde(rename = "sandbox-aws")]
+    SandboxAws {
+        binding: RemoteAwsSandboxBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteAwsClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
+}
+
+/// Concrete MicroVM sandbox topology returned to remote clients.
+///
+/// Deliberately without the execution role and the egress connectors of the in-cloud binding: the
+/// provider passes no role, and a binding carrying connectors is refused before it reaches here.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteAwsSandboxBinding {
+    /// MicroVM image the credential lease authorizes sessions against.
+    pub image_arn: String,
+    /// Image version sessions are enumerated by together with the image.
+    pub image_version: String,
+    /// Region the MicroVMs run in.
+    pub region: String,
+    /// Ports a session capability may be minted for.
+    pub preview_ports: Vec<u16>,
+    /// Idle seconds after which a session suspends, where the declaration asked for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub idle_suspend_seconds: Option<u32>,
+    /// Wall-clock ceiling on a session, where the declaration asked for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_lifetime_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress. Always true here, and sent rather than
+    /// implied so the client's own fail-open check on an empty connector list still has an answer.
+    pub allow_egress: bool,
 }
 
 #[derive(Serialize)]
@@ -337,10 +373,15 @@ enum RemoteAiBinding {
     Azure(RemoteAzureFoundryAiBinding),
 }
 
+enum RemoteSandboxBinding {
+    Aws(RemoteAwsSandboxBinding),
+}
+
 enum ResolvedRemoteBinding {
     Storage(RemoteStorageBinding),
     Key(RemoteKeyBinding),
     Ai(RemoteAiBinding),
+    Sandbox(RemoteSandboxBinding),
 }
 
 impl ResolvedRemoteBinding {
@@ -349,6 +390,15 @@ impl ResolvedRemoteBinding {
             Self::Storage(binding) => binding.credential_scope(),
             Self::Key(binding) => binding.credential_scope(),
             Self::Ai(binding) => binding.credential_scope(),
+            Self::Sandbox(binding) => binding.credential_scope(),
+        }
+    }
+}
+
+impl RemoteSandboxBinding {
+    fn credential_scope(&self) -> RemoteBindingCredentialScope {
+        match self {
+            Self::Aws(_) => RemoteBindingCredentialScope::AwsSandbox,
         }
     }
 }
@@ -584,6 +634,25 @@ impl ResolveBindingResponse {
             )),
         }
     }
+
+    fn from_sandbox_parts(
+        binding: RemoteSandboxBinding,
+        lease: MaterializedCredentialLease,
+        expires_at: String,
+    ) -> Result<Self, alien_error::AlienError<ErrorData>> {
+        match (binding, lease.client_config) {
+            (RemoteSandboxBinding::Aws(binding), ClientConfig::Aws(client_config)) => {
+                Ok(Self::SandboxAws {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            _ => Err(ErrorData::internal(
+                "Remote Sandbox binding and materialized credential platforms do not match",
+            )),
+        }
+    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -686,6 +755,9 @@ async fn resolve_binding(
         alien_core::remote_bindings::RemoteBindingKind::Ai => {
             remote_ai_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Ai)
         }
+        alien_core::remote_bindings::RemoteBindingKind::Sandbox => {
+            remote_sandbox_binding(&deployment, &resource_id).map(ResolvedRemoteBinding::Sandbox)
+        }
     };
     let binding = match binding {
         Ok(binding) => binding,
@@ -732,6 +804,9 @@ async fn resolve_binding(
             lease,
             expires_at.clone(),
         ),
+        ResolvedRemoteBinding::Sandbox(binding) => {
+            ResolveBindingResponse::from_sandbox_parts(binding, lease, expires_at.clone())
+        }
     };
     let response = match response {
         Ok(response) => response,
@@ -1155,6 +1230,81 @@ fn remote_ai_binding(
             deployment.platform
         ))),
     }
+}
+
+fn remote_sandbox_binding(
+    deployment: &DeploymentRecord,
+    resource_id: &str,
+) -> Result<RemoteSandboxBinding, alien_error::AlienError<ErrorData>> {
+    // AWS alone, unlike the other kinds. A GCP sandbox is a subprocess of the application's own
+    // Cloud Run instance, and an Azure sandbox group is created by the runtime controller, so
+    // neither has a durable parent a setup-owned identity could be scoped to.
+    if deployment.platform != Platform::Aws {
+        return Err(ErrorData::bad_request(format!(
+            "Remote Sandbox is only supported on AWS, not deployment platform '{}'",
+            deployment.platform
+        )));
+    }
+    let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+        ErrorData::bad_request("Deployment has no stack state (not yet provisioned)")
+    })?;
+    let resource = stack_state.resource(resource_id).ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Resource '{resource_id}' does not exist in stack state"
+        ))
+    })?;
+    if resource.resource_type != Sandbox::RESOURCE_TYPE.as_ref() {
+        return Err(ErrorData::bad_request(format!(
+            "Resource '{resource_id}' is not a sandbox"
+        )));
+    }
+    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+        return Err(ErrorData::bad_request(format!(
+            "Sandbox resource '{resource_id}' is not Frozen"
+        )));
+    }
+    if resource.status != ResourceStatus::Running {
+        return Err(ErrorData::bad_request(format!(
+            "Sandbox resource '{resource_id}' is not running"
+        )));
+    }
+    let binding = resource.remote_binding_params.clone().ok_or_else(|| {
+        ErrorData::bad_request(format!(
+            "Sandbox resource '{resource_id}' is not enabled for remote access"
+        ))
+    })?;
+    let binding: SandboxBinding =
+        serde_json::from_value(binding)
+            .into_alien_error()
+            .context(ErrorData::BadRequest {
+                reason: format!("Sandbox resource '{resource_id}' has an invalid remote binding"),
+            })?;
+
+    let SandboxBinding::Aws(binding) = binding else {
+        return Err(ErrorData::bad_request(format!(
+            "Sandbox resource '{resource_id}' binding does not match deployment platform '{}'",
+            deployment.platform
+        )));
+    };
+    // Starting a session on a connector is a third authorization, `lambda:PassNetworkConnector`,
+    // which AWS scopes to no resource and no condition key. `sandbox/remote-execute` therefore
+    // withholds it, and a sandbox that restricts egress is refused here rather than reaching the
+    // caller as an AccessDenied from inside its own `create()`.
+    if !binding.egress_connector_arns.is_empty() {
+        return Err(ErrorData::bad_request(format!(
+            "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
+        )));
+    }
+
+    Ok(RemoteSandboxBinding::Aws(RemoteAwsSandboxBinding {
+        image_arn: concrete_binding_value(&binding.image_arn, "AWS sandbox imageArn")?,
+        image_version: concrete_binding_value(&binding.image_version, "AWS sandbox imageVersion")?,
+        region: concrete_binding_value(&binding.region, "AWS sandbox region")?,
+        preview_ports: binding.preview_ports,
+        idle_suspend_seconds: binding.idle_suspend_seconds,
+        max_lifetime_seconds: binding.max_lifetime_seconds,
+        allow_egress: binding.allow_egress,
+    }))
 }
 
 #[cfg(test)]

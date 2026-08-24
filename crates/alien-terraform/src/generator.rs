@@ -574,7 +574,11 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
     let resources = stack
         .resources()
         .filter_map(|(resource_id, entry)| {
-            alien_core::remote_bindings::remote_binding_for_entry(entry)
+            // The document a security team approves the grant from, so it lists only bindings the
+            // module actually installs a policy for.
+            alien_core::remote_bindings::remote_binding_is_deliverable(entry)
+                .then(|| alien_core::remote_bindings::remote_binding_for_entry(entry))
+                .flatten()
                 .map(|definition| (resource_id, definition))
         })
         .collect::<Vec<_>>();

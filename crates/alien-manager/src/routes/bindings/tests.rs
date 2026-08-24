@@ -1,8 +1,9 @@
 use std::collections::HashMap;
 
 use alien_core::{
-    Ai, ExternalBinding, ExternalBindings, Platform, Resource, Stack, StackResourceState,
-    StackSettings, StackState,
+    Ai, AwsSandboxBinding, BindingValue, ExternalBinding, ExternalBindings, Platform, Resource,
+    SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack, StackResourceState, StackSettings,
+    StackState,
 };
 use alien_error::AlienError;
 use async_trait::async_trait;
@@ -180,6 +181,185 @@ fn lease(client_config: ClientConfig) -> MaterializedCredentialLease {
         client_config,
         expires_at: Utc::now() + chrono::Duration::minutes(15),
     }
+}
+
+fn sandbox_resource() -> Sandbox {
+    Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu:24.04".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build()
+}
+
+fn sandbox_stack_state(binding: SandboxBinding, platform: Platform) -> StackState {
+    let mut stack_state = StackState::new(platform);
+    stack_state.resources.insert(
+        "agents".to_string(),
+        StackResourceState::builder()
+            .resource_type(Sandbox::RESOURCE_TYPE.to_string())
+            .status(ResourceStatus::Running)
+            .config(Resource::new(sandbox_resource()))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .remote_binding_params(serde_json::to_value(binding).unwrap())
+            .dependencies(Vec::new())
+            .build(),
+    );
+    stack_state
+}
+
+fn open_sandbox_binding() -> SandboxBinding {
+    let SandboxBinding::Aws(mut binding) = SandboxBinding::aws(
+        "arn:aws:lambda:us-east-1:123456789012:microvm-image:stack-agents",
+        "3",
+        "us-east-1",
+    ) else {
+        unreachable!("the AWS constructor returns the AWS variant")
+    };
+    binding.allow_egress = true;
+    binding.preview_ports = vec![8080];
+    binding.max_lifetime_seconds = Some(1800);
+    SandboxBinding::Aws(binding)
+}
+
+#[test]
+fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
+    let deployment = deployment(sandbox_stack_state(open_sandbox_binding(), Platform::Aws));
+
+    let Ok(RemoteSandboxBinding::Aws(binding)) = remote_sandbox_binding(&deployment, "agents")
+    else {
+        panic!("a running Frozen sandbox with an open-egress binding resolves")
+    };
+
+    assert_eq!(
+        binding.image_arn,
+        "arn:aws:lambda:us-east-1:123456789012:microvm-image:stack-agents"
+    );
+    assert_eq!(binding.image_version, "3");
+    assert_eq!(binding.region, "us-east-1");
+    assert_eq!(binding.preview_ports, vec![8080]);
+    assert_eq!(binding.max_lifetime_seconds, Some(1800));
+    assert_eq!(binding.idle_suspend_seconds, None);
+    assert!(
+        binding.allow_egress,
+        "an empty connector list means open egress, and the client re-checks the pair"
+    );
+}
+
+/// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`, so a session cannot be
+/// started on the connector a restricting sandbox declares. Refusing here names the reason
+/// instead of surfacing an AccessDenied from inside the caller's own `create()`.
+#[test]
+fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
+    let SandboxBinding::Aws(binding) = open_sandbox_binding() else {
+        unreachable!("the fixture is the AWS variant")
+    };
+    let restricted = SandboxBinding::Aws(AwsSandboxBinding {
+        allow_egress: false,
+        egress_connector_arns: vec![BindingValue::value(
+            "arn:aws:lambda:us-east-1:123456789012:network-connector:stack-agents".to_string(),
+        )],
+        ..binding
+    });
+    let deployment = deployment(sandbox_stack_state(restricted, Platform::Aws));
+
+    let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+        panic!("a connector cannot be passed with the remote grant")
+    };
+    assert_eq!(error.code, "BAD_REQUEST");
+    assert!(
+        error.message.contains("restricts egress"),
+        "{}",
+        error.message
+    );
+}
+
+/// Preflight refuses a remote binding by its permission set's platform coverage, while this route
+/// hardcodes AWS. Widening either alone brings back a deployment that installs a grant the other
+/// end will not honour.
+#[test]
+fn remote_sandbox_resolve_agrees_with_the_permission_set_platform_coverage() {
+    for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(open_sandbox_binding(), platform),
+            platform,
+        );
+
+        assert_eq!(
+            alien_permissions::permission_set_covers_platform("sandbox/remote-execute", platform),
+            remote_sandbox_binding(&deployment, "agents").is_ok(),
+            "{platform}"
+        );
+    }
+}
+
+#[test]
+fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
+    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+        let deployment = deployment_on_platform(
+            sandbox_stack_state(open_sandbox_binding(), platform),
+            platform,
+        );
+        let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
+            panic!("only AWS provisions a sandbox parent a setup identity can be scoped to")
+        };
+        assert_eq!(error.code, "BAD_REQUEST");
+        assert!(
+            error.message.contains("only supported on AWS"),
+            "{platform}"
+        );
+    }
+}
+
+/// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent
+/// breakage for every remote client.
+#[test]
+fn remote_sandbox_response_carries_the_service_tag_and_no_extra_credentials() {
+    let response = ResolveBindingResponse::from_sandbox_parts(
+        match remote_sandbox_binding(
+            &deployment(sandbox_stack_state(open_sandbox_binding(), Platform::Aws)),
+            "agents",
+        ) {
+            Ok(binding) => binding,
+            Err(error) => panic!("fixture must resolve: {error}"),
+        },
+        lease(ClientConfig::Aws(Box::new(AwsClientConfig {
+            account_id: "123456789012".to_string(),
+            region: "us-east-1".to_string(),
+            credentials: AwsCredentials::SessionCredentials {
+                access_key_id: "AKIA".to_string(),
+                secret_access_key: "secret".to_string(),
+                session_token: "token".to_string(),
+                expires_at: "2026-01-01T00:00:00Z".to_string(),
+            },
+            service_overrides: None,
+        }))),
+        "2026-01-01T00:00:00Z".to_string(),
+    )
+    .expect("an AWS binding pairs with an AWS lease");
+
+    let json = serde_json::to_value(&response).expect("response serializes");
+    assert_eq!(json["service"], "sandbox-aws");
+    assert_eq!(json["binding"]["imageVersion"], "3");
+    assert_eq!(json["binding"]["allowEgress"], true);
+    assert_eq!(json["binding"]["previewPorts"], serde_json::json!([8080]));
+    assert!(
+        json["binding"].get("idleSuspendSeconds").is_none(),
+        "an absent ceiling is omitted rather than sent as null"
+    );
+    assert_eq!(
+        json["clientConfig"]["credentials"]["type"],
+        "sessionCredentials"
+    );
+    assert_eq!(json["expiresAt"], "2026-01-01T00:00:00Z");
+    assert_eq!(
+        format!("{response:?}"),
+        "ResolveBindingResponse { lease: \"<redacted>\" }"
+    );
 }
 
 #[test]

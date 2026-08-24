@@ -10,6 +10,7 @@ import type {
   RawQueueHandle,
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
+  RawSandboxHandle,
   RawStorageHandle,
   RawVaultHandle,
 } from "../loader.js"
@@ -53,6 +54,29 @@ function fakeRemoteAddon() {
     decrypt: async ciphertext => ciphertext,
   }
   const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
+  const session = (sessionId: string | null | undefined) => ({
+    sessionId: sessionId ?? "generated",
+    state: "running",
+    generation: 1,
+  })
+  const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {})
+  const sandbox: RawSandboxHandle = {
+    capabilities: () => ["files", "reconnect"],
+    create: async sessionId => session(sessionId),
+    get: async () => null,
+    getOrCreate: async sessionId => session(sessionId),
+    list: async () => [],
+    runCommand: async () => {
+      throw new Error("unused")
+    },
+    readFile: async (_sessionId, path) => Buffer.from(path),
+    writeFile: async () => {},
+    mkdir: async () => {},
+    suspend: async () => {},
+    resume: async () => {},
+    terminate,
+  }
+  const resolveSandbox = vi.fn<(name: string) => Promise<RawSandboxHandle>>(async () => sandbox)
   const resolveAi = vi.fn<RawRemoteBindingsHandle["ai"]>(async () => ({
     resourceId: "models",
     bindingJson: JSON.stringify({ service: "bedrock", region: "us-east-1" }),
@@ -115,6 +139,8 @@ function fakeRemoteAddon() {
 
     key = resolveKey
 
+    sandbox = resolveSandbox
+
     ai = resolveAi
   }
 
@@ -144,6 +170,8 @@ function fakeRemoteAddon() {
     head,
     put,
     resolveKey,
+    resolveSandbox,
+    terminate,
     resolveAi,
   }
 }
@@ -232,6 +260,79 @@ describe("Bindings.forRemoteDeployment", () => {
     expect(lease.binding).toEqual({ service: "bedrock", region: "us-east-1" })
     expect(lease.clientConfig.platform).toBe("aws")
     expect(lease.expiresAt).toEqual(new Date("2026-08-05T08:00:00Z"))
+  })
+
+  it("mirrors the in-cloud Sandbox surface and resolves each name lazily once", async () => {
+    const fixture = fakeRemoteAddon()
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    const agent = bindings.sandbox("agent")
+    const build = bindings.sandbox("build")
+
+    expect(fixture.resolveSandbox).not.toHaveBeenCalled()
+    expect(bindings.sandbox("agent")).toBe(agent)
+    // A remote Sandbox is the in-cloud one, so a method missing here is a caller writing
+    // against a surface the hosted path silently does not have.
+    expect(Object.keys(agent).sort()).toEqual(
+      [
+        "capabilities",
+        "create",
+        "get",
+        "getOrCreate",
+        "list",
+        "runCommand",
+        "readFile",
+        "writeFiles",
+        "mkdir",
+        "suspend",
+        "resume",
+        "terminate",
+      ].sort(),
+    )
+
+    await expect(agent.capabilities()).resolves.toEqual(["files", "reconnect"])
+    await agent.terminate("session_1")
+    await build.capabilities()
+
+    expect(fixture.forRemoteDeployment).toHaveBeenCalledOnce()
+    expect(fixture.resolveSandbox.mock.calls).toEqual([["agent"], ["build"]])
+    expect(fixture.terminate).toHaveBeenCalledWith("session_1")
+  })
+
+  it("unwraps napi errors from Sandbox resolution and operations", async () => {
+    const fixture = fakeRemoteAddon()
+    fixture.resolveSandbox.mockRejectedValueOnce(
+      new Error(
+        JSON.stringify({
+          code: "REMOTE_BINDING_DENIED",
+          message: "Remote binding access denied",
+          retryable: false,
+        }),
+      ),
+    )
+    loadAddon.mockReturnValue(fixture.addon)
+    const bindings = await Bindings.forRemoteDeployment({
+      deploymentId: "dep_123",
+      token: "token_123",
+    })
+
+    await expect(bindings.sandbox("agent").capabilities()).rejects.toMatchObject({
+      code: "REMOTE_BINDING_DENIED",
+      message: "Remote binding access denied",
+    })
+
+    fixture.terminate.mockRejectedValueOnce(new Error("native transport failed"))
+    const operation = bindings.sandbox("build").terminate("session_1")
+
+    await expect(operation).rejects.toBeInstanceOf(AlienError)
+    await expect(operation).rejects.toMatchObject({
+      code: "BINDINGS_ERROR",
+      message: "native transport failed",
+    })
   })
 
   it("reuses one native bindings handle and resolves each Storage handle lazily once", async () => {

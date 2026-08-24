@@ -3,7 +3,7 @@
 //! Keep this boundary exhaustive: a manager schema change must fail compilation
 //! until every new response or credential variant has an intentional mapping.
 
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager_api::types as manager_types;
 use chrono::{DateTime, Utc};
 
@@ -244,9 +244,75 @@ impl ResolvedRemoteBinding {
                     expires_at,
                 }
             }
+            manager_types::ResolveBindingResponse::SandboxAws {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAwsCredentials::SessionCredentials {
+                    access_key_id,
+                    secret_access_key,
+                    session_token,
+                    expires_at: credential_expires_at,
+                } = client_config.credentials;
+                let preview_ports = binding
+                    .preview_ports
+                    .into_iter()
+                    .map(|port| narrow_manager_number(port, "previewPorts", resource_id))
+                    .collect::<Result<Vec<u16>>>()?;
+                Self::SandboxAws {
+                    binding: Box::new(alien_core::AwsSandboxBinding {
+                        image_arn: alien_core::BindingValue::Value(binding.image_arn),
+                        image_version: alien_core::BindingValue::Value(binding.image_version),
+                        region: alien_core::BindingValue::Value(binding.region),
+                        // The remote contract carries neither: the provider refuses an execution
+                        // role outright, and reads egress from `allow_egress` against this list.
+                        execution_role_arn: None,
+                        egress_connector_arns: Vec::new(),
+                        preview_ports,
+                        idle_suspend_seconds: binding
+                            .idle_suspend_seconds
+                            .map(|seconds| {
+                                narrow_manager_number(seconds, "idleSuspendSeconds", resource_id)
+                            })
+                            .transpose()?,
+                        max_lifetime_seconds: binding
+                            .max_lifetime_seconds
+                            .map(|seconds| {
+                                narrow_manager_number(seconds, "maxLifetimeSeconds", resource_id)
+                            })
+                            .transpose()?,
+                        allow_egress: binding.allow_egress,
+                    }),
+                    client_config: Box::new(alien_core::AwsClientConfig {
+                        account_id: client_config.account_id,
+                        region: client_config.region,
+                        credentials: alien_core::AwsCredentials::SessionCredentials {
+                            access_key_id,
+                            secret_access_key,
+                            session_token,
+                            expires_at: credential_expires_at,
+                        },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
         };
         Ok(lease)
     }
+}
+
+/// Narrows one of the manager schema's `i32` fields, refusing the whole lease when it does not
+/// fit. A truncated preview port would mint ingress for a port the declaration never named.
+fn narrow_manager_number<T: TryFrom<i32>>(value: i32, field: &str, resource_id: &str) -> Result<T> {
+    T::try_from(value).map_err(|_| {
+        AlienError::new(ErrorData::RemoteAccessFailed {
+            operation: format!(
+                "read {field} value {value} for remote binding '{resource_id}': out of range"
+            ),
+        })
+    })
 }
 
 fn parse_manager_expiry(expires_at: String, resource_id: &str) -> Result<DateTime<Utc>> {

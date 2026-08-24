@@ -112,6 +112,97 @@
 // This includes the static PERMISSION_SETS_REGISTRY and the public API workers
 include!(concat!(env!("OUT_DIR"), "/permission_sets_registry.rs"));
 
+/// AWS actions that hand out a credential reaching inside a MicroVM session.
+///
+/// A MicroVM auth token is what the sandbox agent protocol travels on, and `ConnectMicrovm`
+/// attaches to a running session with no matching API operation to audit.
+pub const SENSITIVE_MICROVM_ACTIONS: &[&str] = &[
+    "lambda:CreateMicrovmAuthToken",
+    "lambda:CreateMicrovmShellAuthToken",
+    "lambda:ConnectMicrovm",
+];
+
+/// AWS actions that address an existing MicroVM session, or start one.
+///
+/// Starting counts: one image serves every session of a sandbox and AWS scopes a mint no finer,
+/// so whoever holds `sandbox/remote-execute` mints into whatever sessions exist.
+pub const MICROVM_SESSION_LIFECYCLE_ACTIONS: &[&str] = &[
+    "lambda:RunMicrovm",
+    "lambda:SuspendMicrovm",
+    "lambda:ResumeMicrovm",
+    "lambda:TerminateMicrovm",
+    "lambda:GetMicrovm",
+];
+
+/// Whether `permission_set` grants anything that addresses a MicroVM session.
+///
+/// Bindings are deliberately not consulted. `${stackPrefix}` is uninterpolated this early and an
+/// inline set's ARNs are free-form user strings, so any ARN comparison is either unsound or
+/// widened past by writing `*`. Carrying the verb at all is the answer.
+///
+/// AWS only: a GCP sandbox is a launcher subprocess that makes no GCP API call, and an Azure
+/// sandbox group is created by the runtime controller rather than reached through a stack grant.
+pub fn permission_set_reaches_a_microvm_session(
+    permission_set: &alien_core::permissions::PermissionSet,
+) -> bool {
+    permission_set
+        .platforms
+        .aws
+        .iter()
+        .flatten()
+        .filter(|entry| entry.effect.is_allow())
+        .flat_map(|entry| entry.grant.actions.iter().flatten())
+        .any(|action| action_reaches_a_microvm_session(action))
+}
+
+/// Whether one IAM action, possibly carrying a `*`, can authorize an operation on a session.
+///
+/// Three cases sit together here: a wildcard is cleared only against the known verbs, an exact
+/// action is matched on the `Microvm` namespace so a verb AWS adds later fails closed, and the
+/// `MicrovmImage` family is excluded because it addresses the image a session launches from —
+/// `sandbox/provision` and `sandbox/heartbeat` legitimately hold those.
+///
+/// Compared lowercased throughout, because AWS matches action names case-insensitively — a set
+/// granting `lambda:runmicrovm` reaches a session exactly as `lambda:RunMicrovm` does.
+fn action_reaches_a_microvm_session(action: &str) -> bool {
+    let action = action.to_ascii_lowercase();
+    if action.contains('*') {
+        let literal = action.split('*').next().unwrap_or_default();
+        return SENSITIVE_MICROVM_ACTIONS
+            .iter()
+            .chain(MICROVM_SESSION_LIFECYCLE_ACTIONS)
+            .any(|known| known.to_ascii_lowercase().starts_with(literal));
+    }
+    action
+        .strip_prefix("lambda:")
+        .is_some_and(|verb| verb.contains("microvm") && !verb.contains("microvmimage"))
+}
+
+/// Whether `permission_set_id` grants anything at all on `platform`.
+///
+/// An absent or empty block is a kind the platform does not support: emitters and the generated
+/// permission docs both iterate the block, so such a grant installs no role binding and prints a
+/// heading with no permissions under it.
+pub fn permission_set_covers_platform(
+    permission_set_id: &str,
+    platform: alien_core::Platform,
+) -> bool {
+    let Some(permission_set) = get_permission_set(permission_set_id) else {
+        return false;
+    };
+    let platforms = &permission_set.platforms;
+    let entries = match platform {
+        alien_core::Platform::Aws => platforms.aws.as_ref().map(Vec::len),
+        alien_core::Platform::Gcp => platforms.gcp.as_ref().map(Vec::len),
+        alien_core::Platform::Azure => platforms.azure.as_ref().map(Vec::len),
+        alien_core::Platform::Kubernetes
+        | alien_core::Platform::Machines
+        | alien_core::Platform::Local
+        | alien_core::Platform::Test => None,
+    };
+    entries.is_some_and(|count| count > 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -170,6 +261,44 @@ mod tests {
 
         // Should be sorted or at least consistent
         println!("Available permission sets: {:?}", ids);
+    }
+
+    /// The Remote Bindings platform gate refuses a kind whose set does not cover the deployment's
+    /// platform, so this data is what decides where each kind may be published. `sandbox/remote-execute`
+    /// is AWS-only, and `alien-manager`'s resolve route hardcodes the same answer.
+    #[test]
+    fn remote_binding_permission_sets_cover_the_platforms_that_support_them() {
+        use alien_core::Platform;
+
+        for id in [
+            "storage/remote-data-write",
+            "key/remote-cryptography",
+            "ai/invoke",
+        ] {
+            for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+                assert!(
+                    permission_set_covers_platform(id, platform),
+                    "{id} must grant something on {platform}"
+                );
+            }
+        }
+
+        assert!(permission_set_covers_platform(
+            "sandbox/remote-execute",
+            Platform::Aws
+        ));
+        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+            assert!(
+                !permission_set_covers_platform("sandbox/remote-execute", platform),
+                "widening sandbox/remote-execute to {platform} must be done together with \
+                 alien-manager's resolve route and alien-preflights' platform gate"
+            );
+        }
+
+        assert!(!permission_set_covers_platform(
+            "nonexistent/permission",
+            Platform::Aws
+        ));
     }
 
     #[test]

@@ -5,10 +5,12 @@
     "aws": [
       {
         "grant": {
-          // Minting a MicroVM auth token is the action that grants access to session contents,
-          // so it belongs in this set alone — management, provision and heartbeat must never
-          // reach inside a session. CreateMicrovmShellAuthToken is deliberately excluded: an
-          // interactive shell is not part of the resource's surface.
+          // Minting a MicroVM auth token is the action that grants access to session contents, so
+          // it belongs here and in `sandbox/remote-execute` alone — management, provision and
+          // heartbeat must never reach inside a session, and
+          // `only_session_reaching_sandbox_sets_mint_microvm_auth_tokens` pins that list.
+          // CreateMicrovmShellAuthToken is deliberately excluded: an interactive shell is not
+          // part of the resource's surface.
           //
           // Authorized against the image the session was launched from, which is what bounds
           // it: a workload can only mint tokens for sessions of its own sandbox.
