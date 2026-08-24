@@ -912,6 +912,7 @@ fn tracing_json_message(input: &str) -> Option<String> {
     let record = record.as_object()?;
     record.get("timestamp")?.as_str()?;
     record.get("level")?.as_str()?;
+    record.get("target")?.as_str()?;
     record
         .get("fields")?
         .as_object()?
@@ -1314,7 +1315,8 @@ mod tests {
 
     #[test]
     fn does_not_guess_a_message_from_generic_json() {
-        let original = r#"{"level":"INFO","message":"ready"}"#;
+        let original =
+            r#"{"timestamp":"2026-08-24T09:12:53Z","level":"INFO","fields":{"message":"ready"}}"#;
         let hit = serde_json::json!({ "body": { "message": original } });
 
         let entry = log_entry_from_hit(hit.clone());
