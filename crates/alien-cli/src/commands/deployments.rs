@@ -1,5 +1,7 @@
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
+use crate::commands::event_display::{print_event_table, EventDisplayRow};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
@@ -50,6 +52,7 @@ pub enum MonitoringMode {
     alien deployments list
     alien deployments describe production/api
     alien deployments resources production/api --json
+    alien deployments events production/api
     alien deployments wait production/api --for ready --timeout 10m
     alien deployments machines production/api --json
 
@@ -73,6 +76,7 @@ impl DeploymentsArgs {
             DeploymentsCmd::Ls { json: true, .. }
                 | DeploymentsCmd::Get { json: true, .. }
                 | DeploymentsCmd::Resources { json: true, .. }
+                | DeploymentsCmd::Events { json: true, .. }
                 | DeploymentsCmd::Wait { json: true, .. }
                 | DeploymentsCmd::Machines { json: true, .. }
                 | DeploymentsCmd::Retry { json: true, .. }
@@ -172,6 +176,19 @@ pub enum DeploymentsCmd {
         id: String,
 
         /// Print stable machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Show deployment lifecycle and configuration events
+    Events {
+        /// Deployment ID, or <deployment-group-name>/<deployment-name>
+        id: String,
+
+        /// Maximum number of recent events to return
+        #[arg(long, default_value_t = 20, value_parser = clap::value_parser!(u64).range(1..=100))]
+        limit: u64,
+
+        /// Print the API response as machine-readable JSON
         #[arg(long)]
         json: bool,
     },
@@ -328,6 +345,28 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             let deployment = resolve_deployment_reference(&manager, &id).await?;
             resources_task(&deployment, json)
+        }
+        DeploymentsCmd::Events { id, limit, json } => {
+            if !ctx.is_platform() {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "command".to_string(),
+                    message: "Deployment event history requires platform mode.".to_string(),
+                }));
+            }
+            let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+            let client = ctx.sdk_client().await?;
+            let deployment = crate::platform_deployment_resolver::resolve(
+                &ctx, &client, &workspace, &id, None, !json,
+            )
+            .await?;
+            deployment_events_task(
+                &client,
+                workspace.as_str(),
+                &String::from(deployment.id),
+                limit,
+                json,
+            )
+            .await
         }
         DeploymentsCmd::Wait {
             id,
@@ -544,6 +583,53 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             token_deployment_task(&client, &workspace_name, &id).await
         }
     }
+}
+
+async fn deployment_events_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment_id: &str,
+    limit: u64,
+    json: bool,
+) -> Result<()> {
+    let limit = NonZeroU64::new(limit).ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "limit".to_string(),
+            message: "event limit must be greater than zero".to_string(),
+        })
+    })?;
+    let response = client
+        .list_events()
+        .workspace(workspace)
+        .deployment_id(deployment_id)
+        .limit(limit)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("listing events for deployment '{deployment_id}'"),
+            url: None,
+        })?
+        .into_inner();
+
+    if json {
+        return print_json(&response);
+    }
+
+    let rows = response
+        .items
+        .iter()
+        .map(|event| {
+            EventDisplayRow::try_new(
+                String::from(event.id.clone()),
+                event.created_at,
+                &event.data,
+                &event.state,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    print_event_table(&rows);
+    Ok(())
 }
 
 async fn machines_inventory_task(
@@ -2275,6 +2361,24 @@ mod tests {
             DeploymentsCmd::Resources { json: true, .. }
         ));
 
+        let events = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "events",
+            "production/api",
+            "--limit",
+            "50",
+            "--json",
+        ])
+        .expect("event history should parse");
+        assert!(matches!(
+            events.cmd,
+            DeploymentsCmd::Events {
+                limit: 50,
+                json: true,
+                ..
+            }
+        ));
+
         let wait = DeploymentsArgs::try_parse_from([
             "deployments",
             "wait",
@@ -2294,6 +2398,19 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn deployment_events_rejects_an_api_limit_above_the_maximum() {
+        let result = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "events",
+            "production/api",
+            "--limit",
+            "101",
+        ]);
+
+        assert!(result.is_err(), "limits above the API maximum must fail");
     }
 
     #[test]

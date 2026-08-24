@@ -1,6 +1,7 @@
 //! Platform-only commands for managing workspace private managers.
 
 use crate::auth::AuthHttp;
+use crate::commands::event_display::{print_event_lines, print_event_table, EventDisplayRow};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
@@ -297,15 +298,6 @@ struct ManagerSetupOutput {
     deployment_link: String,
     setup: serde_json::Value,
     files_written: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ManagerEventSummary {
-    id: String,
-    created_at: String,
-    state: String,
-    summary: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1367,52 +1359,6 @@ where
         })
 }
 
-/// Format an event's data as a human-readable summary.
-fn format_event_data(data: &alien_platform_api::types::EventData) -> String {
-    use alien_platform_api::types::EventData;
-
-    match data {
-        EventData::LoadingConfiguration => "Loading configuration".to_string(),
-        EventData::Finished => "Finished".to_string(),
-        EventData::BuildingStack { stack } => format!("Building stack: {}", stack),
-        EventData::RunningPreflights { platform, stack } => {
-            format!("Running preflights: {} ({})", stack, platform)
-        }
-        EventData::DownloadingAlienRuntime { target_triple, .. } => {
-            format!("Downloading alien-worker-runtime ({})", target_triple)
-        }
-        EventData::BuildingResource {
-            resource_name,
-            resource_type,
-            ..
-        } => format!("Building {} '{}'", resource_type, resource_name),
-        EventData::BuildingImage { image } => format!("Building image: {}", image),
-        EventData::PushingImage { image, .. } => format!("Pushing image: {}", image),
-        EventData::PushingStack {
-            stack, platform, ..
-        } => {
-            format!("Pushing stack: {} ({})", stack, platform)
-        }
-        EventData::PushingResource {
-            resource_name,
-            resource_type,
-        } => format!("Pushing {} '{}'", resource_type, resource_name),
-        EventData::CreatingRelease { .. } => "Creating release".to_string(),
-        other => format!("{:?}", other),
-    }
-}
-
-fn format_event_state(state: &alien_platform_api::types::EventState) -> &'static str {
-    use alien_platform_api::types::EventState;
-
-    match state {
-        EventState::Started => "started",
-        EventState::Success => "success",
-        EventState::Failed { .. } => "FAILED",
-        EventState::None => "",
-    }
-}
-
 async fn events_manager_task(
     client: &alien_platform_api::Client,
     workspace: &str,
@@ -1455,33 +1401,33 @@ async fn events_manager_task(
             None => events.to_vec(),
         };
 
+        let rows = new_events
+            .iter()
+            .map(|event| {
+                EventDisplayRow::try_new(
+                    String::from(event.id.clone()),
+                    event.created_at,
+                    &event.data,
+                    &event.state,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?;
+
         if json {
-            let payload: Vec<ManagerEventSummary> = new_events
-                .iter()
-                .map(|event| ManagerEventSummary {
-                    id: (*event.id).clone(),
-                    created_at: event.created_at.to_string(),
-                    state: format_event_state(&event.state).to_string(),
-                    summary: format_event_data(&event.data),
-                })
-                .collect();
-            return print_json(&payload);
+            return print_json(&rows);
         }
 
-        if events.is_empty() && last_event_id.is_none() {
-            println!("(no events)");
-        }
-
-        for event in &new_events {
-            let state = format_event_state(&event.state);
-            let data = format_event_data(&event.data);
-            let timestamp = event.created_at.format("%H:%M:%S");
-            if state.is_empty() {
-                println!("[{}] {}", timestamp, data);
-            } else {
-                println!("[{}] {} ({})", timestamp, data, state);
+        if follow {
+            if events.is_empty() && last_event_id.is_none() {
+                println!("(no events; waiting for new events)");
             }
-            last_event_id = Some((*event.id).clone());
+            print_event_lines(&rows);
+        } else {
+            print_event_table(&rows);
+        }
+
+        if let Some(event) = events.last() {
+            last_event_id = Some(String::from(event.id.clone()));
         }
 
         if !follow {

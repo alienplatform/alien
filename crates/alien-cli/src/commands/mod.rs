@@ -10,6 +10,7 @@ pub mod deploy;
 pub mod deployments;
 pub mod destroy;
 pub mod dev_helpers;
+mod event_display;
 #[cfg(feature = "platform")]
 pub mod examples;
 pub mod init;
