@@ -23,7 +23,8 @@ const LABEL_SANDBOX: &str = "alien.dev/sandbox";
 ///
 /// The metadata server is the one that matters. gVisor is a kernel boundary, not a network
 /// boundary, so it does nothing about routing and link-local has to be denied explicitly rather
-/// than assumed unreachable. Cloud Run and Azure block it at the platform; Kubernetes does not.
+/// than assumed unreachable. The managed sandbox runtimes block it at the platform; Kubernetes,
+/// this emitter's target, does not.
 ///
 /// **The metadata entry is a `/32`, not the `169.254.0.0/16` it sits in.** GKE puts NodeLocal
 /// DNSCache at `169.254.20.10`, so denying the whole range takes DNS out and with it every

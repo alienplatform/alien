@@ -225,9 +225,9 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// Three routes, none of which the vendor's own `-access` grant travels: a compute link, a
 /// permission profile, and a stack permission set on a user-declared ServiceAccount. Reach is
 /// decided by the resolved set's session-reaching verbs, never by a set id — an inline set an
-/// author names anything defeats a prefix test. GCP's blanket `sandboxLauncher` is a fourth
-/// route no declaration shows, and only the platform gate refusing a GCP remote sandbox keeps
-/// this answer honest there.
+/// author names anything defeats a prefix test. This scan is shaped for the AWS routes; what
+/// keeps it honest for GCP is the platform gate refusing a GCP remote sandbox before this answer
+/// is used, not anything this function checks.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
@@ -452,9 +452,9 @@ mod tests {
         assert!(error.to_string().contains("is not supported on gcp"));
     }
 
-    /// `GcpSandboxLauncherMutation` marks every Worker a session launcher, which
-    /// `in_cloud_reach_to` cannot see — so single tenancy would certify this stack. The platform
-    /// gate runs first and is what keeps that unreachable.
+    /// A GCP remote sandbox's in-cloud reach is not something `in_cloud_reach_to` can see, so
+    /// single tenancy would certify this stack. The platform gate runs first and is what keeps
+    /// that unreachable.
     #[tokio::test]
     async fn a_gcp_remote_sandbox_is_refused_before_single_tenancy_can_certify_it() {
         let worker = Worker::new("processor".to_string())

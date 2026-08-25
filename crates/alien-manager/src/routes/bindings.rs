@@ -1236,9 +1236,9 @@ fn remote_sandbox_binding(
     deployment: &DeploymentRecord,
     resource_id: &str,
 ) -> Result<RemoteSandboxBinding, alien_error::AlienError<ErrorData>> {
-    // AWS alone, unlike the other kinds. A GCP sandbox is a subprocess of the application's own
-    // Cloud Run instance, and an Azure sandbox group is created by the runtime controller, so
-    // neither has a durable parent a setup-owned identity could be scoped to.
+    // AWS alone: it is the only sandbox with a RemoteSandboxBinding, and the connector
+    // authorization below (`lambda:PassNetworkConnector`) is AWS-specific. Remote access to a
+    // GCP or Azure sandbox is not wired yet.
     if deployment.platform != Platform::Aws {
         return Err(ErrorData::bad_request(format!(
             "Remote Sandbox is only supported on AWS, not deployment platform '{}'",
