@@ -298,7 +298,7 @@ importers:
         version: link:../config-typescript
       '@aws-sdk/client-ssm':
         specifier: ^3.0.0
-        version: 3.1117.0
+        version: 3.1118.0
       '@azure/identity':
         specifier: ^4.0.0
         version: 4.13.2
@@ -455,8 +455,8 @@ packages:
     resolution: {integrity: sha512-vT3eqOEmJ4KZ2qojycEV0zzFBPDrkwntyfnWi8/WMaag8jvGN4osIdVRuwxWcK6AvQr32ohrpcLGqEZ+ZHVNcw==}
     hasBin: true
 
-  '@aws-sdk/client-ssm@3.1117.0':
-    resolution: {integrity: sha512-jHIEtAyNB0IEajYgC/0RxCNyJhhC5RNG6ZXPW5lJ/xGDR1otEQRzFObfaHfwBTrB27Ecv1AQPrjvYUXhZUSBlQ==}
+  '@aws-sdk/client-ssm@3.1118.0':
+    resolution: {integrity: sha512-TLB3v/wl9WLcudi7zm8NMV4GUu0XPy00jmOCBqc4TrodQzLI0UeuZVRaVXZjjTnqtkeSHs4HNc3dFU9qtX3rlQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.977.9':
@@ -4148,7 +4148,7 @@ snapshots:
       js-yaml: 4.1.1
       typescript: 4.9.5
 
-  '@aws-sdk/client-ssm@3.1117.0':
+  '@aws-sdk/client-ssm@3.1118.0':
     dependencies:
       '@aws-sdk/core': 3.977.9
       '@aws-sdk/credential-provider-node': 3.972.81
