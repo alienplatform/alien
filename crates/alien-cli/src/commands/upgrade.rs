@@ -130,8 +130,14 @@ async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
             ),
         })?;
 
-    if stable <= current && !args.force {
-        println!("Alien is already up to date (v{current}).");
+    if !should_install(&stable, &current, args.force) {
+        if stable < current {
+            println!(
+                "Alien v{current} is newer than the stable release (v{stable}); leaving it unchanged."
+            );
+        } else {
+            println!("Alien is already up to date (v{current}).");
+        }
         return Ok(());
     }
 
@@ -190,11 +196,14 @@ async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
             })?;
     }
     staged_file
-        .flush()
+        .sync_all()
         .await
         .into_alien_error()
         .context(ErrorData::UpgradeFailed {
-            message: format!("Could not flush the staged CLI at {}", staged_exe.display()),
+            message: format!(
+                "Could not synchronize the staged CLI at {}",
+                staged_exe.display()
+            ),
         })?;
     let actual_checksum = hex::encode(hasher.finalize());
     verify_checksum_value(&actual_checksum, &expected_checksum)?;
@@ -222,6 +231,10 @@ fn parse_release_version(value: &str) -> Result<Version> {
         .context(ErrorData::UpgradeFailed {
             message: format!("The stable channel returned an invalid version: {value}"),
         })
+}
+
+fn should_install(stable: &Version, current: &Version, force: bool) -> bool {
+    stable > current || (stable == current && force)
 }
 
 fn artifact_url(releases_url: &str, version: &Version) -> Result<String> {
@@ -360,6 +373,13 @@ mod tests {
         let checksum = hex::encode(Sha256::digest(b"release"));
         assert!(verify_checksum(b"release", &checksum).is_ok());
         assert!(verify_checksum(b"modified", &checksum).is_err());
+    }
+
+    #[test]
+    fn force_reinstalls_current_version_without_downgrading() {
+        let current = Version::new(3, 3, 18);
+        assert!(should_install(&current, &current, true));
+        assert!(!should_install(&Version::new(3, 3, 17), &current, true));
     }
 
     #[test]
