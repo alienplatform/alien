@@ -73,7 +73,7 @@ pub struct Cli {
     pub dir: Option<String>,
 
     /// Project to manage (defaults to linked project or interactive bootstrap)
-    #[arg(long, global = true)]
+    #[arg(long, env = "ALIEN_PROJECT", global = true)]
     pub project: Option<String>,
 
     /// Platform base URL (defaults to https://api.alien.dev)
@@ -91,6 +91,19 @@ pub struct Cli {
     /// Workspace name
     #[arg(long, env = "ALIEN_WORKSPACE", global = true)]
     pub workspace: Option<String>,
+}
+
+/// Treats a blank (empty or whitespace-only) string as unset, so
+/// `ALIEN_PROJECT=""` behaves the same as the variable not being set at
+/// all — falling back to the linked project or interactive bootstrap —
+/// instead of being treated as an explicit override for a blank project.
+fn non_blank(value: String) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 impl Cli {
@@ -466,6 +479,17 @@ pub(crate) fn cli_env_vars_to_core(
 mod tests {
     use super::*;
     use alien_core::EnvironmentVariableType;
+
+    #[test]
+    fn non_blank_treats_empty_and_whitespace_as_unset() {
+        assert_eq!(non_blank("".to_string()), None);
+        assert_eq!(non_blank("   ".to_string()), None);
+    }
+
+    #[test]
+    fn non_blank_trims_non_blank_values() {
+        assert_eq!(non_blank("  my-project  ".to_string()), Some("my-project".to_string()));
+    }
 
     #[test]
     fn parse_single_env_var_supports_plain_value() {
@@ -1547,7 +1571,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
                 api_key: cli.api_key.clone(),
                 no_browser: cli.no_browser,
                 workspace: cli.workspace.clone().and_then(normalize_workspace_name),
-                project: cli.project.clone(),
+                project: cli.project.clone().and_then(non_blank),
             }
         }
         #[cfg(not(feature = "platform"))]
