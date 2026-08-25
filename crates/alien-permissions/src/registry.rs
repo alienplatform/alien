@@ -140,8 +140,8 @@ pub const MICROVM_SESSION_LIFECYCLE_ACTIONS: &[&str] = &[
 /// inline set's ARNs are free-form user strings, so any ARN comparison is either unsound or
 /// widened past by writing `*`. Carrying the verb at all is the answer.
 ///
-/// AWS only: a GCP sandbox is a launcher subprocess that makes no GCP API call, and an Azure
-/// sandbox group is created by the runtime controller rather than reached through a stack grant.
+/// AWS only: it scans for the verbs that reach an AWS MicroVM session. The other clouds do not
+/// expose a session through the stack grants this inspects.
 pub fn permission_set_reaches_a_microvm_session(
     permission_set: &alien_core::permissions::PermissionSet,
 ) -> bool {
