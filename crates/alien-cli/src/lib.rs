@@ -41,9 +41,10 @@ use crate::commands::{
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
     prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
-    vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs, BuildSubcommand,
-    CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs,
-    LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, WhoamiArgs,
+    upgrade_task, vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs,
+    BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
+    InitArgs, LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs,
+    UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -194,6 +195,9 @@ pub enum Commands {
     Dev(DevCommand),
     /// Show current authenticated user information
     Whoami(WhoamiArgs),
+    /// Upgrade the Alien CLI to the latest stable version
+    #[command(visible_alias = "update")]
+    Upgrade(UpgradeArgs),
 
     #[cfg(feature = "platform")]
     #[command(flatten)]
@@ -575,6 +579,16 @@ mod tests {
                 "1.2.3",
             ])
             .expect("dev release --version should parse");
+    }
+
+    #[test]
+    fn update_alias_parses_as_upgrade() {
+        let cli = Cli::try_parse_from(["alien", "update", "--dry-run"])
+            .expect("update alias should parse");
+        assert!(matches!(
+            cli.command,
+            Some(Commands::Upgrade(UpgradeArgs { dry_run: true, .. }))
+        ));
     }
 
     #[cfg(feature = "platform")]
@@ -1540,6 +1554,11 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return render_task(args).await;
     }
 
+    // Upgrades do not need a project or authentication context.
+    if let Some(Commands::Upgrade(args)) = cli.command {
+        return upgrade_task(args).await;
+    }
+
     // Handle dev command early — it creates its own execution context.
     if let Some(Commands::Dev(dev_cmd)) = cli.command {
         return handle_dev_command(dev_cmd).await;
@@ -1600,6 +1619,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Init(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Serve(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Render(_)) => unreachable!("handled before ctx resolution"),
+            Some(Commands::Upgrade(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Build(args)) => build_command(args).await?,
             Some(Commands::Release(args)) => release_command(args, ctx).await?,
             Some(Commands::Onboard(args)) => onboard_task(args, ctx).await?,
