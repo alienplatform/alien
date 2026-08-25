@@ -307,6 +307,19 @@ pub enum ErrorData {
         url: Option<String>,
     },
 
+    /// CLI upgrade failed.
+    #[error(
+        code = "UPGRADE_FAILED",
+        message = "Upgrade failed: {message}",
+        retryable = "inherit",
+        internal = "inherit",
+        human = "transparent"
+    )]
+    UpgradeFailed {
+        /// Description of the upgrade failure
+        message: String,
+    },
+
     /// Generic error for uncommon cases.
     #[error(
         code = "GENERIC_ERROR",

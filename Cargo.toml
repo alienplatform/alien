@@ -160,6 +160,8 @@ rand = "0.9"
 rand_distr = "0.5"
 regex = "1"
 reqwest = { version = "0.12.2", default-features = false }
+semver = "1"
+self-replace = "1.5"
 rkyv = "0.8.0"
 rstest = "0.26.0"
 schemars = { version = "0.8", features = ["indexmap2"] }

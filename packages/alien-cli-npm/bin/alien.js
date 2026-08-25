@@ -58,7 +58,7 @@ if (!binPath) {
 // Spawn the binary, forwarding all arguments and stdio
 const child = spawn(binPath, process.argv.slice(2), {
   stdio: "inherit",
-  env: process.env,
+  env: { ...process.env, ALIEN_INSTALL_METHOD: "npm" },
 })
 
 // Forward signals to the child process
