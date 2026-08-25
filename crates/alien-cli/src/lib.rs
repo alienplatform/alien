@@ -73,7 +73,7 @@ pub struct Cli {
     pub dir: Option<String>,
 
     /// Project to manage (defaults to linked project or interactive bootstrap)
-    #[arg(long, global = true)]
+    #[arg(long, env = "ALIEN_PROJECT", global = true)]
     pub project: Option<String>,
 
     /// Platform base URL (defaults to https://api.alien.dev)
