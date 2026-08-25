@@ -215,7 +215,11 @@ async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()
             message: "Could not replace the current Alien executable; check that it is writable"
                 .to_string(),
         })?;
-    sync_replacement(current_exe)?;
+    if let Err(error) = sync_replacement(current_exe) {
+        eprintln!(
+            "Warning: Alien was replaced, but the change could not be fully synchronized to disk: {error}"
+        );
+    }
 
     println!("Alien was upgraded successfully to v{stable}.");
     Ok(())
