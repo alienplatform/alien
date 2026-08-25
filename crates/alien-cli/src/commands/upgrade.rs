@@ -50,7 +50,7 @@ pub async fn upgrade_task(args: UpgradeArgs) -> Result<()> {
         InstallMethod::Homebrew => {
             upgrade_with_package_manager(&args, "brew", &["upgrade", "alienplatform/tap/alien"])
         }
-        InstallMethod::Standalone => upgrade_standalone(&args).await,
+        InstallMethod::Standalone => upgrade_standalone(&args, &current_exe).await,
     }
 }
 
@@ -96,7 +96,7 @@ fn upgrade_with_package_manager(
     Ok(())
 }
 
-async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
+async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()> {
     let releases_url =
         env::var(RELEASES_URL_ENV).unwrap_or_else(|_| DEFAULT_RELEASES_URL.to_string());
     let client = reqwest::Client::new();
@@ -195,6 +195,7 @@ async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
                 message: format!("Could not write the staged CLI at {}", staged_exe.display()),
             })?;
     }
+    make_executable(&staged_exe)?;
     staged_file
         .sync_all()
         .await
@@ -207,7 +208,6 @@ async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
         })?;
     let actual_checksum = hex::encode(hasher.finalize());
     verify_checksum_value(&actual_checksum, &expected_checksum)?;
-    make_executable(&staged_exe)?;
     validate_download(&staged_exe, &stable)?;
     self_replace::self_replace(&staged_exe)
         .into_alien_error()
@@ -215,8 +215,35 @@ async fn upgrade_standalone(args: &UpgradeArgs) -> Result<()> {
             message: "Could not replace the current Alien executable; check that it is writable"
                 .to_string(),
         })?;
+    sync_replacement_directory(current_exe)?;
 
     println!("Alien was upgraded successfully to v{stable}.");
+    Ok(())
+}
+
+#[cfg(unix)]
+fn sync_replacement_directory(current_exe: &Path) -> Result<()> {
+    let directory = current_exe.parent().ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::UpgradeFailed {
+            message: format!(
+                "Could not locate the installation directory for {}",
+                current_exe.display()
+            ),
+        })
+    })?;
+    fs::File::open(directory)
+        .and_then(|file| file.sync_all())
+        .into_alien_error()
+        .context(ErrorData::UpgradeFailed {
+            message: format!(
+                "Alien was replaced, but its installation directory could not be synchronized: {}",
+                directory.display()
+            ),
+        })
+}
+
+#[cfg(not(unix))]
+fn sync_replacement_directory(_current_exe: &Path) -> Result<()> {
     Ok(())
 }
 
