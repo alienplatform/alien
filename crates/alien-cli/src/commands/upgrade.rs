@@ -215,10 +215,23 @@ async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()
             message: "Could not replace the current Alien executable; check that it is writable"
                 .to_string(),
         })?;
-    sync_replacement_directory(current_exe)?;
+    sync_replacement(current_exe)?;
 
     println!("Alien was upgraded successfully to v{stable}.");
     Ok(())
+}
+
+fn sync_replacement(current_exe: &Path) -> Result<()> {
+    fs::File::open(current_exe)
+        .and_then(|file| file.sync_all())
+        .into_alien_error()
+        .context(ErrorData::UpgradeFailed {
+            message: format!(
+                "Alien was replaced, but the installed executable could not be synchronized: {}",
+                current_exe.display()
+            ),
+        })?;
+    sync_replacement_directory(current_exe)
 }
 
 #[cfg(unix)]
