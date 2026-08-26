@@ -117,7 +117,7 @@ enum JoinAction {
     Reconfigure,
     Repair,
     Reregister,
-    ReregisterAndReinstall,
+    ReregisterThenRetry,
     NoOp,
 }
 
@@ -748,7 +748,7 @@ fn rejected_credentials_action(
         if install_state_matches_bundle_context(state, request, manifest) {
             JoinAction::Reregister
         } else {
-            JoinAction::ReregisterAndReinstall
+            JoinAction::ReregisterThenRetry
         },
     )
 }
@@ -773,7 +773,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     if matches!(
         action,
-        JoinAction::Reregister | JoinAction::ReregisterAndReinstall
+        JoinAction::Reregister | JoinAction::ReregisterThenRetry
     ) {
         let state = read_install_state(&install_state_path(&paths))?;
         reregister_existing_join(&request, &state).await?;
@@ -781,7 +781,10 @@ async fn install_join(request: JoinRequest) -> Result<()> {
             output::success("Machine credentials refreshed");
             return Ok(());
         }
-        output::info("Machine credentials refreshed; continuing bundle installation");
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Machine credentials were refreshed successfully. Rerun the same join command to install the requested bundle."
+                .to_string(),
+        }));
     } else if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
         return reconcile_existing_join(&paths, &request, &manifest, action).await;
     }
@@ -3479,7 +3482,7 @@ mod tests {
 
         assert_eq!(
             rejected_credentials_action(&state, &request, &manifest).expect("action"),
-            JoinAction::ReregisterAndReinstall
+            JoinAction::ReregisterThenRetry
         );
     }
 
