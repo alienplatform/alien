@@ -204,6 +204,19 @@ pub enum ErrorData {
         workspaces: Vec<String>,
     },
 
+    /// A workspace was created remotely but could not be selected locally.
+    #[error(
+        code = "WORKSPACE_CREATED_SELECTION_FAILED",
+        message = "Workspace '{workspace}' was created, but could not be selected locally",
+        hint = "Do not create it again. Fix the local profile error, then run `alien workspaces set {workspace}`.",
+        retryable = "false",
+        internal = "false"
+    )]
+    WorkspaceCreatedSelectionFailed {
+        /// Name of the workspace that was successfully created.
+        workspace: String,
+    },
+
     /// Invalid project name specified.
     #[error(
         code = "INVALID_PROJECT_NAME",

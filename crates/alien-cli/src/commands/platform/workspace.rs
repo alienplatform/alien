@@ -103,7 +103,9 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
                 })?
                 .into_inner();
             let workspace = (*response.name).clone();
-            save_workspace(&workspace)?;
+            save_workspace(&workspace).context(ErrorData::WorkspaceCreatedSelectionFailed {
+                workspace: workspace.clone(),
+            })?;
 
             if args.json {
                 print_json(&WorkspaceCreateOutput {
