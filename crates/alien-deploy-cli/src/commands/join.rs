@@ -12,9 +12,11 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use service_manager::*;
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+use std::future::Future;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -115,7 +117,35 @@ enum JoinAction {
     Reinstall,
     Reconfigure,
     Repair,
+    Reregister,
+    ReregisterThenRetry,
     NoOp,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocalMachineStatus {
+    control: LocalControlStatus,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocalControlStatus {
+    connectivity: Option<LocalConnectivity>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+struct SecretFileSnapshot {
+    contents: Option<String>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum LocalConnectivity {
+    NeverConnected,
+    Connected,
+    Degraded,
+    AuthenticationFailed,
 }
 
 #[derive(Serialize)]
@@ -641,7 +671,7 @@ async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, request)?;
-    let action = classify_join_action(&paths, request, &manifest)?;
+    let action = classify_join_action(&paths, request, &manifest).await?;
     let json = serde_json::to_string_pretty(&JoinPreview {
         action,
         plan: &request.plan,
@@ -656,7 +686,7 @@ async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     Ok(())
 }
 
-fn classify_join_action(
+async fn classify_join_action(
     paths: &InstallPaths,
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
@@ -666,10 +696,23 @@ fn classify_join_action(
         return Ok(JoinAction::Install);
     }
     let state = read_install_state(&state_path)?;
-    if !install_state_matches_bundle_context(&state, request, manifest) {
+    if !state.executable_path.is_file() {
         return Ok(JoinAction::Reinstall);
     }
-    if !state.executable_path.is_file() {
+    let machine_id_valid = state.machine_id.as_deref().is_some_and(|machine_id| {
+        !machine_id.trim().is_empty()
+            && state.machine_id_path.as_ref().is_none_or(|path| {
+                read_secret_string(path, "machine id").is_ok_and(|stored| stored == machine_id)
+            })
+    });
+    if machine_id_valid
+        && machine_service_status(&state.service_label)? == ServiceStatus::Running
+        && local_machine_connectivity(&state.executable_path)?
+            == Some(LocalConnectivity::AuthenticationFailed)
+    {
+        return rejected_credentials_action(&state, request, manifest);
+    }
+    if !install_state_matches_bundle_context(&state, request, manifest) {
         return Ok(JoinAction::Reinstall);
     }
     if state.network_interface != request.plan.network_interface
@@ -687,17 +730,33 @@ fn classify_join_action(
     {
         return Ok(JoinAction::Reconfigure);
     }
-    let machine_id_valid = state.machine_id.as_deref().is_some_and(|machine_id| {
-        !machine_id.trim().is_empty()
-            && state.machine_id_path.as_ref().is_none_or(|path| {
-                read_secret_string(path, "machine id").is_ok_and(|stored| stored == machine_id)
-            })
-    });
     if !machine_id_valid || machine_service_status(&state.service_label)? != ServiceStatus::Running
     {
         return Ok(JoinAction::Repair);
     }
     Ok(JoinAction::NoOp)
+}
+
+fn rejected_credentials_action(
+    state: &MachineInstallState,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> Result<JoinAction> {
+    if state.control_plane_url.as_deref() != Some(request.plan.control_plane_url.as_str()) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "control-plane-url".to_string(),
+            message:
+                "cannot refresh rejected machine credentials while changing the control-plane URL"
+                    .to_string(),
+        }));
+    }
+    Ok(
+        if install_state_matches_bundle_context(state, request, manifest) {
+            JoinAction::Reregister
+        } else {
+            JoinAction::ReregisterThenRetry
+        },
+    )
 }
 
 async fn install_join(request: JoinRequest) -> Result<()> {
@@ -706,7 +765,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, &request)?;
-    let action = classify_join_action(&paths, &request, &manifest)?;
+    let action = classify_join_action(&paths, &request, &manifest).await?;
     if action == JoinAction::NoOp {
         let state = read_install_state(&install_state_path(&paths))?;
         output::success("Machine is already joined");
@@ -718,7 +777,21 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         return Ok(());
     }
 
-    if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
+    if matches!(
+        action,
+        JoinAction::Reregister | JoinAction::ReregisterThenRetry
+    ) {
+        let state = read_install_state(&install_state_path(&paths))?;
+        reregister_existing_join(&request, &state).await?;
+        if action == JoinAction::Reregister {
+            output::success("Machine credentials refreshed");
+            return Ok(());
+        }
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Machine credentials were refreshed successfully. Rerun the same join command to install the requested bundle."
+                .to_string(),
+        }));
+    } else if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
         return reconcile_existing_join(&paths, &request, &manifest, action).await;
     }
 
@@ -858,7 +931,6 @@ async fn reconcile_existing_join(
             reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
         }));
     }
-
     output::step(
         2,
         4,
@@ -883,7 +955,6 @@ async fn reconcile_existing_join(
 
     output::step(3, 4, "Reconciling machine service");
     install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
-
     output::step(4, 4, "Verifying machine registration");
     if let Some(registration) = &manifest.registration {
         let machine_id = wait_for_registration(&request.install_root, registration).await?;
@@ -896,6 +967,68 @@ async fn reconcile_existing_join(
         JoinAction::Repair => "Machine service repaired",
         _ => unreachable!(),
     });
+    Ok(())
+}
+
+async fn reregister_existing_join(
+    request: &JoinRequest,
+    state: &MachineInstallState,
+) -> Result<()> {
+    let machine_token_path = state.machine_token_path.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "installed machine token path".to_string(),
+            message: "cannot refresh rejected credentials because the installed service has no machine token file"
+                .to_string(),
+        })
+    })?;
+    let previous_machine_token = snapshot_secret_file(machine_token_path, "machine token")?;
+    if !previous_machine_token
+        .contents
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "installed machine token path".to_string(),
+            message: "cannot refresh rejected credentials because the installed machine token file is missing or empty"
+                .to_string(),
+        }));
+    }
+    let previous_join_token = snapshot_secret_file(&state.join_token_path, "join token")?;
+
+    output::step(2, 4, "Writing refreshed machine credentials");
+    let join_token_candidate = write_secret_candidate(&state.join_token_path, &request.token)?;
+    let credentials_changed = Cell::new(false);
+    run_with_credential_recovery(
+        async {
+            replace_secret_candidate(&join_token_candidate, &state.join_token_path)?;
+            credentials_changed.set(true);
+            sync_secret_parent(&state.join_token_path)?;
+            output::step(3, 4, "Restarting machine registration");
+            stop_machine_service(&state.service_label)?;
+            remove_file_if_exists(machine_token_path)?;
+            start_machine_service(&state.service_label)?;
+            output::step(4, 4, "Verifying machine registration");
+            wait_for_secret_file(
+                machine_token_path,
+                Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
+                Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
+            )
+            .await
+        },
+        || {
+            recover_if_credentials_changed(credentials_changed.get(), || {
+                restore_credentials_and_service(
+                    &state.join_token_path,
+                    &previous_join_token,
+                    machine_token_path,
+                    &previous_machine_token,
+                    || stop_machine_service(&state.service_label),
+                    || start_machine_service(&state.service_label),
+                )
+            })
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -951,6 +1084,146 @@ fn machine_service_status(service_label: &str) -> Result<ServiceStatus> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to inspect machine service status".to_string(),
         })
+}
+
+fn stop_machine_service(service_label: &str) -> Result<()> {
+    let manager = native_service_manager()?;
+    let label = parse_service_label(service_label)?;
+    manager
+        .stop(ServiceStopCtx { label })
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to stop machine service before refreshing credentials".to_string(),
+        })
+}
+
+fn start_machine_service(service_label: &str) -> Result<()> {
+    let manager = native_service_manager()?;
+    let label = parse_service_label(service_label)?;
+    manager
+        .start(ServiceStartCtx { label })
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to restore machine service after credential refresh failure"
+                .to_string(),
+        })
+}
+
+fn credential_refresh_error(
+    refresh_error: AlienError<ErrorData>,
+    recovery_result: Result<()>,
+) -> AlienError<ErrorData> {
+    match recovery_result {
+        Ok(()) => refresh_error,
+        Err(recovery_error) => refresh_error.context(ErrorData::OperatorServiceError {
+                message: format!(
+                "Machine credential refresh failed, and restoring the previous credentials and service also failed: {recovery_error}"
+                ),
+        }),
+    }
+}
+
+async fn run_with_credential_recovery<T>(
+    refresh: impl Future<Output = Result<T>>,
+    recover: impl FnOnce() -> Result<()>,
+) -> Result<T> {
+    match refresh.await {
+        Ok(value) => Ok(value),
+        Err(refresh_error) => Err(credential_refresh_error(refresh_error, recover())),
+    }
+}
+
+fn recover_if_credentials_changed(
+    credentials_changed: bool,
+    recover: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if credentials_changed {
+        recover()
+    } else {
+        Ok(())
+    }
+}
+
+fn snapshot_secret_file(path: &Path, description: &str) -> Result<SecretFileSnapshot> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(SecretFileSnapshot {
+            contents: Some(contents),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SecretFileSnapshot { contents: None })
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read".to_string(),
+                file_path: path.display().to_string(),
+                reason: format!("Failed to snapshot {description}"),
+            })),
+    }
+}
+
+fn restore_secret_file(path: &Path, snapshot: &SecretFileSnapshot) -> Result<()> {
+    match &snapshot.contents {
+        Some(contents) => write_secret_file(path, contents),
+        None => remove_file_if_exists(path),
+    }
+}
+
+fn restore_credentials_and_service(
+    join_token_path: &Path,
+    previous_join_token: &SecretFileSnapshot,
+    machine_token_path: &Path,
+    previous_machine_token: &SecretFileSnapshot,
+    stop: impl FnOnce() -> Result<()>,
+    restart: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let mut failures = Vec::new();
+    for (operation, result) in [
+        ("stop the replacement service", stop()),
+        (
+            "restore the previous machine token",
+            restore_secret_file(machine_token_path, previous_machine_token),
+        ),
+        (
+            "restore the previous join token",
+            restore_secret_file(join_token_path, previous_join_token),
+        ),
+        ("restart the previous service", restart()),
+    ] {
+        if let Err(error) = result {
+            failures.push(format!("{operation}: {error}"));
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AlienError::new(ErrorData::OperatorServiceError {
+            message: format!(
+                "Failed to fully restore machine credentials: {}",
+                failures.join("; ")
+            ),
+        }))
+    }
+}
+
+fn local_machine_connectivity(executable_path: &Path) -> Result<Option<LocalConnectivity>> {
+    let output = Command::new(executable_path)
+        .args(["status", "--json"])
+        .output()
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to inspect local machine connectivity".to_string(),
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let status = serde_json::from_slice::<LocalMachineStatus>(&output.stdout)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse local machine status".to_string(),
+            reason: "Installed machine service returned invalid status JSON".to_string(),
+        })?;
+    Ok(status.control.connectivity)
 }
 
 async fn download_manifest(url: &str) -> Result<MachineBundleManifest> {
@@ -1463,6 +1736,30 @@ async fn wait_for_machine_id_file(
     }
 }
 
+async fn wait_for_secret_file(
+    path: &Path,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match read_secret_string(path, "machine token") {
+            Ok(_) => return Ok(()),
+            Err(_) if !path.exists() => {}
+            Err(error) => return Err(error),
+        }
+        if started.elapsed() >= timeout {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Timed out waiting for refreshed machine credentials at {}",
+                    path.display()
+                ),
+            }));
+        }
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 fn apply_ip_forwarding_now() -> Result<()> {
     let output = Command::new("sysctl")
         .arg("-w")
@@ -1555,13 +1852,21 @@ fn write_secret_candidate(path: &Path, contents: &str) -> Result<PathBuf> {
 }
 
 fn commit_secret_candidate(temporary_path: &Path, path: &Path) -> Result<()> {
+    replace_secret_candidate(temporary_path, path)?;
+    sync_secret_parent(path)
+}
+
+fn replace_secret_candidate(temporary_path: &Path, path: &Path) -> Result<()> {
     std::fs::rename(temporary_path, path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "replace".to_string(),
             file_path: path.display().to_string(),
             reason: "Failed to atomically replace machine configuration".to_string(),
-        })?;
+        })
+}
+
+fn sync_secret_parent(path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         AlienError::new(ErrorData::FileOperationFailed {
             operation: "resolve".to_string(),
@@ -2191,6 +2496,244 @@ mod tests {
             "{WRAPPED_JOIN_TOKEN_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(payload.to_string())
         )
+    }
+
+    #[cfg(unix)]
+    fn status_executable(directory: &Path, connectivity: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = directory.join(format!("status-{connectivity}"));
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' '{{\"control\":{{\"connectivity\":\"{connectivity}\"}}}}'\n"
+            ),
+        )
+        .expect("write status executable");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make status executable runnable");
+        path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn local_status_distinguishes_rejected_credentials_from_network_failure() {
+        let directory = tempfile::tempdir().expect("status directory");
+        assert_eq!(
+            local_machine_connectivity(&status_executable(
+                directory.path(),
+                "authenticationFailed"
+            ))
+            .expect("authentication status"),
+            Some(LocalConnectivity::AuthenticationFailed)
+        );
+        assert_eq!(
+            local_machine_connectivity(&status_executable(directory.path(), "degraded"))
+                .expect("degraded status"),
+            Some(LocalConnectivity::Degraded)
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_credentials_wait_for_a_nonempty_machine_token() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let path = directory.path().join("machine-token");
+        let writer_path = path.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            std::fs::write(writer_path, "new-token\n").expect("write token");
+        });
+
+        wait_for_secret_file(&path, Duration::from_secs(1), Duration::from_millis(1))
+            .await
+            .expect("credentials should appear");
+        assert_eq!(
+            read_secret_string(&path, "machine token").expect("read token"),
+            "new-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_credential_verification_runs_recovery() {
+        let restarted = std::cell::Cell::new(false);
+        let result = run_with_credential_recovery::<()>(
+            async {
+                Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "verification timed out".to_string(),
+                }))
+            },
+            || {
+                restarted.set(true);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(restarted.get());
+    }
+
+    #[tokio::test]
+    async fn failure_before_credentials_change_does_not_run_recovery() {
+        let credentials_changed = false;
+        let recovered = std::cell::Cell::new(false);
+        let result = run_with_credential_recovery::<()>(
+            async {
+                Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: "/join-token".to_string(),
+                    reason: "candidate replacement failed".to_string(),
+                }))
+            },
+            || {
+                recover_if_credentials_changed(credentials_changed, || {
+                    recovered.set(true);
+                    Ok(())
+                })
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!recovered.get());
+    }
+
+    #[test]
+    fn failed_credential_refresh_restores_both_tokens_before_restart() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        write_secret_file(&join_token_path, "previous-join-token\n")
+            .expect("write previous join token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot token");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+        let tokens_seen_by_restart = std::cell::RefCell::new(None);
+
+        restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || Ok(()),
+            || {
+                *tokens_seen_by_restart.borrow_mut() = Some((
+                    read_secret_string(&machine_token_path, "machine token")
+                        .expect("restored machine token"),
+                    read_secret_string(&join_token_path, "join token")
+                        .expect("restored join token"),
+                ));
+                Ok(())
+            },
+        )
+        .expect("restore credentials");
+
+        assert_eq!(
+            tokens_seen_by_restart.into_inner(),
+            Some((
+                "previous-machine-token".to_string(),
+                "previous-join-token".to_string()
+            ))
+        );
+        assert_eq!(
+            std::fs::read_to_string(&join_token_path).expect("read exact restored join token"),
+            "previous-join-token\n"
+        );
+    }
+
+    #[test]
+    fn failed_credential_refresh_removes_join_token_that_was_previously_absent() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot absence");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+
+        restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || Ok(()),
+            || Ok(()),
+        )
+        .expect("restore credentials");
+
+        assert!(!join_token_path.exists());
+    }
+
+    #[test]
+    fn failed_stop_still_restores_credentials_and_restarts_service() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot absence");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+        let restarted = std::cell::Cell::new(false);
+
+        let error = restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || {
+                Err(AlienError::new(ErrorData::OperatorServiceError {
+                    message: "stop failed".to_string(),
+                }))
+            },
+            || {
+                restarted.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("stop failure should be reported");
+
+        assert!(restarted.get());
+        assert!(!join_token_path.exists());
+        assert_eq!(
+            read_secret_string(&machine_token_path, "machine token")
+                .expect("restored machine token"),
+            "previous-machine-token"
+        );
+        assert!(error.to_string().contains("stop failed"));
+    }
+
+    #[test]
+    fn failed_service_restore_is_reported_with_the_refresh_failure() {
+        let result = credential_refresh_error(
+            AlienError::new(ErrorData::FileOperationFailed {
+                operation: "remove".to_string(),
+                file_path: "/machine-token".to_string(),
+                reason: "refresh failed".to_string(),
+            }),
+            Err(AlienError::new(ErrorData::OperatorServiceError {
+                message: "restart failed".to_string(),
+            })),
+        );
+
+        let message = result.to_string();
+        assert!(message.contains("refresh failed"));
+        assert!(message.contains("restart failed"));
     }
 
     #[tokio::test]
@@ -3069,8 +3612,8 @@ mod tests {
         assert!(request.plan.reconcile_network);
     }
 
-    #[test]
-    fn changed_network_override_is_reconfigured_without_reinstalling() {
+    #[tokio::test]
+    async fn changed_network_override_is_reconfigured_without_reinstalling() {
         let root = tempfile::tempdir().expect("install root");
         let request = build_join_request(
             &JoinArgs {
@@ -3109,8 +3652,45 @@ mod tests {
         .expect("write state");
 
         assert_eq!(
-            classify_join_action(&paths, &request, &manifest).expect("join action"),
+            classify_join_action(&paths, &request, &manifest)
+                .await
+                .expect("join action"),
             JoinAction::Reconfigure
+        );
+    }
+
+    #[test]
+    fn rejected_credentials_refresh_before_installing_a_changed_bundle() {
+        let root = tempfile::tempdir().expect("install root");
+        let request = build_join_request(
+            &JoinArgs {
+                install_root: root.path().to_path_buf(),
+                ..test_join_args()
+            },
+            None,
+            linux_host(root.path()),
+        )
+        .expect("request");
+        let manifest = test_manifest();
+        let state = MachineInstallState {
+            bundle_version: "previous-version".to_string(),
+            bundle_url: Some("https://example.com/previous-manifest.json".to_string()),
+            service_label: manifest.service.label.clone(),
+            executable_path: PathBuf::from("/installed/machine"),
+            config_path: PathBuf::from("/installed/machine.toml"),
+            join_token_path: PathBuf::from("/installed/join-token"),
+            machine_id_path: Some(PathBuf::from("/installed/machine-id")),
+            machine_token_path: Some(PathBuf::from("/installed/machine-token")),
+            control_plane_url: Some(request.plan.control_plane_url.clone()),
+            cluster_id: Some(request.plan.cluster_id.clone()),
+            machine_id: Some("machine-123".to_string()),
+            network_interface: None,
+            wireguard_endpoint: None,
+        };
+
+        assert_eq!(
+            rejected_credentials_action(&state, &request, &manifest).expect("action"),
+            JoinAction::ReregisterThenRetry
         );
     }
 
