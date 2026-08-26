@@ -703,6 +703,13 @@ async fn classify_join_action(
         && local_machine_connectivity(&state.executable_path)?
             == Some(LocalConnectivity::AuthenticationFailed)
     {
+        if state.control_plane_url.as_deref() != Some(request.plan.control_plane_url.as_str()) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "control-plane-url".to_string(),
+                message: "cannot refresh rejected machine credentials while changing the control-plane URL"
+                    .to_string(),
+            }));
+        }
         return Ok(JoinAction::Reregister);
     }
     if !install_state_matches_bundle_context(&state, request, manifest) {
@@ -891,18 +898,9 @@ async fn reconcile_existing_join(
             reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
         }));
     }
-    let reregister_token = if action == JoinAction::Reregister {
-        let path = state.machine_token_path.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "bundle.config.machineTokenFile".to_string(),
-                message: "cannot refresh rejected credentials because the installed bundle has no machine token file".to_string(),
-            })
-        })?;
-        let previous = read_secret_string(&path, "machine token")?;
-        Some((path, previous))
-    } else {
-        None
-    };
+    if action == JoinAction::Reregister {
+        return reregister_existing_join(request, &state).await;
+    }
 
     output::step(
         2,
@@ -910,7 +908,6 @@ async fn reconcile_existing_join(
         match action {
             JoinAction::Reconfigure => "Writing updated machine configuration",
             JoinAction::Repair => "Repairing machine configuration",
-            JoinAction::Reregister => "Refreshing rejected machine credentials",
             _ => unreachable!(),
         },
     );
@@ -928,47 +925,61 @@ async fn reconcile_existing_join(
     write_install_state(paths, &state)?;
 
     output::step(3, 4, "Reconciling machine service");
-    if let Some((machine_token_path, previous_machine_token)) = &reregister_token {
-        stop_machine_service(&state.service_label)?;
-        run_with_credential_recovery(
-            async {
-                remove_file_if_exists(machine_token_path)?;
-                start_machine_service(&state.service_label)?;
-                output::step(4, 4, "Verifying machine registration");
-                wait_for_secret_file(
-                    machine_token_path,
-                    Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
-                    Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
-                )
-                .await
-            },
-            || {
-                // Do not race a running replacement process while restoring its
-                // token. If stopping fails, the service is still running and the
-                // combined error tells the operator that rollback was incomplete.
-                stop_machine_service(&state.service_label)?;
-                restore_machine_credentials(machine_token_path, previous_machine_token, || {
-                    start_machine_service(&state.service_label)
-                })
-            },
-        )
-        .await?;
-    } else {
-        install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
-        output::step(4, 4, "Verifying machine registration");
-        if let Some(registration) = &manifest.registration {
-            let machine_id = wait_for_registration(&request.install_root, registration).await?;
-            state.machine_id = Some(machine_id.clone());
-            write_install_state(paths, &state)?;
-            output::label_value("Machine", &machine_id);
-        }
+    install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
+    output::step(4, 4, "Verifying machine registration");
+    if let Some(registration) = &manifest.registration {
+        let machine_id = wait_for_registration(&request.install_root, registration).await?;
+        state.machine_id = Some(machine_id.clone());
+        write_install_state(paths, &state)?;
+        output::label_value("Machine", &machine_id);
     }
     output::success(match action {
         JoinAction::Reconfigure => "Machine configuration updated",
         JoinAction::Repair => "Machine service repaired",
-        JoinAction::Reregister => "Machine credentials refreshed",
         _ => unreachable!(),
     });
+    Ok(())
+}
+
+async fn reregister_existing_join(
+    request: &JoinRequest,
+    state: &MachineInstallState,
+) -> Result<()> {
+    let machine_token_path = state.machine_token_path.as_ref().ok_or_else(|| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "installed machine token path".to_string(),
+            message: "cannot refresh rejected credentials because the installed service has no machine token file"
+                .to_string(),
+        })
+    })?;
+    let previous_machine_token = read_secret_string(machine_token_path, "machine token")?;
+
+    output::step(2, 4, "Writing refreshed machine credentials");
+    write_secret_file(&state.join_token_path, &request.token)?;
+    output::step(3, 4, "Restarting machine registration");
+    stop_machine_service(&state.service_label)?;
+    run_with_credential_recovery(
+        async {
+            remove_file_if_exists(machine_token_path)?;
+            start_machine_service(&state.service_label)?;
+            output::step(4, 4, "Verifying machine registration");
+            wait_for_secret_file(
+                machine_token_path,
+                Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
+                Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
+            )
+            .await
+        },
+        || {
+            // Do not race a running replacement process while restoring its token.
+            stop_machine_service(&state.service_label)?;
+            restore_machine_credentials(machine_token_path, &previous_machine_token, || {
+                start_machine_service(&state.service_label)
+            })
+        },
+    )
+    .await?;
+    output::success("Machine credentials refreshed");
     Ok(())
 }
 
