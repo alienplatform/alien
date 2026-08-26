@@ -890,13 +890,15 @@ async fn reconcile_existing_join(
             reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
         }));
     }
-    let reregister_token_path = if action == JoinAction::Reregister {
-        Some(state.machine_token_path.clone().ok_or_else(|| {
+    let reregister_token = if action == JoinAction::Reregister {
+        let path = state.machine_token_path.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
                 field: "bundle.config.machineTokenFile".to_string(),
                 message: "cannot refresh rejected credentials because the installed bundle has no machine token file".to_string(),
             })
-        })?)
+        })?;
+        let previous = read_secret_string(&path, "machine token")?;
+        Some((path, previous))
     } else {
         None
     };
@@ -925,21 +927,25 @@ async fn reconcile_existing_join(
     write_install_state(paths, &state)?;
 
     output::step(3, 4, "Reconciling machine service");
-    if let Some(machine_token_path) = &reregister_token_path {
+    if let Some((machine_token_path, previous_machine_token)) = &reregister_token {
         stop_machine_service(&state.service_label)?;
         run_with_service_recovery(
             || {
                 remove_file_if_exists(machine_token_path)?;
                 install_machine_service(&manifest.service, &state.executable_path, &config_path)
             },
-            || start_machine_service(&state.service_label),
+            || {
+                restore_machine_credentials(machine_token_path, previous_machine_token, || {
+                    start_machine_service(&state.service_label)
+                })
+            },
         )?;
     } else {
         install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
     }
 
     output::step(4, 4, "Verifying machine registration");
-    if let Some(machine_token_path) = &reregister_token_path {
+    if let Some((machine_token_path, _)) = &reregister_token {
         wait_for_secret_file(
             machine_token_path,
             Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
@@ -1052,6 +1058,30 @@ fn run_with_service_recovery<T>(
                 ),
             })),
         },
+    }
+}
+
+fn restore_machine_credentials(
+    machine_token_path: &Path,
+    previous_machine_token: &str,
+    restart: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    let token_result = write_secret_file(machine_token_path, previous_machine_token);
+    let restart_result = restart();
+    match (token_result, restart_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(token_error), Ok(())) => Err(token_error.context(ErrorData::OperatorServiceError {
+            message: "Failed to restore the previous machine token after credential refresh failure"
+                .to_string(),
+        })),
+        (Ok(()), Err(restart_error)) => Err(restart_error),
+        (Err(token_error), Err(restart_error)) => {
+            Err(token_error.context(ErrorData::OperatorServiceError {
+                message: format!(
+                    "Failed to restore the previous machine token and restart the service: {restart_error}"
+                ),
+            }))
+        }
     }
 }
 
@@ -2413,6 +2443,27 @@ mod tests {
 
         assert!(result.is_err());
         assert!(restarted.get());
+    }
+
+    #[test]
+    fn failed_credential_refresh_restores_the_previous_token_before_restart() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let token_path = directory.path().join("machine-token");
+        write_secret_file(&token_path, "previous-token").expect("write previous token");
+        remove_file_if_exists(&token_path).expect("remove token during refresh");
+        let token_seen_by_restart = std::cell::RefCell::new(None);
+
+        restore_machine_credentials(&token_path, "previous-token", || {
+            *token_seen_by_restart.borrow_mut() =
+                Some(read_secret_string(&token_path, "machine token").expect("restored token"));
+            Ok(())
+        })
+        .expect("restore credentials");
+
+        assert_eq!(
+            token_seen_by_restart.into_inner().as_deref(),
+            Some("previous-token")
+        );
     }
 
     #[test]
