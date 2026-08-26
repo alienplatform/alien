@@ -15,6 +15,7 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
+use std::future::Future;
 use std::io::Write;
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
@@ -929,34 +930,37 @@ async fn reconcile_existing_join(
     output::step(3, 4, "Reconciling machine service");
     if let Some((machine_token_path, previous_machine_token)) = &reregister_token {
         stop_machine_service(&state.service_label)?;
-        run_with_service_recovery(
-            || {
+        run_with_credential_recovery(
+            async {
                 remove_file_if_exists(machine_token_path)?;
-                install_machine_service(&manifest.service, &state.executable_path, &config_path)
+                start_machine_service(&state.service_label)?;
+                output::step(4, 4, "Verifying machine registration");
+                wait_for_secret_file(
+                    machine_token_path,
+                    Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
+                    Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
+                )
+                .await
             },
             || {
+                // Stop the replacement attempt before putting the previous token
+                // back. Recovery still proceeds when this best-effort stop fails.
+                let _ = stop_machine_service(&state.service_label);
                 restore_machine_credentials(machine_token_path, previous_machine_token, || {
                     start_machine_service(&state.service_label)
                 })
             },
-        )?;
-    } else {
-        install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
-    }
-
-    output::step(4, 4, "Verifying machine registration");
-    if let Some((machine_token_path, _)) = &reregister_token {
-        wait_for_secret_file(
-            machine_token_path,
-            Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
-            Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
         )
         .await?;
-    } else if let Some(registration) = &manifest.registration {
-        let machine_id = wait_for_registration(&request.install_root, registration).await?;
-        state.machine_id = Some(machine_id.clone());
-        write_install_state(paths, &state)?;
-        output::label_value("Machine", &machine_id);
+    } else {
+        install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
+        output::step(4, 4, "Verifying machine registration");
+        if let Some(registration) = &manifest.registration {
+            let machine_id = wait_for_registration(&request.install_root, registration).await?;
+            state.machine_id = Some(machine_id.clone());
+            write_install_state(paths, &state)?;
+            output::label_value("Machine", &machine_id);
+        }
     }
     output::success(match action {
         JoinAction::Reconfigure => "Machine configuration updated",
@@ -1044,20 +1048,27 @@ fn start_machine_service(service_label: &str) -> Result<()> {
         })
 }
 
-fn run_with_service_recovery<T>(
-    operation: impl FnOnce() -> Result<T>,
-    restart: impl FnOnce() -> Result<()>,
-) -> Result<T> {
-    match operation() {
-        Ok(value) => Ok(value),
-        Err(operation_error) => match restart() {
-            Ok(()) => Err(operation_error),
-            Err(restart_error) => Err(operation_error.context(ErrorData::OperatorServiceError {
+fn credential_refresh_error(
+    refresh_error: AlienError<ErrorData>,
+    recovery_result: Result<()>,
+) -> AlienError<ErrorData> {
+    match recovery_result {
+        Ok(()) => refresh_error,
+        Err(recovery_error) => refresh_error.context(ErrorData::OperatorServiceError {
                 message: format!(
-                    "Machine credential refresh failed, and restoring the previous service also failed: {restart_error}"
+                "Machine credential refresh failed, and restoring the previous credentials and service also failed: {recovery_error}"
                 ),
-            })),
-        },
+        }),
+    }
+}
+
+async fn run_with_credential_recovery<T>(
+    refresh: impl Future<Output = Result<T>>,
+    recover: impl FnOnce() -> Result<()>,
+) -> Result<T> {
+    match refresh.await {
+        Ok(value) => Ok(value),
+        Err(refresh_error) => Err(credential_refresh_error(refresh_error, recover())),
     }
 }
 
@@ -2424,22 +2435,21 @@ mod tests {
         );
     }
 
-    #[test]
-    fn failed_credential_refresh_restarts_the_previous_service() {
+    #[tokio::test]
+    async fn failed_credential_verification_runs_recovery() {
         let restarted = std::cell::Cell::new(false);
-        let result = run_with_service_recovery::<()>(
-            || {
-                Err(AlienError::new(ErrorData::FileOperationFailed {
-                    operation: "remove".to_string(),
-                    file_path: "/machine-token".to_string(),
-                    reason: "test failure".to_string(),
+        let result = run_with_credential_recovery::<()>(
+            async {
+                Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: "verification timed out".to_string(),
                 }))
             },
             || {
                 restarted.set(true);
                 Ok(())
             },
-        );
+        )
+        .await;
 
         assert!(result.is_err());
         assert!(restarted.get());
@@ -2468,21 +2478,16 @@ mod tests {
 
     #[test]
     fn failed_service_restore_is_reported_with_the_refresh_failure() {
-        let result = run_with_service_recovery::<()>(
-            || {
-                Err(AlienError::new(ErrorData::FileOperationFailed {
-                    operation: "remove".to_string(),
-                    file_path: "/machine-token".to_string(),
-                    reason: "refresh failed".to_string(),
-                }))
-            },
-            || {
-                Err(AlienError::new(ErrorData::OperatorServiceError {
-                    message: "restart failed".to_string(),
-                }))
-            },
-        )
-        .expect_err("both failures must be returned");
+        let result = credential_refresh_error(
+            AlienError::new(ErrorData::FileOperationFailed {
+                operation: "remove".to_string(),
+                file_path: "/machine-token".to_string(),
+                reason: "refresh failed".to_string(),
+            }),
+            Err(AlienError::new(ErrorData::OperatorServiceError {
+                message: "restart failed".to_string(),
+            })),
+        );
 
         let message = result.to_string();
         assert!(message.contains("refresh failed"));
