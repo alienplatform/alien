@@ -115,7 +115,29 @@ enum JoinAction {
     Reinstall,
     Reconfigure,
     Repair,
+    Reregister,
     NoOp,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocalMachineStatus {
+    control: LocalControlStatus,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct LocalControlStatus {
+    connectivity: Option<LocalConnectivity>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+enum LocalConnectivity {
+    NeverConnected,
+    Connected,
+    Degraded,
+    AuthenticationFailed,
 }
 
 #[derive(Serialize)]
@@ -641,7 +663,7 @@ async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, request)?;
-    let action = classify_join_action(&paths, request, &manifest)?;
+    let action = classify_join_action(&paths, request, &manifest).await?;
     let json = serde_json::to_string_pretty(&JoinPreview {
         action,
         plan: &request.plan,
@@ -656,7 +678,7 @@ async fn print_join_plan(request: &JoinRequest) -> Result<()> {
     Ok(())
 }
 
-fn classify_join_action(
+async fn classify_join_action(
     paths: &InstallPaths,
     request: &JoinRequest,
     manifest: &MachineBundleManifest,
@@ -666,10 +688,23 @@ fn classify_join_action(
         return Ok(JoinAction::Install);
     }
     let state = read_install_state(&state_path)?;
-    if !install_state_matches_bundle_context(&state, request, manifest) {
+    if !state.executable_path.is_file() {
         return Ok(JoinAction::Reinstall);
     }
-    if !state.executable_path.is_file() {
+    let machine_id_valid = state.machine_id.as_deref().is_some_and(|machine_id| {
+        !machine_id.trim().is_empty()
+            && state.machine_id_path.as_ref().is_none_or(|path| {
+                read_secret_string(path, "machine id").is_ok_and(|stored| stored == machine_id)
+            })
+    });
+    if machine_id_valid
+        && machine_service_status(&state.service_label)? == ServiceStatus::Running
+        && local_machine_connectivity(&state.executable_path)?
+            == Some(LocalConnectivity::AuthenticationFailed)
+    {
+        return Ok(JoinAction::Reregister);
+    }
+    if !install_state_matches_bundle_context(&state, request, manifest) {
         return Ok(JoinAction::Reinstall);
     }
     if state.network_interface != request.plan.network_interface
@@ -687,12 +722,6 @@ fn classify_join_action(
     {
         return Ok(JoinAction::Reconfigure);
     }
-    let machine_id_valid = state.machine_id.as_deref().is_some_and(|machine_id| {
-        !machine_id.trim().is_empty()
-            && state.machine_id_path.as_ref().is_none_or(|path| {
-                read_secret_string(path, "machine id").is_ok_and(|stored| stored == machine_id)
-            })
-    });
     if !machine_id_valid || machine_service_status(&state.service_label)? != ServiceStatus::Running
     {
         return Ok(JoinAction::Repair);
@@ -706,7 +735,7 @@ async fn install_join(request: JoinRequest) -> Result<()> {
     output::step(1, 6, "Resolving machine bundle");
     let manifest = download_manifest(&request.plan.bundle_url).await?;
     reject_different_cluster(&paths, &request)?;
-    let action = classify_join_action(&paths, &request, &manifest)?;
+    let action = classify_join_action(&paths, &request, &manifest).await?;
     if action == JoinAction::NoOp {
         let state = read_install_state(&install_state_path(&paths))?;
         output::success("Machine is already joined");
@@ -718,7 +747,10 @@ async fn install_join(request: JoinRequest) -> Result<()> {
         return Ok(());
     }
 
-    if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
+    if matches!(
+        action,
+        JoinAction::Reconfigure | JoinAction::Repair | JoinAction::Reregister
+    ) {
         return reconcile_existing_join(&paths, &request, &manifest, action).await;
     }
 
@@ -865,6 +897,7 @@ async fn reconcile_existing_join(
         match action {
             JoinAction::Reconfigure => "Writing updated machine configuration",
             JoinAction::Repair => "Repairing machine configuration",
+            JoinAction::Reregister => "Refreshing rejected machine credentials",
             _ => unreachable!(),
         },
     );
@@ -881,11 +914,35 @@ async fn reconcile_existing_join(
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
     write_install_state(paths, &state)?;
 
+    if action == JoinAction::Reregister {
+        stop_machine_service(&state.service_label)?;
+        let machine_token_path = state.machine_token_path.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "bundle.config.machineTokenFile".to_string(),
+                message: "cannot refresh rejected credentials because the installed bundle has no machine token file".to_string(),
+            })
+        })?;
+        remove_file_if_exists(machine_token_path)?;
+    }
+
     output::step(3, 4, "Reconciling machine service");
     install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
 
     output::step(4, 4, "Verifying machine registration");
-    if let Some(registration) = &manifest.registration {
+    if action == JoinAction::Reregister {
+        let machine_token_path = state.machine_token_path.as_deref().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "bundle.config.machineTokenFile".to_string(),
+                message: "cannot verify refreshed credentials because the installed bundle has no machine token file".to_string(),
+            })
+        })?;
+        wait_for_secret_file(
+            machine_token_path,
+            Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
+            Duration::from_millis(REGISTRATION_POLL_INTERVAL_MS),
+        )
+        .await?;
+    } else if let Some(registration) = &manifest.registration {
         let machine_id = wait_for_registration(&request.install_root, registration).await?;
         state.machine_id = Some(machine_id.clone());
         write_install_state(paths, &state)?;
@@ -894,6 +951,7 @@ async fn reconcile_existing_join(
     output::success(match action {
         JoinAction::Reconfigure => "Machine configuration updated",
         JoinAction::Repair => "Machine service repaired",
+        JoinAction::Reregister => "Machine credentials refreshed",
         _ => unreachable!(),
     });
     Ok(())
@@ -951,6 +1009,37 @@ fn machine_service_status(service_label: &str) -> Result<ServiceStatus> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to inspect machine service status".to_string(),
         })
+}
+
+fn stop_machine_service(service_label: &str) -> Result<()> {
+    let manager = native_service_manager()?;
+    let label = parse_service_label(service_label)?;
+    manager
+        .stop(ServiceStopCtx { label })
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to stop machine service before refreshing credentials".to_string(),
+        })
+}
+
+fn local_machine_connectivity(executable_path: &Path) -> Result<Option<LocalConnectivity>> {
+    let output = Command::new(executable_path)
+        .args(["status", "--json"])
+        .output()
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to inspect local machine connectivity".to_string(),
+        })?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let status = serde_json::from_slice::<LocalMachineStatus>(&output.stdout)
+        .into_alien_error()
+        .context(ErrorData::JsonError {
+            operation: "parse local machine status".to_string(),
+            reason: "Installed machine service returned invalid status JSON".to_string(),
+        })?;
+    Ok(status.control.connectivity)
 }
 
 async fn download_manifest(url: &str) -> Result<MachineBundleManifest> {
@@ -1459,6 +1548,30 @@ async fn wait_for_machine_id_file(
             }));
         }
 
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
+async fn wait_for_secret_file(
+    path: &Path,
+    timeout: Duration,
+    poll_interval: Duration,
+) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        match read_secret_string(path, "machine token") {
+            Ok(_) => return Ok(()),
+            Err(_) if !path.exists() => {}
+            Err(error) => return Err(error),
+        }
+        if started.elapsed() >= timeout {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Timed out waiting for refreshed machine credentials at {}",
+                    path.display()
+                ),
+            }));
+        }
         tokio::time::sleep(poll_interval).await;
     }
 }
@@ -2191,6 +2304,61 @@ mod tests {
             "{WRAPPED_JOIN_TOKEN_PREFIX}{}",
             URL_SAFE_NO_PAD.encode(payload.to_string())
         )
+    }
+
+    #[cfg(unix)]
+    fn status_executable(directory: &Path, connectivity: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        let path = directory.join(format!("status-{connectivity}"));
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' '{{\"control\":{{\"connectivity\":\"{connectivity}\"}}}}'\n"
+            ),
+        )
+        .expect("write status executable");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+            .expect("make status executable runnable");
+        path
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn local_status_distinguishes_rejected_credentials_from_network_failure() {
+        let directory = tempfile::tempdir().expect("status directory");
+        assert_eq!(
+            local_machine_connectivity(&status_executable(
+                directory.path(),
+                "authenticationFailed"
+            ))
+            .expect("authentication status"),
+            Some(LocalConnectivity::AuthenticationFailed)
+        );
+        assert_eq!(
+            local_machine_connectivity(&status_executable(directory.path(), "degraded"))
+                .expect("degraded status"),
+            Some(LocalConnectivity::Degraded)
+        );
+    }
+
+    #[tokio::test]
+    async fn refreshed_credentials_wait_for_a_nonempty_machine_token() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let path = directory.path().join("machine-token");
+        let writer_path = path.clone();
+        tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            std::fs::write(writer_path, "new-token\n").expect("write token");
+        });
+
+        wait_for_secret_file(&path, Duration::from_secs(1), Duration::from_millis(1))
+            .await
+            .expect("credentials should appear");
+        assert_eq!(
+            read_secret_string(&path, "machine token").expect("read token"),
+            "new-token"
+        );
     }
 
     #[tokio::test]
@@ -3069,8 +3237,8 @@ mod tests {
         assert!(request.plan.reconcile_network);
     }
 
-    #[test]
-    fn changed_network_override_is_reconfigured_without_reinstalling() {
+    #[tokio::test]
+    async fn changed_network_override_is_reconfigured_without_reinstalling() {
         let root = tempfile::tempdir().expect("install root");
         let request = build_join_request(
             &JoinArgs {
@@ -3109,7 +3277,9 @@ mod tests {
         .expect("write state");
 
         assert_eq!(
-            classify_join_action(&paths, &request, &manifest).expect("join action"),
+            classify_join_action(&paths, &request, &manifest)
+                .await
+                .expect("join action"),
             JoinAction::Reconfigure
         );
     }
