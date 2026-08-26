@@ -890,6 +890,16 @@ async fn reconcile_existing_join(
             reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
         }));
     }
+    let reregister_token_path = if action == JoinAction::Reregister {
+        Some(state.machine_token_path.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "bundle.config.machineTokenFile".to_string(),
+                message: "cannot refresh rejected credentials because the installed bundle has no machine token file".to_string(),
+            })
+        })?)
+    } else {
+        None
+    };
 
     output::step(
         2,
@@ -914,14 +924,8 @@ async fn reconcile_existing_join(
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
     write_install_state(paths, &state)?;
 
-    if action == JoinAction::Reregister {
+    if let Some(machine_token_path) = &reregister_token_path {
         stop_machine_service(&state.service_label)?;
-        let machine_token_path = state.machine_token_path.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "bundle.config.machineTokenFile".to_string(),
-                message: "cannot refresh rejected credentials because the installed bundle has no machine token file".to_string(),
-            })
-        })?;
         remove_file_if_exists(machine_token_path)?;
     }
 
@@ -929,13 +933,7 @@ async fn reconcile_existing_join(
     install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
 
     output::step(4, 4, "Verifying machine registration");
-    if action == JoinAction::Reregister {
-        let machine_token_path = state.machine_token_path.as_deref().ok_or_else(|| {
-            AlienError::new(ErrorData::ValidationError {
-                field: "bundle.config.machineTokenFile".to_string(),
-                message: "cannot verify refreshed credentials because the installed bundle has no machine token file".to_string(),
-            })
-        })?;
+    if let Some(machine_token_path) = &reregister_token_path {
         wait_for_secret_file(
             machine_token_path,
             Duration::from_secs(DEFAULT_REGISTRATION_TIMEOUT_SECONDS),
