@@ -117,6 +117,7 @@ enum JoinAction {
     Reconfigure,
     Repair,
     Reregister,
+    ReregisterAndReinstall,
     NoOp,
 }
 
@@ -703,14 +704,7 @@ async fn classify_join_action(
         && local_machine_connectivity(&state.executable_path)?
             == Some(LocalConnectivity::AuthenticationFailed)
     {
-        if state.control_plane_url.as_deref() != Some(request.plan.control_plane_url.as_str()) {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "control-plane-url".to_string(),
-                message: "cannot refresh rejected machine credentials while changing the control-plane URL"
-                    .to_string(),
-            }));
-        }
-        return Ok(JoinAction::Reregister);
+        return rejected_credentials_action(&state, request, manifest);
     }
     if !install_state_matches_bundle_context(&state, request, manifest) {
         return Ok(JoinAction::Reinstall);
@@ -737,6 +731,28 @@ async fn classify_join_action(
     Ok(JoinAction::NoOp)
 }
 
+fn rejected_credentials_action(
+    state: &MachineInstallState,
+    request: &JoinRequest,
+    manifest: &MachineBundleManifest,
+) -> Result<JoinAction> {
+    if state.control_plane_url.as_deref() != Some(request.plan.control_plane_url.as_str()) {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "control-plane-url".to_string(),
+            message:
+                "cannot refresh rejected machine credentials while changing the control-plane URL"
+                    .to_string(),
+        }));
+    }
+    Ok(
+        if install_state_matches_bundle_context(state, request, manifest) {
+            JoinAction::Reregister
+        } else {
+            JoinAction::ReregisterAndReinstall
+        },
+    )
+}
+
 async fn install_join(request: JoinRequest) -> Result<()> {
     let paths = install_paths(&request.install_root);
 
@@ -757,8 +773,16 @@ async fn install_join(request: JoinRequest) -> Result<()> {
 
     if matches!(
         action,
-        JoinAction::Reconfigure | JoinAction::Repair | JoinAction::Reregister
+        JoinAction::Reregister | JoinAction::ReregisterAndReinstall
     ) {
+        let state = read_install_state(&install_state_path(&paths))?;
+        reregister_existing_join(&request, &state).await?;
+        if action == JoinAction::Reregister {
+            output::success("Machine credentials refreshed");
+            return Ok(());
+        }
+        output::info("Machine credentials refreshed; continuing bundle installation");
+    } else if matches!(action, JoinAction::Reconfigure | JoinAction::Repair) {
         return reconcile_existing_join(&paths, &request, &manifest, action).await;
     }
 
@@ -898,10 +922,6 @@ async fn reconcile_existing_join(
             reason: "Installed machine executable is missing; rerun join with the bundle available to reinstall it".to_string(),
         }));
     }
-    if action == JoinAction::Reregister {
-        return reregister_existing_join(request, &state).await;
-    }
-
     output::step(
         2,
         4,
@@ -979,7 +999,6 @@ async fn reregister_existing_join(
         },
     )
     .await?;
-    output::success("Machine credentials refreshed");
     Ok(())
 }
 
@@ -3426,6 +3445,41 @@ mod tests {
                 .await
                 .expect("join action"),
             JoinAction::Reconfigure
+        );
+    }
+
+    #[test]
+    fn rejected_credentials_refresh_before_installing_a_changed_bundle() {
+        let root = tempfile::tempdir().expect("install root");
+        let request = build_join_request(
+            &JoinArgs {
+                install_root: root.path().to_path_buf(),
+                ..test_join_args()
+            },
+            None,
+            linux_host(root.path()),
+        )
+        .expect("request");
+        let manifest = test_manifest();
+        let state = MachineInstallState {
+            bundle_version: "previous-version".to_string(),
+            bundle_url: Some("https://example.com/previous-manifest.json".to_string()),
+            service_label: manifest.service.label.clone(),
+            executable_path: PathBuf::from("/installed/machine"),
+            config_path: PathBuf::from("/installed/machine.toml"),
+            join_token_path: PathBuf::from("/installed/join-token"),
+            machine_id_path: Some(PathBuf::from("/installed/machine-id")),
+            machine_token_path: Some(PathBuf::from("/installed/machine-token")),
+            control_plane_url: Some(request.plan.control_plane_url.clone()),
+            cluster_id: Some(request.plan.cluster_id.clone()),
+            machine_id: Some("machine-123".to_string()),
+            network_interface: None,
+            wireguard_endpoint: None,
+        };
+
+        assert_eq!(
+            rejected_credentials_action(&state, &request, &manifest).expect("action"),
+            JoinAction::ReregisterAndReinstall
         );
     }
 
