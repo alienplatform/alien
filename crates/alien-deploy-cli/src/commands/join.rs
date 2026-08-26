@@ -943,9 +943,10 @@ async fn reconcile_existing_join(
                 .await
             },
             || {
-                // Stop the replacement attempt before putting the previous token
-                // back. Recovery still proceeds when this best-effort stop fails.
-                let _ = stop_machine_service(&state.service_label);
+                // Do not race a running replacement process while restoring its
+                // token. If stopping fails, the service is still running and the
+                // combined error tells the operator that rollback was incomplete.
+                stop_machine_service(&state.service_label)?;
                 restore_machine_credentials(machine_token_path, previous_machine_token, || {
                     start_machine_service(&state.service_label)
                 })
