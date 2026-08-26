@@ -199,12 +199,13 @@ pub async fn run_writer(
                         code = %error.error.code,
                         "trace ingestion will be retried"
                     );
-                    queue
-                        .nack(&receipt_handle)
-                        .await
-                        .context(ErrorData::QueueOperationFailed {
-                            operation: "release trace for retry".to_string(),
-                        })?;
+                    if let Err(nack_error) = queue.nack(&receipt_handle).await {
+                        // Some queues, including the current SQS binding, cannot
+                        // shorten a message lease. Leaving it unacknowledged still
+                        // allows redelivery after the lease expires, and must not
+                        // terminate the sole writer.
+                        tracing::warn!(%nack_error, "could not release trace early; waiting for lease-based redelivery");
+                    }
                 }
             }
         }
