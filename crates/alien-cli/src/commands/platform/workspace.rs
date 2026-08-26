@@ -15,6 +15,7 @@ use serde::Serialize;
     long_about = "Manage workspaces in the Alien platform.",
     after_help = "EXAMPLES:
     alien workspaces current
+    alien workspaces create my-workspace
     alien workspaces ls
     alien workspaces set my-workspace
     alien workspaces set --json"
@@ -32,6 +33,11 @@ pub struct WorkspaceArgs {
 pub enum WorkspaceCmd {
     /// Print the effective current workspace
     Current,
+    /// Create a workspace and select it as the default
+    Create {
+        /// Permanent workspace name used in URLs and CLI commands.
+        name: String,
+    },
     /// Set the default workspace
     Set {
         /// Workspace name. If omitted in a real TTY, prompts for selection.
@@ -55,6 +61,15 @@ struct WorkspaceSetOutput {
     saved: bool,
 }
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceCreateOutput {
+    id: String,
+    workspace: String,
+    role: String,
+    selected: bool,
+}
+
 pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<()> {
     match args.cmd {
         WorkspaceCmd::Current => {
@@ -71,6 +86,38 @@ pub async fn workspace_task(args: WorkspaceArgs, ctx: ExecutionMode) -> Result<(
                     command("alien workspaces set <name>"),
                     command("alien login")
                 );
+            }
+        }
+        WorkspaceCmd::Create { name } => {
+            let http = ctx.auth_http().await?;
+            let response = http
+                .sdk_client()
+                .create_workspace()
+                .body_map(|body| body.name(name.as_str()))
+                .send()
+                .await
+                .into_sdk_error()
+                .context(ErrorData::ApiRequestFailed {
+                    message: "Failed to create workspace".to_string(),
+                    url: None,
+                })?
+                .into_inner();
+            let workspace = (*response.name).clone();
+            save_workspace(&workspace)?;
+
+            if args.json {
+                print_json(&WorkspaceCreateOutput {
+                    id: response.id.to_string(),
+                    workspace,
+                    role: response.role.to_string(),
+                    selected: true,
+                })?;
+            } else {
+                println!(
+                    "{}",
+                    success_line(&format!("Created workspace {workspace} and selected it."))
+                );
+                println!("{}", dim_label("Workspace names are permanent."));
             }
         }
         WorkspaceCmd::Set { name } => {
@@ -159,7 +206,8 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
     let workspaces = list_workspace_names(http).await?;
     if workspaces.is_empty() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "No workspaces found for this account.".to_string(),
+            message: "No workspaces found for this account. Run `alien workspaces create <name>`."
+                .to_string(),
         }));
     }
 
@@ -174,4 +222,21 @@ pub async fn prompt_workspace(http: &crate::auth::AuthHttp, json_mode: bool) -> 
     }
 
     prompt_select("Select a workspace:", &workspaces)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkspaceArgs, WorkspaceCmd};
+    use clap::Parser;
+
+    #[test]
+    fn parses_workspace_create_name() {
+        let args = WorkspaceArgs::try_parse_from(["workspaces", "create", "acme-prod"])
+            .expect("create command should parse");
+
+        assert!(matches!(
+            args.cmd,
+            WorkspaceCmd::Create { name } if name == "acme-prod"
+        ));
+    }
 }
