@@ -112,7 +112,7 @@ async fn local_storage_rejects_object_attributes_without_writing_the_payload() {
         .await
         .expect_err("local storage must not silently discard object attributes");
 
-    assert!(matches!(&error, object_store::Error::Generic { .. }));
+    assert!(matches!(&error, object_store::Error::NotSupported { .. }));
     assert!(error
         .to_string()
         .contains("the local filesystem backend cannot persist object attributes"));
