@@ -924,13 +924,19 @@ async fn reconcile_existing_join(
     state.wireguard_endpoint = request.plan.wireguard_endpoint.clone();
     write_install_state(paths, &state)?;
 
+    output::step(3, 4, "Reconciling machine service");
     if let Some(machine_token_path) = &reregister_token_path {
         stop_machine_service(&state.service_label)?;
-        remove_file_if_exists(machine_token_path)?;
+        run_with_service_recovery(
+            || {
+                remove_file_if_exists(machine_token_path)?;
+                install_machine_service(&manifest.service, &state.executable_path, &config_path)
+            },
+            || start_machine_service(&state.service_label),
+        )?;
+    } else {
+        install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
     }
-
-    output::step(3, 4, "Reconciling machine service");
-    install_machine_service(&manifest.service, &state.executable_path, &config_path)?;
 
     output::step(4, 4, "Verifying machine registration");
     if let Some(machine_token_path) = &reregister_token_path {
@@ -1018,6 +1024,35 @@ fn stop_machine_service(service_label: &str) -> Result<()> {
         .context(ErrorData::OperatorServiceError {
             message: "Failed to stop machine service before refreshing credentials".to_string(),
         })
+}
+
+fn start_machine_service(service_label: &str) -> Result<()> {
+    let manager = native_service_manager()?;
+    let label = parse_service_label(service_label)?;
+    manager
+        .start(ServiceStartCtx { label })
+        .into_alien_error()
+        .context(ErrorData::OperatorServiceError {
+            message: "Failed to restore machine service after credential refresh failure"
+                .to_string(),
+        })
+}
+
+fn run_with_service_recovery<T>(
+    operation: impl FnOnce() -> Result<T>,
+    restart: impl FnOnce() -> Result<()>,
+) -> Result<T> {
+    match operation() {
+        Ok(value) => Ok(value),
+        Err(operation_error) => match restart() {
+            Ok(()) => Err(operation_error),
+            Err(restart_error) => Err(operation_error.context(ErrorData::OperatorServiceError {
+                message: format!(
+                    "Machine credential refresh failed, and restoring the previous service also failed: {restart_error}"
+                ),
+            })),
+        },
+    }
 }
 
 fn local_machine_connectivity(executable_path: &Path) -> Result<Option<LocalConnectivity>> {
@@ -2357,6 +2392,50 @@ mod tests {
             read_secret_string(&path, "machine token").expect("read token"),
             "new-token"
         );
+    }
+
+    #[test]
+    fn failed_credential_refresh_restarts_the_previous_service() {
+        let restarted = std::cell::Cell::new(false);
+        let result = run_with_service_recovery::<()>(
+            || {
+                Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "remove".to_string(),
+                    file_path: "/machine-token".to_string(),
+                    reason: "test failure".to_string(),
+                }))
+            },
+            || {
+                restarted.set(true);
+                Ok(())
+            },
+        );
+
+        assert!(result.is_err());
+        assert!(restarted.get());
+    }
+
+    #[test]
+    fn failed_service_restore_is_reported_with_the_refresh_failure() {
+        let result = run_with_service_recovery::<()>(
+            || {
+                Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "remove".to_string(),
+                    file_path: "/machine-token".to_string(),
+                    reason: "refresh failed".to_string(),
+                }))
+            },
+            || {
+                Err(AlienError::new(ErrorData::OperatorServiceError {
+                    message: "restart failed".to_string(),
+                }))
+            },
+        )
+        .expect_err("both failures must be returned");
+
+        let message = result.to_string();
+        assert!(message.contains("refresh failed"));
+        assert!(message.contains("restart failed"));
     }
 
     #[tokio::test]
