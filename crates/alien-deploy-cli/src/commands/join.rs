@@ -12,6 +12,7 @@ use reqwest::Url;
 use serde::{Deserialize, Serialize};
 use service_manager::*;
 use sha2::{Digest, Sha256};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs::{File, OpenOptions};
@@ -995,9 +996,13 @@ async fn reregister_existing_join(
     let previous_join_token = snapshot_secret_file(&state.join_token_path, "join token")?;
 
     output::step(2, 4, "Writing refreshed machine credentials");
+    let join_token_candidate = write_secret_candidate(&state.join_token_path, &request.token)?;
+    let credentials_changed = Cell::new(false);
     run_with_credential_recovery(
         async {
-            write_secret_file(&state.join_token_path, &request.token)?;
+            replace_secret_candidate(&join_token_candidate, &state.join_token_path)?;
+            credentials_changed.set(true);
+            sync_secret_parent(&state.join_token_path)?;
             output::step(3, 4, "Restarting machine registration");
             stop_machine_service(&state.service_label)?;
             remove_file_if_exists(machine_token_path)?;
@@ -1011,14 +1016,16 @@ async fn reregister_existing_join(
             .await
         },
         || {
-            restore_credentials_and_service(
-                &state.join_token_path,
-                &previous_join_token,
-                machine_token_path,
-                &previous_machine_token,
-                || stop_machine_service(&state.service_label),
-                || start_machine_service(&state.service_label),
-            )
+            recover_if_credentials_changed(credentials_changed.get(), || {
+                restore_credentials_and_service(
+                    &state.join_token_path,
+                    &previous_join_token,
+                    machine_token_path,
+                    &previous_machine_token,
+                    || stop_machine_service(&state.service_label),
+                    || start_machine_service(&state.service_label),
+                )
+            })
         },
     )
     .await?;
@@ -1123,6 +1130,17 @@ async fn run_with_credential_recovery<T>(
     match refresh.await {
         Ok(value) => Ok(value),
         Err(refresh_error) => Err(credential_refresh_error(refresh_error, recover())),
+    }
+}
+
+fn recover_if_credentials_changed(
+    credentials_changed: bool,
+    recover: impl FnOnce() -> Result<()>,
+) -> Result<()> {
+    if credentials_changed {
+        recover()
+    } else {
+        Ok(())
     }
 }
 
@@ -1834,13 +1852,21 @@ fn write_secret_candidate(path: &Path, contents: &str) -> Result<PathBuf> {
 }
 
 fn commit_secret_candidate(temporary_path: &Path, path: &Path) -> Result<()> {
+    replace_secret_candidate(temporary_path, path)?;
+    sync_secret_parent(path)
+}
+
+fn replace_secret_candidate(temporary_path: &Path, path: &Path) -> Result<()> {
     std::fs::rename(temporary_path, path)
         .into_alien_error()
         .context(ErrorData::FileOperationFailed {
             operation: "replace".to_string(),
             file_path: path.display().to_string(),
             reason: "Failed to atomically replace machine configuration".to_string(),
-        })?;
+        })
+}
+
+fn sync_secret_parent(path: &Path) -> Result<()> {
     let parent = path.parent().ok_or_else(|| {
         AlienError::new(ErrorData::FileOperationFailed {
             operation: "resolve".to_string(),
@@ -2545,6 +2571,31 @@ mod tests {
 
         assert!(result.is_err());
         assert!(restarted.get());
+    }
+
+    #[tokio::test]
+    async fn failure_before_credentials_change_does_not_run_recovery() {
+        let credentials_changed = false;
+        let recovered = std::cell::Cell::new(false);
+        let result = run_with_credential_recovery::<()>(
+            async {
+                Err(AlienError::new(ErrorData::FileOperationFailed {
+                    operation: "write".to_string(),
+                    file_path: "/join-token".to_string(),
+                    reason: "candidate replacement failed".to_string(),
+                }))
+            },
+            || {
+                recover_if_credentials_changed(credentials_changed, || {
+                    recovered.set(true);
+                    Ok(())
+                })
+            },
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(!recovered.get());
     }
 
     #[test]
