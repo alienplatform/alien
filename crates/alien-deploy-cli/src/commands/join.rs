@@ -133,6 +133,11 @@ struct LocalControlStatus {
     connectivity: Option<LocalConnectivity>,
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct SecretFileSnapshot {
+    contents: Option<String>,
+}
+
 #[derive(Debug, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 enum LocalConnectivity {
@@ -975,14 +980,26 @@ async fn reregister_existing_join(
                 .to_string(),
         })
     })?;
-    let previous_machine_token = read_secret_string(machine_token_path, "machine token")?;
+    let previous_machine_token = snapshot_secret_file(machine_token_path, "machine token")?;
+    if !previous_machine_token
+        .contents
+        .as_deref()
+        .is_some_and(|token| !token.trim().is_empty())
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "installed machine token path".to_string(),
+            message: "cannot refresh rejected credentials because the installed machine token file is missing or empty"
+                .to_string(),
+        }));
+    }
+    let previous_join_token = snapshot_secret_file(&state.join_token_path, "join token")?;
 
     output::step(2, 4, "Writing refreshed machine credentials");
-    write_secret_file(&state.join_token_path, &request.token)?;
-    output::step(3, 4, "Restarting machine registration");
-    stop_machine_service(&state.service_label)?;
     run_with_credential_recovery(
         async {
+            write_secret_file(&state.join_token_path, &request.token)?;
+            output::step(3, 4, "Restarting machine registration");
+            stop_machine_service(&state.service_label)?;
             remove_file_if_exists(machine_token_path)?;
             start_machine_service(&state.service_label)?;
             output::step(4, 4, "Verifying machine registration");
@@ -994,11 +1011,14 @@ async fn reregister_existing_join(
             .await
         },
         || {
-            // Do not race a running replacement process while restoring its token.
-            stop_machine_service(&state.service_label)?;
-            restore_machine_credentials(machine_token_path, &previous_machine_token, || {
-                start_machine_service(&state.service_label)
-            })
+            restore_credentials_and_service(
+                &state.join_token_path,
+                &previous_join_token,
+                machine_token_path,
+                &previous_machine_token,
+                || stop_machine_service(&state.service_label),
+                || start_machine_service(&state.service_label),
+            )
         },
     )
     .await?;
@@ -1106,27 +1126,65 @@ async fn run_with_credential_recovery<T>(
     }
 }
 
-fn restore_machine_credentials(
+fn snapshot_secret_file(path: &Path, description: &str) -> Result<SecretFileSnapshot> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => Ok(SecretFileSnapshot {
+            contents: Some(contents),
+        }),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            Ok(SecretFileSnapshot { contents: None })
+        }
+        Err(error) => Err(error
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read".to_string(),
+                file_path: path.display().to_string(),
+                reason: format!("Failed to snapshot {description}"),
+            })),
+    }
+}
+
+fn restore_secret_file(path: &Path, snapshot: &SecretFileSnapshot) -> Result<()> {
+    match &snapshot.contents {
+        Some(contents) => write_secret_file(path, contents),
+        None => remove_file_if_exists(path),
+    }
+}
+
+fn restore_credentials_and_service(
+    join_token_path: &Path,
+    previous_join_token: &SecretFileSnapshot,
     machine_token_path: &Path,
-    previous_machine_token: &str,
+    previous_machine_token: &SecretFileSnapshot,
+    stop: impl FnOnce() -> Result<()>,
     restart: impl FnOnce() -> Result<()>,
 ) -> Result<()> {
-    let token_result = write_secret_file(machine_token_path, previous_machine_token);
-    let restart_result = restart();
-    match (token_result, restart_result) {
-        (Ok(()), Ok(())) => Ok(()),
-        (Err(token_error), Ok(())) => Err(token_error.context(ErrorData::OperatorServiceError {
-            message: "Failed to restore the previous machine token after credential refresh failure"
-                .to_string(),
-        })),
-        (Ok(()), Err(restart_error)) => Err(restart_error),
-        (Err(token_error), Err(restart_error)) => {
-            Err(token_error.context(ErrorData::OperatorServiceError {
-                message: format!(
-                    "Failed to restore the previous machine token and restart the service: {restart_error}"
-                ),
-            }))
+    let mut failures = Vec::new();
+    for (operation, result) in [
+        ("stop the replacement service", stop()),
+        (
+            "restore the previous machine token",
+            restore_secret_file(machine_token_path, previous_machine_token),
+        ),
+        (
+            "restore the previous join token",
+            restore_secret_file(join_token_path, previous_join_token),
+        ),
+        ("restart the previous service", restart()),
+    ] {
+        if let Err(error) = result {
+            failures.push(format!("{operation}: {error}"));
         }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AlienError::new(ErrorData::OperatorServiceError {
+            message: format!(
+                "Failed to fully restore machine credentials: {}",
+                failures.join("; ")
+            ),
+        }))
     }
 }
 
@@ -2490,24 +2548,123 @@ mod tests {
     }
 
     #[test]
-    fn failed_credential_refresh_restores_the_previous_token_before_restart() {
+    fn failed_credential_refresh_restores_both_tokens_before_restart() {
         let directory = tempfile::tempdir().expect("token directory");
-        let token_path = directory.path().join("machine-token");
-        write_secret_file(&token_path, "previous-token").expect("write previous token");
-        remove_file_if_exists(&token_path).expect("remove token during refresh");
-        let token_seen_by_restart = std::cell::RefCell::new(None);
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        write_secret_file(&join_token_path, "previous-join-token\n")
+            .expect("write previous join token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot token");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+        let tokens_seen_by_restart = std::cell::RefCell::new(None);
 
-        restore_machine_credentials(&token_path, "previous-token", || {
-            *token_seen_by_restart.borrow_mut() =
-                Some(read_secret_string(&token_path, "machine token").expect("restored token"));
-            Ok(())
-        })
+        restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || Ok(()),
+            || {
+                *tokens_seen_by_restart.borrow_mut() = Some((
+                    read_secret_string(&machine_token_path, "machine token")
+                        .expect("restored machine token"),
+                    read_secret_string(&join_token_path, "join token")
+                        .expect("restored join token"),
+                ));
+                Ok(())
+            },
+        )
         .expect("restore credentials");
 
         assert_eq!(
-            token_seen_by_restart.into_inner().as_deref(),
-            Some("previous-token")
+            tokens_seen_by_restart.into_inner(),
+            Some((
+                "previous-machine-token".to_string(),
+                "previous-join-token".to_string()
+            ))
         );
+        assert_eq!(
+            std::fs::read_to_string(&join_token_path).expect("read exact restored join token"),
+            "previous-join-token\n"
+        );
+    }
+
+    #[test]
+    fn failed_credential_refresh_removes_join_token_that_was_previously_absent() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot absence");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+
+        restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || Ok(()),
+            || Ok(()),
+        )
+        .expect("restore credentials");
+
+        assert!(!join_token_path.exists());
+    }
+
+    #[test]
+    fn failed_stop_still_restores_credentials_and_restarts_service() {
+        let directory = tempfile::tempdir().expect("token directory");
+        let machine_token_path = directory.path().join("machine-token");
+        let join_token_path = directory.path().join("join-token");
+        write_secret_file(&machine_token_path, "previous-machine-token")
+            .expect("write previous machine token");
+        let previous_machine_token =
+            snapshot_secret_file(&machine_token_path, "machine token").expect("snapshot token");
+        let previous_join_token =
+            snapshot_secret_file(&join_token_path, "join token").expect("snapshot absence");
+        remove_file_if_exists(&machine_token_path).expect("remove machine token during refresh");
+        write_secret_file(&join_token_path, "replacement-join-token")
+            .expect("write replacement join token");
+        let restarted = std::cell::Cell::new(false);
+
+        let error = restore_credentials_and_service(
+            &join_token_path,
+            &previous_join_token,
+            &machine_token_path,
+            &previous_machine_token,
+            || {
+                Err(AlienError::new(ErrorData::OperatorServiceError {
+                    message: "stop failed".to_string(),
+                }))
+            },
+            || {
+                restarted.set(true);
+                Ok(())
+            },
+        )
+        .expect_err("stop failure should be reported");
+
+        assert!(restarted.get());
+        assert!(!join_token_path.exists());
+        assert_eq!(
+            read_secret_string(&machine_token_path, "machine token")
+                .expect("restored machine token"),
+            "previous-machine-token"
+        );
+        assert!(error.to_string().contains("stop failed"));
     }
 
     #[test]
