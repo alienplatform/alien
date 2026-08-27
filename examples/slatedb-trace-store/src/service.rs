@@ -26,6 +26,24 @@ use tokio::{sync::RwLock, time::Duration};
 
 const MAX_QUEUE_ATTEMPTS: usize = 5;
 
+pub struct WriterHealth {
+    receive: AtomicBool,
+    finalization: AtomicBool,
+}
+
+impl WriterHealth {
+    pub fn new() -> Self {
+        Self {
+            receive: AtomicBool::new(true),
+            finalization: AtomicBool::new(true),
+        }
+    }
+
+    fn is_healthy(&self) -> bool {
+        self.receive.load(Ordering::Relaxed) && self.finalization.load(Ordering::Relaxed)
+    }
+}
+
 pub struct ApiState {
     storage: Arc<dyn Storage>,
     queue: Queue,
@@ -66,8 +84,8 @@ pub async fn health() -> impl IntoResponse {
     (StatusCode::OK, Json(json!({ "status": "ok" })))
 }
 
-pub async fn writer_health(State(healthy): State<Arc<AtomicBool>>) -> impl IntoResponse {
-    if healthy.load(Ordering::Relaxed) {
+pub async fn writer_health(State(health): State<Arc<WriterHealth>>) -> impl IntoResponse {
+    if health.is_healthy() {
         (StatusCode::OK, Json(json!({ "status": "ok" })))
     } else {
         (
@@ -163,22 +181,20 @@ pub async fn run_writer(
     writer: TraceWriter,
     storage: Arc<dyn Storage>,
     queue: Queue,
-    healthy: Arc<AtomicBool>,
+    health: Arc<WriterHealth>,
 ) -> Result<()> {
     let mut receive_failures = 0;
     loop {
         let messages = match queue.receive(10).await {
             Ok(messages) => {
                 receive_failures = 0;
+                health.receive.store(true, Ordering::Relaxed);
                 messages
             }
             Err(error) => {
                 receive_failures += 1;
                 if receive_failures >= MAX_QUEUE_ATTEMPTS {
-                    // Degradation is latched until Alien replaces the writer. A
-                    // later successful poll cannot prove that an earlier ack or
-                    // failure-record operation recovered.
-                    healthy.store(false, Ordering::Relaxed);
+                    health.receive.store(false, Ordering::Relaxed);
                 }
                 tracing::warn!(%error, attempt = receive_failures, "could not receive traces; retrying");
                 tokio::time::sleep(Duration::from_secs(1)).await;
@@ -205,7 +221,7 @@ pub async fn run_writer(
             match outcome {
                 Ok(staging_path) => {
                     let acknowledged =
-                        ack_with_retry(&queue, &receipt_handle, "ack committed trace", &healthy)
+                        ack_with_retry(&queue, &receipt_handle, "ack committed trace", &health)
                             .await;
                     if acknowledged {
                         if let Err(error) = storage.delete(&Path::from(staging_path.as_str())).await
@@ -220,11 +236,11 @@ pub async fn run_writer(
                         &failure,
                         message.attempt,
                         &receipt_handle,
-                        &healthy,
+                        &health,
                     )
                     .await;
                     if recorded {
-                        ack_with_retry(&queue, &receipt_handle, "ack rejected trace", &healthy)
+                        ack_with_retry(&queue, &receipt_handle, "ack rejected trace", &health)
                             .await;
                     }
                 }
@@ -251,14 +267,17 @@ async fn ack_with_retry(
     queue: &Queue,
     receipt_handle: &str,
     operation: &str,
-    healthy: &AtomicBool,
+    health: &WriterHealth,
 ) -> bool {
     for attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match queue.ack(receipt_handle).await {
-            Ok(()) => return true,
+            Ok(()) => {
+                health.finalization.store(true, Ordering::Relaxed);
+                return true;
+            }
             Err(error) => {
                 if attempt >= MAX_QUEUE_ATTEMPTS {
-                    healthy.store(false, Ordering::Relaxed);
+                    health.finalization.store(false, Ordering::Relaxed);
                     tracing::error!(%error, %operation, "queue operation remains unavailable; leaving message for redelivery");
                     return false;
                 }
@@ -275,14 +294,17 @@ async fn record_failure_with_retry(
     failure: &PermanentFailure,
     attempt: u32,
     receipt_handle: &str,
-    healthy: &AtomicBool,
+    health: &WriterHealth,
 ) -> bool {
     for storage_attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match record_failure(storage, failure, attempt, receipt_handle).await {
-            Ok(()) => return true,
+            Ok(()) => {
+                health.finalization.store(true, Ordering::Relaxed);
+                return true;
+            }
             Err(error) => {
                 if storage_attempt >= MAX_QUEUE_ATTEMPTS {
-                    healthy.store(false, Ordering::Relaxed);
+                    health.finalization.store(false, Ordering::Relaxed);
                     tracing::error!(%error, "failure record remains unavailable; leaving message for redelivery");
                     return false;
                 }

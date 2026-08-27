@@ -10,16 +10,13 @@ use crate::{
     error::{ErrorData, Result},
     service::{
         get_trace, health, ingest, list_traces, open_writer, run_writer, writer_health, ApiState,
+        WriterHealth,
     },
 };
 use alien_error::{Context, IntoAlienError};
 use alien_sdk::Bindings;
 use axum::{routing::get, Router};
-use std::{
-    net::SocketAddr,
-    str::FromStr,
-    sync::{atomic::AtomicBool, Arc},
-};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -101,12 +98,12 @@ async fn main() -> Result<()> {
         }
         Mode::Writer => {
             let (writer, storage, queue) = open_writer(storage, queue).await?;
-            let healthy = Arc::new(AtomicBool::new(true));
+            let health = Arc::new(WriterHealth::new());
             (
                 Router::new()
                     .route("/health", get(writer_health))
-                    .with_state(Arc::clone(&healthy)),
-                Some(run_writer(writer, storage, queue, healthy)),
+                    .with_state(Arc::clone(&health)),
+                Some(run_writer(writer, storage, queue, health)),
             )
         }
     };
