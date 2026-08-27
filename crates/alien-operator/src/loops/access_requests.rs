@@ -25,6 +25,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use serde_json::{Map, Value};
 use tracing::debug;
 
 use crate::OperatorState;
@@ -36,6 +37,8 @@ pub struct AccessRequestCommand {
     pub command: String,
     /// One-line human summary for display.
     pub summary: String,
+    /// Exact operation parameters the customer is being asked to authorize.
+    pub params: Map<String, Value>,
 }
 
 /// A control-plane access request: a grant the customer must approve before its

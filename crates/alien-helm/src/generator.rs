@@ -790,6 +790,10 @@ spec:
                       summary:
                         type: string
                         description: One-line human summary for display.
+                      params:
+                        type: object
+                        x-kubernetes-preserve-unknown-fields: true
+                        description: Exact operation parameters covered by the grant.
                 approvedForMinutes:
                   type: integer
                   minimum: 1
@@ -4403,6 +4407,14 @@ mod tests {
         assert_eq!(
             yaml_path(&crd, &["spec", "names", "plural"]).and_then(YamlValue::as_str),
             Some("acmeaccessrequests")
+        );
+        assert_eq!(
+            crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"]
+                ["properties"]["commands"]["items"]["properties"]["params"]
+                ["x-kubernetes-preserve-unknown-fields"]
+                .as_bool(),
+            Some(true),
+            "the CRD must retain exact operation parameters for customer review"
         );
         // Not the Alien defaults.
         let text = &manifest;
