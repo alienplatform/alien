@@ -619,3 +619,52 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
         );
     }
 }
+
+/// Storage is a remote-binding type too, so the same prefix match stripped `storage/heartbeat`
+/// from every bring-your-own-bucket deployment's management identity.
+#[test]
+fn aws_remote_storage_management_role_keeps_its_heartbeat() {
+    let stack = Stack::new("byo-bucket".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new().global(["storage/heartbeat"]),
+        ))
+        .add_with_remote_access(
+            alien_core::Storage::new("customer-data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote storage management",
+    );
+
+    let management = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("ManagementRole") && resource.resource_type.contains("Policy")
+        })
+        .map(|(_, resource)| serde_json::to_string(&resource.properties).expect("serializes"))
+        .collect::<String>();
+
+    assert!(
+        management.contains("s3:"),
+        "the management identity must keep its storage heartbeat grant: {yaml}"
+    );
+    assert!(
+        !management.contains("s3:GetObject"),
+        "heartbeat must not reach object contents: {management}"
+    );
+}
