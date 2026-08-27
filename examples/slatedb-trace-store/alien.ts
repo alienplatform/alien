@@ -1,8 +1,6 @@
 import * as alien from "@alienplatform/core"
 
-const data = new alien.Storage("data")
-  .lifecycleRules([{ prefix: "staging/v1/", days: 7 }])
-  .build()
+const data = new alien.Storage("data").lifecycleRules([{ prefix: "staging/v1/", days: 7 }]).build()
 const ingestion = new alien.Queue("ingestion").build()
 
 const code = {

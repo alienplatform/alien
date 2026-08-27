@@ -151,6 +151,11 @@ pub async fn run_writer(
     loop {
         let messages = match queue.receive(10).await {
             Ok(messages) => messages,
+            Err(error) if !error.retryable => {
+                return Err(error).context(ErrorData::QueueOperationFailed {
+                    operation: "receive traces".to_string(),
+                });
+            }
             Err(error) => {
                 tracing::warn!(%error, "could not receive traces; retrying");
                 tokio::time::sleep(Duration::from_secs(1)).await;
