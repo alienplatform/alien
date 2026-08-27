@@ -79,7 +79,7 @@ importers:
     devDependencies:
       '@napi-rs/cli':
         specifier: ^3.0.0
-        version: 3.8.6(@emnapi/core@1.11.2)(@emnapi/runtime@1.11.2)(@types/node@24.13.3)
+        version: 3.8.6(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@24.13.3)
 
   packages/ai-gateway:
     dependencies:
@@ -101,7 +101,7 @@ importers:
         version: 24.13.3
       openai:
         specifier: ^7.0.0
-        version: 7.6.0(@aws-sdk/credential-provider-node@3.972.81)(@smithy/signature-v4@5.7.3)(undici@6.28.0)(ws@8.21.2)(zod@4.4.3)
+        version: 7.7.0(@aws-sdk/credential-provider-node@3.972.81)(@smithy/signature-v4@5.7.3)(undici@6.28.0)(ws@8.21.2)(zod@4.4.3)
       tsdown:
         specifier: ^0.13.0
         version: 0.13.5(typescript@5.9.3)
@@ -3334,8 +3334,8 @@ packages:
     resolution: {integrity: sha512-YgBpdJHPyQ2UE5x+hlSXcnejzAvD0b22U2OuAP+8OnlJT+PjWPxtgmGqKKc+RgTM63U9gN0YzrYc71R2WT/hTA==}
     engines: {node: '>=18'}
 
-  openai@7.6.0:
-    resolution: {integrity: sha512-9J/2k23STBk+gQXCTrZbj0eFvb9I6TZTUC47/uWj+V0BoxTdvrwKadFYu2L6jZgPG1RQ43S6ETPH9SU3lyQx5g==}
+  openai@7.7.0:
+    resolution: {integrity: sha512-GmfZh/nAyI1Ya//I80YrTzY7h+0E7NPd3YQD64X5tcJMrupws0dYmN2L1D5KhU88j6u/oLErIu+oNTRqm+O2Mg==}
     engines: {node: '>=22.0.0'}
     peerDependencies:
       '@aws-sdk/credential-provider-node': '>=3.972.0 <4'
@@ -5198,6 +5198,37 @@ snapshots:
     optionalDependencies:
       '@emnapi/core': 1.11.2
       '@emnapi/runtime': 1.11.2
+    transitivePeerDependencies:
+      - '@napi-rs/cross-toolchain-arm64-target-aarch64'
+      - '@napi-rs/cross-toolchain-arm64-target-armv7'
+      - '@napi-rs/cross-toolchain-arm64-target-ppc64le'
+      - '@napi-rs/cross-toolchain-arm64-target-s390x'
+      - '@napi-rs/cross-toolchain-arm64-target-x86_64'
+      - '@napi-rs/cross-toolchain-x64-target-aarch64'
+      - '@napi-rs/cross-toolchain-x64-target-armv7'
+      - '@napi-rs/cross-toolchain-x64-target-ppc64le'
+      - '@napi-rs/cross-toolchain-x64-target-s390x'
+      - '@napi-rs/cross-toolchain-x64-target-x86_64'
+      - '@types/node'
+      - supports-color
+
+  '@napi-rs/cli@3.8.6(@emnapi/core@1.9.2)(@emnapi/runtime@1.9.2)(@types/node@24.13.3)':
+    dependencies:
+      '@inquirer/prompts': 8.5.2(@types/node@24.13.3)
+      '@napi-rs/cross-toolchain': 1.0.3
+      '@napi-rs/wasm-tools': 1.1.0
+      '@octokit/rest': 22.0.1
+      clipanion: 4.0.0-rc.4(typanion@3.14.0)
+      colorette: 2.0.20
+      es-toolkit: 1.50.0
+      js-yaml: 4.3.1
+      obug: 2.1.4
+      semver: 7.8.5
+      typanion: 3.14.0
+      typescript: 6.0.3
+    optionalDependencies:
+      '@emnapi/core': 1.9.2
+      '@emnapi/runtime': 1.9.2
     transitivePeerDependencies:
       - '@napi-rs/cross-toolchain-arm64-target-aarch64'
       - '@napi-rs/cross-toolchain-arm64-target-armv7'
@@ -7200,7 +7231,7 @@ snapshots:
       is-inside-container: 1.0.0
       wsl-utils: 0.1.0
 
-  openai@7.6.0(@aws-sdk/credential-provider-node@3.972.81)(@smithy/signature-v4@5.7.3)(undici@6.28.0)(ws@8.21.2)(zod@4.4.3):
+  openai@7.7.0(@aws-sdk/credential-provider-node@3.972.81)(@smithy/signature-v4@5.7.3)(undici@6.28.0)(ws@8.21.2)(zod@4.4.3):
     optionalDependencies:
       '@aws-sdk/credential-provider-node': 3.972.81
       '@smithy/signature-v4': 5.7.3
