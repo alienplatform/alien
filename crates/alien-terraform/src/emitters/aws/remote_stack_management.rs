@@ -59,7 +59,7 @@ impl TfEmitter for AwsRemoteStackManagementEmitter {
         let mut gated_statements =
             std::collections::BTreeMap::<String, Vec<AwsIamStatement>>::new();
         if let Some(profile) = ctx.stack.management().profile() {
-            for permission_set_ref in global_permission_refs(profile) {
+            for permission_set_ref in global_permission_refs(ctx, profile) {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
@@ -224,11 +224,31 @@ fn self_read_policy(label: &str) -> Expression {
     ]))
 }
 
-fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
+/// Session-reaching sets belong to the remote caller's identity alone, whatever their id.
+fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
+    permission_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .is_some_and(|set| alien_permissions::permission_set_reaches_a_microvm_session(&set))
+}
+
+fn global_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
+) -> Vec<&'a PermissionSetReference> {
     profile
         .0
         .get("*")
-        .map(|refs| refs.iter().collect())
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_ref| {
+                    !alien_core::remote_bindings::remote_binding_claims_management_set(
+                        ctx.stack.resources.values(),
+                        permission_ref.id(),
+                        || reaches_a_session(permission_ref),
+                    )
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
