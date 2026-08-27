@@ -115,7 +115,7 @@ chrono = "0.4.40"
 clap = "4.5.35"
 cloudevents-sdk = "0.9"
 config = "0.15"
-container-registry = { git = "https://github.com/alienplatform/container_registry-rs.git", rev = "f0d0fe6" }
+container-registry = { git = "https://github.com/alienplatform/container_registry-rs.git", rev = "fd28e7c" }
 dashmap = "6"
 derive_more = "2"
 dirs = "6"
