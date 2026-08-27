@@ -233,13 +233,8 @@ pub async fn run_writer(
                     }
                 }
                 Err(ProcessError::Permanent(failure)) => {
-                    let recorded = record_failure_with_retry(
-                        &storage,
-                        &failure,
-                        message.attempt,
-                        &receipt_handle,
-                    )
-                    .await;
+                    let recorded =
+                        record_failure_with_retry(&storage, &failure, message.attempt).await;
                     if recorded {
                         ack_with_retry(&queue, &receipt_handle, "ack rejected trace").await;
                     }
@@ -284,10 +279,9 @@ async fn record_failure_with_retry(
     storage: &Arc<dyn Storage>,
     failure: &PermanentFailure,
     attempt: u32,
-    receipt_handle: &str,
 ) -> bool {
     for storage_attempt in 1..=MAX_QUEUE_ATTEMPTS {
-        match record_failure(storage, failure, attempt, receipt_handle).await {
+        match record_failure(storage, failure, attempt).await {
             Ok(()) => return true,
             Err(error) => {
                 if storage_attempt >= MAX_QUEUE_ATTEMPTS {
@@ -415,15 +409,14 @@ async fn record_failure(
     storage: &Arc<dyn Storage>,
     failure: &PermanentFailure,
     attempt: u32,
-    receipt_handle: &str,
 ) -> Result<()> {
     let failed_at = chrono::Utc::now();
-    let receipt_hash = hex::encode(Sha256::digest(receipt_handle.as_bytes()));
-    let path = format!(
-        "failures/v1/{:016x}-{}.json",
-        failed_at.timestamp_millis(),
-        &receipt_hash[..16]
-    );
+    let identity = serde_json::to_vec(&(&failure.trace_id, &failure.staging_path, &failure.reason))
+        .into_alien_error()
+        .context(ErrorData::SerializationFailed {
+            operation: "encode ingestion failure identity".to_string(),
+        })?;
+    let path = format!("failures/v1/{}.json", hex::encode(Sha256::digest(identity)));
     let body = serde_json::to_vec(&IngestionFailure {
         trace_id: failure.trace_id.clone(),
         staging_path: failure.staging_path.clone(),
