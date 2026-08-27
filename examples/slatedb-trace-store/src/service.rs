@@ -170,12 +170,14 @@ pub async fn run_writer(
         let messages = match queue.receive(10).await {
             Ok(messages) => {
                 receive_failures = 0;
-                healthy.store(true, Ordering::Relaxed);
                 messages
             }
             Err(error) => {
                 receive_failures += 1;
                 if receive_failures >= MAX_QUEUE_ATTEMPTS {
+                    // Degradation is latched until Alien replaces the writer. A
+                    // later successful poll cannot prove that an earlier ack or
+                    // failure-record operation recovered.
                     healthy.store(false, Ordering::Relaxed);
                 }
                 tracing::warn!(%error, attempt = receive_failures, "could not receive traces; retrying");
@@ -253,10 +255,7 @@ async fn ack_with_retry(
 ) -> bool {
     for attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match queue.ack(receipt_handle).await {
-            Ok(()) => {
-                healthy.store(true, Ordering::Relaxed);
-                return true;
-            }
+            Ok(()) => return true,
             Err(error) => {
                 if attempt >= MAX_QUEUE_ATTEMPTS {
                     healthy.store(false, Ordering::Relaxed);
@@ -280,10 +279,7 @@ async fn record_failure_with_retry(
 ) -> bool {
     for storage_attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match record_failure(storage, failure, attempt, receipt_handle).await {
-            Ok(()) => {
-                healthy.store(true, Ordering::Relaxed);
-                return true;
-            }
+            Ok(()) => return true,
             Err(error) => {
                 if storage_attempt >= MAX_QUEUE_ATTEMPTS {
                     healthy.store(false, Ordering::Relaxed);
