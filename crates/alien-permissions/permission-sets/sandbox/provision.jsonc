@@ -60,8 +60,8 @@
       },
       {
         // An image declaring egress names its connector, and CreateMicrovmImage is authorized
-        // as that pass too. AWS authorizes the pass against the connector ARN, but a
-        // customer-declared connector's ARN shape is unestablished, so this stays unbounded.
+        // as that pass too. AWS authorizes it against the connector ARN, but that ARN ends in
+        // an AWS-assigned id rather than the name, so a prefix scope would deny a real one.
         "label": "pass-sandbox-egress-connector",
         "description": "Allow the sandbox image to be built against its egress connector.",
         "grant": {

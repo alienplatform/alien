@@ -239,13 +239,14 @@ fn global_permission_refs<'a>(
             refs.iter()
                 .filter(|permission_ref| {
                     // A remotely-bound resource keeps its management identity able to report on
-                    // itself, but nothing that addresses a session: the caller drives those, and a
-                    // `<type>/` prefix match dropped `<type>/heartbeat` along with them.
+                    // itself, but nothing that addresses a session: the caller drives those.
                     !ctx.stack.resources.values().any(|entry| {
                         alien_core::remote_bindings::remote_binding_for_entry(entry).is_some_and(
                             |definition| {
                                 permission_ref.id() == definition.permission_set
-                                    || reaches_a_session(permission_ref)
+                                    || (definition.kind
+                                        == alien_core::remote_bindings::RemoteBindingKind::Sandbox
+                                        && reaches_a_session(permission_ref))
                             },
                         )
                     })

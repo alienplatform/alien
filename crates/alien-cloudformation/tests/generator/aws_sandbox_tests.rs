@@ -557,8 +557,7 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
 }
 
 /// The management identity must be able to report on a remotely-bound sandbox without gaining any
-/// reach into its sessions — the caller drives those, and a `sandbox/` prefix match once dropped
-/// the heartbeat grant along with them.
+/// reach into its sessions — the caller drives those.
 #[test]
 fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     // The profile the preflight mutation derives for this stack: heartbeat so the identity can
@@ -603,6 +602,9 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
         management.contains("lambda:GetMicrovmImage"),
         "the management identity must be able to read the sandbox it reports on: {management}"
     );
+    // `PassNetworkConnector` is withheld because `sandbox/management` as a whole reaches a
+    // session, not because the action itself does — split that statement out and this stops
+    // holding while still passing.
     for reaches_a_session in [
         "lambda:RunMicrovm",
         "lambda:SuspendMicrovm",

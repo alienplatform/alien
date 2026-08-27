@@ -592,9 +592,9 @@ fn action_is_documented_pass_network_connector_exception(
     action: &str,
 ) -> bool {
     // Attaching a declared egress connector: to a session in `management`, to the image build in
-    // `provision`. AWS does authorize this against the connector ARN (`sandbox/remote-execute`
-    // scopes it), but a customer-declared connector's ARN shape is unestablished, so these two
-    // stay unbounded until it is. Narrow them then; the exception is not a property of the action.
+    // `provision`. AWS authorizes this against the connector ARN (`sandbox/remote-execute` scopes
+    // it), but a connector's ARN ends in an AWS-assigned id, not the name the template sets, so
+    // these two stay unbounded. The exception is not a property of the action.
     action == "lambda:PassNetworkConnector"
         && matches!(
             permission_set_id,
@@ -728,9 +728,7 @@ const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] = &[
     "lambda:ListMicrovmImages",
     "lambda:CreateMicrovmImage",
     // `lambda:PassNetworkConnector` is deliberately absent: AWS authorizes it against the
-    // connector ARN, so it can be — and is — scoped. A live RunMicrovm refused with
-    // "not authorized to perform: lambda:PassNetworkConnector on resource:
-    // arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:INTERNET_EGRESS".
+    // connector ARN, so it is scoped rather than wildcarded — see `sandbox/remote-execute`.
 ];
 
 /// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks

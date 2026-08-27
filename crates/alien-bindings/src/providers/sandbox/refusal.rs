@@ -55,7 +55,7 @@ where
     })
 }
 
-/// `.unreachable(…)` at a call site, where `.context(ErrorData::SandboxUnreachable { … })` stood.
+/// `.unreachable(…)` at a call site: wraps a client error as `SandboxUnreachable`.
 pub(crate) trait Unreachable<T> {
     fn unreachable(self, operation: &str, what: &str) -> Result<T>;
 }

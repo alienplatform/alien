@@ -227,10 +227,8 @@ pub struct RemoteBindings {
 enum BindingsSource {
     /// The deployment is already identified, so every binding rides one provider.
     Deployment(Arc<RemoteBindingsProvider>),
-    /// Only the customer is identified. Platform picks the deployment by matching its purpose
-    /// against the requested capability, so each capability addresses a different deployment and
-    /// needs its own manager access. Resolving at construction would pin the handle to one
-    /// capability and make every other binding unreachable.
+    /// Only the customer is identified, so each capability resolves its own provider lazily
+    /// rather than pinning the handle to one at construction.
     Environment(EnvironmentSource),
 }
 
@@ -426,7 +424,10 @@ impl RemoteBindings {
 
     /// Loads a Storage binding and keeps its short-lived credential lease fresh.
     pub async fn storage(&self, resource_id: &str) -> Result<Arc<dyn RemoteStorage>> {
-        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        let provider = self
+            .source
+            .provider(RemoteBindingCapability::Storage)
+            .await?;
         let initial = provider.load_storage(resource_id).await?;
         Ok(Arc::new(RefreshingStorage::new(
             provider,
@@ -436,10 +437,19 @@ impl RemoteBindings {
     }
 
     /// Loads a Key binding and keeps its short-lived credential lease fresh.
+    ///
+    /// Resolved through Storage: Platform's external-access schema names `storage` and `sandbox`
+    /// alone, so a Key rides whichever deployment serves the customer's Storage purpose.
     pub async fn key(&self, resource_id: &str) -> Result<Arc<dyn Key>> {
-        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        let provider = self
+            .source
+            .provider(RemoteBindingCapability::Storage)
+            .await?;
         provider.load_key(resource_id).await?;
-        Ok(Arc::new(RefreshingKey::new(provider, resource_id.to_string())))
+        Ok(Arc::new(RefreshingKey::new(
+            provider,
+            resource_id.to_string(),
+        )))
     }
 
     /// Loads a Sandbox binding for running untrusted code in the customer's cloud.
@@ -463,8 +473,13 @@ impl RemoteBindings {
     }
 
     /// Loads one short-lived managed AI binding lease.
+    ///
+    /// Resolved through Storage, for the reason given on `key`.
     pub async fn ai(&self) -> Result<RemoteAiLease> {
-        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        let provider = self
+            .source
+            .provider(RemoteBindingCapability::Storage)
+            .await?;
         let resolved = provider.source.resolve_ai().await?;
         resolved.into_ai_lease(provider.clock.now())
     }
