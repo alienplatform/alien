@@ -1207,7 +1207,8 @@ fn restore_credentials_and_service(
 }
 
 fn local_machine_connectivity(executable_path: &Path) -> Result<Option<LocalConnectivity>> {
-    let output = Command::new(executable_path)
+    let status_executable = installed_status_executable(executable_path);
+    let output = Command::new(&status_executable)
         .args(["status", "--json"])
         .output()
         .into_alien_error()
@@ -1224,6 +1225,19 @@ fn local_machine_connectivity(executable_path: &Path) -> Result<Option<LocalConn
             reason: "Installed machine service returned invalid status JSON".to_string(),
         })?;
     Ok(status.control.connectivity)
+}
+
+fn installed_status_executable(service_executable: &Path) -> PathBuf {
+    let horizond = service_executable.with_file_name("horizond");
+    if service_executable
+        .file_name()
+        .is_some_and(|name| name == "machine-entrypoint")
+        && horizond.is_file()
+    {
+        horizond
+    } else {
+        service_executable.to_path_buf()
+    }
 }
 
 async fn download_manifest(url: &str) -> Result<MachineBundleManifest> {
@@ -2457,6 +2471,8 @@ mod tests {
     use super::*;
     use flate2::{write::GzEncoder, Compression};
     use std::io::Write;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
 
@@ -2500,8 +2516,6 @@ mod tests {
 
     #[cfg(unix)]
     fn status_executable(directory: &Path, connectivity: &str) -> PathBuf {
-        use std::os::unix::fs::PermissionsExt;
-
         let path = directory.join(format!("status-{connectivity}"));
         std::fs::write(
             &path,
@@ -2532,6 +2546,36 @@ mod tests {
                 .expect("degraded status"),
             Some(LocalConnectivity::Degraded)
         );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn local_status_bypasses_legacy_machine_entrypoint_wrapper() {
+        let directory = tempfile::tempdir().expect("status directory");
+        let entrypoint = directory.path().join("machine-entrypoint");
+        let wrapper_was_run = directory.path().join("wrapper-was-run");
+        std::fs::write(
+            &entrypoint,
+            format!("#!/bin/sh\ntouch '{}'\nexit 1\n", wrapper_was_run.display()),
+        )
+        .expect("write legacy wrapper");
+        std::fs::set_permissions(&entrypoint, std::fs::Permissions::from_mode(0o755))
+            .expect("make legacy wrapper executable");
+
+        let horizond = directory.path().join("horizond");
+        std::fs::write(
+            &horizond,
+            "#!/bin/sh\nprintf '%s\\n' '{\"control\":{\"connectivity\":\"authenticationFailed\"}}'\n",
+        )
+        .expect("write horizond status executable");
+        std::fs::set_permissions(&horizond, std::fs::Permissions::from_mode(0o755))
+            .expect("make horizond status executable");
+
+        assert_eq!(
+            local_machine_connectivity(&entrypoint).expect("authentication status"),
+            Some(LocalConnectivity::AuthenticationFailed)
+        );
+        assert!(!wrapper_was_run.exists());
     }
 
     #[tokio::test]
