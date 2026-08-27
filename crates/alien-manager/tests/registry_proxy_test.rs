@@ -17,6 +17,7 @@ use std::time::Duration;
 
 use bollard::image::CreateImageOptions;
 use bollard::Docker;
+use container_registry::ContainerRegistry;
 use futures_util::StreamExt;
 
 use alien_core::{Platform, ReadinessProbe, ResourceLifecycle, Stack, Worker, WorkerCode};
@@ -90,9 +91,10 @@ fn empty_stack(stack_id: &str) -> Stack {
 /// Start a local OCI registry on a random port (no auth — matches production).
 /// The real security boundary is the manager's registry proxy (deployment tokens).
 async fn start_local_registry() -> (String, tokio::task::JoinHandle<()>) {
-    let (running, host) = dockdash::test_utils::setup_local_registry()
-        .await
-        .expect("Failed to start local registry");
+    let running = ContainerRegistry::builder()
+        .build_for_testing()
+        .run_in_background();
+    let host = format!("localhost:{}", running.bound_addr().port());
 
     let handle = tokio::spawn(async move {
         let _guard = running;
@@ -899,6 +901,49 @@ async fn test_proxy_push_then_pull() {
     }
 
     println!("End-to-end push→pull through proxy succeeded!");
+}
+
+/// OCI indexes must pass through the manager proxy to the embedded local
+/// registry. `alien dev release` publishes one whenever a worker has multiple
+/// Linux targets.
+#[tokio::test]
+async fn test_proxy_push_image_index() {
+    let s = setup().await;
+    let index = serde_json::json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [{
+            "mediaType": "application/vnd.oci.image.manifest.v1+json",
+            "size": 7143,
+            "digest": "sha256:e4c58958181a5925816faa528ce959e487632f4cfd192f8132f71b32df2744b4",
+            "platform": {
+                "architecture": "amd64",
+                "os": "linux"
+            }
+        }]
+    });
+
+    let response = reqwest::Client::new()
+        .put(format!(
+            "{}/v2/artifacts/proxy-index/manifests/latest",
+            s.manager_url
+        ))
+        .bearer_auth(&s.admin_token)
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/vnd.oci.image.index.v1+json",
+        )
+        .json(&index)
+        .send()
+        .await
+        .expect("image index request should reach the manager");
+    let status = response.status();
+    let body = response
+        .text()
+        .await
+        .expect("image index response body should be readable");
+
+    assert_eq!(status, reqwest::StatusCode::CREATED, "{body}");
 }
 
 /// End-to-end: push a large, poorly-compressible layer through the local
