@@ -27,6 +27,11 @@ use tokio::{sync::RwLock, time::Duration};
 const MAX_QUEUE_ATTEMPTS: usize = 5;
 
 pub struct WriterHealth {
+    // Health is process-wide: can this writer still receive work? A failed
+    // per-message ack is not a liveness failure. The message remains durable
+    // in the queue and is retried after its lease, while the writer continues
+    // processing other traces. Restarting the writer would not resolve that
+    // delivery and would unnecessarily interrupt healthy work.
     receive: AtomicBool,
 }
 
