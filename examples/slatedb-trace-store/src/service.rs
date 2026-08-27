@@ -21,6 +21,8 @@ use sha2::{Digest, Sha256};
 use std::sync::Arc;
 use tokio::{sync::RwLock, time::Duration};
 
+const MAX_QUEUE_ATTEMPTS: usize = 5;
+
 pub struct ApiState {
     storage: Arc<dyn Storage>,
     queue: Queue,
@@ -148,16 +150,21 @@ pub async fn run_writer(
     storage: Arc<dyn Storage>,
     queue: Queue,
 ) -> Result<()> {
+    let mut receive_failures = 0;
     loop {
         let messages = match queue.receive(10).await {
-            Ok(messages) => messages,
-            Err(error) if !error.retryable => {
-                return Err(error).context(ErrorData::QueueOperationFailed {
-                    operation: "receive traces".to_string(),
-                });
+            Ok(messages) => {
+                receive_failures = 0;
+                messages
             }
             Err(error) => {
-                tracing::warn!(%error, "could not receive traces; retrying");
+                receive_failures += 1;
+                if receive_failures == MAX_QUEUE_ATTEMPTS {
+                    return Err(error).context(ErrorData::QueueOperationFailed {
+                        operation: "receive traces".to_string(),
+                    });
+                }
+                tracing::warn!(%error, attempt = receive_failures, "could not receive traces; retrying");
                 tokio::time::sleep(Duration::from_secs(1)).await;
                 continue;
             }
@@ -181,37 +188,15 @@ pub async fn run_writer(
 
             match outcome {
                 Ok(staging_path) => {
-                    if let Err(error) = queue.ack(&receipt_handle).await {
-                        if !error.retryable {
-                            return Err(error).context(ErrorData::QueueOperationFailed {
-                                operation: "ack committed trace".to_string(),
-                            });
-                        }
-                        tracing::warn!(%error, "could not acknowledge committed trace; waiting for redelivery");
-                        continue;
-                    }
+                    ack_with_retry(&queue, &receipt_handle, "ack committed trace").await?;
                     if let Err(error) = storage.delete(&Path::from(staging_path.as_str())).await {
                         tracing::warn!(path = %staging_path, %error, "failed to delete committed staging object");
                     }
                 }
                 Err(ProcessError::Permanent(failure)) => {
-                    if let Err(error) =
-                        record_failure(&storage, &failure, message.attempt, &receipt_handle).await
-                    {
-                        if !error.retryable {
-                            return Err(error);
-                        }
-                        tracing::warn!(%error, "could not record rejected trace; waiting for redelivery");
-                        continue;
-                    }
-                    if let Err(error) = queue.ack(&receipt_handle).await {
-                        if !error.retryable {
-                            return Err(error).context(ErrorData::QueueOperationFailed {
-                                operation: "ack rejected trace".to_string(),
-                            });
-                        }
-                        tracing::warn!(%error, "could not acknowledge rejected trace; waiting for redelivery");
-                    }
+                    record_failure_with_retry(&storage, &failure, message.attempt, &receipt_handle)
+                        .await?;
+                    ack_with_retry(&queue, &receipt_handle, "ack rejected trace").await?;
                 }
                 Err(ProcessError::Retryable(error)) => {
                     tracing::warn!(
@@ -230,6 +215,43 @@ pub async fn run_writer(
             }
         }
     }
+}
+
+async fn ack_with_retry(queue: &Queue, receipt_handle: &str, operation: &str) -> Result<()> {
+    for attempt in 1..=MAX_QUEUE_ATTEMPTS {
+        match queue.ack(receipt_handle).await {
+            Ok(()) => return Ok(()),
+            Err(error) if attempt == MAX_QUEUE_ATTEMPTS => {
+                return Err(error).context(ErrorData::QueueOperationFailed {
+                    operation: operation.to_string(),
+                });
+            }
+            Err(error) => {
+                tracing::warn!(%error, attempt, %operation, "queue operation failed; retrying");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+    unreachable!("the bounded retry loop always returns")
+}
+
+async fn record_failure_with_retry(
+    storage: &Arc<dyn Storage>,
+    failure: &PermanentFailure,
+    attempt: u32,
+    receipt_handle: &str,
+) -> Result<()> {
+    for storage_attempt in 1..=MAX_QUEUE_ATTEMPTS {
+        match record_failure(storage, failure, attempt, receipt_handle).await {
+            Ok(()) => return Ok(()),
+            Err(error) if storage_attempt == MAX_QUEUE_ATTEMPTS => return Err(error),
+            Err(error) => {
+                tracing::warn!(%error, attempt = storage_attempt, "could not record rejected trace; retrying");
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+        }
+    }
+    unreachable!("the bounded retry loop always returns")
 }
 
 struct PermanentFailure {
