@@ -181,24 +181,37 @@ pub async fn run_writer(
 
             match outcome {
                 Ok(staging_path) => {
-                    queue
-                        .ack(&receipt_handle)
-                        .await
-                        .context(ErrorData::QueueOperationFailed {
-                            operation: "ack committed trace".to_string(),
-                        })?;
+                    if let Err(error) = queue.ack(&receipt_handle).await {
+                        if !error.retryable {
+                            return Err(error).context(ErrorData::QueueOperationFailed {
+                                operation: "ack committed trace".to_string(),
+                            });
+                        }
+                        tracing::warn!(%error, "could not acknowledge committed trace; waiting for redelivery");
+                        continue;
+                    }
                     if let Err(error) = storage.delete(&Path::from(staging_path.as_str())).await {
                         tracing::warn!(path = %staging_path, %error, "failed to delete committed staging object");
                     }
                 }
                 Err(ProcessError::Permanent(failure)) => {
-                    record_failure(&storage, &failure, message.attempt, &receipt_handle).await?;
-                    queue
-                        .ack(&receipt_handle)
-                        .await
-                        .context(ErrorData::QueueOperationFailed {
-                            operation: "ack rejected trace".to_string(),
-                        })?;
+                    if let Err(error) =
+                        record_failure(&storage, &failure, message.attempt, &receipt_handle).await
+                    {
+                        if !error.retryable {
+                            return Err(error);
+                        }
+                        tracing::warn!(%error, "could not record rejected trace; waiting for redelivery");
+                        continue;
+                    }
+                    if let Err(error) = queue.ack(&receipt_handle).await {
+                        if !error.retryable {
+                            return Err(error).context(ErrorData::QueueOperationFailed {
+                                operation: "ack rejected trace".to_string(),
+                            });
+                        }
+                        tracing::warn!(%error, "could not acknowledge rejected trace; waiting for redelivery");
+                    }
                 }
                 Err(ProcessError::Retryable(error)) => {
                     tracing::warn!(
