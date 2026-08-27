@@ -1,0 +1,325 @@
+name: Egress Deny Guard
+
+# The only automated check that a sandbox declared `egressDeny` cannot reach the internet.
+# Weekly rather than per-PR: it needs a real account and a MicroVM image build, and what it
+# guards against is an AWS-side behaviour change rather than a change in this repository.
+
+on:
+  schedule:
+    - cron: "43 4 * * 2"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: egress-deny-guard
+  cancel-in-progress: false
+
+env:
+  STACK_NAME: egress-deny-guard
+  # Docker base the bundle builds on. AL2023 matches the MicroVM base image the emitter names and
+  # ships the curl the probe runs.
+  SANDBOX_BASE_IMAGE: public.ecr.aws/amazonlinux/amazonlinux:2023
+  AGENT_TARGET: aarch64-unknown-linux-musl
+  # Fall back to local compilation when the shared sccache backend returns a
+  # transient error (e.g. webdav 403) instead of failing the whole build.
+  SCCACHE_IGNORE_SERVER_IO_ERROR: "1"
+
+jobs:
+  egress-deny:
+    name: egressDeny is enforced
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 90
+    # Makes the OIDC `sub` `repo:OWNER/REPO:environment:egress-deny-guard` whatever branch a
+    # manual run starts from, so one trust policy covers the schedule and a deliberate break.
+    environment: egress-deny-guard
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Configure git credentials
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
+        with:
+          toolchain: nightly
+          targets: aarch64-unknown-linux-musl
+
+      - uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        continue-on-error: true
+        with:
+          version: v0.16.0
+
+      - uses: taiki-e/install-action@43cb5d9d3c33252b8482ffa34f4e609859a530d8 # cargo-nextest
+        with:
+          tool: cargo-nextest
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+
+      - name: Build the sandbox agent
+        run: |
+          set -euo pipefail
+          cargo build -p alien-sandbox-agent --release --target "$AGENT_TARGET"
+          agent="target/$AGENT_TARGET/release/alien-sandbox-agent"
+          # A MicroVM image accepts aarch64 only, and the wrong architecture surfaces minutes
+          # later as an image that never becomes active rather than as a build failure.
+          file "$agent"
+          file "$agent" | grep -q "ARM aarch64"
+          echo "AGENT_BINARY=$agent" >> "$GITHUB_ENV"
+
+      - name: Write the image bundle
+        run: |
+          set -euo pipefail
+          mkdir -p .guard
+          cargo run -p alien-build --example sandbox-bundle -- \
+            "$AGENT_BINARY" "$SANDBOX_BASE_IMAGE" .guard/sandbox-bundle.zip
+          # Per-run key, so nothing collides. A cancelled run cannot remove its own object and
+          # no later run can guess the key: expiry on the `egress-deny-guard/` prefix is what
+          # reclaims it, and that lives in the bucket's lifecycle configuration.
+          echo "BUNDLE_KEY=egress-deny-guard/${{ github.run_id }}-${{ github.run_attempt }}.zip" \
+            >> "$GITHUB_ENV"
+
+      - name: Render the sandbox stack
+        env:
+          ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+        run: |
+          set -euo pipefail
+          cat > .guard/alien.json <<JSON
+          {
+            "id": "egress-deny-guard",
+            "resources": {
+              "probe": {
+                "config": {
+                  "type": "sandbox",
+                  "id": "probe",
+                  "code": { "type": "image", "image": "s3://$ARTIFACT_BUCKET/$BUNDLE_KEY" },
+                  "egress": { "mode": "deny" },
+                  "session": {}
+                },
+                "lifecycle": "frozen",
+                "dependencies": [],
+                "remoteAccess": false
+              }
+            },
+            "permissions": { "profiles": {}, "management": "auto" }
+          }
+          JSON
+          cat > .guard/stack-settings.yaml <<'YAML'
+          network:
+            type: create
+            availabilityZones: 2
+          YAML
+          # Rendered by the shipped emitter rather than written out here: the deny is a
+          # loopback-only egress rule on the connector's security group, and a hand-written copy
+          # would guard the copy instead of what deployments get.
+          cargo run -p alien-cli --bin alien -- render \
+            --format cloudformation \
+            --stack .guard/alien.json \
+            --stack-settings .guard/stack-settings.yaml \
+            --registration-mode outputs \
+            --output .guard
+
+      - name: Build the guard test
+        # Built by nextest, and before credentials are assumed: nextest compiles its own test
+        # binaries, and doing that after the assume spends the session on compilation.
+        run: cargo nextest run -p alien-aws-clients --lib --no-run
+
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          # The job budget is 90 minutes and a role's default ceiling is one hour, which would
+          # expire mid-test and fail on signing rather than on the property under test.
+          role-duration-seconds: 5400
+
+      - name: Resolve the target account
+        run: |
+          set -euo pipefail
+          account_id=$(aws sts get-caller-identity --query Account --output text)
+          echo "::add-mask::$account_id"
+          echo "ACCOUNT_ID=$account_id" >> "$GITHUB_ENV"
+
+      - name: Remove anything an earlier run left behind
+        env:
+          AWS_TARGET_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+          AWS_TARGET_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          AWS_TARGET_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_TARGET_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_TARGET_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
+        run: ./scripts/egress-deny-guard-teardown.sh "$STACK_NAME"
+
+      - name: Upload the image bundle
+        env:
+          ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+        run: aws s3 cp .guard/sandbox-bundle.zip "s3://$ARTIFACT_BUCKET/$BUNDLE_KEY"
+
+      - name: Deploy the sandbox stack
+        env:
+          MANAGING_ROLE_ARN: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          aws cloudformation deploy \
+            --template-file .guard/template.yaml \
+            --stack-name "$STACK_NAME" \
+            --no-fail-on-empty-changeset \
+            --capabilities CAPABILITY_NAMED_IAM CAPABILITY_AUTO_EXPAND \
+            --parameter-overrides \
+              "ManagingRoleArn=$MANAGING_ROLE_ARN" \
+              "ManagingAccountId=$ACCOUNT_ID"
+
+      - name: Read the probe image and connector
+        run: |
+          set -euo pipefail
+          resources=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query "Stacks[0].Outputs[?OutputKey=='DeploymentResources'].OutputValue" \
+            --output text)
+          image_arn=$(printf '%s' "$resources" |
+            jq -r '.[] | select(.type == "sandbox") | .importData.imageArn // empty' | head -1)
+          image_version=$(printf '%s' "$resources" |
+            jq -r '.[] | select(.type == "sandbox") | .importData.imageVersion // empty' | head -1)
+          connector=$(printf '%s' "$resources" |
+            jq -r '.[] | select(.type == "sandbox") | .importData.egressConnectorArns[0] // empty' | head -1)
+          echo "::add-mask::$image_arn"
+          echo "::add-mask::$connector"
+
+          # RunMicrovm refuses a bare name with "Malformed ARN", which reads like a broken image
+          # rather than the wrong identifier having been read out of the stack.
+          case "$image_arn" in
+            arn:*) ;;
+            *) echo "::error::the stack's sandbox output is not an image ARN"; exit 1 ;;
+          esac
+          case "$connector" in
+            arn:*) ;;
+            *) echo "::error::the stack produced no egress connector ARN"; exit 1 ;;
+          esac
+          if [ -z "$image_version" ]; then
+            echo "::error::the probe image reports no active version"
+            exit 1
+          fi
+
+          {
+            echo "PROBE_IMAGE_NAME=$image_arn"
+            echo "PROBE_IMAGE_VERSION=$image_version"
+            echo "PROBE_CONNECTOR_ARN=$connector"
+          } >> "$GITHUB_ENV"
+
+      - name: A denied sandbox cannot reach the internet
+        env:
+          AWS_TARGET_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+          AWS_TARGET_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          AWS_TARGET_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_TARGET_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_TARGET_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
+        run: |
+          set -euo pipefail
+          # No --no-capture: nextest prints a failing test's output anyway, and streaming the
+          # passing run puts the session endpoint in a world-readable log.
+          if ! cargo nextest run -p alien-aws-clients --lib \
+            --no-tests=fail --run-ignored=all \
+            -E 'test(=aws::lambda_microvms::live_deny::a_denied_sandbox_cannot_reach_the_internet_and_an_open_one_can)'
+          then
+            echo "::error title=egressDeny regression::a sandbox declared egressDeny was not denied egress, or the guard could not prove it — the assertion above says which"
+            exit 1
+          fi
+
+      - name: Refresh credentials for teardown
+        if: always()
+        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        with:
+          role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          # The session above may have expired inside the job; take the web-identity path again
+          # rather than inheriting it.
+          unset-current-credentials: true
+
+      - name: Tear down
+        if: always()
+        env:
+          AWS_TARGET_ACCOUNT_ID: ${{ env.ACCOUNT_ID }}
+          AWS_TARGET_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          AWS_TARGET_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_TARGET_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_TARGET_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
+        run: ./scripts/egress-deny-guard-teardown.sh "$STACK_NAME"
+
+      - name: Remove the uploaded bundle
+        if: always() && env.BUNDLE_KEY != ''
+        env:
+          ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+        run: aws s3 rm "s3://$ARTIFACT_BUCKET/$BUNDLE_KEY"
+
+  # Cleanup safety net. The teardown above is a step in the job it cleans up after, so a timeout
+  # or a cancel gives it only whatever window the runner allows — which does not reliably cover
+  # deleting a VPC. This job has its own timeout and its own credentials.
+  #
+  # It checks with the CLI first and only builds when something actually survived: a cancelled run
+  # leaves a MicroVM and an image version holding the image open, no stock `aws` subcommand
+  # terminates either, and a delete on a held image is accepted while removing nothing — so
+  # `delete-stack` alone cannot be trusted to clear it.
+  cleanup:
+    needs: [egress-deny]
+    if: always()
+    runs-on: depot-ubuntu-24.04-arm-8
+    timeout-minutes: 45
+    environment: egress-deny-guard
+    steps:
+      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        id: creds
+        with:
+          role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+          aws-region: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          mask-aws-account-id: true
+
+      - name: Did anything survive?
+        id: survived
+        run: |
+          set -uo pipefail
+          if ! err=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" 2>&1 >/dev/null); then
+            case "$err" in
+              *"does not exist"*) echo "nothing left behind"; echo "stack=absent" >> "$GITHUB_OUTPUT"; exit 0 ;;
+              *) echo "::error::describe-stacks was inconclusive: $err"; exit 1 ;;
+            esac
+          fi
+          echo "::warning::$STACK_NAME outlived its job; reclaiming it"
+          echo "stack=present" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        if: steps.survived.outputs.stack == 'present'
+
+      - name: Configure git credentials
+        if: steps.survived.outputs.stack == 'present'
+        run: git config --global url."https://x-access-token:${{ secrets.REPO_ACCESS_TOKEN }}@github.com/".insteadOf "https://github.com/"
+
+      - uses: dtolnay/rust-toolchain@7c8d7d138f5c09cef361f8214cf96882cd029cdb # nightly
+        if: steps.survived.outputs.stack == 'present'
+        with:
+          toolchain: nightly
+
+      - uses: taiki-e/install-action@43cb5d9d3c33252b8482ffa34f4e609859a530d8 # cargo-nextest
+        if: steps.survived.outputs.stack == 'present'
+        with:
+          tool: cargo-nextest
+
+      - name: Install protoc
+        if: steps.survived.outputs.stack == 'present'
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          version: "27.x"
+          repo-token: ${{ github.token }}
+
+      - name: Reclaim and remove the stack
+        if: steps.survived.outputs.stack == 'present'
+        env:
+          # The account id is a plain step output; the key, secret and token are exported to the
+          # environment instead and are only outputs under `output-credentials`.
+          AWS_TARGET_ACCOUNT_ID: ${{ steps.creds.outputs.aws-account-id }}
+          AWS_TARGET_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          AWS_TARGET_ACCESS_KEY_ID: ${{ env.AWS_ACCESS_KEY_ID }}
+          AWS_TARGET_SECRET_ACCESS_KEY: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          AWS_TARGET_SESSION_TOKEN: ${{ env.AWS_SESSION_TOKEN }}
+        run: ./scripts/egress-deny-guard-teardown.sh "$STACK_NAME"

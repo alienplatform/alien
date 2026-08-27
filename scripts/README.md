@@ -18,6 +18,12 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 - **`write-gke-kubeconfig.sh`** — Used by `configure-e2e-provider-ingress.sh` and GKE Terraform distribution jobs to replace Terraform's static-client kubeconfig with one authenticated as the selected target service account.
 - **`cleanup-aws-e2e-resources.sh`** — Used by `.github/workflows/e2e-cloud.yml` before and after cloud E2E jobs to remove AWS resources for an E2E slot or explicit resource prefix. Run only with target-account AWS credentials and a scoped `ALIEN_E2E_SLOT` or `ALIEN_E2E_RESOURCE_PREFIX`.
 
+## Sandbox egress guard
+
+- **`egress-deny-guard-teardown.sh`** — Used by `.github/workflows/egress-deny-guard.yml` before and after the weekly `egressDeny` check to remove the probe stack, and to fail the run if any of it survives. Takes the stack name and needs target-account AWS credentials in both the CLI's and the Rust client's environment (`AWS_TARGET_*`).
+
+  Two preconditions live outside this repository: the OIDC role needs `MaxSessionDuration` of at least 5400 seconds, or every run dies at credential assumption; and a lifecycle rule expiring the artifact bucket's `egress-deny-guard/` prefix is what reclaims a bundle a cancelled run could not delete.
+
 ## Example testing
 
 - **`test-examples-local.sh`** (`pnpm test:examples`) — Used by CI Fast and local development to test examples against local source by temporarily injecting `pnpm.overrides`. Always restores `examples/package.json` and `examples/pnpm-lock.yaml` via trap cleanup.
