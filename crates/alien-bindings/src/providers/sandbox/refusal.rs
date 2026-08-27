@@ -129,6 +129,10 @@ mod tests {
     use super::*;
     use alien_client_core::ErrorData as ClientErrorData;
 
+    // No assertion below interpolates a reason or an error into its message. This repository's CI
+    // logs are public, and the value under test is the one place a cloud's own text — role ARNs
+    // included — is lifted out of a response body. The condition names the expectation instead.
+
     /// The body AWS answered the failure this exists for with, verbatim but for the account id.
     const REFUSED_BODY: &str = r#"{"Message":"User: arn:aws:sts::123456789012:assumed-role/stack-access/session is not authorized to perform: lambda:PassNetworkConnector on resource: arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS"}"#;
 
@@ -158,11 +162,12 @@ mod tests {
 
         assert!(
             reason.contains("lambda:PassNetworkConnector"),
-            "the refused action is what sends a reader to the role rather than the code: {reason}"
+            "the reason must name the refused action, which is what sends a reader to the role \
+             rather than to the code"
         );
         assert!(
             reason.starts_with("Lambda MicroVMs RunMicrovm failed: "),
-            "the client's own classification stays in front of it: {reason}"
+            "the client's own classification must stay in front of the lifted sentence"
         );
     }
 
@@ -177,7 +182,7 @@ mod tests {
         );
         assert!(
             internal.internal,
-            "an internal cause makes the wrapper internal: {internal}"
+            "an internal cause must make the wrapper internal"
         );
         assert_eq!(
             internal.into_external().message,
@@ -195,7 +200,7 @@ mod tests {
         );
         assert!(
             !external.internal,
-            "a cause the client publishes leaves the wrapper public: {external}"
+            "a cause the client publishes must leave the wrapper public"
         );
     }
 
@@ -224,7 +229,7 @@ mod tests {
         );
         assert!(
             !reason.contains("assumed-role"),
-            "no identity out of the private layer reaches it: {reason}"
+            "no identity out of the private layer may reach a public wrapper"
         );
     }
 
@@ -251,7 +256,10 @@ mod tests {
         let body = format!(r#"{{"message":"{}"}}"#, "é".repeat(400));
         let reason = cloud_reason(&refused(500, &body, "Lambda MicroVMs RunMicrovm failed"));
 
-        assert!(reason.ends_with('…'), "{reason}");
+        assert!(
+            reason.ends_with('…'),
+            "an over-long body must be clipped, and a clip is marked with an ellipsis"
+        );
         assert!(
             reason.len() <= "Lambda MicroVMs RunMicrovm failed: ".len() + DETAIL_LIMIT + 4,
             "a multi-byte body is clipped at a character boundary near the limit, not past it: {}",
