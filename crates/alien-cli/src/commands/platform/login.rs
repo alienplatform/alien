@@ -1,5 +1,7 @@
 use crate::auth::{force_login, save_workspace};
-use crate::commands::platform::workspace::{prompt_workspace, validate_workspace_name};
+use crate::commands::platform::workspace::{
+    list_workspace_names, prompt_workspace, validate_workspace_name,
+};
 use crate::error::Result;
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line};
@@ -18,6 +20,23 @@ pub struct LoginArgs {}
 pub async fn login_task(_args: LoginArgs, ctx: ExecutionMode) -> Result<()> {
     let auth_opts = ctx.auth_opts();
     let http = force_login(&auth_opts).await?;
+
+    if !matches!(
+        ctx,
+        ExecutionMode::Platform {
+            workspace: Some(_),
+            ..
+        }
+    ) && list_workspace_names(&http).await?.is_empty()
+    {
+        println!("{}", success_line("Logged in."));
+        println!("{}", dim_label("Next"));
+        println!(
+            "  {}  Create a workspace (its name is permanent)",
+            command("alien workspaces create <name>")
+        );
+        return Ok(());
+    }
 
     let workspace = if let ExecutionMode::Platform {
         workspace: Some(ref workspace),
