@@ -82,8 +82,8 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 /// Whether a declaration's remote binding is one a deployment can actually deliver.
 ///
 /// A sandbox reaches the network through an egress connector, and starting a session on one is
-/// additionally authorized as `lambda:PassNetworkConnector` — which AWS scopes to no resource and
-/// no condition key, so `sandbox/remote-execute` withholds it. Preflight refuses such a stack;
+/// additionally authorized as `lambda:PassNetworkConnector`. The remote grant passes only AWS's
+/// own connectors, so a customer-declared one is unreachable. Preflight refuses such a stack;
 /// emitters and generated docs read this so nothing advertises a grant that cannot be used.
 pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
     entry

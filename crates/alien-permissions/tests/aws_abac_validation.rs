@@ -321,7 +321,16 @@ fn documented_external_resource_scope(resource: &str) -> bool {
     // (`project/default`), which, like inference profiles, exists per account
     // rather than per stack. The grant is pinned to that one project (not
     // `project/*`) since the gateway only ever uses the default project.
-    resource == "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default"
+    if resource == "arn:aws:bedrock-mantle:*:${awsAccountId}:project/default" {
+        return true;
+    }
+
+    // AWS's own MicroVM network connectors (INTERNET_EGRESS, HTTP_INGRESS). AWS attaches them
+    // implicitly to an open-egress session and authorizes each as `lambda:PassNetworkConnector`,
+    // so a session cannot start without them. The literal `aws` account segment is what makes the
+    // wildcard safe: a connector the customer declared carries the customer's account id and this
+    // pattern cannot name it.
+    resource == "arn:aws:lambda:${awsRegion}:aws:network-connector:aws-network-connector:*"
 }
 
 fn documented_ses_domain_identity_scope(resource: &str) -> bool {
@@ -582,9 +591,10 @@ fn action_is_documented_pass_network_connector_exception(
     permission_set_id: &str,
     action: &str,
 ) -> bool {
-    // Attaching a declared egress connector — to a session in `management`, to the image build in
-    // `provision` — is authorized as a separate pass action that AWS defines against no resource
-    // type and no condition key, so which connector a holder may attach cannot be bounded here.
+    // Attaching a declared egress connector: to a session in `management`, to the image build in
+    // `provision`. AWS does authorize this against the connector ARN (`sandbox/remote-execute`
+    // scopes it), but a customer-declared connector's ARN shape is unestablished, so these two
+    // stay unbounded until it is. Narrow them then; the exception is not a property of the action.
     action == "lambda:PassNetworkConnector"
         && matches!(
             permission_set_id,
@@ -717,9 +727,10 @@ fn action_requires_tag_condition(action: &str) -> bool {
 const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] = &[
     "lambda:ListMicrovmImages",
     "lambda:CreateMicrovmImage",
-    // Narrowing this to an ARN does not tighten the grant, it stops the statement matching — and
-    // every session then fails to start.
-    "lambda:PassNetworkConnector",
+    // `lambda:PassNetworkConnector` is deliberately absent: AWS authorizes it against the
+    // connector ARN, so it can be — and is — scoped. A live RunMicrovm refused with
+    // "not authorized to perform: lambda:PassNetworkConnector on resource:
+    // arn:aws:lambda:<region>:aws:network-connector:aws-network-connector:INTERNET_EGRESS".
 ];
 
 /// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks

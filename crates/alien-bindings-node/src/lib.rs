@@ -152,7 +152,7 @@ pub struct RemoteBindingsHandle {
 #[cfg(feature = "platform-sdk")]
 #[napi]
 impl RemoteBindingsHandle {
-    /// Select a customer's Storage deployment by Project and external ID.
+    /// Address a customer by Project and external ID. Each binding resolves its own deployment.
     #[napi(factory)]
     pub async fn for_customer(
         project: String,

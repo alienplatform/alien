@@ -220,7 +220,78 @@ impl KeyProviderApi for RemoteBindingsProvider {
 /// Resource-scoped remote bindings for an existing deployment.
 #[derive(Debug)]
 pub struct RemoteBindings {
-    provider: Arc<RemoteBindingsProvider>,
+    source: BindingsSource,
+}
+
+#[derive(Debug)]
+enum BindingsSource {
+    /// The deployment is already identified, so every binding rides one provider.
+    Deployment(Arc<RemoteBindingsProvider>),
+    /// Only the customer is identified. Platform picks the deployment by matching its purpose
+    /// against the requested capability, so each capability addresses a different deployment and
+    /// needs its own manager access. Resolving at construction would pin the handle to one
+    /// capability and make every other binding unreachable.
+    Environment(EnvironmentSource),
+}
+
+struct EnvironmentSource {
+    project: String,
+    external_id: String,
+    token: String,
+    api_base_url: Option<String>,
+    providers: RwLock<HashMap<RemoteBindingCapability, Arc<RemoteBindingsProvider>>>,
+}
+
+impl fmt::Debug for EnvironmentSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("EnvironmentSource")
+            .field("project", &self.project)
+            .field("external_id", &self.external_id)
+            .field("token", &"<redacted>")
+            .field("api_base_url", &self.api_base_url)
+            .finish()
+    }
+}
+
+impl EnvironmentSource {
+    async fn provider(
+        &self,
+        capability: RemoteBindingCapability,
+    ) -> Result<Arc<RemoteBindingsProvider>> {
+        if let Some(provider) = self.providers.read().await.get(&capability) {
+            return Ok(provider.clone());
+        }
+        let provider = Arc::new(
+            RemoteBindingsProvider::for_remote_environment(
+                &self.project,
+                &self.external_id,
+                capability,
+                &self.token,
+                self.api_base_url.as_deref(),
+            )
+            .await?,
+        );
+        // Racing callers may both discover; keeping the first keeps one lease per capability.
+        Ok(self
+            .providers
+            .write()
+            .await
+            .entry(capability)
+            .or_insert(provider)
+            .clone())
+    }
+}
+
+impl BindingsSource {
+    async fn provider(
+        &self,
+        capability: RemoteBindingCapability,
+    ) -> Result<Arc<RemoteBindingsProvider>> {
+        match self {
+            Self::Deployment(provider) => Ok(provider.clone()),
+            Self::Environment(environment) => environment.provider(capability).await,
+        }
+    }
 }
 
 /// A short-lived managed AI binding and the cloud credential needed to use it.
@@ -285,8 +356,12 @@ pub trait RemoteStorage: Send + Sync + fmt::Debug {
 }
 
 impl RemoteBindings {
-    /// Selects an external environment's Storage deployment by stable application external
-    /// ID and discovers its assigned Manager through the Platform API.
+    /// Addresses an external environment by stable application external ID.
+    ///
+    /// Each binding discovers its own deployment and Manager on first use, because Platform
+    /// selects the deployment by matching its purpose to the requested capability: a customer
+    /// running only a Sandbox has no Storage deployment, and vice versa. Nothing is contacted
+    /// here, so an unreachable customer surfaces at the first `storage`/`sandbox` call.
     pub async fn for_environment(
         project: &str,
         external_id: &str,
@@ -294,16 +369,13 @@ impl RemoteBindings {
         api_base_url: Option<&str>,
     ) -> Result<Self> {
         Ok(Self {
-            provider: Arc::new(
-                RemoteBindingsProvider::for_remote_environment(
-                    project,
-                    external_id,
-                    RemoteBindingCapability::Storage,
-                    token,
-                    api_base_url,
-                )
-                .await?,
-            ),
+            source: BindingsSource::Environment(EnvironmentSource {
+                project: project.to_string(),
+                external_id: external_id.to_string(),
+                token: token.to_string(),
+                api_base_url: api_base_url.map(ToString::to_string),
+                providers: RwLock::new(HashMap::new()),
+            }),
         })
     }
 
@@ -314,10 +386,10 @@ impl RemoteBindings {
         api_base_url: Option<&str>,
     ) -> Result<Self> {
         Ok(Self {
-            provider: Arc::new(
+            source: BindingsSource::Deployment(Arc::new(
                 RemoteBindingsProvider::for_remote_deployment(deployment_id, token, api_base_url)
                     .await?,
-            ),
+            )),
         })
     }
 
@@ -334,25 +406,30 @@ impl RemoteBindings {
         expires_at: DateTime<Utc>,
     ) -> Result<Self> {
         Ok(Self {
-            provider: Arc::new(RemoteBindingsProvider::from_manager_access(
-                deployment_id,
-                manager_url,
-                manager_token,
-                expires_at,
-            )?),
+            source: BindingsSource::Deployment(Arc::new(
+                RemoteBindingsProvider::from_manager_access(
+                    deployment_id,
+                    manager_url,
+                    manager_token,
+                    expires_at,
+                )?,
+            )),
         })
     }
 
     #[cfg(test)]
     fn from_provider(provider: Arc<RemoteBindingsProvider>) -> Self {
-        Self { provider }
+        Self {
+            source: BindingsSource::Deployment(provider),
+        }
     }
 
     /// Loads a Storage binding and keeps its short-lived credential lease fresh.
     pub async fn storage(&self, resource_id: &str) -> Result<Arc<dyn RemoteStorage>> {
-        let initial = self.provider.load_storage(resource_id).await?;
+        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        let initial = provider.load_storage(resource_id).await?;
         Ok(Arc::new(RefreshingStorage::new(
-            self.provider.clone(),
+            provider,
             resource_id.to_string(),
             initial,
         )))
@@ -360,11 +437,9 @@ impl RemoteBindings {
 
     /// Loads a Key binding and keeps its short-lived credential lease fresh.
     pub async fn key(&self, resource_id: &str) -> Result<Arc<dyn Key>> {
-        self.provider.load_key(resource_id).await?;
-        Ok(Arc::new(RefreshingKey::new(
-            self.provider.clone(),
-            resource_id.to_string(),
-        )))
+        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        provider.load_key(resource_id).await?;
+        Ok(Arc::new(RefreshingKey::new(provider, resource_id.to_string())))
     }
 
     /// Loads a Sandbox binding for running untrusted code in the customer's cloud.
@@ -378,13 +453,20 @@ impl RemoteBindings {
     /// does: a caller already holding the handle keeps that authority either way, so refusing
     /// during a Manager blip withholds nothing.
     pub async fn sandbox(&self, resource_id: &str) -> Result<Arc<dyn Sandbox>> {
-        self.provider.resolver(resource_id).await.sandbox().await
+        self.source
+            .provider(RemoteBindingCapability::Sandbox)
+            .await?
+            .resolver(resource_id)
+            .await
+            .sandbox()
+            .await
     }
 
     /// Loads one short-lived managed AI binding lease.
     pub async fn ai(&self) -> Result<RemoteAiLease> {
-        let resolved = self.provider.source.resolve_ai().await?;
-        resolved.into_ai_lease(self.provider.clock.now())
+        let provider = self.source.provider(RemoteBindingCapability::Storage).await?;
+        let resolved = provider.source.resolve_ai().await?;
+        resolved.into_ai_lease(provider.clock.now())
     }
 }
 

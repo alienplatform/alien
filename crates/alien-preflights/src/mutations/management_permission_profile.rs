@@ -419,9 +419,9 @@ mod tests {
         HeartbeatsMode, KubernetesCertificateMode, KubernetesCluster, KubernetesClusterOwnership,
         KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
         KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, ServiceActivation,
-        StackSettings, StackState, Storage, TelemetryMode, Worker, WorkerCode,
-        WorkerPublicEndpoint,
+        KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Sandbox, SandboxCode,
+        SandboxEgress, SandboxSessionPolicy, ServiceActivation, StackSettings, StackState, Storage,
+        TelemetryMode, Worker, WorkerCode, WorkerPublicEndpoint,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -483,6 +483,50 @@ mod tests {
             .expect("global management permissions")
             .iter()
             .any(|permission| permission.id() == "email/heartbeat"));
+    }
+
+    #[tokio::test]
+    async fn frozen_remote_sandbox_heartbeat_permission_is_added_to_management() {
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "public.ecr.aws/docker/library/alpine:3.20".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test-stack".to_string())
+            .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+            .build();
+        let stack_state = StackState::new(Platform::Aws);
+
+        let result_stack = ManagementPermissionProfileMutation
+            .mutate(
+                stack,
+                &stack_state,
+                &deployment_config_for_management_permission_test(),
+            )
+            .await
+            .expect("management permission mutation should succeed");
+
+        let permissions = result_stack
+            .management()
+            .profile()
+            .expect("auto management profile should be generated");
+        let global = permissions.0.get("*").expect("global management permissions");
+        assert!(
+            global
+                .iter()
+                .any(|permission| permission.id() == "sandbox/heartbeat"),
+            "a frozen remote-access sandbox must keep its management identity able to heartbeat"
+        );
+        let granted: Vec<&str> = permissions.0.values().flatten().map(|p| p.id()).collect();
+        assert!(
+            !granted.contains(&"sandbox/execute") && !granted.contains(&"sandbox/remote-execute"),
+            "heartbeat must not drag session execution onto the management identity: {granted:?}"
+        );
     }
 
     #[tokio::test]

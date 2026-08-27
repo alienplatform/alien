@@ -238,12 +238,14 @@ fn global_permission_refs<'a>(
         .map(|refs| {
             refs.iter()
                 .filter(|permission_ref| {
+                    // A remotely-bound resource keeps its management identity able to report on
+                    // itself, but nothing that addresses a session: the caller drives those, and a
+                    // `<type>/` prefix match dropped `<type>/heartbeat` along with them.
                     !ctx.stack.resources.values().any(|entry| {
                         alien_core::remote_bindings::remote_binding_for_entry(entry).is_some_and(
                             |definition| {
-                                permission_ref
-                                    .id()
-                                    .starts_with(&format!("{}/", definition.resource_type))
+                                permission_ref.id() == definition.permission_set
+                                    || reaches_a_session(permission_ref)
                             },
                         )
                     })
@@ -251,6 +253,13 @@ fn global_permission_refs<'a>(
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Session-reaching sets belong to the remote caller's identity alone, whatever their id.
+fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
+    permission_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .is_some_and(|set| alien_permissions::permission_set_reaches_a_microvm_session(&set))
 }
 
 fn resource_scoped_permission_refs(

@@ -79,7 +79,7 @@ export class Bindings {
     this.#sandbox = sandbox
   }
 
-  /** Select a customer's Storage by Project and stable external ID. */
+  /** Address a customer by Project and stable external ID; each binding resolves its own deployment. */
   static async forRemoteCustomer(options: RemoteCustomerBindingsOptions): Promise<Bindings> {
     try {
       const addon = loadAddon()
