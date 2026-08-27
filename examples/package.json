@@ -4,6 +4,6 @@
   "packageManager": "pnpm@10.11.0",
   "scripts": {
     "test": "pnpm run test:projects",
-    "test:projects": "pnpm -C byob-storage-ts check && pnpm -C basic-worker-ts test && pnpm -C remote-worker-ts test && pnpm -C data-connector-ts test && pnpm -C event-pipeline-ts test && pnpm -C command-routing-ts test:ts"
+    "test:projects": "pnpm -C byob-storage-ts check && pnpm -C basic-worker-ts test && pnpm -C remote-worker-ts test && pnpm -C data-connector-ts test && pnpm -C event-pipeline-ts test && pnpm -C command-routing-ts test:ts && pnpm -C slatedb-trace-store test"
   }
 }

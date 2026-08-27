@@ -253,8 +253,7 @@ impl ObjectStore for LocalStorage {
     ) -> ObjectStoreResult<PutResult> {
         let dst = prefixed_path(&self.base_dir, location);
         if !opts.attributes.is_empty() {
-            return Err(object_store::Error::Generic {
-                store: "LocalStorage",
+            return Err(object_store::Error::NotSupported {
                 source: Box::new(AlienError::new(ErrorData::OperationNotSupported {
                     operation: "storage.put object attributes".to_string(),
                     reason: "the local filesystem backend cannot persist object attributes"

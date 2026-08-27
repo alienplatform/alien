@@ -40,6 +40,7 @@ members = [
   "examples/basic-worker-rs",
   "examples/endpoint-agent",
   "examples/byoc-database",
+  "examples/slatedb-trace-store",
   "crates/alien-test",
   "tests/e2e/test-apps/comprehensive-rust",
   "tests/e2e/test-apps/container-rust",
@@ -209,6 +210,7 @@ zip = { version = "2", default-features = false, features = ["deflate"] }
 pem = "3.0"
 oci-tar-builder = "0.4"
 sha2 = "0.10"
+slatedb = { version = "=0.13.0", default-features = false, features = ["moka"] }
 oauth2 = { version = "5.0", default-features = false, features = ["reqwest"] }
 cacache = { version = "13.1", default-features = false, features = ["tokio-runtime"] }
 strip-ansi-escapes = "0.2.1"

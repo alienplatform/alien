@@ -12,6 +12,7 @@ packages:
   - webhook-api-ts
   - nextjs-app
   - byoc-database
+  - slatedb-trace-store
   - endpoint-agent
   - full-stack-microservices
   - full-stack-microservices/services/*
