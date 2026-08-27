@@ -18,12 +18,9 @@ use bytes::Bytes;
 use object_store::{path::Path, ObjectStore};
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use std::{
-    collections::HashSet,
-    sync::{
-        atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
-    },
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
 };
 use tokio::{sync::RwLock, time::Duration};
 
@@ -31,35 +28,17 @@ const MAX_QUEUE_ATTEMPTS: usize = 5;
 
 pub struct WriterHealth {
     receive: AtomicBool,
-    finalization_failures: Mutex<HashSet<String>>,
 }
 
 impl WriterHealth {
     pub fn new() -> Self {
         Self {
             receive: AtomicBool::new(true),
-            finalization_failures: Mutex::new(HashSet::new()),
         }
     }
 
     fn is_healthy(&self) -> bool {
         self.receive.load(Ordering::Relaxed)
-            && self
-                .finalization_failures
-                .lock()
-                .is_ok_and(|failures| failures.is_empty())
-    }
-
-    fn finalization_failed(&self, message_key: &str) {
-        if let Ok(mut failures) = self.finalization_failures.lock() {
-            failures.insert(message_key.to_string());
-        }
-    }
-
-    fn finalization_recovered(&self, message_key: &str) {
-        if let Ok(mut failures) = self.finalization_failures.lock() {
-            failures.remove(message_key);
-        }
     }
 }
 
@@ -227,7 +206,6 @@ pub async fn run_writer(
 
         for message in messages {
             let receipt_handle = message.receipt_handle.clone();
-            let message_key = message_key(&message.payload);
             let pointer = decode_pointer(message.payload);
             let outcome = match pointer {
                 Ok(pointer) => process_pointer(&writer, &storage, &pointer).await,
@@ -240,14 +218,8 @@ pub async fn run_writer(
 
             match outcome {
                 Ok(staging_path) => {
-                    let acknowledged = ack_with_retry(
-                        &queue,
-                        &receipt_handle,
-                        "ack committed trace",
-                        &message_key,
-                        &health,
-                    )
-                    .await;
+                    let acknowledged =
+                        ack_with_retry(&queue, &receipt_handle, "ack committed trace").await;
                     if acknowledged {
                         if let Err(error) = storage.delete(&Path::from(staging_path.as_str())).await
                         {
@@ -261,19 +233,10 @@ pub async fn run_writer(
                         &failure,
                         message.attempt,
                         &receipt_handle,
-                        &message_key,
-                        &health,
                     )
                     .await;
                     if recorded {
-                        ack_with_retry(
-                            &queue,
-                            &receipt_handle,
-                            "ack rejected trace",
-                            &message_key,
-                            &health,
-                        )
-                        .await;
+                        ack_with_retry(&queue, &receipt_handle, "ack rejected trace").await;
                     }
                 }
                 Err(ProcessError::Retryable(error)) => {
@@ -295,22 +258,12 @@ pub async fn run_writer(
     }
 }
 
-async fn ack_with_retry(
-    queue: &Queue,
-    receipt_handle: &str,
-    operation: &str,
-    message_key: &str,
-    health: &WriterHealth,
-) -> bool {
+async fn ack_with_retry(queue: &Queue, receipt_handle: &str, operation: &str) -> bool {
     for attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match queue.ack(receipt_handle).await {
-            Ok(()) => {
-                health.finalization_recovered(message_key);
-                return true;
-            }
+            Ok(()) => return true,
             Err(error) => {
                 if attempt >= MAX_QUEUE_ATTEMPTS {
-                    health.finalization_failed(message_key);
                     tracing::error!(%error, %operation, "queue operation remains unavailable; leaving message for redelivery");
                     return false;
                 }
@@ -327,18 +280,12 @@ async fn record_failure_with_retry(
     failure: &PermanentFailure,
     attempt: u32,
     receipt_handle: &str,
-    message_key: &str,
-    health: &WriterHealth,
 ) -> bool {
     for storage_attempt in 1..=MAX_QUEUE_ATTEMPTS {
         match record_failure(storage, failure, attempt, receipt_handle).await {
-            Ok(()) => {
-                health.finalization_recovered(message_key);
-                return true;
-            }
+            Ok(()) => return true,
             Err(error) => {
                 if storage_attempt >= MAX_QUEUE_ATTEMPTS {
-                    health.finalization_failed(message_key);
                     tracing::error!(%error, "failure record remains unavailable; leaving message for redelivery");
                     return false;
                 }
@@ -348,14 +295,6 @@ async fn record_failure_with_retry(
         }
     }
     unreachable!("the bounded retry loop always returns")
-}
-
-fn message_key(payload: &MessagePayload) -> String {
-    let encoded = match payload {
-        MessagePayload::Json(value) => value.to_string().into_bytes(),
-        MessagePayload::Text(value) => value.as_bytes().to_vec(),
-    };
-    hex::encode(Sha256::digest(encoded))
 }
 
 struct PermanentFailure {
