@@ -16,13 +16,14 @@ use futures::stream::BoxStream;
 
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport, AGENT_PORT};
+use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
     SandboxSession, SandboxSessionState,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::{AlienError, Context};
+use alien_error::AlienError;
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -137,10 +138,10 @@ impl AwsSandbox {
                 return Ok(None)
             }
             Err(error) => {
-                return Err(error).context(ErrorData::SandboxUnreachable {
-                    operation: "sandbox.session".to_string(),
-                    reason: format!("could not read session '{session_id}'"),
-                })
+                return Err(error).unreachable(
+                    "sandbox.session",
+                    &format!("could not read session '{session_id}'"),
+                )
             }
         };
 
@@ -195,10 +196,10 @@ impl AwsSandbox {
             .microvms
             .create_microvm_auth_token(session_id, vec![AGENT_PORT], AGENT_TOKEN_MINUTES)
             .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.agent".to_string(),
-                reason: format!("could not mint an endpoint token for '{session_id}'"),
-            })?;
+            .unreachable(
+                "sandbox.agent",
+                &format!("could not mint an endpoint token for '{session_id}'"),
+            )?;
 
         let mut request = self
             .agent
@@ -359,13 +360,10 @@ impl Sandbox for AwsSandbox {
                 self.max_lifetime_seconds,
             )
             .await
-            // The cloud's own refusal is carried in the message rather than only in the source:
-            // the chain does not survive into the SDK, and "could not start a MicroVM" without a
-            // reason sends a reader to the code instead of to the quota or role that refused.
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.create".to_string(),
-                reason: format!("could not start a MicroVM from '{}'", self.image_identifier),
-            })?;
+            .unreachable(
+                "sandbox.create",
+                &format!("could not start a MicroVM from '{}'", self.image_identifier),
+            )?;
 
         let microvm_id = microvm.microvm_id.ok_or_else(|| {
             AlienError::new(ErrorData::UnexpectedResponseFormat {
@@ -509,10 +507,10 @@ impl Sandbox for AwsSandbox {
             .microvms
             .create_microvm_auth_token(session_id, vec![port], PREVIEW_TOKEN_MINUTES)
             .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.preview".to_string(),
-                reason: format!("could not mint a preview token for port {port}"),
-            })?;
+            .unreachable(
+                "sandbox.preview",
+                &format!("could not mint a preview token for port {port}"),
+            )?;
 
         let mut headers: BTreeMap<String, String> = token.auth_token.into_iter().collect();
         headers.insert(PROXY_PORT_HEADER.to_string(), port.to_string());
@@ -528,25 +526,19 @@ impl Sandbox for AwsSandbox {
     async fn suspend(&self, session_id: &str) -> Result<()> {
         self.ensure_owned(session_id).await?;
 
-        self.microvms
-            .suspend_microvm(session_id)
-            .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.suspend".to_string(),
-                reason: format!("could not suspend MicroVM '{session_id}'"),
-            })
+        self.microvms.suspend_microvm(session_id).await.unreachable(
+            "sandbox.suspend",
+            &format!("could not suspend MicroVM '{session_id}'"),
+        )
     }
 
     async fn resume(&self, session_id: &str) -> Result<()> {
         self.ensure_owned(session_id).await?;
 
-        self.microvms
-            .resume_microvm(session_id)
-            .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.resume".to_string(),
-                reason: format!("could not resume MicroVM '{session_id}'"),
-            })
+        self.microvms.resume_microvm(session_id).await.unreachable(
+            "sandbox.resume",
+            &format!("could not resume MicroVM '{session_id}'"),
+        )
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
@@ -562,10 +554,10 @@ impl Sandbox for AwsSandbox {
         self.microvms
             .terminate_microvm(session_id)
             .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: "sandbox.terminate".to_string(),
-                reason: format!("could not terminate MicroVM '{session_id}'"),
-            })
+            .unreachable(
+                "sandbox.terminate",
+                &format!("could not terminate MicroVM '{session_id}'"),
+            )
     }
 
     fn as_any(&self) -> &dyn std::any::Any {
@@ -579,6 +571,7 @@ mod tests {
     use alien_aws_clients::aws::lambda_microvms::{
         Microvm, MicrovmAuthToken, MockLambdaMicrovmsApi,
     };
+    use alien_error::Context;
     use std::time::Duration;
 
     fn image_version(version: &str) -> alien_aws_clients::aws::lambda_microvms::MicrovmImage {
@@ -1105,6 +1098,75 @@ mod tests {
         assert!(
             error.to_string().contains("get"),
             "points the caller at what does work: {error}"
+        );
+    }
+
+    /// A `RunMicrovm` refused for a missing IAM action, shaped as `LambdaMicrovmsClient::send`
+    /// shapes one: the transport records the response body, and `classify` wraps a non-404 as
+    /// its own generic failure.
+    fn refused_run() -> Result<Microvm, alien_client_core::ErrorData> {
+        Err(AlienError::new(
+            alien_client_core::ErrorData::HttpResponseError {
+                message: "Request failed with HTTP 403: Forbidden".to_string(),
+                url: "https://lambda.us-east-2.amazonaws.com/2025-09-09/microvms".to_string(),
+                http_status: 403,
+                http_request_text: None,
+                http_response_text: Some(
+                    r#"{"Message":"User: arn:aws:sts::123456789012:assumed-role/stack-access/session is not authorized to perform: lambda:PassNetworkConnector on resource: arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS"}"#
+                        .to_string(),
+                ),
+            },
+        ))
+        .context(alien_client_core::ErrorData::GenericError {
+            message: "Lambda MicroVMs RunMicrovm failed".to_string(),
+        })
+    }
+
+    /// The refused action is what sends a reader to the role rather than to this code, and the
+    /// wire format past this binding is a flat message string — so `reason` is the only place a
+    /// structured consumer sees it. It reaches an operator's log alone: an IAM identity makes the
+    /// whole error internal, and `into_external` replaces it.
+    #[tokio::test]
+    async fn a_refused_create_reports_what_aws_refused_it_with() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_run_microvm()
+            .returning(|_, _, _, _, _, _, _| refused_run());
+        // Nothing was started, so nothing is cleaned up.
+        client.expect_terminate_microvm().never();
+
+        let error = sandbox(client)
+            .create(CreateSessionRequest {
+                session_id: None,
+                tenant_key: None,
+                env: BTreeMap::new(),
+            })
+            .await
+            .expect_err("a refused RunMicrovm cannot produce a session");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error
+                .message
+                .contains("could not start a MicroVM from 'sbx-image'"),
+            "the binding still says which call it was: {}",
+            error.message
+        );
+        assert!(
+            error
+                .message
+                .contains("is not authorized to perform: lambda:PassNetworkConnector"),
+            "and AWS's own sentence is what tells the operator why: {}",
+            error.message
+        );
+        assert!(
+            error.internal,
+            "an IAM identity in the message makes the error internal: {error}"
+        );
+        assert_eq!(
+            error.into_external().message,
+            "Internal server error",
+            "so none of it is published to the caller"
         );
     }
 }

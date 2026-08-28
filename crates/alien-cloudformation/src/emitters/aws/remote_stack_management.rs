@@ -238,19 +238,22 @@ fn global_permission_refs<'a>(
         .map(|refs| {
             refs.iter()
                 .filter(|permission_ref| {
-                    !ctx.stack.resources.values().any(|entry| {
-                        alien_core::remote_bindings::remote_binding_for_entry(entry).is_some_and(
-                            |definition| {
-                                permission_ref
-                                    .id()
-                                    .starts_with(&format!("{}/", definition.resource_type))
-                            },
-                        )
-                    })
+                    !alien_core::remote_bindings::remote_binding_claims_management_set(
+                        ctx.stack.resources.values(),
+                        permission_ref.id(),
+                        || reaches_a_session(permission_ref),
+                    )
                 })
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Session-reaching sets belong to the remote caller's identity alone, whatever their id.
+fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
+    permission_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .is_some_and(|set| alien_permissions::permission_set_reaches_a_microvm_session(&set))
 }
 
 fn resource_scoped_permission_refs(

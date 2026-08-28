@@ -446,11 +446,14 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         !policy.contains("microvm-image:${local.resource_prefix}-*"),
         "a stack-wide pattern would reach every sibling sandbox:\n{policy}"
     );
-    for withheld in [
-        "lambda:PassNetworkConnector",
-        "iam:PassRole",
-        "lambda:CreateMicrovmShellAuthToken",
-    ] {
+    // AWS attaches its own connectors to an open-egress session and authorizes each as
+    // PassNetworkConnector, so a session cannot start without it. The literal `aws` account
+    // segment is what stops the scope naming a customer-declared connector.
+    assert!(
+        policy.contains("aws:network-connector:aws-network-connector:*"),
+        "the connector grant must be scoped to AWS-managed connectors:\n{policy}"
+    );
+    for withheld in ["iam:PassRole", "lambda:CreateMicrovmShellAuthToken"] {
         assert!(
             !policy.contains(withheld),
             "{withheld} must stay out of the remote grant:\n{policy}"
@@ -517,4 +520,65 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
         !rendered.contains("lambda:CreateMicrovmAuthToken"),
         "nothing in the module may mint session credentials for this sandbox:\n{rendered}"
     );
+}
+
+/// The management identity must be able to report on a remotely-bound sandbox without gaining any
+/// reach into its sessions. Mirrors the CloudFormation generator's assertion, because two setup
+/// emitters compiling different management semantics for one stack is the failure this pins.
+#[test]
+fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            PermissionProfile::new().global(["sandbox/heartbeat", "sandbox/management"]),
+        ))
+        .add_with_remote_access(
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+    // Only the management role's own files: the access role legitimately carries the session
+    // verbs, so a whole-module grep would assert the opposite of what this pins.
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.contains("management"))
+        .map(|(_, body)| body.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("lambda:GetMicrovmImage"),
+        "the management identity must be able to read the sandbox it reports on: {rendered}"
+    );
+    for reaches_a_session in [
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+    ] {
+        assert!(
+            !rendered.contains(reaches_a_session),
+            "{reaches_a_session} reaches a session and belongs to the remote caller alone"
+        );
+    }
 }

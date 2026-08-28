@@ -466,6 +466,9 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         "lambda:TerminateMicrovm",
         "lambda:CreateMicrovmAuthToken",
         "lambda:GetMicrovm",
+        // AWS attaches its own INTERNET_EGRESS and HTTP_INGRESS connectors to an open-egress
+        // session and authorizes each as PassNetworkConnector, so without this nothing starts.
+        "lambda:PassNetworkConnector",
     ] {
         assert!(document.contains(action), "{action} is missing: {document}");
     }
@@ -473,8 +476,13 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         document.contains("microvm-image:${AWS::StackName}-agents"),
         "the grant must name this sandbox's own image: {document}"
     );
+    // AWS's own connectors sit under the literal account `aws`; a customer-declared one carries
+    // the customer's account id, so this scope cannot name one.
+    assert!(
+        document.contains("aws:network-connector:aws-network-connector:*"),
+        "the connector grant must be scoped to AWS-managed connectors: {document}"
+    );
     for withheld in [
-        "lambda:PassNetworkConnector",
         "iam:PassRole",
         "lambda:CreateMicrovmShellAuthToken",
         "microvm-image:${AWS::StackName}-*",
@@ -486,8 +494,8 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
     }
 }
 
-/// A sandbox that routes egress through a connector is not remotely reachable, because
-/// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`. Preflight refuses such a
+/// A sandbox that routes egress through a connector is not remotely reachable: the remote grant
+/// passes only AWS's own connectors, never one the customer declared. Preflight refuses such a
 /// stack; the emitter agrees, so a stack that reaches here another way installs no usable grant.
 #[test]
 fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
@@ -545,5 +553,118 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
     assert!(
         !rendered.contains("lambda:CreateMicrovmAuthToken"),
         "no policy in the template may mint session credentials for this sandbox: {rendered}"
+    );
+}
+
+/// The management identity must be able to report on a remotely-bound sandbox without gaining any
+/// reach into its sessions — the caller drives those.
+#[test]
+fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
+    // The profile the preflight mutation derives for this stack: heartbeat so the identity can
+    // report on the sandbox, management because a frozen sandbox is setup-owned.
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new()
+                .global(["sandbox/heartbeat", "sandbox/management"]),
+        ))
+        .add_with_remote_access(
+            sandbox_fixture(SandboxEgress::Allow),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote sandbox management",
+    );
+
+    let management = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("ManagementRole") && resource.resource_type.contains("Policy")
+        })
+        .map(|(_, resource)| serde_json::to_string(&resource.properties).expect("serializes"))
+        .collect::<String>();
+
+    assert!(
+        management.contains("lambda:GetMicrovmImage"),
+        "the management identity must be able to read the sandbox it reports on: {management}"
+    );
+    // `PassNetworkConnector` is withheld because `sandbox/management` as a whole reaches a
+    // session, not because the action itself does — split that statement out and this stops
+    // holding while still passing.
+    for reaches_a_session in [
+        "lambda:RunMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:PassNetworkConnector",
+    ] {
+        assert!(
+            !management.contains(reaches_a_session),
+            "{reaches_a_session} reaches a session and belongs to the remote caller alone: {yaml}"
+        );
+    }
+}
+
+/// Storage is a remote-binding type too, so the same prefix match stripped `storage/heartbeat`
+/// from every bring-your-own-bucket deployment's management identity.
+#[test]
+fn aws_remote_storage_management_role_keeps_its_heartbeat() {
+    let stack = Stack::new("byo-bucket".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new().global(["storage/heartbeat"]),
+        ))
+        .add_with_remote_access(
+            alien_core::Storage::new("customer-data".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "remote storage management",
+    );
+
+    let management = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("ManagementRole") && resource.resource_type.contains("Policy")
+        })
+        .map(|(_, resource)| serde_json::to_string(&resource.properties).expect("serializes"))
+        .collect::<String>();
+
+    assert!(
+        management.contains("s3:"),
+        "the management identity must keep its storage heartbeat grant: {yaml}"
+    );
+    assert!(
+        !management.contains("s3:GetObject"),
+        "heartbeat must not reach object contents: {management}"
     );
 }

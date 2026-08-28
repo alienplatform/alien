@@ -22,6 +22,9 @@ pub mod kubernetes;
 #[cfg(feature = "local")]
 pub mod local;
 
+#[cfg(feature = "aws")]
+mod refusal;
+
 /// The longest command deadline these backends accept.
 ///
 /// A ceiling rather than a guard: a timer takes a point in time, and a duration near

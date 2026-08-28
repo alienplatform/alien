@@ -82,14 +82,33 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 /// Whether a declaration's remote binding is one a deployment can actually deliver.
 ///
 /// A sandbox reaches the network through an egress connector, and starting a session on one is
-/// additionally authorized as `lambda:PassNetworkConnector` — which AWS scopes to no resource and
-/// no condition key, so `sandbox/remote-execute` withholds it. Preflight refuses such a stack;
+/// additionally authorized as `lambda:PassNetworkConnector`. The remote grant passes only AWS's
+/// own connectors, so a customer-declared one is unreachable. Preflight refuses such a stack;
 /// emitters and generated docs read this so nothing advertises a grant that cannot be used.
 pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
     entry
         .config
         .downcast_ref::<Sandbox>()
         .is_none_or(|sandbox| matches!(sandbox.egress, SandboxEgress::Allow))
+}
+
+/// Whether a stack's remote bindings mean this global management set belongs to the caller's
+/// identity rather than the deployment's.
+///
+/// The binding's own set always does. A sandbox binding additionally claims anything that reaches
+/// a session, because the remote caller drives those; `reaches_a_session` decides that, so the
+/// permission registry stays the single place the verbs are named.
+pub fn remote_binding_claims_management_set<'a>(
+    resources: impl IntoIterator<Item = &'a ResourceEntry>,
+    permission_set_id: &str,
+    reaches_a_session: impl Fn() -> bool,
+) -> bool {
+    resources.into_iter().any(|entry| {
+        remote_binding_for_entry(entry).is_some_and(|definition| {
+            permission_set_id == definition.permission_set
+                || (definition.kind == RemoteBindingKind::Sandbox && reaches_a_session())
+        })
+    })
 }
 
 pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {

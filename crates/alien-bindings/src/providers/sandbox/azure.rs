@@ -106,8 +106,9 @@ impl AzureSandbox {
     /// A refusal is a request the data plane understood and rejected, so repeating it repeats the
     /// refusal. Anything else left the outcome unknown: for the idempotent file operations that is
     /// worth another attempt, but `run_command` may already have started the command and must not
-    /// carry the retry signal. The cause stays on the source chain rather than in `reason`, which
-    /// is what keeps a raw response body out of an externally visible message.
+    /// carry the retry signal. `reason` says only what this binding knows: `is_refusal` classifies
+    /// to public variants, and `into_external` passes a public error's source chain through
+    /// untouched, so the chain hides nothing a `reason` would have exposed.
     fn failed(operation: &str, error: AlienError<ClientErrorData>) -> AlienError<ErrorData> {
         if is_refusal(&error) {
             return error.context(ErrorData::SandboxCommandFailed {

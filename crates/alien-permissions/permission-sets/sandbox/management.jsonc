@@ -26,7 +26,8 @@
       {
         // The third action a RunMicrovm carrying an egress connector is authorized as; without
         // it a sandbox that declares egress cannot start a session at all. AWS authorizes it
-        // against no resource type and defines no condition key, so it cannot be narrowed.
+        // against the connector ARN, but a connector's ARN ends in an AWS-assigned id rather
+        // than the name the template sets, so a `${stackPrefix}-*` scope would deny a real one.
         "label": "pass-sandbox-egress-connector",
         "description": "Allow a session to start on the sandbox's egress connector.",
         "grant": {

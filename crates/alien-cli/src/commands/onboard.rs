@@ -71,6 +71,7 @@ pub enum OnboardSetupItem {
     Keys,
     Storage,
     Registry,
+    Sandbox,
 }
 
 pub async fn onboard_task(args: OnboardArgs, ctx: ExecutionMode) -> Result<()> {
@@ -218,6 +219,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                         OnboardSetupItem::Keys => alien_platform_api::types::DeploymentSetupItemSelectionItem::Keys,
                         OnboardSetupItem::Storage => alien_platform_api::types::DeploymentSetupItemSelectionItem::Bucket,
                         OnboardSetupItem::Registry => alien_platform_api::types::DeploymentSetupItemSelectionItem::Registry,
+                        OnboardSetupItem::Sandbox => alien_platform_api::types::DeploymentSetupItemSelectionItem::Sandbox,
                     },
                     provider_allowlist: Vec::new(),
                     release_channel: None,
@@ -288,6 +290,7 @@ fn onboard_setup_item_name(item: &OnboardSetupItem) -> &'static str {
         OnboardSetupItem::Keys => "keys",
         OnboardSetupItem::Storage => "storage",
         OnboardSetupItem::Registry => "registry",
+        OnboardSetupItem::Sandbox => "sandbox",
     }
 }
 
@@ -336,6 +339,7 @@ async fn fetch_available_setup(
             DeploymentLinkSetupResponseSetupItemsItem::Keys => OnboardSetupItem::Keys,
             DeploymentLinkSetupResponseSetupItemsItem::Bucket => OnboardSetupItem::Storage,
             DeploymentLinkSetupResponseSetupItemsItem::Registry => OnboardSetupItem::Registry,
+            DeploymentLinkSetupResponseSetupItemsItem::Sandbox => OnboardSetupItem::Sandbox,
         })
         .collect();
     let supported_platforms = setup

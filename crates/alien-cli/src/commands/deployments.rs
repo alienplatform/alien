@@ -2,6 +2,7 @@ use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 use crate::commands::event_display::{print_event_table, EventDisplayRow};
+use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::interaction::{ConfirmationMode, InteractionMode};
@@ -55,6 +56,7 @@ pub enum MonitoringMode {
     alien deployments events production/api
     alien deployments wait production/api --for ready --timeout 10m
     alien deployments machines production/api --json
+    alien deployments untrack my-sandbox
 
 RELATED COMMANDS:
     alien logs --deployment production/api --follow
@@ -273,6 +275,11 @@ pub enum DeploymentsCmd {
         /// Deployment ID
         id: String,
     },
+    /// Forget a deployment this machine tracks locally, discarding its stored key
+    Untrack {
+        /// Deployment name, as passed to `alien deploy --name`
+        name: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -298,7 +305,11 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
         delete_confirmation_mode(*yes)?;
     }
 
-    ctx.ensure_ready().await?;
+    // Untracking only touches this machine's registry. Demanding a reachable
+    // manager first would make an entry unclearable exactly when it is stale.
+    if !matches!(args.cmd, DeploymentsCmd::Untrack { .. }) {
+        ctx.ensure_ready().await?;
+    }
 
     match args.cmd {
         // Platform mode lists canonical platform records; local modes list manager records.
@@ -582,7 +593,23 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let workspace_name = ctx.resolve_platform_workspace_context(true).await?.name;
             token_deployment_task(&client, &workspace_name, &id).await
         }
+        DeploymentsCmd::Untrack { name } => untrack_deployment_task(&name),
     }
+}
+
+/// Drop this machine's tracked entry for `name`, so the next deploy registers afresh.
+fn untrack_deployment_task(name: &str) -> Result<()> {
+    match DeploymentTracker::new()?.remove_deployment(name)? {
+        Some(deployment) => println!(
+            "{}",
+            success_line(&format!(
+                "Untracked '{}' ({}).",
+                name, deployment.deployment_id
+            ))
+        ),
+        None => println!("No deployment named '{name}' is tracked on this machine."),
+    }
+    Ok(())
 }
 
 async fn deployment_events_task(
@@ -1973,7 +2000,6 @@ async fn create_deployment_task(
         external_bindings: None,
         kubernetes: None,
         public_endpoints: None,
-        logs: None,
     };
 
     let request = NewDeploymentRequest {

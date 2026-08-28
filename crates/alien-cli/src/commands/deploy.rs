@@ -11,7 +11,9 @@ use crate::commands::{
     create_initial_deployment, fetch_dev_deployment_live_state,
     wait_for_dev_deployment_ready_with_progress,
 };
-use crate::deployment_tracking::{validate_token, DeploymentToken, DeploymentTracker};
+use crate::deployment_tracking::{
+    validate_token, DeploymentToken, DeploymentTracker, ValidatedDeploymentInfo,
+};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
@@ -92,6 +94,11 @@ pub struct DeployArgs {
     /// Secret stack input value for setup (id=value).
     #[arg(long = "secret-input")]
     pub secret_input_values: Vec<String>,
+
+    /// Customer setup item to install, for a deployment-group token whose group
+    /// offers more than one. The API rejects the request without it.
+    #[arg(long = "setup-item")]
+    pub setup_item: Option<String>,
 
     /// Public subdomain for deployments in your own environment.
     ///
@@ -1124,7 +1131,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Step 1: Load or register the deployment (via platform API)
     let mut tracker = DeploymentTracker::new()?;
-    let tracked_deployment = match tracker.get_deployment(&resolved_args.name) {
+    // Only the platform API is asked whether a stored key is still live; in dev and
+    // standalone mode `base_url` is a manager, whose deployments it cannot speak for.
+    let existing_deployment = if ctx.is_platform() {
+        tracker
+            .resolve_live_deployment(&resolved_args.name, &base_url)
+            .await?
+    } else {
+        tracker.get_deployment(&resolved_args.name).cloned()
+    };
+    let tracked_deployment = match existing_deployment {
         Some(deployment) => {
             info!("Found tracked deployment '{}'", resolved_args.name);
             if resolved_args.public_subdomain.is_some() {
@@ -1135,29 +1151,34 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 }));
             }
 
-            // If a token was provided, check if it's different from the stored one
-            if let Some(ref provided_token) = args.token {
-                if deployment.api_key != *provided_token {
-                    info!(
-                        "Updating stored API key for deployment '{}'",
-                        resolved_args.name
-                    );
-                    tracker.remove_deployment(&resolved_args.name)?;
-                    tracker
-                        .add_deployment(
-                            resolved_args.name.clone(),
-                            provided_token.clone(),
-                            &base_url,
-                        )
-                        .await
-                        .context(ErrorData::ConfigurationError {
-                            message: "Failed to update deployment API key".to_string(),
-                        })?
-                } else {
-                    deployment.clone()
+            match args.token.as_ref() {
+                Some(provided_token) if deployment.api_key != *provided_token => {
+                    match validate_token(provided_token, &base_url).await? {
+                        DeploymentToken::Deployment {
+                            deployment_id,
+                            project_id,
+                            workspace_id,
+                        } => {
+                            info!(
+                                "Updating stored API key for deployment '{}'",
+                                resolved_args.name
+                            );
+                            tracker.track(
+                                resolved_args.name.clone(),
+                                provided_token.clone(),
+                                ValidatedDeploymentInfo {
+                                    deployment_id,
+                                    workspace_id,
+                                    project_id,
+                                },
+                            )?
+                        }
+                        // A group token authorizes creating deployments, not re-keying
+                        // one that already exists, so keep the stored deployment key.
+                        DeploymentToken::DeploymentGroup { .. } => deployment,
+                    }
                 }
-            } else {
-                deployment.clone()
+                _ => deployment,
             }
         }
         None => {
@@ -1236,14 +1257,25 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         external_bindings: None,
                         kubernetes: None,
                         public_endpoints: None,
-                        logs: None,
                     };
+
+                        let parsed_setup_item = match args.setup_item.as_deref() {
+                            Some(item) => Some(
+                                serde_json::from_value(serde_json::Value::String(item.to_string()))
+                                    .into_alien_error()
+                                    .context(ErrorData::ValidationError {
+                                        field: "setup-item".to_string(),
+                                        message: format!("Unknown setup item '{item}'"),
+                                    })?,
+                            ),
+                            None => None,
+                        };
 
                         let create_response = sdk_client
                             .create_deployment()
                             .workspace(&workspace_name)
                             .body(alien_platform_api::types::NewDeploymentRequest {
-                                setup_item: None,
+                                setup_item: parsed_setup_item,
                                 name: resolved_args
                                     .name
                                     .clone()

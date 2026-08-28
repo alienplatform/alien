@@ -23,15 +23,9 @@ pub(super) enum RemoteBindingSelector<'a> {
 ///
 /// Platform selects the deployment by its purpose, so this decides which of a project's
 /// deployments the returned Manager capability addresses.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub(crate) enum RemoteBindingCapability {
     Storage,
-    /// Reachable once Platform's external-access schema accepts it; the variant exists so that
-    /// naming the wrong capability at a call site is a compile error rather than a 4xx.
-    #[expect(
-        dead_code,
-        reason = "constructed once the wire enum carries the sandbox capability"
-    )]
     Sandbox,
 }
 
@@ -43,11 +37,9 @@ impl RemoteBindingCapability {
             Self::Storage => Ok(
                 alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Storage,
             ),
-            // Platform's external-access schema still accepts `storage` alone. Refusing beats
-            // asking for storage under a sandbox's name and reaching the wrong deployment.
-            Self::Sandbox => Err(remote_configuration_error(
-                "request external environment access for a Sandbox capability",
-            )),
+            Self::Sandbox => Ok(
+                alien_platform_api::types::RemoteBindingsExternalAccessRequestCapability::Sandbox,
+            ),
         }
     }
 }
