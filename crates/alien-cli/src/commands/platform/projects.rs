@@ -10,12 +10,14 @@ use alien_platform_api::types::{
     ConfigureProjectBucketsBodyAccess, ConfigureProjectDeploymentsBody,
     ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
-    ConfigureProjectRegistryBodyRepositoriesItem, CreateProjectBody, CreateProjectBodyName,
+    ConfigureProjectRegistryBodyRepositoriesItem, ConfigureSandboxRequest,
+    ConfigureSandboxRequestImageBundleUri, CreateProjectBody, CreateProjectBodyName,
     CreateProjectWorkspace, ListProjectsWorkspace,
 };
 use alien_platform_api::SdkResultExt;
 use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::BTreeSet;
+use std::num::NonZeroU64;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -30,7 +32,8 @@ use std::collections::BTreeSet;
     alien --workspace my-workspace projects ls
     alien projects capabilities status
     alien projects capabilities enable ai --model byo/claude-opus-5
-    alien projects capabilities enable encryption"
+    alien projects capabilities enable encryption
+    alien projects capabilities enable sandbox --image-bundle-uri s3://bucket/bundle.tar --max-session-lifetime-seconds 3600"
 )]
 pub struct ProjectArgs {
     /// Emit structured JSON output
@@ -88,6 +91,12 @@ pub enum CapabilityCommand {
         /// Permit registry pushes in addition to pulls.
         #[arg(long)]
         push: bool,
+        /// Sandbox image bundle URI (s3://bucket/key). Required for sandbox.
+        #[arg(long)]
+        image_bundle_uri: Option<String>,
+        /// Maximum sandbox session lifetime in seconds (1-28800). Required for sandbox.
+        #[arg(long)]
+        max_session_lifetime_seconds: Option<u64>,
     },
 }
 
@@ -102,7 +111,11 @@ pub enum CapabilityName {
     #[value(alias = "storage")]
     Buckets,
     Registry,
+    Sandbox,
 }
+
+/// Inclusive upper bound for a sandbox session lifetime, from the API spec.
+const MAX_SANDBOX_SESSION_LIFETIME_SECONDS: u64 = 28800;
 
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiProvider {
@@ -196,6 +209,8 @@ async fn capabilities_task(
             providers,
             repositories,
             push,
+            image_bundle_uri,
+            max_session_lifetime_seconds,
         } => {
             validate_capability_options(
                 capability,
@@ -204,6 +219,8 @@ async fn capabilities_task(
                 &providers,
                 &repositories,
                 push,
+                image_bundle_uri.as_deref(),
+                max_session_lifetime_seconds,
             )?;
             let client = http.sdk_client();
             let result = match capability {
@@ -348,6 +365,38 @@ async fn capabilities_task(
                         )?.into_inner(),
                     )
                 }
+                CapabilityName::Sandbox => {
+                    let image_bundle_uri = image_bundle_uri.ok_or_else(missing_sandbox_uri)?;
+                    let image_bundle_uri =
+                        ConfigureSandboxRequestImageBundleUri::try_from(image_bundle_uri)
+                            .into_alien_error()
+                            .context(ErrorData::ValidationError {
+                                field: "image-bundle-uri".to_string(),
+                                message: "Sandbox image bundle URI must be an s3:// URI."
+                                    .to_string(),
+                            })?;
+                    let max_session_lifetime_seconds = max_session_lifetime_seconds
+                        .and_then(NonZeroU64::new)
+                        .ok_or_else(missing_sandbox_lifetime)?;
+                    let mut request = client
+                        .configure_project_sandbox()
+                        .id_or_name(project)
+                        .body(&ConfigureSandboxRequest {
+                            image_bundle_uri,
+                            max_session_lifetime_seconds,
+                        });
+                    if let Some(workspace) = workspace {
+                        request = request.workspace(workspace);
+                    }
+                    serde_json::to_value(
+                        request.send().await.into_sdk_error().context(
+                            ErrorData::ApiRequestFailed {
+                                message: "Failed to enable sandbox".to_string(),
+                                url: None,
+                            },
+                        )?.into_inner(),
+                    )
+                }
             }
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
@@ -382,6 +431,7 @@ impl AiProvider {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn validate_capability_options(
     capability: CapabilityName,
     models: &[String],
@@ -389,6 +439,8 @@ fn validate_capability_options(
     providers: &[AiProvider],
     repositories: &[String],
     push: bool,
+    image_bundle_uri: Option<&str>,
+    max_session_lifetime_seconds: Option<u64>,
 ) -> Result<()> {
     if capability == CapabilityName::Ai && models.is_empty() && required_models.is_empty() {
         return Err(alien_error::AlienError::new(ErrorData::ValidationError {
@@ -402,6 +454,15 @@ fn validate_capability_options(
             message: "Container Registry requires at least one --repository allowlist entry."
                 .to_string(),
         }));
+    }
+    if capability == CapabilityName::Sandbox {
+        if image_bundle_uri.is_none() {
+            return Err(missing_sandbox_uri());
+        }
+        match max_session_lifetime_seconds {
+            Some(seconds) if (1..=MAX_SANDBOX_SESSION_LIFETIME_SECONDS).contains(&seconds) => {}
+            _ => return Err(missing_sandbox_lifetime()),
+        }
     }
     if capability != CapabilityName::Ai
         && (!models.is_empty() || !required_models.is_empty() || !providers.is_empty())
@@ -418,7 +479,35 @@ fn validate_capability_options(
             message: "--repository and --push are only valid for Container Registry.".to_string(),
         }));
     }
+    if capability != CapabilityName::Sandbox
+        && (image_bundle_uri.is_some() || max_session_lifetime_seconds.is_some())
+    {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "capability".to_string(),
+            message:
+                "--image-bundle-uri and --max-session-lifetime-seconds are only valid for Sandbox."
+                    .to_string(),
+        }));
+    }
     Ok(())
+}
+
+/// Build the error for a sandbox request that omits the image bundle URI.
+fn missing_sandbox_uri() -> alien_error::AlienError<ErrorData> {
+    alien_error::AlienError::new(ErrorData::ValidationError {
+        field: "image-bundle-uri".to_string(),
+        message: "Sandbox requires --image-bundle-uri.".to_string(),
+    })
+}
+
+/// Build the error for a sandbox request whose session lifetime is missing or out of range.
+fn missing_sandbox_lifetime() -> alien_error::AlienError<ErrorData> {
+    alien_error::AlienError::new(ErrorData::ValidationError {
+        field: "max-session-lifetime-seconds".to_string(),
+        message: format!(
+            "Sandbox requires --max-session-lifetime-seconds between 1 and {MAX_SANDBOX_SESSION_LIFETIME_SECONDS}."
+        ),
+    })
 }
 
 async fn get_project_task(
@@ -654,5 +743,99 @@ mod tests {
                 }
             }
         ));
+    }
+
+    #[test]
+    fn enable_sandbox_parses_its_required_flags() {
+        let args = ProjectArgs::try_parse_from([
+            "projects",
+            "capabilities",
+            "enable",
+            "sandbox",
+            "--image-bundle-uri",
+            "s3://bucket/bundle.tar",
+            "--max-session-lifetime-seconds",
+            "3600",
+        ])
+        .expect("sandbox capability should parse");
+
+        assert!(matches!(
+            args.cmd,
+            ProjectCmd::Capabilities {
+                command: CapabilityCommand::Enable {
+                    capability: CapabilityName::Sandbox,
+                    image_bundle_uri: Some(uri),
+                    max_session_lifetime_seconds: Some(3600),
+                    ..
+                }
+            } if uri == "s3://bucket/bundle.tar"
+        ));
+    }
+
+    fn validate_sandbox(
+        image_bundle_uri: Option<&str>,
+        max_session_lifetime_seconds: Option<u64>,
+    ) -> Result<()> {
+        validate_capability_options(
+            CapabilityName::Sandbox,
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            image_bundle_uri,
+            max_session_lifetime_seconds,
+        )
+    }
+
+    #[test]
+    fn sandbox_accepts_both_boundary_lifetimes() {
+        validate_sandbox(Some("s3://bucket/key"), Some(1)).expect("1 second is the lower bound");
+        validate_sandbox(Some("s3://bucket/key"), Some(28800))
+            .expect("28800 seconds is the upper bound");
+    }
+
+    #[test]
+    fn sandbox_requires_the_image_bundle_uri() {
+        let error = validate_sandbox(None, Some(3600)).expect_err("missing URI should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn sandbox_requires_a_lifetime_in_range() {
+        assert_eq!(
+            validate_sandbox(Some("s3://bucket/key"), None)
+                .expect_err("missing lifetime should fail")
+                .code,
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(
+            validate_sandbox(Some("s3://bucket/key"), Some(0))
+                .expect_err("zero lifetime should fail")
+                .code,
+            "VALIDATION_ERROR"
+        );
+        assert_eq!(
+            validate_sandbox(Some("s3://bucket/key"), Some(28801))
+                .expect_err("above the upper bound should fail")
+                .code,
+            "VALIDATION_ERROR"
+        );
+    }
+
+    #[test]
+    fn sandbox_flags_are_rejected_for_other_capabilities() {
+        let error = validate_capability_options(
+            CapabilityName::Buckets,
+            &[],
+            &[],
+            &[],
+            &[],
+            false,
+            Some("s3://bucket/key"),
+            Some(3600),
+        )
+        .expect_err("sandbox flags on a non-sandbox capability should fail");
+        assert_eq!(error.code, "VALIDATION_ERROR");
     }
 }
