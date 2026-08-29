@@ -96,6 +96,7 @@ async fn create_test_deployment_with_settings(
                 environment_variables: None,
                 public_subdomain: None,
                 input_values: Default::default(),
+                setup_item: None,
                 deployment_token: None,
             },
         )
@@ -250,6 +251,7 @@ async fn input_values_survive_create_import_and_reimport() {
                 environment_variables: None,
                 public_subdomain: None,
                 input_values: values.clone(),
+                setup_item: None,
                 deployment_token: None,
             },
         )

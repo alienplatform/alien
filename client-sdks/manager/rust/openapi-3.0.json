@@ -8313,6 +8313,11 @@
             "type": "string",
             "nullable": true
           },
+          "setupItem": {
+            "type": "string",
+            "description": "Customer setup item selected from the deployment-group contract.",
+            "nullable": true
+          },
           "setupMethod": {
             "type": "string",
             "description": "Setup method that is registering this deployment, such as `manual` for\nrendered Operator manifests or `helm` for generated Helm installs.",

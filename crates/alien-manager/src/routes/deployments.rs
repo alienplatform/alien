@@ -463,6 +463,7 @@ async fn create_deployment(
                 environment_variables: req.environment_variables,
                 public_subdomain: None,
                 input_values: Default::default(),
+                setup_item: None,
                 deployment_token: Some(raw_token.clone()),
             },
         )

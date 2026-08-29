@@ -148,6 +148,8 @@ pub struct CreateDeploymentParams {
     pub public_subdomain: Option<String>,
     /// Stack input values collected before deployment creation.
     pub input_values: HashMap<String, serde_json::Value>,
+    /// Customer setup item selected from the deployment-group contract.
+    pub setup_item: Option<String>,
     /// Raw deployment token for proxy pull auth.
     pub deployment_token: Option<String>,
 }

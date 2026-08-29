@@ -98,6 +98,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub name: Option<String>,
 
+    /// Setup item captured by the deployment-group token.
+    #[arg(long = "setup-item")]
+    pub setup_item: Option<String>,
+
     /// Encryption key for operator database (required for pull model)
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
     pub encryption_key: Option<String>,
@@ -927,6 +931,40 @@ machine = "m8i.xlarge"
         assert_eq!(error.code, "VALIDATION_ERROR");
     }
 
+    #[test]
+    fn deploy_accepts_setup_item_selection() {
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--platform",
+            "aws",
+            "--setup-item",
+            "deployment",
+        ]);
+
+        assert_eq!(args.setup_item.as_deref(), Some("deployment"));
+    }
+
+    #[test]
+    fn deployment_info_url_includes_setup_item_selection() {
+        let url = deployment_info_url(
+            "https://api.example.test/",
+            Platform::Aws,
+            Some("deployment"),
+        )
+        .expect("deployment info URL should be valid");
+        let query = url.query_pairs().collect::<HashMap<_, _>>();
+
+        assert_eq!(url.path(), "/v1/deployment-info");
+        assert_eq!(
+            query.get("platform").map(|value| value.as_ref()),
+            Some("aws")
+        );
+        assert_eq!(
+            query.get("setupItem").map(|value| value.as_ref()),
+            Some("deployment")
+        );
+    }
+
     fn stack_input(id: &str, kind: StackInputKind, required: bool) -> StackInputDefinition {
         StackInputDefinition {
             id: id.to_string(),
@@ -1080,7 +1118,14 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
-    let deployer_inputs = match fetch_deployment_info(&resolved.base_url, &token, platform).await {
+    let deployer_inputs = match fetch_deployment_info(
+        &resolved.base_url,
+        &token,
+        platform,
+        args.setup_item.as_deref(),
+    )
+    .await
+    {
         Ok(info) => {
             validate_deployment_readiness(&info, platform)?;
             deployer_inputs_from_info(&info, platform)
@@ -1182,6 +1227,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         &name,
         &stack_settings,
         stack_input_values,
+        args.setup_item.as_deref(),
     )
     .await?;
     let deployment_id = init.deployment_id;
@@ -2021,6 +2067,7 @@ async fn fetch_deployment_info(
     base_url: &str,
     token: &str,
     platform: Platform,
+    setup_item: Option<&str>,
 ) -> Result<DeploymentInfoResponse> {
     let http_client = {
         use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, USER_AGENT};
@@ -2045,16 +2092,7 @@ async fn fetch_deployment_info(
             })?
     };
 
-    let mut url = reqwest::Url::parse(&format!(
-        "{}/v1/deployment-info",
-        base_url.trim_end_matches('/')
-    ))
-    .into_alien_error()
-    .context(ErrorData::ConfigurationError {
-        message: "Invalid platform API base URL".to_string(),
-    })?;
-    url.query_pairs_mut()
-        .append_pair("platform", platform.as_str());
+    let url = deployment_info_url(base_url, platform, setup_item)?;
     let response = http_client
         .get(url)
         .send()
@@ -2078,6 +2116,27 @@ async fn fetch_deployment_info(
         .context(ErrorData::ConfigurationError {
             message: "Failed to parse deployment info response".to_string(),
         })
+}
+
+fn deployment_info_url(
+    base_url: &str,
+    platform: Platform,
+    setup_item: Option<&str>,
+) -> Result<reqwest::Url> {
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/v1/deployment-info",
+        base_url.trim_end_matches('/')
+    ))
+    .into_alien_error()
+    .context(ErrorData::ConfigurationError {
+        message: "Invalid platform API base URL".to_string(),
+    })?;
+    url.query_pairs_mut()
+        .append_pair("platform", platform.as_str());
+    if let Some(setup_item) = setup_item {
+        url.query_pairs_mut().append_pair("setupItem", setup_item);
+    }
+    Ok(url)
 }
 
 fn deployer_inputs_from_info(
@@ -2605,12 +2664,14 @@ async fn initialize_deployment(
     name: &str,
     stack_settings: &StackSettings,
     input_values: HashMap<String, serde_json::Value>,
+    setup_item: Option<&str>,
 ) -> Result<InitResult> {
     let body = alien_manager_api::types::InitializeRequest {
         name: Some(name.to_string()),
         platform: Some(sdk_platform(platform)),
         base_platform: base_platform.map(sdk_platform),
         initial_desired_release: alien_manager_api::types::InitialDesiredRelease::Active,
+        setup_item: setup_item.map(ToString::to_string),
         stack_settings: Some(sdk_stack_settings(stack_settings)?),
         input_values: input_values.into_iter().collect(),
         scope: None,

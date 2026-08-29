@@ -9545,6 +9545,13 @@
               "null"
             ]
           },
+          "setupItem": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Customer setup item selected from the deployment-group contract."
+          },
           "setupMethod": {
             "type": [
               "string",

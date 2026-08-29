@@ -190,6 +190,9 @@ pub struct InitializeRequest {
     /// creation intent, not a permanent deployment mode: a later update can
     /// assign a desired release to a deployment initialized with `none`.
     pub initial_desired_release: InitialDesiredRelease,
+    /// Customer setup item selected from the deployment-group contract.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_item: Option<String>,
     pub stack_settings: Option<alien_core::StackSettings>,
     /// Deployer-provided stack inputs. Embedded platform managers resolve
     /// these before creating the deployment; standalone managers accept the
@@ -775,10 +778,12 @@ mod tests {
         let request: InitializeRequest = serde_json::from_value(json!({
             "platform": "kubernetes",
             "permission": "observe",
-            "initialDesiredRelease": "none"
+            "initialDesiredRelease": "none",
+            "setupItem": "deployment"
         }))
         .expect("explicit no-release initialization should deserialize");
         assert_eq!(request.initial_desired_release, InitialDesiredRelease::None);
+        assert_eq!(request.setup_item.as_deref(), Some("deployment"));
 
         let missing_selection = serde_json::from_value::<InitializeRequest>(json!({
             "platform": "kubernetes",
@@ -1855,6 +1860,7 @@ async fn initialize(
                         environment_variables: None,
                         public_subdomain: None,
                         input_values: req.input_values,
+                        setup_item: req.setup_item,
                         deployment_token: dep_token,
                     },
                 )
