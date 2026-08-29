@@ -992,12 +992,21 @@ mod live_deny {
     fn client() -> LambdaMicrovmsClient {
         let root: StdPathBuf = workspace_root::get_workspace_root();
         dotenvy::from_path(root.join(".env.test")).ok();
+        // Empty is unset, not configured: a workflow step reading an expression that never
+        // resolved passes "" rather than nothing, and signing with it surfaces a 403 instead of
+        // saying the credentials were never there.
+        let required = |name: &str| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| panic!("{name} must be set and non-empty"))
+        };
         let config = crate::AwsClientConfig {
-            account_id: std::env::var("AWS_TARGET_ACCOUNT_ID").expect("AWS_TARGET_ACCOUNT_ID"),
-            region: std::env::var("AWS_TARGET_REGION").expect("AWS_TARGET_REGION"),
+            account_id: required("AWS_TARGET_ACCOUNT_ID"),
+            region: required("AWS_TARGET_REGION"),
             credentials: AwsCredentials::AccessKeys {
-                access_key_id: std::env::var("AWS_TARGET_ACCESS_KEY_ID").expect("key"),
-                secret_access_key: std::env::var("AWS_TARGET_SECRET_ACCESS_KEY").expect("secret"),
+                access_key_id: required("AWS_TARGET_ACCESS_KEY_ID"),
+                secret_access_key: required("AWS_TARGET_SECRET_ACCESS_KEY"),
                 session_token: std::env::var("AWS_TARGET_SESSION_TOKEN")
                     .ok()
                     .filter(|token| !token.is_empty()),
@@ -1123,6 +1132,11 @@ mod live_deny {
         }
     }
 
+    /// The only automated check that `egressDeny` denies, run weekly by `egress-deny-guard`.
+    ///
+    /// Left `#[ignore]`d and named exactly by that workflow rather than gated on the probe
+    /// environment: a gate that skipped when the image was missing would report a provisioning
+    /// failure as a pass, which is the hole this exists to close.
     #[tokio::test]
     #[ignore]
     async fn a_denied_sandbox_cannot_reach_the_internet_and_an_open_one_can() {
@@ -1159,15 +1173,159 @@ mod live_deny {
         // the image, the agent or the probe was broken for both.
         assert!(
             open_output.contains("HTTP:200"),
-            "the control must reach the internet, or the deny result means nothing:\n{open_output}"
+            "the control must reach the internet, or the egressDeny result means \
+             nothing:\n{open_output}"
         );
         assert!(
             !denied_output.contains("HTTP:200"),
-            "a sandbox under deny reached the internet:\n{denied_output}"
+            "egressDeny regression: a sandbox under egressDeny reached the internet:\n\
+             {denied_output}"
         );
         assert!(
             denied_output.contains("HTTP:000"),
-            "deny should fail to connect rather than get some other status:\n{denied_output}"
+            "egressDeny regression: a denied sandbox should fail to connect rather than get some \
+             other status:\n{denied_output}"
+        );
+    }
+
+    /// Reclaims everything a guard run leaves on the probe image: its sessions, then its versions.
+    ///
+    /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it, and a
+    /// surviving version holds the image open so the delete that follows cannot remove it.
+    #[tokio::test]
+    #[ignore]
+    async fn reclaim_the_probe_image() {
+        let image = std::env::var("PROBE_IMAGE_NAME").expect(
+            "PROBE_IMAGE_NAME, the image ARN egress-deny-guard-teardown.sh reads from the stack",
+        );
+        let client = client();
+
+        // Proves the identifier addresses something before the version list is read, so an empty
+        // list means reclaimed rather than misaddressed: every other caller puts PROBE_IMAGE_NAME
+        // in a request body, and this is the first to put it in a path.
+        if let Err(error) = client.get_microvm_image(&image).await {
+            assert_eq!(
+                error.code, "REMOTE_RESOURCE_NOT_FOUND",
+                "the probe image was unreadable for a reason other than being gone, so a reclaim \
+                 cannot prove anything: {error}"
+            );
+            println!("probe image already reclaimed");
+            return;
+        }
+
+        let mut stranded = Vec::new();
+        let mut terminating = Vec::new();
+        let mut undeleted = Vec::new();
+        for version in client
+            .list_microvm_image_versions(&image)
+            .await
+            .expect("ListMicrovmImageVersions")
+        {
+            let version = version.image_version.expect("a version identifier");
+            for microvm in client
+                .list_microvms(&image, &version)
+                .await
+                .expect("ListMicrovms")
+            {
+                let id = microvm.microvm_id.expect("a MicroVM id");
+                // Every MicroVM is attempted before anything fails: one that refuses to
+                // terminate would otherwise abandon the rest, which bill by the hour.
+                match client.terminate_microvm(&id).await {
+                    Ok(()) => terminating.push(id),
+                    Err(error) => {
+                        println!("{id}: refused: {error}");
+                        stranded.push(id);
+                    }
+                }
+            }
+
+            // Terminate returns once AWS accepts it, the way suspend documents for itself, so the
+            // version delete below would race the sessions still holding it. Waiting here turns a
+            // refusal into a real failure rather than a retry that reads like one.
+            for id in terminating.drain(..) {
+                let mut gone = false;
+                for _ in 0..60 {
+                    match client.get_microvm(&id).await {
+                        Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {
+                            gone = true;
+                            break;
+                        }
+                        Ok(current) if current.state.as_deref() == Some("TERMINATED") => {
+                            gone = true;
+                            break;
+                        }
+                        _ => tokio::time::sleep(Duration::from_secs(5)).await,
+                    }
+                }
+                if gone {
+                    println!("terminated {id}");
+                } else {
+                    println!("{id}: still terminating");
+                    stranded.push(id);
+                }
+            }
+
+            // Best-effort for the same reason termination is: a version that refuses to delete
+            // would otherwise abandon every version after it, and abort before the report below
+            // naming what is still billing.
+            match client
+                .send::<serde_json::Value>(
+                    Method::DELETE,
+                    &format!("/{API_VERSION}/microvm-images/{image}/versions/{version}"),
+                    &[],
+                    None,
+                    "DeleteMicrovmImageVersion",
+                )
+                .await
+            {
+                Ok(_) => println!("deleted version {version}"),
+                Err(error) => {
+                    println!("version {version}: delete refused: {error}");
+                    undeleted.push(version);
+                }
+            }
+        }
+
+        assert!(
+            stranded.is_empty(),
+            "MicroVMs the reclaim could not terminate keep billing and hold the image open: \
+             {stranded:?}"
+        );
+        assert!(
+            undeleted.is_empty(),
+            "image versions the reclaim could not delete hold the image open, so the stack \
+             delete cannot remove it: {undeleted:?}"
+        );
+        let left = client
+            .list_microvm_image_versions(&image)
+            .await
+            .expect("ListMicrovmImageVersions");
+        assert!(
+            left.is_empty(),
+            "the probe image still holds versions, so the stack delete cannot remove it: {left:?}"
+        );
+    }
+
+    /// The probe image is gone once its stack is.
+    ///
+    /// Asserted rather than assumed: a delete on a `CREATED` image is accepted and removes
+    /// nothing while its versions survive (`delete_images_versions_first`), so a teardown can
+    /// report success over an image that is still there.
+    #[tokio::test]
+    #[ignore]
+    async fn the_probe_image_is_gone() {
+        let image = std::env::var("PROBE_IMAGE_NAME").expect(
+            "PROBE_IMAGE_NAME, the image ARN egress-deny-guard-teardown.sh reads from the stack",
+        );
+
+        let error = client().get_microvm_image(&image).await.expect_err(
+            "the guard's probe image must not survive its own teardown; if AWS now answers a \
+             deleted image with a terminal state instead of a 404, widen this to accept that \
+             state rather than dropping the check",
+        );
+        assert_eq!(
+            error.code, "REMOTE_RESOURCE_NOT_FOUND",
+            "the probe image is still readable after teardown: {error}"
         );
     }
 

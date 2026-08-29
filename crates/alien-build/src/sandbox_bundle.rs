@@ -34,30 +34,58 @@ pub use alien_core::sandbox_process::AGENT_PORT;
 /// Name the agent binary must have inside the bundle.
 pub const AGENT_FILENAME: &str = "alien-sandbox-agent";
 
+/// Where the agent comes from at image-build time: `Image` copies it out of a published
+/// container image (no binary in the bundle, a new agent is a tag change); `Binary` embeds a
+/// local build instead, for CI on the current commit and for pre-publish development.
+#[derive(Debug, Clone)]
+pub enum AgentSource {
+    /// A published image holding the agent at [`AGENT_PATH`].
+    Image(String),
+    /// A local agent binary, zipped into the bundle beside the Dockerfile.
+    Binary(std::path::PathBuf),
+}
+
+/// Refuses a reference that cannot cross into generated content: a newline in it writes its own
+/// Dockerfile directives.
+fn checked_reference<'a>(reference: &'a str, what: &str) -> Result<&'a str> {
+    if reference.is_empty()
+        || reference
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control())
+    {
+        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+            message: format!(
+                "{what} reference '{reference}' is empty or carries whitespace or control \
+                 characters, which cannot cross into a generated Dockerfile"
+            ),
+        }));
+    }
+    Ok(reference)
+}
+
 /// Renders the Dockerfile for a sandbox image built on `base_image`.
 ///
 /// The agent runs as root so it can drop to [`EXEC_UID`] before every spawn; inside a MicroVM
 /// that is contained by hardware virtualisation, which is the tenant boundary. A shared-kernel
 /// backend must give the agent `CAP_SETUID` instead of root.
-pub fn dockerfile(base_image: &str) -> Result<String> {
-    // Checked here rather than by the callers: this is the one place the value crosses into
-    // generated content, and a reference carrying a newline writes its own Dockerfile directives.
-    if base_image.is_empty()
-        || base_image
-            .chars()
-            .any(|c| c.is_whitespace() || c.is_control())
-    {
-        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
-            message: format!("base image reference '{base_image}' is not a valid image reference"),
-        }));
-    }
+pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
+    let base_image = checked_reference(base_image, "base image")?;
+    // Both lines pin ownership and mode themselves: the untrusted code the agent supervises must
+    // not be able to rewrite the supervisor, whichever way the agent arrived.
+    let copy_agent = match agent {
+        AgentSource::Image(image) => {
+            let image = checked_reference(image, "agent image")?;
+            format!("COPY --from={image} --chown=0:0 --chmod=0755 {AGENT_PATH} {AGENT_PATH}")
+        }
+        AgentSource::Binary(_) => {
+            format!("COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} {AGENT_PATH}")
+        }
+    };
 
     Ok(format!(
         r#"FROM {base_image}
 
-# Root-owned and not writable by the exec uid: the untrusted code the agent supervises must not
-# be able to rewrite the supervisor.
-COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} {AGENT_PATH}
+{copy_agent}
 
 # Written with numeric ids and a plain append rather than useradd/adduser, which differ across
 # base distributions. Linux runs a process under a uid with no passwd entry, but some tooling
@@ -84,35 +112,46 @@ ENTRYPOINT ["{AGENT_PATH}"]
     ))
 }
 
-/// Writes the bundle AWS builds a MicroVM image from: the rendered Dockerfile and the agent
-/// binary beside it, zipped.
+/// Writes the bundle AWS builds a MicroVM image from: the rendered Dockerfile, plus the agent
+/// binary beside it when the agent is a local build rather than a published image.
 ///
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
-pub fn write_bundle(destination: &Path, base_image: &str, agent_binary: &Path) -> Result<()> {
+pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
         file_path: path.display().to_string(),
         reason: "could not assemble the sandbox image bundle".to_string(),
     };
 
-    let agent = std::fs::read(agent_binary)
-        .into_alien_error()
-        .context(failed("read", agent_binary))?;
+    // Every fallible input resolves before the archive exists, so no failure — a bad reference
+    // or an unreadable agent binary — leaves a truncated zip behind.
+    let dockerfile = dockerfile(base_image, agent)?;
+    let agent_bytes = match agent {
+        AgentSource::Binary(agent_binary) => Some(
+            std::fs::read(agent_binary)
+                .into_alien_error()
+                .context(failed("read", agent_binary))?,
+        ),
+        AgentSource::Image(_) => None,
+    };
+
     let archive = File::create(destination)
         .into_alien_error()
         .context(failed("create", destination))?;
     let mut zip = ZipWriter::new(archive);
 
-    // 0755 on the agent so the entry is already executable; the Dockerfile's `--chmod` covers
-    // builders that drop archive modes, and neither alone is reliable across both.
-    let options: SimpleFileOptions = SimpleFileOptions::default().unix_permissions(0o755);
-    zip.start_file(AGENT_FILENAME, options)
-        .into_alien_error()
-        .context(failed("write", destination))?;
-    zip.write_all(&agent)
-        .into_alien_error()
-        .context(failed("write", destination))?;
+    if let Some(bytes) = agent_bytes {
+        // 0755 on the agent so the entry is already executable; the Dockerfile's `--chmod` covers
+        // builders that drop archive modes, and neither alone is reliable across both.
+        let options: SimpleFileOptions = SimpleFileOptions::default().unix_permissions(0o755);
+        zip.start_file(AGENT_FILENAME, options)
+            .into_alien_error()
+            .context(failed("write", destination))?;
+        zip.write_all(&bytes)
+            .into_alien_error()
+            .context(failed("write", destination))?;
+    }
 
     zip.start_file(
         "Dockerfile",
@@ -120,7 +159,7 @@ pub fn write_bundle(destination: &Path, base_image: &str, agent_binary: &Path) -
     )
     .into_alien_error()
     .context(failed("write", destination))?;
-    zip.write_all(dockerfile(base_image)?.as_bytes())
+    zip.write_all(dockerfile.as_bytes())
         .into_alien_error()
         .context(failed("write", destination))?;
 
@@ -142,14 +181,27 @@ mod tests {
             "",
             "alpine\tlatest",
         ] {
-            super::dockerfile(reference)
-                .expect_err(&format!("{reference:?} must not render into a Dockerfile"));
+            super::dockerfile(
+                reference,
+                &super::AgentSource::Image("agent:v1".to_string()),
+            )
+            .expect_err(&format!("{reference:?} must not render into a Dockerfile"));
+            super::dockerfile(
+                "ubuntu:24.04",
+                &super::AgentSource::Image(reference.to_string()),
+            )
+            .expect_err(&format!(
+                "{reference:?} must not render as an agent image either"
+            ));
         }
 
         // The control arm: an ordinary reference still renders, so the guard is not refusing
         // everything.
-        let rendered = super::dockerfile("public.ecr.aws/lambda/microvms:al2023-minimal")
-            .expect("an ordinary reference renders");
+        let rendered = super::dockerfile(
+            "public.ecr.aws/lambda/microvms:al2023-minimal",
+            &super::AgentSource::Image("agent:v1".to_string()),
+        )
+        .expect("an ordinary reference renders");
         assert!(rendered.starts_with("FROM public.ecr.aws/lambda/microvms:al2023-minimal"));
     }
 
@@ -157,8 +209,16 @@ mod tests {
 
     /// The properties below are the image's half of the supervisor boundary. A base image is
     /// caller-supplied, so these assertions are about what Alien adds on top of it.
+    fn embedded_agent() -> AgentSource {
+        AgentSource::Binary(std::path::PathBuf::from("unused-in-render"))
+    }
+
     fn rendered() -> String {
-        dockerfile("public.ecr.aws/lambda/microvms:al2023-minimal").expect("a valid reference")
+        dockerfile(
+            "public.ecr.aws/lambda/microvms:al2023-minimal",
+            &embedded_agent(),
+        )
+        .expect("a valid reference")
     }
 
     #[test]
@@ -230,7 +290,8 @@ mod tests {
         std::fs::write(&agent, b"\x7fELF-not-really").expect("agent");
         let bundle = dir.path().join("sandbox.zip");
 
-        write_bundle(&bundle, "ubuntu:24.04", &agent).expect("writes the bundle");
+        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent))
+            .expect("writes the bundle");
 
         let file = std::fs::File::open(&bundle).expect("opens");
         let mut archive = zip::ZipArchive::new(file).expect("reads as a zip");
@@ -254,6 +315,64 @@ mod tests {
         assert!(contents.starts_with("FROM ubuntu:24.04"));
     }
 
+    /// Image-sourced bundles carry no agent binary: the zip holds only the Dockerfile.
+    #[test]
+    fn an_image_sourced_bundle_carries_only_the_dockerfile() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let bundle = dir.path().join("sandbox.zip");
+
+        write_bundle(
+            &bundle,
+            "ubuntu:24.04",
+            &AgentSource::Image("public.ecr.aws/acme/sandbox-agent:v1".to_string()),
+        )
+        .expect("writes the bundle");
+
+        let file = std::fs::File::open(&bundle).expect("opens");
+        let mut archive = zip::ZipArchive::new(file).expect("zip");
+        assert_eq!(archive.len(), 1, "nothing but the Dockerfile belongs here");
+
+        let mut dockerfile = String::new();
+        std::io::Read::read_to_string(
+            &mut archive.by_name("Dockerfile").expect("dockerfile entry"),
+            &mut dockerfile,
+        )
+        .expect("reads");
+        assert!(
+            dockerfile.contains(&format!(
+                "COPY --from=public.ecr.aws/acme/sandbox-agent:v1 \
+                 --chown=0:0 --chmod=0755 {AGENT_PATH} {AGENT_PATH}"
+            )) || dockerfile.contains(&format!(
+                "COPY --from=public.ecr.aws/acme/sandbox-agent:v1 --chown=0:0 --chmod=0755 {AGENT_PATH} {AGENT_PATH}"
+            )),
+            "the agent must be copied out of the named image, root-owned and 0755:\n{dockerfile}"
+        );
+        assert!(
+            !dockerfile.contains(&format!("COPY --chown=0:0 --chmod=0755 {AGENT_FILENAME} ")),
+            "the local-file COPY must not appear when the agent comes from an image"
+        );
+    }
+
+    /// A failed input must leave nothing at the destination — a truncated zip uploaded by a
+    /// caller that only checked the exit path fails ~160s into an image build instead of here.
+    #[test]
+    fn a_missing_agent_binary_leaves_no_bundle_behind() {
+        let dir = tempfile::TempDir::new().expect("temp dir");
+        let bundle = dir.path().join("sandbox.zip");
+
+        write_bundle(
+            &bundle,
+            "ubuntu:24.04",
+            &AgentSource::Binary(dir.path().join("does-not-exist")),
+        )
+        .expect_err("an unreadable agent must fail the bundle");
+
+        assert!(
+            !bundle.exists(),
+            "no partial archive may be left at the destination"
+        );
+    }
+
     /// The agent entry must survive as an executable. A builder that honours archive modes and
     /// one that does not both have to produce a runnable binary, which is why the Dockerfile
     /// also carries `--chmod`.
@@ -263,7 +382,7 @@ mod tests {
         let agent = dir.path().join("agent-bin");
         std::fs::write(&agent, b"binary").expect("agent");
         let bundle = dir.path().join("sandbox.zip");
-        write_bundle(&bundle, "ubuntu:24.04", &agent).expect("writes");
+        write_bundle(&bundle, "ubuntu:24.04", &AgentSource::Binary(agent)).expect("writes");
 
         let file = std::fs::File::open(&bundle).expect("opens");
         let mut archive = zip::ZipArchive::new(file).expect("zip");
