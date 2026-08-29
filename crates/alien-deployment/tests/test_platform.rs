@@ -999,6 +999,10 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         .expect("Step should succeed");
     assert_eq!(result.state.status, DeploymentStatus::UpdateFailed);
 
+    // Keep the persisted failed state to reproduce a corrective release being
+    // selected directly by the release controller.
+    let mut corrective_state = state.clone();
+
     // With retry_requested, should transition to UpdatePending (not Updating)
     request_retry(&mut state);
     let result = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
@@ -1045,6 +1049,47 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
             .is_some(),
         "retry preparation must not consume setup authorization"
     );
+
+    // A newly selected corrective release enters UpdatePending directly rather
+    // than passing through the manual UpdateFailed retry handler. It must still
+    // reset the failed controller before reconciling the corrected config.
+    corrective_state.status = DeploymentStatus::UpdatePending;
+    corrective_state.retry_requested = false;
+    corrective_state.target_release = Some(ReleaseInfo {
+        release_id: Some("rel_v3".to_string()),
+        version: Some("3.0.0".to_string()),
+        description: None,
+        stack: create_test_stack("test-stack", "test-function-v2"),
+    });
+    corrective_state
+        .runtime_metadata
+        .as_mut()
+        .unwrap()
+        .setup_update_authorization = None;
+
+    let corrected = run_to_completion(corrective_state, config).await;
+    assert_eq!(corrected.status, DeploymentStatus::Running);
+    assert_eq!(
+        corrected
+            .current_release
+            .as_ref()
+            .and_then(|release| release.release_id.as_deref()),
+        Some("rel_v3")
+    );
+    let corrected_resource = corrected
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .get("test-function-v2")
+        .expect("corrected resource should remain in stack state");
+    assert_eq!(
+        corrected_resource.status,
+        alien_core::ResourceStatus::Running
+    );
+    assert_eq!(corrected_resource.retry_attempt, 0);
+    assert!(corrected_resource.error.is_none());
+    assert!(corrected_resource.last_failed_state.is_none());
 }
 
 async fn assert_failed_retry_transition(
