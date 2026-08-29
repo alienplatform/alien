@@ -335,6 +335,30 @@ impl AgentTransport for AwsSandbox {
 
 impl Binding for AwsSandbox {}
 
+/// Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a session-level
+/// value that silently never applies is worse than no session. Per-command `env` on
+/// `RunCommandRequest` is the path that works here.
+fn refuse_unsupported_session_fields(
+    request: &CreateSessionRequest,
+    operation: &str,
+) -> Result<()> {
+    if !request.env.is_empty() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: operation.to_string(),
+            reason: "AWS sandboxes take no session-level env; set env per command instead"
+                .to_string(),
+        }));
+    }
+    if request.tenant_key.is_some() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: operation.to_string(),
+            reason: "AWS sandboxes take no tenantKey; a MicroVM is already single-tenant"
+                .to_string(),
+        }));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Sandbox for AwsSandbox {
     /// Narrows the platform ceiling to this instance: `preview` is false with no declared
@@ -356,23 +380,7 @@ impl Sandbox for AwsSandbox {
     /// [`Sandbox::get`]'s job, not an idempotency key's.
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         let _ = request.session_id;
-        // Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a session-level
-        // value that silently never applies is worse than no session. Per-command `env` on
-        // `RunCommandRequest` is the path that works here.
-        if !request.env.is_empty() {
-            return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: "sandbox.create".to_string(),
-                reason: "AWS sandboxes take no session-level env; set env per command instead"
-                    .to_string(),
-            }));
-        }
-        if request.tenant_key.is_some() {
-            return Err(AlienError::new(ErrorData::OperationNotSupported {
-                operation: "sandbox.create".to_string(),
-                reason: "AWS sandboxes take no tenantKey; a MicroVM is already single-tenant"
-                    .to_string(),
-            }));
-        }
+        refuse_unsupported_session_fields(&request, "sandbox.create")?;
         let client_token = uuid::Uuid::new_v4().simple().to_string();
 
         let microvm = self
@@ -443,6 +451,9 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+        // Refused on the reconnect path too: an existing session honors these fields no more
+        // than a fresh one would.
+        refuse_unsupported_session_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.session_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
                 // Reaching a session someone else started still has to mean what `create` means,
