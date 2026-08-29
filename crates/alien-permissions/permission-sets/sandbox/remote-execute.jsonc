@@ -2,10 +2,14 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS alone. A GCP sandbox is a launcher subprocess inside the app's own Cloud Run instance,
-    // so there is no parent a remote caller could address; on Azure the sandbox group is created
-    // by the runtime controller, and setup can scope no role assignment to a group that does not
-    // exist yet — see the same note in `sandbox/management`.
+    // AWS alone, for a different reason on each of the other two. GCP scopes every sandbox
+    // permission at `projects/${projectName}` and offers nothing narrower, so a remote grant
+    // would reach every sandbox in the project rather than this one. On Azure the name is
+    // knowable (`${stackPrefix}-${resourceName}`) but not grantable: `Microsoft.App/sandboxGroups`
+    // has no ARM template representation, so setup neither creates the group nor can scope a role
+    // assignment to one that does not exist, and the sandbox emitter attaches nothing to the
+    // `-access` identity — see the fuller note in `sandbox/management`.
+    // A remote binding declared on either is refused by the remote-bindings preflight.
     "aws": [
       {
         "label": "session-lifecycle",

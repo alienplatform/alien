@@ -79,17 +79,40 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
         .flatten()
 }
 
-/// Whether a declaration's remote binding is one a deployment can actually deliver.
+/// Why a declaration's remote binding is one a deployment cannot deliver, if it cannot.
 ///
-/// A sandbox reaches the network through an egress connector, and starting a session on one is
-/// additionally authorized as `lambda:PassNetworkConnector`. The remote grant passes only AWS's
-/// own connectors, so a customer-declared one is unreachable. Preflight refuses such a stack;
-/// emitters and generated docs read this so nothing advertises a grant that cannot be used.
+/// Two cases, both sandbox-only and both about a declared policy the remote grant cannot carry.
+/// Egress: starting a session is additionally authorized as `lambda:PassNetworkConnector`, and the
+/// remote grant passes only AWS's own connectors, so a customer-declared one is unreachable.
+/// Preview ports: `CreateMicrovmAuthToken` has no port condition key, so the list bounds a caller
+/// going through the provider but not a holder of the leased credentials — a bound that only looks
+/// like one. Preflight refuses either; emitters and generated docs read this so nothing advertises
+/// a grant that cannot be used.
+pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'static str> {
+    remote_binding_for_entry(entry)?;
+    let sandbox = entry.config.downcast_ref::<Sandbox>()?;
+
+    if !matches!(sandbox.egress, SandboxEgress::Allow) {
+        return Some(
+            "a remotely published sandbox must declare egress 'allow'; a sandbox that routes its \
+             traffic through an egress connector cannot be reached remotely",
+        );
+    }
+
+    if !sandbox.preview_ports.is_empty() {
+        return Some(
+            "a remotely published sandbox must declare no previewPorts; the session token mint \
+             carries no port condition, so the list bounds a caller reaching the sandbox through \
+             its binding but not a holder of the remote credentials",
+        );
+    }
+
+    None
+}
+
+/// Whether a declaration's remote binding is one a deployment can actually deliver.
 pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
-    entry
-        .config
-        .downcast_ref::<Sandbox>()
-        .is_none_or(|sandbox| matches!(sandbox.egress, SandboxEgress::Allow))
+    remote_binding_undeliverable_reason(entry).is_none()
 }
 
 /// Whether a stack's remote bindings mean this global management set belongs to the caller's
@@ -113,4 +136,88 @@ pub fn remote_binding_claims_management_set<'a>(
 
 pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {
     DEFINITIONS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Sandbox, SandboxCode, SandboxLimits, SandboxSessionPolicy};
+
+    fn remote_sandbox(egress: SandboxEgress, preview_ports: Vec<u16>) -> ResourceEntry {
+        let sandbox = Sandbox::new("agent-sbx".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .limits(SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "2Gi".to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(egress)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .preview_ports(preview_ports)
+            .build();
+
+        ResourceEntry {
+            enabled_when: None,
+            config: crate::Resource::new(sandbox),
+            dependencies: Vec::new(),
+            lifecycle: ResourceLifecycle::Frozen,
+            remote_access: true,
+        }
+    }
+
+    /// Every deployment today declares no ports; a refusal that caught them would be the worst
+    /// outcome of adding one.
+    #[test]
+    fn a_remote_sandbox_declaring_no_ports_is_deliverable() {
+        assert!(remote_binding_is_deliverable(&remote_sandbox(
+            SandboxEgress::Allow,
+            Vec::new()
+        )));
+    }
+
+    /// The mint carries no port condition key, so the list bounds a caller reaching the sandbox
+    /// through its binding and not a holder of the leased credentials.
+    #[test]
+    fn a_remote_sandbox_declaring_ports_is_refused() {
+        let reason =
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Allow, vec![8080]))
+                .expect("a declared port list is not deliverable to a remote caller");
+
+        assert!(
+            reason.contains("previewPorts"),
+            "the refusal must name the field the user declared"
+        );
+    }
+
+    /// The question only applies to a remote binding. A deployment's own compute reaching its own
+    /// sandbox is not this problem, and refusing it would be a false positive.
+    #[test]
+    fn a_sandbox_with_no_remote_binding_may_declare_ports() {
+        let mut entry = remote_sandbox(SandboxEgress::Allow, vec![8080]);
+        entry.remote_access = false;
+
+        assert_eq!(remote_binding_undeliverable_reason(&entry), None);
+        assert!(remote_binding_is_deliverable(&entry));
+    }
+
+    /// Two undeliverable declarations, two reasons. Collapsing them would answer a port mistake
+    /// with an egress instruction.
+    #[test]
+    fn each_undeliverable_declaration_answers_in_its_own_terms() {
+        let egress =
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Deny, Vec::new()))
+                .expect("a restricted egress is not deliverable");
+        let ports =
+            remote_binding_undeliverable_reason(&remote_sandbox(SandboxEgress::Allow, vec![8080]))
+                .expect("a declared port list is not deliverable");
+
+        assert_ne!(egress, ports, "one reason cannot stand in for the other");
+        assert!(egress.contains("egress"));
+    }
 }

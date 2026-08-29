@@ -16,9 +16,9 @@ use crate::{
     expr,
 };
 use alien_core::{
-    import::EmitContext, permissions::PermissionSetReference, ErrorData, NetworkSettings,
-    RemoteBindings, Result, Sandbox, SandboxCode, SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY,
-    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
+    NetworkSettings, RemoteBindings, Result, Sandbox, SandboxCode, SandboxEgress,
+    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -115,7 +115,7 @@ impl TfEmitter for AwsSandboxEmitter {
                         // A template for the same reason the operator policy's ARNs are: a plain
                         // string literal has its `${` escaped, so the partition would reach IAM as
                         // literal text and the grant would match nothing.
-                        expr::template(artifact_object_arn(&artifact_uri)),
+                        expr::template(artifact_object_arn(artifact_uri)),
                     ),
                 ]),
                 Expression::from_iter([
@@ -300,7 +300,7 @@ impl TfEmitter for AwsSandboxEmitter {
             ),
             (
                 "CodeArtifact",
-                Expression::from_iter([("Uri", Expression::String(artifact_uri.clone()))]),
+                Expression::from_iter([("Uri", code_artifact_uri(artifact_uri))]),
             ),
             // Content-bearing logging off: the control plane must never see session contents,
             // and this is the switch rather than an approximation of it.
@@ -549,11 +549,29 @@ fn base_image_arn() -> Expression {
 /// The bundle URI is known when the module is emitted, so the build role is scoped to it rather
 /// than to every object in the account. `s3://bucket/key` maps to `arn:<partition>:s3:::bucket/key`; a
 /// URI without a key would be a bucket ARN, which `artifact_uri` has already refused.
-fn artifact_object_arn(uri: &str) -> String {
-    format!(
-        "arn:${{data.aws_partition.current.partition}}:s3:::{}",
-        uri.trim_start_matches("s3://")
-    )
+fn artifact_object_arn(uri: BundleUri<'_>) -> String {
+    let path = match uri {
+        BundleUri::Literal(uri) => uri.trim_start_matches("s3://").to_string(),
+        BundleUri::Regional { before, after } => format!(
+            "{}${{data.aws_region.current.region}}{after}",
+            before.trim_start_matches("s3://")
+        ),
+    };
+    format!("arn:${{data.aws_partition.current.partition}}:s3:::{path}")
+}
+
+/// The `CodeArtifact.Uri`, with the region resolved where the vendor asked for one.
+///
+/// A URI carrying no token stays a plain string rather than becoming a template with nothing to
+/// interpolate: every bundle configured today has none, and routing them through an expression
+/// would rewrite every existing customer's module for no behaviour change.
+fn code_artifact_uri(uri: BundleUri<'_>) -> Expression {
+    match uri {
+        BundleUri::Literal(uri) => Expression::String(uri.to_string()),
+        BundleUri::Regional { before, after } => expr::template(format!(
+            "{before}${{data.aws_region.current.region}}{after}"
+        )),
+    }
 }
 
 /// What Lambda may do while managing the connector's network interfaces.
@@ -699,7 +717,7 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
 /// reference, and a Terraform module has nowhere to build one — the same reason the Worker
 /// emitter refuses source. Requiring an `s3://` URI fails at plan time with something a reader
 /// can act on, rather than at the end of a ~160s image build.
-fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
+fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
     let unsupported = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("terraform emit sandbox '{}'", sandbox.id()),
@@ -713,7 +731,7 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
         SandboxCode::Image { image }
             if image.starts_with("s3://") && image.trim_start_matches("s3://").contains('/') =>
         {
-            Ok(image.clone())
+            alien_core::parse_bundle_uri(image).map_err(unsupported)
         }
         SandboxCode::Image { image } if image.starts_with("s3://") => Err(unsupported(format!(
             "code.image '{image}' names a bucket with no object key; give the full path to the \
@@ -789,6 +807,89 @@ fn environment_variables() -> Expression {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REGIONAL: &str = "s3://acme-artifacts-{region}/agents/bundle.zip";
+    const LITERAL: &str = "s3://acme-artifacts-us-east-2/agents/bundle.zip";
+
+    fn parsed(uri: &str) -> BundleUri<'_> {
+        alien_core::parse_bundle_uri(uri).expect("the fixture parses")
+    }
+
+    /// A URI carrying no token must stay a plain string. Routing it through a template would
+    /// rewrite every module already in the field for no rendered change.
+    ///
+    /// Asserted on the variant, not on `Debug`: `Expression::String` and a quoted
+    /// `TemplateExpr` print identically, so a `Debug` comparison passes while hcl escapes the
+    /// interpolation and ships `$${data…}` as part of the bucket name.
+    #[test]
+    fn a_uri_without_a_token_emits_the_plain_string_it_does_today() {
+        assert_eq!(
+            code_artifact_uri(parsed(LITERAL)),
+            Expression::String(LITERAL.to_string()),
+            "a token-less URI must not become a template"
+        );
+    }
+
+    /// The regional form has to be a template, not a string that merely reads like one. hcl-rs
+    /// escapes an interpolation inside `Expression::String`, so the literal `${data…}` would reach
+    /// S3 as part of the bucket name while the build-role ARN interpolated correctly.
+    #[test]
+    fn a_regional_uri_emits_an_interpolating_template() {
+        assert!(
+            matches!(
+                code_artifact_uri(parsed(REGIONAL)),
+                Expression::TemplateExpr(_)
+            ),
+            "a regional URI must interpolate rather than escape"
+        );
+    }
+
+    /// Both consumers must name the same object. Asserting only that each mentions the region
+    /// would pass while the two pointed at different buckets — which fails at build time as an
+    /// access denial that reads like an IAM bug rather than a template bug.
+    #[test]
+    fn the_uri_and_the_build_grant_name_the_same_object() {
+        let Expression::TemplateExpr(template) = code_artifact_uri(parsed(REGIONAL)) else {
+            panic!("a regional URI must be a template");
+        };
+        let hcl::TemplateExpr::QuotedString(uri) = *template else {
+            panic!("the URI template is a quoted string");
+        };
+
+        assert_eq!(
+            artifact_object_arn(parsed(REGIONAL)),
+            format!(
+                "arn:${{data.aws_partition.current.partition}}:s3:::{}",
+                uri.strip_prefix("s3://").expect("the URI stays an s3 URI")
+            ),
+            "the grant must name exactly the object the image is built from"
+        );
+    }
+
+    /// The refusal has to land at plan time, and this emitter is wired to the same validator the
+    /// CloudFormation one is. Without the wiring a typo'd token renders verbatim into the module.
+    #[test]
+    fn a_token_this_build_cannot_resolve_is_refused_before_emitting() {
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://acme-artifacts-{regio}/bundle.zip".to_string(),
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "2Gi".to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+
+        let error = artifact_uri(&sandbox).expect_err("an unknown token must be refused");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+    }
 
     /// The schema's architecture enum has exactly one member, and the agent binary in the image
     /// has to match it. A change here without a matching build target is a ~160s image build

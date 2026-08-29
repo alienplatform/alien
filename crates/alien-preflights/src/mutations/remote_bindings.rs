@@ -49,7 +49,7 @@ impl StackMutation for RemoteBindingsMutation {
         let platform = config.base_platform.unwrap_or(stack_state.platform);
         validate_remote_bindings_cover_the_platform(&stack, platform, self.description())?;
         validate_isolated_remote_resource(&stack, self.description())?;
-        validate_remote_sandboxes_allow_egress(&stack, self.description())?;
+        validate_remote_sandboxes_are_deliverable(&stack, self.description())?;
         validate_remote_sandboxes_are_single_tenant(&stack, self.description())?;
 
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
@@ -172,23 +172,24 @@ fn validate_isolated_remote_resource(stack: &Stack, mutation_name: &str) -> Resu
     }))
 }
 
-/// Refuses a remotely published sandbox that restricts egress.
+/// Refuses a remotely published sandbox declaring a policy the remote grant cannot carry.
 ///
 /// The declaration has to fail here rather than install a role carrying arbitrary code execution
-/// for a binding the manager will then refuse to resolve. `remote_binding_is_deliverable` holds
-/// the reason and is the same predicate both setup emitters read.
-fn validate_remote_sandboxes_allow_egress(stack: &Stack, mutation_name: &str) -> Result<()> {
+/// for a binding the manager will then refuse to resolve.
+/// `remote_binding_undeliverable_reason` holds the reasons and is the same source both setup
+/// emitters read, so each case reaches the user in its own terms rather than under the first one's.
+fn validate_remote_sandboxes_are_deliverable(stack: &Stack, mutation_name: &str) -> Result<()> {
     for (resource_id, entry) in &stack.resources {
-        if !entry.has_remote_bindings()
-            || alien_core::remote_bindings::remote_binding_is_deliverable(entry)
-        {
+        if !entry.has_remote_bindings() {
             continue;
         }
+        let Some(reason) = alien_core::remote_bindings::remote_binding_undeliverable_reason(entry)
+        else {
+            continue;
+        };
         return Err(AlienError::new(ErrorData::StackMutationFailed {
             mutation_name: mutation_name.to_string(),
-            message: "a remotely published sandbox must declare egress 'allow'; a sandbox that \
-                      routes its traffic through an egress connector cannot be reached remotely"
-                .to_string(),
+            message: reason.to_string(),
             resource_id: Some(resource_id.clone()),
         }));
     }
