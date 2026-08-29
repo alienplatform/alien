@@ -12,6 +12,9 @@ export default defineConfig({
     extension: {
       ".ts": ".js",
     },
+    // This repo formats with biome, and biome.json excludes **/generated on purpose; kubb's
+    // default formatter is prettier, which isn't installed here.
+    format: false,
   },
   plugins: [
     pluginOas(),
