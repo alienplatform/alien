@@ -1068,6 +1068,7 @@ async fn native_deployment_blocks_imported_name() {
                 stack_state: None,
                 environment_variables: None,
                 input_values: Default::default(),
+                setup_item: None,
                 deployment_token: None,
             },
         )

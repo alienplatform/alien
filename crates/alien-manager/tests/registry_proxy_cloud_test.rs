@@ -349,6 +349,7 @@ impl CloudProxyTest {
                     environment_variables: None,
                     public_subdomain: None,
                     input_values: Default::default(),
+                    setup_item: None,
                     deployment_token: Some(deploy_raw.clone()),
                 },
             )
