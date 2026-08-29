@@ -109,20 +109,10 @@ impl AwsSandbox {
         }
     }
 
-    /// Reads a session and refuses one that is not this sandbox's own.
-    ///
-    /// The image is the boundary, and it is one per sandbox — not by naming convention but by
-    /// construction: the emitters bind `imageArn` to the ARN AWS assigned to the one image
-    /// resource emitted for this one declared sandbox, read back off that resource. Two declared
-    /// sandboxes cannot share an ARN however their names collide, and nothing else in the
-    /// codebase produces the value. Two bindings that do resolve to one image are two bindings on
-    /// one declared sandbox, which is the sharing the declaration asked for.
-    ///
-    /// Asked of the session itself rather than by enumerating the image. IAM does not answer it:
-    /// the stack binding scopes the token mint to `microvm-image:<stack prefix>-*`, which matches
-    /// every sibling, so a workload holding one sandbox's handle could otherwise pass a *sibling
-    /// sandbox's* session id and be authorised for it.
-    async fn owned_microvm(&self, session_id: &str) -> Result<Option<Microvm>> {
+    /// Reads a session's record, with no ownership check: absent is `None`, and whose it is
+    /// stays for the caller to ask [`Self::owns`]. Read off the session itself rather than by
+    /// enumerating the image, because listing would need an account-wide grant.
+    async fn fetched_microvm(&self, session_id: &str) -> Result<Option<Microvm>> {
         let microvm = match self.microvms.get_microvm(session_id).await {
             Ok(microvm) => microvm,
             // A session id that names nothing is absent, not a failure — `get` reports that as
@@ -145,16 +135,32 @@ impl AwsSandbox {
             }
         };
 
-        // An absent `imageArn` is refused rather than assumed to match: it would otherwise turn a
-        // response the client failed to parse into a passing ownership check.
-        Ok(microvm
+        Ok(Some(microvm))
+    }
+
+    /// Whether a fetched record is one of this sandbox's own sessions.
+    ///
+    /// The image ARN is the boundary — one per declared sandbox by construction, and IAM does not
+    /// draw this line: the token mint is scoped to `microvm-image:<stack prefix>-*`, which matches
+    /// every sibling. An absent `imageArn` is refused rather than assumed to match, so a response
+    /// the client failed to parse never passes as ownership.
+    fn owns(&self, microvm: &Microvm) -> bool {
+        microvm
             .image_arn
             .as_deref()
             .is_some_and(|image| image == self.image_identifier)
-            .then_some(microvm))
     }
 
-    /// Refuses a session that is not one of this sandbox's own.
+    /// The session's record if it exists *and* is this sandbox's own; absent and someone else's
+    /// collapse to `None`, which is what every operation except `terminate` wants.
+    async fn owned_microvm(&self, session_id: &str) -> Result<Option<Microvm>> {
+        Ok(self
+            .fetched_microvm(session_id)
+            .await?
+            .filter(|microvm| self.owns(microvm)))
+    }
+
+    /// Refuses a session that is absent or not one of this sandbox's own.
     async fn ensure_owned(&self, session_id: &str) -> Result<()> {
         if self.owned_microvm(session_id).await?.is_none() {
             return Err(AlienError::new(ErrorData::SandboxUnreachable {
@@ -331,8 +337,14 @@ impl Binding for AwsSandbox {}
 
 #[async_trait]
 impl Sandbox for AwsSandbox {
+    /// Narrows the platform ceiling to this instance: `preview` is false with no declared
+    /// `preview_ports`, since `preview()` would refuse every port anyway and callers are meant
+    /// to branch on this flag rather than call and fail.
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::for_platform(Platform::Aws).expect("AWS has a sandbox backend")
+        let mut capabilities =
+            SandboxCapabilities::for_platform(Platform::Aws).expect("AWS has a sandbox backend");
+        capabilities.preview = !self.preview_ports.is_empty();
+        capabilities
     }
 
     /// Starts a MicroVM.
@@ -344,6 +356,23 @@ impl Sandbox for AwsSandbox {
     /// [`Sandbox::get`]'s job, not an idempotency key's.
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         let _ = request.session_id;
+        // Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a session-level
+        // value that silently never applies is worse than no session. Per-command `env` on
+        // `RunCommandRequest` is the path that works here.
+        if !request.env.is_empty() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "AWS sandboxes take no session-level env; set env per command instead"
+                    .to_string(),
+            }));
+        }
+        if request.tenant_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: "sandbox.create".to_string(),
+                reason: "AWS sandboxes take no tenantKey; a MicroVM is already single-tenant"
+                    .to_string(),
+            }));
+        }
         let client_token = uuid::Uuid::new_v4().simple().to_string();
 
         let microvm = self
@@ -548,8 +577,20 @@ impl Sandbox for AwsSandbox {
         }))
     }
 
+    /// Idempotent per the trait: a session AWS has already reaped is terminated, not an error.
+    /// Absence and "someone else's" part ways here alone — every other operation needs the
+    /// session to exist, so for them the two are the same refusal.
     async fn terminate(&self, session_id: &str) -> Result<()> {
-        self.ensure_owned(session_id).await?;
+        match self.fetched_microvm(session_id).await? {
+            None => return Ok(()),
+            Some(microvm) if !self.owns(&microvm) => {
+                return Err(AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.terminate".to_string(),
+                    reason: format!("session '{session_id}' does not belong to this sandbox"),
+                }))
+            }
+            Some(_) => {}
+        }
 
         self.microvms
             .terminate_microvm(session_id)
@@ -609,6 +650,73 @@ mod tests {
             None,
             None,
         )
+    }
+
+    /// AWS reaps the microvm record after termination, so pinning idempotent-on-absent keeps a
+    /// caller's retry loop from flaking once the record is gone.
+    #[tokio::test]
+    async fn terminating_an_absent_session_succeeds() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm().returning(|id| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteResourceNotFound {
+                    resource_type: "Microvm".to_string(),
+                    resource_name: id.to_string(),
+                },
+            ))
+        });
+        client.expect_terminate_microvm().never();
+
+        let sandbox = sandbox(client);
+
+        sandbox
+            .terminate("already-reaped")
+            .await
+            .expect("an absent session is already terminated");
+    }
+
+    /// See `capabilities()` for why this tracks `preview_ports`.
+    #[tokio::test]
+    async fn capabilities_reflect_the_declared_preview_ports() {
+        assert!(
+            !sandbox(MockLambdaMicrovmsApi::new()).capabilities().preview,
+            "no declared ports means no preview capability"
+        );
+        assert!(
+            sandbox_previewing(MockLambdaMicrovmsApi::new(), vec![8080])
+                .capabilities()
+                .preview,
+            "a declared port makes the capability real"
+        );
+    }
+
+    /// See `create()` for why these are refused rather than silently dropped.
+    #[tokio::test]
+    async fn unsupported_session_fields_are_refused_not_dropped() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_run_microvm().never();
+
+        let sandbox = sandbox(client);
+
+        let with_env = CreateSessionRequest {
+            env: [("KEY".to_string(), "value".to_string())].into(),
+            ..Default::default()
+        };
+        let error = sandbox
+            .create(with_env)
+            .await
+            .expect_err("a session-level env must be refused");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+
+        let with_tenant = CreateSessionRequest {
+            tenant_key: Some("tenant-1".to_string()),
+            ..Default::default()
+        };
+        let error = sandbox
+            .create(with_tenant)
+            .await
+            .expect_err("a tenant key must be refused");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
     }
 
     /// IAM cannot draw this line: the stack binding scopes the token mint to
