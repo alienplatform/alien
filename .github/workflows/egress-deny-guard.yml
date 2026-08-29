@@ -76,8 +76,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p .guard
+          # --agent-binary on purpose: the guard exists to test THIS commit's agent, so it
+          # embeds the fresh build rather than pulling a published image.
           cargo run -p alien-build --example sandbox-bundle -- \
-            "$AGENT_BINARY" "$SANDBOX_BASE_IMAGE" .guard/sandbox-bundle.zip
+            --agent-binary "$AGENT_BINARY" "$SANDBOX_BASE_IMAGE" .guard/sandbox-bundle.zip
           # Per-run key, so nothing collides. A cancelled run cannot remove its own object and
           # no later run can guess the key: expiry on the `egress-deny-guard/` prefix is what
           # reclaims it, and that lives in the bucket's lifecycle configuration.
