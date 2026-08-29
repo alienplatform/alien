@@ -6,7 +6,7 @@ use alien_core::{
     StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::{RunningResourcePolicy, StackExecutor};
+use alien_infra::{state_utils::StackStateExt, RunningResourcePolicy, StackExecutor};
 use std::collections::HashSet;
 use tracing::{debug, info};
 
@@ -102,11 +102,27 @@ pub async fn handle_update_pending(
     let mut next = current.clone();
 
     // Stack state is required
-    let stack_state = current.stack_state.clone().ok_or_else(|| {
+    let mut stack_state = current.stack_state.clone().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for update".to_string(),
         })
     })?;
+
+    // UpdatePending is also the entry point for a corrective release selected
+    // after an update failed. Normalize terminal resource failures here so an
+    // externally selected release cannot bypass the ordinary UpdateFailed retry
+    // handler and leave the executor polling a superseded controller state.
+    let retried = stack_state
+        .retry_failed()
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to prepare resources for update".to_string(),
+        })?;
+    if !retried.is_empty() {
+        info!(
+            resource_ids = ?retried,
+            "Reset failed resource state before preparing update"
+        );
+    }
 
     // A frozen gate is answered once: the answers recorded at creation are
     // what every later input value is held against. A gate with no recorded
@@ -483,7 +499,6 @@ pub async fn handle_update_failed(
     // retry/backoff budget before re-running preflights. Stack preparation will
     // still replace this state when the desired resource config changed; when
     // it did not, execution resumes without losing durable provider IDs.
-    use alien_infra::state_utils::StackStateExt;
     let retried = stack_state
         .retry_failed()
         .context(ErrorData::StackExecutionFailed {
