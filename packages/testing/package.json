@@ -36,7 +36,7 @@
     "@alienplatform/commands": "workspace:*",
     "@alienplatform/core": "workspace:*",
     "get-port": "^7.1.0",
-    "zod": "4.4.3"
+    "zod": "4.5.2"
   },
   "peerDependencies": {
     "@aws-sdk/client-ssm": "^3.0.0",
