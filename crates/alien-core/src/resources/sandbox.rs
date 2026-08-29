@@ -476,8 +476,9 @@ pub struct Sandbox {
     pub egress: SandboxEgress,
     /// Session lifetime and idle behaviour
     pub session: SandboxSessionPolicy,
-    /// Ports eligible for a preview capability. A port not listed here can never be exposed,
-    /// so an application cannot widen its own ingress at runtime.
+    /// Ports eligible for a preview capability. An application reaches its sandbox through the
+    /// provider, so it cannot widen its own ingress at runtime; a holder of a remote binding's
+    /// credentials is bounded by no port condition, which is why a remote sandbox declares none.
     #[builder(default)]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
@@ -957,6 +958,67 @@ impl ResourceDefinition for Sandbox {
     }
 }
 
+/// The one token a sandbox bundle URI may carry, replaced with the deploying region.
+///
+/// AWS builds a MicroVM image only from a bucket in the image's own region, so a vendor
+/// publishing to every supported region needs one stored URI that resolves per region.
+pub const BUNDLE_REGION_TOKEN: &str = "{region}";
+
+/// A bundle URI split around its region token, or carried whole when it has none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BundleUri<'a> {
+    /// No token: emitted exactly as it is today.
+    Literal(&'a str),
+    /// The text either side of the token, for an emitter to rejoin around its own region
+    /// expression.
+    Regional { before: &'a str, after: &'a str },
+}
+
+/// Reads a sandbox bundle URI, refusing anything an image build would only reject later.
+///
+/// The token is accepted in the bucket alone. A key-position token would name an object that does
+/// not exist, and any other brace is a typo that would otherwise reach S3 verbatim and fail ~160s
+/// into the build — which is the failure this whole check exists to move to plan time.
+pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String> {
+    let path = uri
+        .strip_prefix("s3://")
+        .ok_or_else(|| format!("'{uri}' is not an s3:// URI"))?;
+    let (bucket, key) = path
+        .split_once('/')
+        .ok_or_else(|| format!("'{uri}' names a bucket with no object key"))?;
+
+    if key.contains('{') || key.contains('}') {
+        return Err(format!(
+            "'{uri}' places a token in the object key; {BUNDLE_REGION_TOKEN} is accepted in the \
+             bucket name alone"
+        ));
+    }
+
+    let Some((before, after)) = bucket.split_once(BUNDLE_REGION_TOKEN) else {
+        if bucket.contains('{') || bucket.contains('}') {
+            return Err(format!(
+                "'{uri}' carries a token this build does not know; {BUNDLE_REGION_TOKEN} is the \
+                 only one"
+            ));
+        }
+        return Ok(BundleUri::Literal(uri));
+    };
+
+    if after.contains(BUNDLE_REGION_TOKEN) {
+        return Err(format!("'{uri}' repeats {BUNDLE_REGION_TOKEN}"));
+    }
+    if before.contains('{') || before.contains('}') || after.contains('{') || after.contains('}') {
+        return Err(format!(
+            "'{uri}' carries a token this build does not know; {BUNDLE_REGION_TOKEN} is the only one"
+        ));
+    }
+
+    Ok(BundleUri::Regional {
+        before: &uri[.."s3://".len() + before.len()],
+        after: &uri["s3://".len() + before.len() + BUNDLE_REGION_TOKEN.len()..],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -979,6 +1041,57 @@ mod tests {
             })
             .preview_ports(preview_ports)
             .build()
+    }
+
+    /// A URI with no token must come back whole, because every bundle configured today has none
+    /// and emitting one differently would change every existing customer's template.
+    #[test]
+    fn a_uri_without_a_token_is_carried_whole() {
+        assert_eq!(
+            parse_bundle_uri("s3://acme-artifacts-us-east-2/agents/bundle.zip"),
+            Ok(BundleUri::Literal(
+                "s3://acme-artifacts-us-east-2/agents/bundle.zip"
+            ))
+        );
+    }
+
+    /// The split has to rejoin to the original with the region in place, or an emitter builds a
+    /// URI that is subtly not the one the vendor configured.
+    #[test]
+    fn a_regional_uri_splits_either_side_of_the_token() {
+        let BundleUri::Regional { before, after } =
+            parse_bundle_uri("s3://acme-artifacts-{region}/agents/bundle.zip")
+                .expect("the token is accepted in the bucket")
+        else {
+            panic!("a bucket-position token must split");
+        };
+
+        assert_eq!(before, "s3://acme-artifacts-");
+        assert_eq!(after, "/agents/bundle.zip");
+        assert_eq!(
+            format!("{before}us-east-2{after}"),
+            "s3://acme-artifacts-us-east-2/agents/bundle.zip",
+            "the halves must rejoin to the URI the vendor meant"
+        );
+    }
+
+    /// Each of these reaches S3 verbatim and dies ~160s into an image build if it is not refused
+    /// here, which is the whole reason this runs at plan time.
+    #[test]
+    fn a_token_this_build_cannot_resolve_is_refused() {
+        for uri in [
+            "s3://acme-artifacts-{regio}/bundle.zip",
+            "s3://acme-artifacts/{region}/bundle.zip",
+            "s3://acme-artifacts-{region}-{region}/bundle.zip",
+            "s3://acme-artifacts/bundle-{version}.zip",
+            "s3://acme}-artifacts-{region}/bundle.zip",
+            "s3://acme{-artifacts-{region}/bundle.zip",
+        ] {
+            assert!(
+                parse_bundle_uri(uri).is_err(),
+                "'{uri}' must be refused before it can reach an image build"
+            );
+        }
     }
 
     #[test]

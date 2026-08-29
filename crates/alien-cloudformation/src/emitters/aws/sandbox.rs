@@ -15,8 +15,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, ErrorData, NetworkSettings, RemoteBindings, Result, Sandbox, SandboxCode,
-    SandboxEgress,
+    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, Result, Sandbox,
+    SandboxCode, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -72,7 +72,7 @@ impl CfEmitter for AwsSandboxEmitter {
             service_trust_policy(["lambda.amazonaws.com"]),
         );
         role.properties
-            .insert("Policies".to_string(), build_policies(&artifact_uri));
+            .insert("Policies".to_string(), build_policies(artifact_uri));
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         // An open sandbox routes nothing through a VPC, so none of this exists for it: no
@@ -193,7 +193,7 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         properties.insert(
             "CodeArtifact".to_string(),
-            CfExpression::object([("Uri", CfExpression::from(artifact_uri.as_str()))]),
+            CfExpression::object([("Uri", code_artifact_uri(artifact_uri))]),
         );
         // The switch behind "control plane never sees sandbox contents", not an approximation.
         properties.insert(
@@ -396,7 +396,7 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
 ///
 /// Scoped to the one object it reads. The bundle URI is known when the template is generated, so
 /// there is no reason for the role a customer installs to carry account-wide object read.
-fn build_policies(artifact_uri: &str) -> CfExpression {
+fn build_policies(artifact_uri: BundleUri<'_>) -> CfExpression {
     CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-image-build")),
         (
@@ -417,10 +417,7 @@ fn build_policies(artifact_uri: &str) -> CfExpression {
                                 // Partition-qualified like every other ARN here: a hardcoded
                                 // `aws` never matches in GovCloud or China, and the build fails
                                 // on the bundle it was granted.
-                                CfExpression::sub(format!(
-                                    "arn:${{AWS::Partition}}:s3:::{}",
-                                    artifact_uri.trim_start_matches("s3://")
-                                )),
+                                artifact_object_arn(artifact_uri),
                             ),
                         ]),
                         CfExpression::object([
@@ -666,7 +663,7 @@ fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
 
 /// reference, and Alien has no build step producing one yet. Requiring an `s3://` URI fails at
 /// plan time with something a reader can act on, rather than at the end of a ~160s image build.
-fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
+fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
     let unsupported = |reason: String| {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
@@ -680,7 +677,7 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
         SandboxCode::Image { image }
             if image.starts_with("s3://") && image.trim_start_matches("s3://").contains('/') =>
         {
-            Ok(image.clone())
+            alien_core::parse_bundle_uri(image).map_err(unsupported)
         }
         SandboxCode::Image { image } if image.starts_with("s3://") => Err(unsupported(format!(
             "code.image '{image}' names a bucket with no object key; give the full path to the \
@@ -698,9 +695,115 @@ fn artifact_uri(sandbox: &Sandbox) -> Result<String> {
     }
 }
 
+/// The `CodeArtifact.Uri`, with the region resolved where the vendor asked for one.
+///
+/// A URI carrying no token stays a plain string rather than becoming a `Sub` with nothing to
+/// substitute: every bundle configured today has none, and routing them through an expression
+/// would rewrite every existing customer's template for no behaviour change.
+fn code_artifact_uri(uri: BundleUri<'_>) -> CfExpression {
+    match uri {
+        BundleUri::Literal(uri) => CfExpression::from(uri),
+        BundleUri::Regional { before, after } => {
+            CfExpression::sub(format!("{before}${{AWS::Region}}{after}"))
+        }
+    }
+}
+
+/// The bundle object's ARN. Partition-qualified like every other ARN here — a hardcoded `aws`
+/// never matches in GovCloud — and region-qualified for the same reason one region out.
+fn artifact_object_arn(uri: BundleUri<'_>) -> CfExpression {
+    let path = match uri {
+        BundleUri::Literal(uri) => uri.trim_start_matches("s3://").to_string(),
+        BundleUri::Regional { before, after } => format!(
+            "{}${{AWS::Region}}{after}",
+            before.trim_start_matches("s3://")
+        ),
+    };
+    CfExpression::sub(format!("arn:${{AWS::Partition}}:s3:::{path}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const REGIONAL: &str = "s3://acme-artifacts-{region}/agents/bundle.zip";
+    const LITERAL: &str = "s3://acme-artifacts-us-east-2/agents/bundle.zip";
+
+    fn parsed(uri: &str) -> BundleUri<'_> {
+        alien_core::parse_bundle_uri(uri).expect("the fixture parses")
+    }
+
+    /// The Sub string out of an intrinsic, so a test can compare what will actually be rendered.
+    fn sub_text(expression: &CfExpression) -> &str {
+        let CfExpression::Object(map) = expression else {
+            panic!("expected an intrinsic, got {expression:?}");
+        };
+        let CfExpression::String(text) = &map["Fn::Sub"] else {
+            panic!("expected Fn::Sub to carry a string");
+        };
+        text
+    }
+
+    /// A URI carrying no token must stay a plain string. Routing it through `Sub` would rewrite
+    /// every template already in the field for no rendered change.
+    #[test]
+    fn a_uri_without_a_token_emits_the_plain_string_it_does_today() {
+        assert_eq!(
+            code_artifact_uri(parsed(LITERAL)),
+            CfExpression::from(LITERAL),
+            "a token-less URI must not become an intrinsic"
+        );
+    }
+
+    /// Both consumers must name the same object. Asserting only that each mentions the region
+    /// would pass while the two pointed at different buckets — which fails at build time as an
+    /// access denial that reads like an IAM bug rather than a template bug.
+    #[test]
+    fn the_uri_and_the_build_grant_name_the_same_object() {
+        let uri = code_artifact_uri(parsed(REGIONAL));
+        let arn = artifact_object_arn(parsed(REGIONAL));
+
+        let uri_text = sub_text(&uri);
+        assert_eq!(
+            sub_text(&arn),
+            format!(
+                "arn:${{AWS::Partition}}:s3:::{}",
+                uri_text
+                    .strip_prefix("s3://")
+                    .expect("the URI stays an s3 URI")
+            ),
+            "the grant must name exactly the object the image is built from"
+        );
+        assert!(
+            uri_text.contains("${AWS::Region}") && !uri_text.contains("{region}"),
+            "the token must be consumed, not emitted verbatim: {uri_text}"
+        );
+    }
+
+    /// The refusal has to land at plan time. A brace reaching S3 verbatim dies ~160s into the
+    /// image build, which is the failure `artifact_uri` exists to move forward.
+    #[test]
+    fn a_token_this_build_cannot_resolve_is_refused_before_emitting() {
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://acme-artifacts-{regio}/bundle.zip".to_string(),
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "2Gi".to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+
+        let error = artifact_uri(&sandbox).expect_err("an unknown token must be refused");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
+    }
 
     /// The two emitters must agree: a sandbox declared once cannot mean different architectures
     /// or run as different uids depending on which package format the customer installed.

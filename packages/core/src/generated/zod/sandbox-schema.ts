@@ -23,7 +23,7 @@ get "egress"(){
 get "limits"(){
                 return z.union([SandboxLimitsSchema, z.null()]).optional()
               },
-"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. A port not listed here can never be exposed,\nso an application cannot widen its own ingress at runtime.")),
+"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.")),
 get "session"(){
                 return SandboxSessionPolicySchema.describe("How long a session may live and when it is suspended.")
               }
