@@ -410,23 +410,6 @@
           }
         }
       },
-      // The runtime controller keeps the setup-created compute role, but owns
-      // the generated execute policy attached to it. Capacity reconciliation
-      // must therefore be able to refresh that policy and remove its legacy
-      // predecessor without gaining authority over unrelated IAM roles.
-      {
-        "grant": {
-          "actions": ["iam:PutRolePolicy", "iam:DeleteRolePolicy"]
-        },
-        "binding": {
-          "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
-          },
-          "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
-          }
-        }
-      },
       // Read-only inspection. AWS requires Resource: "*" for these Describe APIs.
       {
         "grant": {
