@@ -314,6 +314,9 @@ pub async fn acquire_setup_run_deployment(
             "initial-setup".to_string(),
             "initial-setup-failed".to_string(),
             "waiting-for-machines".to_string(),
+            "running".to_string(),
+            "update-failed".to_string(),
+            "refresh-failed".to_string(),
         ]),
     )
     .await

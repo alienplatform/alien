@@ -414,6 +414,29 @@ mod tests {
     }
 
     #[test]
+    fn hosted_setup_reconciles_each_packaged_revision_once() {
+        for status in ["running", "update-failed", "refresh-failed"] {
+            assert!(hosted_setup_reconcile_required(
+                status,
+                Some("package-b"),
+                Some("package-a")
+            ));
+            assert!(!hosted_setup_reconcile_required(
+                status,
+                Some("package-b"),
+                Some("package-b")
+            ));
+        }
+
+        assert!(!hosted_setup_reconcile_required(
+            "updating",
+            Some("package-b"),
+            Some("package-a")
+        ));
+        assert!(!hosted_setup_reconcile_required("running", None, None));
+    }
+
+    #[test]
     fn stable_channel_accepts_exact_semver_tag() {
         assert_eq!(
             parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
@@ -1370,7 +1393,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     )?;
 
     // Check if the deployment is already active — nothing to do.
-    let current_deployment = client
+    let mut current_deployment = client
         .get_deployment()
         .id(&deployment_id)
         .send()
@@ -1383,6 +1406,51 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     let hosted_platform =
         manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
+    let setup_revision = embedded_config.and_then(|config| config.setup_revision.as_deref());
+    let applied_setup_revision = current_deployment
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| serde_json::to_value(metadata).ok())
+        .and_then(|metadata| {
+            metadata
+                .get("directSetupRevision")
+                .and_then(serde_json::Value::as_str)
+                .map(ToString::to_string)
+        });
+    if init.deployment_model == DeploymentModel::Push
+        && hosted_platform
+        && requires_install_context(platform)
+        && hosted_setup_reconcile_required(
+            &current_deployment.status,
+            setup_revision,
+            applied_setup_revision.as_deref(),
+        )
+    {
+        output::info("Refreshing setup-owned infrastructure for this CLI revision...");
+        run_push_model(
+            &client,
+            &deployment_id,
+            platform,
+            base_platform,
+            &manager_url,
+            &effective_token,
+            install_management_config.clone(),
+            &args.network,
+            None,
+            setup_revision,
+        )
+        .await?;
+        current_deployment = client
+            .get_deployment()
+            .id(&deployment_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to refresh deployment after setup reconciliation".to_string(),
+            })?
+            .into_inner();
+    }
     if supports_hosted_compute_update(&current_deployment.status)
         && init.deployment_model == DeploymentModel::Push
         && hosted_platform
@@ -1507,6 +1575,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                     &effective_token,
                     None,
                     None,
+                    setup_revision,
                 )
                 .await?;
 
@@ -1555,6 +1624,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                     install_management_config,
                     &args.network,
                     Some(on_progress),
+                    setup_revision,
                 )
                 .await?;
 
@@ -2808,6 +2878,16 @@ fn supports_hosted_compute_update(status: &str) -> bool {
     )
 }
 
+fn hosted_setup_reconcile_required(
+    status: &str,
+    packaged_revision: Option<&str>,
+    applied_revision: Option<&str>,
+) -> bool {
+    matches!(status, "running" | "update-failed" | "refresh-failed")
+        && packaged_revision.is_some()
+        && packaged_revision != applied_revision
+}
+
 /// Whether the hosted platform must receive the requested compute target.
 ///
 /// Platform persists the desired settings before the deployment engine applies
@@ -3766,6 +3846,7 @@ async fn run_push_model(
     management_config: Option<ManagementConfig>,
     network_args: &NetworkArgs,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
+    setup_revision: Option<&str>,
 ) -> Result<()> {
     let credential_platform = base_platform.unwrap_or(platform);
     let client_config = ClientConfig::from_std_env(credential_platform)
@@ -3788,6 +3869,7 @@ async fn run_push_model(
         deployment_token,
         Some(network_args),
         on_progress,
+        setup_revision,
     )
     .await
 }
@@ -3819,6 +3901,7 @@ pub async fn push_initial_setup(
     deployment_token: &str,
     network_args: Option<&NetworkArgs>,
     on_progress: Option<alien_deployment::runner::ProgressCallback>,
+    setup_revision: Option<&str>,
 ) -> Result<()> {
     let setup_management_config = management_config.clone();
 
@@ -4065,7 +4148,12 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    if state.status == DeploymentStatus::Running {
+    if matches!(
+        state.status,
+        DeploymentStatus::Running
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+    ) {
         let stack_state = state.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ConfigurationError {
                 message: "A running deployment has no stack state for setup update".to_string(),
@@ -4128,6 +4216,16 @@ pub async fn push_initial_setup(
         on_progress.as_ref(),
     )
     .await;
+
+    if let Ok(result) = &runner_result {
+        if matches!(result.loop_result.outcome, LoopOutcome::Success) {
+            if let (Some(revision), Some(metadata)) =
+                (setup_revision, state.runtime_metadata.as_mut())
+            {
+                metadata.direct_setup_revision = Some(revision.to_string());
+            }
+        }
+    }
 
     // Always reconcile + release, even on error.
     final_reconcile(client, deployment_id, &session, &state).await;

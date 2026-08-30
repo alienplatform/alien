@@ -91,6 +91,12 @@ pub struct RuntimeMetadata {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_update_authorization: Option<SetupUpdateAuthorization>,
 
+    /// Last generated CLI package revision whose direct setup was applied.
+    /// This lets a newer generated CLI refresh setup-owned infrastructure once
+    /// before handing runtime changes back to the hosted manager.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_setup_revision: Option<String>,
+
     /// Whether cross-account registry access has been successfully granted.
     /// Set to true after the manager successfully sets the ECR/GAR repo policy
     /// for this deployment's target account. Prevents redundant API calls on
