@@ -437,6 +437,36 @@ mod tests {
     }
 
     #[test]
+    fn setup_refresh_prefers_desired_release_and_falls_back_to_current() {
+        assert_eq!(
+            setup_release_id(Some("desired"), Some("current")),
+            Some("desired")
+        );
+        assert_eq!(setup_release_id(None, Some("current")), Some("current"));
+        assert_eq!(setup_release_id(None, None), None);
+    }
+
+    #[test]
+    fn setup_revision_is_applied_at_manager_handoff() {
+        assert!(setup_revision_was_applied(
+            &LoopOutcome::Neutral,
+            &LoopStopReason::Handoff
+        ));
+        assert!(setup_revision_was_applied(
+            &LoopOutcome::Success,
+            &LoopStopReason::Synced
+        ));
+        assert!(!setup_revision_was_applied(
+            &LoopOutcome::Neutral,
+            &LoopStopReason::NoWork
+        ));
+        assert!(!setup_revision_was_applied(
+            &LoopOutcome::Failure,
+            &LoopStopReason::Failed
+        ));
+    }
+
+    #[test]
     fn stable_channel_accepts_exact_semver_tag() {
         assert_eq!(
             parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
@@ -2888,6 +2918,18 @@ fn hosted_setup_reconcile_required(
         && packaged_revision != applied_revision
 }
 
+fn setup_release_id<'a>(desired: Option<&'a str>, current: Option<&'a str>) -> Option<&'a str> {
+    desired.or(current)
+}
+
+fn setup_revision_was_applied(outcome: &LoopOutcome, stop_reason: &LoopStopReason) -> bool {
+    matches!(outcome, LoopOutcome::Success)
+        || matches!(
+            (outcome, stop_reason),
+            (LoopOutcome::Neutral, LoopStopReason::Handoff)
+        )
+}
+
 /// Whether the hosted platform must receive the requested compute target.
 ///
 /// Platform persists the desired settings before the deployment engine applies
@@ -3940,7 +3982,10 @@ pub async fn push_initial_setup(
     // If there's a desired release, fetch the full release info. A failed fetch must fail the
     // setup, not silently degrade to a no-release deploy: swallowing it would report success while
     // having installed nothing the caller asked for.
-    let target_release = if let Some(ref release_id) = deployment.desired_release_id {
+    let target_release = if let Some(release_id) = setup_release_id(
+        deployment.desired_release_id.as_deref(),
+        deployment.current_release_id.as_deref(),
+    ) {
         let resp = client
             .get_release()
             .id(release_id)
@@ -4218,7 +4263,8 @@ pub async fn push_initial_setup(
     .await;
 
     if let Ok(result) = &runner_result {
-        if matches!(result.loop_result.outcome, LoopOutcome::Success) {
+        if setup_revision_was_applied(&result.loop_result.outcome, &result.loop_result.stop_reason)
+        {
             if let (Some(revision), Some(metadata)) =
                 (setup_revision, state.runtime_metadata.as_mut())
             {
