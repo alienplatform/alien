@@ -372,6 +372,28 @@ mod tests {
     }
 
     #[test]
+    fn hosted_compute_updates_cover_active_and_retryable_lifecycle_states() {
+        for status in [
+            "running",
+            "update-pending",
+            "updating",
+            "update-failed",
+            "refresh-failed",
+            "initial-setup",
+            "initial-setup-failed",
+            "provisioning",
+            "waiting-for-machines",
+            "provisioning-failed",
+        ] {
+            assert!(supports_hosted_compute_update(status), "{status}");
+        }
+
+        for status in ["pending", "delete-pending", "deleted"] {
+            assert!(!supports_hosted_compute_update(status), "{status}");
+        }
+    }
+
+    #[test]
     fn stable_channel_accepts_exact_semver_tag() {
         assert_eq!(
             parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
@@ -1341,7 +1363,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
 
     let hosted_platform =
         manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
-    if current_deployment.status == "running"
+    if supports_hosted_compute_update(&current_deployment.status)
         && init.deployment_model == DeploymentModel::Push
         && hosted_platform
         && stack_settings.compute.is_some()
@@ -2745,6 +2767,22 @@ fn has_explicit_non_compute_changes(
     (network && requested.network != current.network)
         || (updates && requested.updates != current.updates)
         || (telemetry && requested.telemetry != current.telemetry)
+}
+
+fn supports_hosted_compute_update(status: &str) -> bool {
+    matches!(
+        status,
+        "running"
+            | "update-pending"
+            | "updating"
+            | "update-failed"
+            | "refresh-failed"
+            | "initial-setup"
+            | "initial-setup-failed"
+            | "provisioning"
+            | "waiting-for-machines"
+            | "provisioning-failed"
+    )
 }
 
 async fn update_hosted_compute_settings(

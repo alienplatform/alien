@@ -165,13 +165,13 @@ pub async fn handle_update_pending(
         .as_ref()
         .and_then(|m| m.prepared_stack.as_ref())
         .or(current.current_release.as_ref().map(|r| &r.stack));
-
-    // Run deployment-time preflights: compatibility checks + mutations + runtime checks
-    // Store the mutated stack to use for the actual update and for future compatibility checks
     let target_release_id = current
         .target_release
         .as_ref()
         .and_then(|release| release.release_id.as_deref());
+
+    // Run deployment-time preflights: compatibility checks + mutations + runtime checks
+    // Store the mutated stack to use for the actual update and for future compatibility checks
     let setup_update_authorization = current
         .runtime_metadata
         .as_ref()
@@ -280,6 +280,27 @@ pub async fn handle_updating(
                 message: "Pending prepared stack not found in runtime metadata".to_string(),
             })
         })?;
+
+    // Frozen resources omitted by a newer release remain setup-owned and must
+    // not be deleted by an ordinary update. Keep their installed definitions
+    // in the execution target while allowing explicitly runtime-managed frozen
+    // resources (currently ComputeCluster capacity) to reconcile changed
+    // configuration through their management controller.
+    if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
+        for (resource_id, entry) in installed_stack.resources() {
+            if entry.lifecycle == ResourceLifecycle::Frozen
+                && !target_stack.resources.contains_key(resource_id)
+            {
+                target_stack
+                    .resources
+                    .insert(resource_id.clone(), entry.clone());
+            }
+        }
+    }
+    // The effective target is the new durable baseline. Persist it before
+    // executor-only environment injection so a second release that also omits
+    // a setup-owned resource cannot lose ownership information and delete it.
+    runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
@@ -295,7 +316,7 @@ pub async fn handle_updating(
     // Sync secrets to vault before updating workload resources.
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
-    info!("Syncing secrets to vault before updating live resources");
+    info!("Syncing secrets to vault before updating managed resources");
     let synced = crate::helpers::sync_secrets_to_vault(
         &target_stack,
         &stack_state,
@@ -314,7 +335,7 @@ pub async fn handle_updating(
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .running_resource_policy(RunningResourcePolicy::OptIn)
-        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {
@@ -700,9 +721,8 @@ mod tests {
         );
     }
 
-    /// A setup-owned resource is excluded by the executor's lifecycle filter, so nothing will
-    /// ever reconcile it. Holding the update open until its recorded config matches the
-    /// declared one would never finish.
+    /// A resource not reported as reconciled by the executor cannot hold an
+    /// update open merely because its recorded configuration differs.
     #[test]
     fn a_resource_the_executor_does_not_reconcile_cannot_hold_the_update_open() {
         let declared = Kv::new("store".to_string()).build();

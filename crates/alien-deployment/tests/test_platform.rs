@@ -787,6 +787,96 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
 }
 
 #[tokio::test]
+async fn consecutive_updates_cannot_delete_an_omitted_frozen_resource() {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+
+    // Model setup-owned infrastructure imported alongside a release that does
+    // not declare it. This is the ownership shape the runtime must preserve.
+    let frozen = Storage::new("setup-storage".to_string()).build();
+    state
+        .runtime_metadata
+        .as_mut()
+        .and_then(|metadata| metadata.prepared_stack.as_mut())
+        .expect("running deployment has prepared stack")
+        .resources
+        .insert(
+            "setup-storage".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(frozen.clone()),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+    let mut frozen_state = alien_core::StackResourceState::new_pending(
+        "storage".to_string(),
+        alien_core::Resource::new(frozen),
+        Some(ResourceLifecycle::Frozen),
+        Vec::new(),
+    );
+    frozen_state.status = alien_core::ResourceStatus::Running;
+    frozen_state.internal_state = Some(serde_json::json!({
+        "type": "TestStorageController",
+        "_controllerStateVersion": 1,
+        "state": "ready",
+        "bucketName": "test-setup-storage",
+    }));
+    state
+        .stack_state
+        .as_mut()
+        .expect("running deployment has stack state")
+        .resources
+        .insert("setup-storage".to_string(), frozen_state);
+
+    for release_number in [2, 3] {
+        let mut target = create_test_stack("test-stack", "test-function");
+        target.permissions = state
+            .current_release
+            .as_ref()
+            .expect("running deployment has current release")
+            .stack
+            .permissions
+            .clone();
+        start_update(
+            &mut state,
+            ReleaseInfo {
+                release_id: Some(format!("rel_v{release_number}")),
+                version: Some(format!("{release_number}.0.0")),
+                description: None,
+                // Both later releases omit the setup-owned frozen resource.
+                stack: target,
+            },
+        );
+        state = run_to_completion(state, config.clone()).await;
+        assert_eq!(state.status, DeploymentStatus::Running);
+        assert_eq!(
+            state
+                .stack_state
+                .as_ref()
+                .and_then(|stack| stack.resources.get("setup-storage"))
+                .map(|resource| resource.status),
+            Some(alien_core::ResourceStatus::Running),
+            "release {release_number} must retain the installed frozen resource"
+        );
+        assert!(
+            state
+                .runtime_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.prepared_stack.as_ref())
+                .is_some_and(|stack| stack.resources.contains_key("setup-storage")),
+            "release {release_number} must retain frozen ownership in the promoted baseline"
+        );
+    }
+}
+
+#[tokio::test]
 async fn update_completes_after_removed_resource_is_deleted() {
     let _vault_env = test_vault_env().await;
     let config = create_test_config("hash_v1", false);
