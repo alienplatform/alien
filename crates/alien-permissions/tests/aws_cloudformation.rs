@@ -227,7 +227,7 @@ fn test_aws_cloudformation_compute_management_can_reconcile_instance_role_policy
     assert_eq!(
         statement.resource,
         [json!({
-            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*"
+            "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-*-role"
         })]
     );
 }

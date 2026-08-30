@@ -630,7 +630,7 @@ fn test_compute_cluster_management_can_reconcile_stack_prefixed_instance_role_po
         .contains(&"iam:DeleteRolePolicy".to_string()));
     assert_eq!(
         role_policy_statement.resource,
-        vec!["arn:aws:iam::123456789012:role/my-stack-*".to_string()]
+        vec!["arn:aws:iam::123456789012:role/my-stack-*-role".to_string()]
     );
 }
 

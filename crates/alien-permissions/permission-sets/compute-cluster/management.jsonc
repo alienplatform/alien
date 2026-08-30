@@ -420,10 +420,10 @@
         },
         "binding": {
           "stack": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*-role"]
           }
         }
       },
