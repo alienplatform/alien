@@ -297,6 +297,10 @@ pub async fn handle_updating(
             }
         }
     }
+    // The effective target is the new durable baseline. Persist it before
+    // executor-only environment injection so a second release that also omits
+    // a setup-owned resource cannot lose ownership information and delete it.
+    runtime_metadata.pending_prepared_stack = Some(target_stack.clone());
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
