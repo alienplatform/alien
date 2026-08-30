@@ -156,6 +156,7 @@ pub async fn handle_provisioning(
     } else if stack_status == StackStatus::Running {
         info!("All live resources deployed successfully, transitioning to Running");
 
+        runtime_metadata.direct_setup_update_authorization = None;
         next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;

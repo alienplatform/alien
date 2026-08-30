@@ -3,10 +3,11 @@
 //! These tests exercise the full alien_deployment::step() lifecycle with no cloud I/O.
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariable,
-    EnvironmentVariableType, EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry,
-    ResourceLifecycle, RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState,
-    Storage, Worker, WorkerCode,
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus,
+    DirectSetupUpdateAuthorization, EnvironmentVariable, EnvironmentVariableType,
+    EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle,
+    RuntimeMetadata, SetupUpdateAuthorization, Stack, StackSettings, StackState, Storage, Worker,
+    WorkerCode,
 };
 use chrono::Utc;
 use indexmap::IndexMap;
@@ -783,6 +784,48 @@ async fn setup_authorized_update_clears_authority_only_on_success() {
     assert_eq!(
         completed.current_release.as_ref().unwrap().release_id,
         release_v2.release_id
+    );
+}
+
+#[tokio::test]
+async fn direct_setup_update_reruns_setup_before_live_reconciliation() {
+    let config = create_test_config("hash_v1", false);
+    let mut state = run_to_completion(
+        create_initial_state(create_test_stack("test-stack", "test-function")),
+        config.clone(),
+    )
+    .await;
+    let current_release = state.current_release.clone().expect("current release");
+    let release_id = current_release
+        .release_id
+        .clone()
+        .expect("current release id");
+    state.target_release = Some(current_release);
+    state.status = DeploymentStatus::UpdatePending;
+    state
+        .runtime_metadata
+        .as_mut()
+        .expect("runtime metadata")
+        .direct_setup_update_authorization = Some(DirectSetupUpdateAuthorization {
+        operation_id: "direct-setup-operation".to_string(),
+        release_id,
+    });
+
+    let setup_step = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("direct setup update should prepare setup-owned resources");
+    assert_eq!(setup_step.state.status, DeploymentStatus::InitialSetup);
+
+    let completed = run_to_completion(setup_step.state, config).await;
+    assert_eq!(completed.status, DeploymentStatus::Running);
+    assert!(
+        completed
+            .runtime_metadata
+            .as_ref()
+            .expect("runtime metadata")
+            .direct_setup_update_authorization
+            .is_none(),
+        "direct setup authority must be consumed only after provisioning returns to Running"
     );
 }
 

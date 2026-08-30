@@ -42,6 +42,21 @@ pub struct SetupUpdateAuthorization {
     pub setup_fingerprint_version: u32,
 }
 
+/// One-shot request for Alien to rerun setup-owned reconciliation.
+///
+/// The control plane may issue this only for an operation it explicitly
+/// authorizes. The deployment engine additionally requires a direct-setup
+/// deployment and an unchanged release before honoring it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct DirectSetupUpdateAuthorization {
+    /// Platform operation that owns this reconciliation and fences stale writes.
+    pub operation_id: String,
+    /// Release whose setup-owned resources may be reconciled.
+    pub release_id: String,
+}
+
 /// Runtime metadata for deployment
 ///
 /// Stores deployment state that needs to persist across step calls.
@@ -90,6 +105,12 @@ pub struct RuntimeMetadata {
     /// and canonical resource digests, never the imported payload or tokens.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup_update_authorization: Option<SetupUpdateAuthorization>,
+
+    /// One-shot authority for an Alien-owned setup update. Unlike an imported
+    /// setup authorization, the deployment engine prepares and applies the
+    /// setup-owned target itself under administrator credentials.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_setup_update_authorization: Option<DirectSetupUpdateAuthorization>,
 
     /// Whether cross-account registry access has been successfully granted.
     /// Set to true after the manager successfully sets the ECR/GAR repo policy
