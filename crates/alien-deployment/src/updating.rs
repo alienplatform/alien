@@ -717,9 +717,8 @@ mod tests {
         );
     }
 
-    /// A setup-owned resource is excluded by the executor's lifecycle filter, so nothing will
-    /// ever reconcile it. Holding the update open until its recorded config matches the
-    /// declared one would never finish.
+    /// A resource not reported as reconciled by the executor cannot hold an
+    /// update open merely because its recorded configuration differs.
     #[test]
     fn a_resource_the_executor_does_not_reconcile_cannot_hold_the_update_open() {
         let declared = Kv::new("store".to_string()).build();
