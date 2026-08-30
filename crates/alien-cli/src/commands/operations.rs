@@ -306,7 +306,11 @@ async fn invoke_task(
             url: Some(commands_url),
         })?;
 
-    let verification = verify_operation(
+    // The write already ran and `result` is its real outcome — a failure to
+    // even check verification (network blip, API error) must not be reported
+    // as the operation itself failing, or a caller could retry an
+    // already-applied write. Degrade to Unverified instead of propagating.
+    let verification = match verify_operation(
         &sdk_client,
         workspace,
         project,
@@ -315,7 +319,13 @@ async fn invoke_task(
         operation,
         &result,
     )
-    .await?;
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(err) => VerificationOutcome::Unverified {
+            reason: format!("could not check verification: {err}"),
+        },
+    };
 
     if options.json {
         println!(
@@ -414,7 +424,13 @@ async fn request_access_then_reinvoke(
         })?
         .into_inner();
 
-    if !json {
+    if json {
+        // JSON callers get no further output until this function returns
+        // (up to an hour later) unless we hand back the request ID and the
+        // approve command as soon as each becomes available — otherwise an
+        // automation caller has no way to learn what to approve.
+        print_json(&json!({ "id": created.id, "status": created.status }))?;
+    } else {
         println!(
             "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
             created.id
@@ -437,7 +453,7 @@ async fn request_access_then_reinvoke(
             })?
             .into_inner();
 
-        if !json && !printed_kubectl_approve {
+        if !printed_kubectl_approve {
             let kubectl_approve = crate::commands::access_requests::fetch_kubectl_approve(
                 sdk_client,
                 workspace,
@@ -445,7 +461,14 @@ async fn request_access_then_reinvoke(
             )
             .await?;
             if let Some(command) = &kubectl_approve {
-                println!("Run this in-cluster to approve:\n  {command}\n");
+                if json {
+                    print_json(&json!({
+                        "id": created.id,
+                        "kubectlApprove": command,
+                    }))?;
+                } else {
+                    println!("Run this in-cluster to approve:\n  {command}\n");
+                }
                 printed_kubectl_approve = true;
             }
         }
@@ -585,10 +608,15 @@ async fn verify_operation(
     let start = std::time::Instant::now();
 
     for _attempt in 1..retry.max_attempts.max(1) {
-        if start.elapsed() >= timeout {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
             break;
         }
-        tokio::time::sleep(interval).await;
+        // Cap the sleep to what's left of the declared timeout — sleeping the
+        // full interval unconditionally can overrun the timeout by up to
+        // interval + request latency while still reporting only the
+        // configured duration.
+        tokio::time::sleep(interval.min(timeout - elapsed)).await;
 
         let check = sdk_client
             .verify_operation_check()
