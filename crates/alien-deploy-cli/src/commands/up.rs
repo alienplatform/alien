@@ -415,7 +415,13 @@ mod tests {
 
     #[test]
     fn hosted_setup_reconciles_each_packaged_revision_once() {
-        for status in ["running", "update-failed", "refresh-failed"] {
+        for status in [
+            "running",
+            "update-failed",
+            "refresh-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+        ] {
             assert!(hosted_setup_reconcile_required(
                 status,
                 Some("package-b"),
@@ -699,7 +705,7 @@ mod tests {
                 "loader".to_string(),
                 std::collections::HashMap::from([(
                     "api".to_string(),
-                    "https://10m5el.compute.islo.ai".to_string(),
+                    "https://loader.compute.example.com".to_string(),
                 )]),
             )])),
             ..StackSettings::default()
@@ -712,7 +718,7 @@ mod tests {
 
         assert_eq!(
             wire["publicEndpoints"]["loader"]["api"],
-            "https://10m5el.compute.islo.ai"
+            "https://loader.compute.example.com"
         );
     }
 
@@ -2913,7 +2919,14 @@ fn hosted_setup_reconcile_required(
     packaged_revision: Option<&str>,
     applied_revision: Option<&str>,
 ) -> bool {
-    matches!(status, "running" | "update-failed" | "refresh-failed")
+    matches!(
+        status,
+        "running"
+            | "update-failed"
+            | "refresh-failed"
+            | "initial-setup-failed"
+            | "provisioning-failed"
+    )
         && packaged_revision.is_some()
         && packaged_revision != applied_revision
 }
