@@ -394,6 +394,26 @@ mod tests {
     }
 
     #[test]
+    fn hosted_compute_retry_resubmits_an_equal_persisted_target() {
+        assert!(!hosted_compute_update_required("running", false));
+        assert!(hosted_compute_update_required("running", true));
+
+        for status in [
+            "update-pending",
+            "updating",
+            "update-failed",
+            "refresh-failed",
+            "initial-setup",
+            "initial-setup-failed",
+            "provisioning",
+            "waiting-for-machines",
+            "provisioning-failed",
+        ] {
+            assert!(hosted_compute_update_required(status, false), "{status}");
+        }
+    }
+
+    #[test]
     fn stable_channel_accepts_exact_semver_tag() {
         assert_eq!(
             parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
@@ -1403,7 +1423,10 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                     .to_string(),
             }));
         }
-        if current_stack_settings.compute != stack_settings.compute {
+        if hosted_compute_update_required(
+            &current_deployment.status,
+            current_stack_settings.compute != stack_settings.compute,
+        ) {
             update_hosted_compute_settings(
                 &resolved.base_url,
                 &effective_token,
@@ -2783,6 +2806,18 @@ fn supports_hosted_compute_update(status: &str) -> bool {
             | "waiting-for-machines"
             | "provisioning-failed"
     )
+}
+
+/// Whether the hosted platform must receive the requested compute target.
+///
+/// Platform persists the desired settings before the deployment engine applies
+/// them. A retryable or in-flight lifecycle can therefore report settings equal
+/// to the caller's request even though the cloud still has the previous
+/// capacity. Only a fully running deployment can safely treat equality as a
+/// no-op; every other supported lifecycle must re-submit the target and let the
+/// platform operation queue handle it idempotently.
+fn hosted_compute_update_required(status: &str, compute_changed: bool) -> bool {
+    compute_changed || status != "running"
 }
 
 async fn update_hosted_compute_settings(
