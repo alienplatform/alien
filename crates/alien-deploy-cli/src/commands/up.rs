@@ -39,6 +39,7 @@ use std::{
     path::{Path, PathBuf},
     str::FromStr,
     sync::Arc,
+    time::Duration,
 };
 
 #[derive(Parser, Debug, Clone)]
@@ -471,6 +472,33 @@ mod tests {
         );
         assert_eq!(setup_release_id(None, Some("current")), Some("current"));
         assert_eq!(setup_release_id(None, None), None);
+    }
+
+    #[test]
+    fn hosted_setup_handoff_waits_only_without_release_authority() {
+        assert!(deployment_has_release_authority(Some("desired"), None));
+        assert!(deployment_has_release_authority(None, Some("current")));
+        assert!(!deployment_has_release_authority(None, None));
+
+        for status in [
+            "initial-setup-failed",
+            "provisioning-failed",
+            "update-failed",
+            "refresh-failed",
+            "delete-pending",
+            "deleting",
+            "deleted",
+        ] {
+            assert!(deployment_handoff_failed(status), "{status}");
+        }
+        for status in [
+            "initial-setup",
+            "provisioning",
+            "waiting-for-machines",
+            "running",
+        ] {
+            assert!(!deployment_handoff_failed(status), "{status}");
+        }
     }
 
     #[test]
@@ -1507,6 +1535,55 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 message: "Failed to refresh deployment after setup reconciliation".to_string(),
             })?
             .into_inner();
+
+        // A hosted setup refresh hands execution back to Platform before the
+        // manager necessarily installs the release authority for the next
+        // lifecycle. Do not race the compute endpoint during that short
+        // handoff: it needs an immutable desired/current release to snapshot
+        // into the update operation. Failed deployments which already retain
+        // release authority continue directly to the corrective update path.
+        if stack_settings.compute.is_some()
+            && !deployment_has_release_authority(
+                current_deployment.desired_release_id.as_deref(),
+                current_deployment.current_release_id.as_deref(),
+            )
+        {
+            output::info("Waiting for hosted deployment handoff...");
+            const HANDOFF_ATTEMPTS: usize = 150;
+            for attempt in 0..HANDOFF_ATTEMPTS {
+                if deployment_handoff_failed(&current_deployment.status) {
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: format!(
+                            "Setup reconciliation handed off, but the hosted deployment entered '{}' before release authority was established",
+                            current_deployment.status
+                        ),
+                    }));
+                }
+                if deployment_has_release_authority(
+                    current_deployment.desired_release_id.as_deref(),
+                    current_deployment.current_release_id.as_deref(),
+                ) {
+                    break;
+                }
+                if attempt + 1 == HANDOFF_ATTEMPTS {
+                    return Err(AlienError::new(ErrorData::ConfigurationError {
+                        message: "Timed out waiting for the hosted deployment to establish release authority after setup reconciliation"
+                            .to_string(),
+                    }));
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+                current_deployment = client
+                    .get_deployment()
+                    .id(&deployment_id)
+                    .send()
+                    .await
+                    .into_sdk_error()
+                    .context(ErrorData::ConfigurationError {
+                        message: "Failed to refresh deployment during setup handoff".to_string(),
+                    })?
+                    .into_inner();
+            }
+        }
     }
     if supports_hosted_compute_update(&current_deployment.status)
         && init.deployment_model == DeploymentModel::Push
@@ -2953,6 +3030,14 @@ fn hosted_setup_reconcile_required(
 
 fn setup_release_id<'a>(desired: Option<&'a str>, current: Option<&'a str>) -> Option<&'a str> {
     desired.or(current)
+}
+
+fn deployment_has_release_authority(desired: Option<&str>, current: Option<&str>) -> bool {
+    setup_release_id(desired, current).is_some()
+}
+
+fn deployment_handoff_failed(status: &str) -> bool {
+    status.ends_with("-failed") || matches!(status, "delete-pending" | "deleting" | "deleted")
 }
 
 fn setup_revision_was_applied(outcome: &LoopOutcome, stop_reason: &LoopStopReason) -> bool {
