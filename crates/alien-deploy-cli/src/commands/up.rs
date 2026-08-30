@@ -278,6 +278,7 @@ impl From<DeployConfigNetwork> for NetworkSettings {
 mod tests {
     use super::*;
     use clap::Parser;
+    use httpmock::{Method::PATCH, MockServer};
     use std::io::Write;
 
     #[test]
@@ -293,6 +294,81 @@ mod tests {
         assert!(!requires_install_context(Platform::Machines));
         assert!(!requires_install_context(Platform::Local));
         assert!(!requires_install_context(Platform::Test));
+    }
+
+    #[tokio::test]
+    async fn hosted_compute_update_uses_deployment_token_and_exact_payload() {
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(PATCH)
+                    .path("/v1/deployments/dep_example/compute")
+                    .header("authorization", "Bearer deployment-secret")
+                    .json_body(serde_json::json!({
+                        "compute": {
+                            "pools": {
+                                "workers": {
+                                    "mode": "fixed",
+                                    "machines": 2,
+                                    "machine": "m7i.large"
+                                }
+                            }
+                        }
+                    }));
+                then.status(200).json_body(serde_json::json!({
+                    "outcome": "accepted",
+                    "operation": null
+                }));
+            })
+            .await;
+        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {
+                "workers": {
+                    "mode": "fixed",
+                    "machines": 2,
+                    "machine": "m7i.large"
+                }
+            }
+        }))
+        .expect("valid compute settings");
+
+        update_hosted_compute_settings(
+            &server.base_url(),
+            "deployment-secret",
+            "dep_example",
+            &compute,
+        )
+        .await
+        .expect("hosted update should succeed");
+
+        mock.assert_async().await;
+    }
+
+    #[test]
+    fn hosted_compute_update_rejects_other_setting_changes() {
+        let current: StackSettings = serde_json::from_value(serde_json::json!({
+            "deploymentModel": "push",
+            "compute": { "pools": {} },
+            "network": { "type": "use-default" }
+        }))
+        .expect("valid current stack settings");
+        let requested: StackSettings = serde_json::from_value(serde_json::json!({
+            "deploymentModel": "push",
+            "compute": {
+                "pools": {
+                    "workers": { "mode": "fixed", "machines": 2, "machine": "m7i.large" }
+                }
+            },
+            "network": { "type": "create" }
+        }))
+        .expect("valid requested stack settings");
+
+        assert!(has_explicit_non_compute_changes(
+            &current, &requested, true, false, false
+        ));
+        assert!(!has_explicit_non_compute_changes(
+            &current, &requested, false, false, false
+        ));
     }
 
     #[test]
@@ -1262,6 +1338,69 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             message: "Failed to get deployment from manager".to_string(),
         })?
         .into_inner();
+
+    let hosted_platform =
+        manager_url.trim_end_matches('/') != resolved.base_url.trim_end_matches('/');
+    if current_deployment.status == "running"
+        && init.deployment_model == DeploymentModel::Push
+        && hosted_platform
+        && stack_settings.compute.is_some()
+    {
+        let current_stack_settings: StackSettings = current_deployment
+            .stack_settings
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize current stack settings".to_string(),
+            })?
+            .unwrap_or_default();
+        let explicit_network = args.network.network_mode != NetworkMode::Auto
+            || deploy_config
+                .as_ref()
+                .and_then(|config| config.network.as_ref())
+                .is_some();
+        let explicit_updates = deploy_config
+            .as_ref()
+            .and_then(|config| config.updates.as_ref())
+            .is_some();
+        let explicit_telemetry = deploy_config
+            .as_ref()
+            .and_then(|config| config.telemetry.as_ref())
+            .is_some();
+        if has_explicit_non_compute_changes(
+            &current_stack_settings,
+            &stack_settings,
+            explicit_network,
+            explicit_updates,
+            explicit_telemetry,
+        ) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "An active hosted deployment can update compute settings only; apply other deployment-setting changes separately."
+                    .to_string(),
+            }));
+        }
+        if current_stack_settings.compute != stack_settings.compute {
+            update_hosted_compute_settings(
+                &resolved.base_url,
+                &effective_token,
+                &deployment_id,
+                stack_settings.compute.as_ref().expect("checked above"),
+            )
+            .await?;
+            output::success(&format!(
+                "Deployment '{}' compute update was accepted by the hosted manager.",
+                name
+            ));
+            return Ok(());
+        }
+        output::success(&format!(
+            "Deployment '{}' already has the requested compute settings.",
+            name
+        ));
+        return Ok(());
+    }
 
     if let Some(public_endpoints) = public_endpoints.as_ref() {
         let release_id = current_deployment
@@ -2594,6 +2733,49 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
         .context(ErrorData::ConfigurationError {
             message: "Failed to create HTTP client".to_string(),
         })
+}
+
+fn has_explicit_non_compute_changes(
+    current: &StackSettings,
+    requested: &StackSettings,
+    network: bool,
+    updates: bool,
+    telemetry: bool,
+) -> bool {
+    (network && requested.network != current.network)
+        || (updates && requested.updates != current.updates)
+        || (telemetry && requested.telemetry != current.telemetry)
+}
+
+async fn update_hosted_compute_settings(
+    base_url: &str,
+    token: &str,
+    deployment_id: &str,
+    compute: &ComputeSettings,
+) -> Result<()> {
+    let client = create_manager_http_client(token)?;
+    let url = format!(
+        "{}/v1/deployments/{}/compute",
+        base_url.trim_end_matches('/'),
+        urlencoding::encode(deployment_id)
+    );
+    let response = client
+        .patch(&url)
+        .json(&serde_json::json!({ "compute": compute }))
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to update hosted deployment compute settings".to_string(),
+        })?;
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Hosted compute update failed with HTTP {status}: {body}"),
+        }));
+    }
+    Ok(())
 }
 
 fn parse_deployment_status(raw_status: &str) -> Result<DeploymentStatus> {
