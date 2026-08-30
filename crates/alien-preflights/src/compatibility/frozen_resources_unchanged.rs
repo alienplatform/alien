@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, StackCompatibilityCheck};
-use alien_core::{ResourceLifecycle, Stack};
+use alien_core::{ComputeCluster, Resource, ResourceLifecycle, Stack};
 use std::collections::{HashMap, HashSet};
 
 /// Validates that frozen resources haven't been added or modified during stack updates.
@@ -11,6 +11,37 @@ use std::collections::{HashMap, HashSet};
 /// 2. Adding frozen resources during update creates inconsistent state
 /// 3. Modifying frozen resources risks breaking security/permission models
 pub struct FrozenResourcesUnchangedCheck;
+
+/// Setup owns the ComputeCluster identity and network boundary, but its
+/// registered runtime controller deliberately owns fleet capacity. Keep this
+/// exception structural and narrow: changing groups, profiles, placement, or
+/// networking still requires setup.
+fn runtime_managed_frozen_change(old: &Resource, new: &Resource) -> bool {
+    let (Some(old_cluster), Some(new_cluster)) = (
+        old.downcast_ref::<ComputeCluster>(),
+        new.downcast_ref::<ComputeCluster>(),
+    ) else {
+        return false;
+    };
+    if old_cluster.capacity_groups.len() != new_cluster.capacity_groups.len() {
+        return false;
+    }
+
+    let mut normalized = old_cluster.clone();
+    for (old_group, new_group) in normalized
+        .capacity_groups
+        .iter_mut()
+        .zip(&new_cluster.capacity_groups)
+    {
+        if old_group.group_id != new_group.group_id {
+            return false;
+        }
+        old_group.min_size = new_group.min_size;
+        old_group.max_size = new_group.max_size;
+        old_group.scale_policy = new_group.scale_policy.clone();
+    }
+    normalized == *new_cluster
+}
 
 #[async_trait::async_trait]
 impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
@@ -69,7 +100,9 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
                 }
 
                 // Check if configuration changed (only check if still frozen)
-                if old_entry.config != new_entry.config {
+                if old_entry.config != new_entry.config
+                    && !runtime_managed_frozen_change(&old_entry.config, &new_entry.config)
+                {
                     errors.push(format!(
                         "Frozen resource '{}' was modified. \
                          Frozen resources are setup-owned. Rerun setup with the updated stack.",
@@ -92,7 +125,9 @@ impl StackCompatibilityCheck for FrozenResourcesUnchangedCheck {
 mod tests {
     use super::*;
     use alien_core::permissions::PermissionsConfig;
-    use alien_core::{Resource, ResourceEntry, ResourceLifecycle, Stack, Storage};
+    use alien_core::{
+        CapacityGroup, ComputeCluster, Resource, ResourceEntry, ResourceLifecycle, Stack, Storage,
+    };
     use indexmap::IndexMap;
 
     #[tokio::test]
@@ -356,5 +391,64 @@ mod tests {
         // Should succeed - removing frozen resources is allowed (deletion scenario)
         assert!(result.success);
         assert!(result.errors.is_empty());
+    }
+
+    fn compute_stack(cluster: ComputeCluster) -> Stack {
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: vec![],
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: PermissionsConfig::new(),
+            supported_platforms: None,
+            inputs: vec![],
+        }
+    }
+
+    fn compute_cluster(size: u32) -> ComputeCluster {
+        ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "workers".to_string(),
+                instance_type: Some("m8i.2xlarge".to_string()),
+                profile: None,
+                min_size: size,
+                max_size: size,
+                scale_policy: None,
+                nested_virtualization: Some(true),
+            })
+            .build()
+    }
+
+    #[tokio::test]
+    async fn compute_capacity_is_runtime_manageable() {
+        let result = FrozenResourcesUnchangedCheck
+            .check(
+                &compute_stack(compute_cluster(2)),
+                &compute_stack(compute_cluster(3)),
+            )
+            .await
+            .unwrap();
+        assert!(result.success, "{:?}", result.errors);
+    }
+
+    #[tokio::test]
+    async fn compute_boundary_change_remains_frozen() {
+        let old = compute_cluster(2);
+        let mut changed = compute_cluster(2);
+        changed.capacity_groups[0].instance_type = Some("m8i.4xlarge".to_string());
+        let result = FrozenResourcesUnchangedCheck
+            .check(&compute_stack(old), &compute_stack(changed))
+            .await
+            .unwrap();
+        assert!(!result.success);
     }
 }

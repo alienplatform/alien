@@ -2,8 +2,8 @@ use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
 use alien_core::{
-    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, RuntimeMetadata, Stack,
-    StackState, StackStatus,
+    ComputeClusterOutputs, Platform, ResourceLifecycle, ResourceStatus, Stack, StackState,
+    StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{state_utils::StackStateExt, RunningResourcePolicy, StackExecutor};
@@ -19,23 +19,6 @@ fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &Stack
                 .and_then(|outputs| outputs.downcast_ref::<ComputeClusterOutputs>())
                 .is_some_and(|outputs| outputs.total_machines == 0)
         })
-}
-
-fn direct_setup_update_is_authorized(
-    metadata: Option<&RuntimeMetadata>,
-    current_release_id: Option<&str>,
-    target_release_id: Option<&str>,
-) -> bool {
-    metadata.is_some_and(|metadata| {
-        metadata.initial_setup_authority == alien_core::InitialSetupAuthority::DirectSetup
-            && metadata
-                .direct_setup_update_authorization
-                .as_ref()
-                .is_some_and(|authorization| {
-                    Some(authorization.release_id.as_str()) == target_release_id
-                        && current_release_id == target_release_id
-                })
-    })
 }
 
 fn compute_update_status(
@@ -182,45 +165,10 @@ pub async fn handle_update_pending(
         .as_ref()
         .and_then(|m| m.prepared_stack.as_ref())
         .or(current.current_release.as_ref().map(|r| &r.stack));
-
     let target_release_id = current
         .target_release
         .as_ref()
         .and_then(|release| release.release_id.as_deref());
-    let direct_setup_update_authorized = direct_setup_update_is_authorized(
-        current.runtime_metadata.as_ref(),
-        current
-            .current_release
-            .as_ref()
-            .and_then(|release| release.release_id.as_deref()),
-        target_release_id,
-    );
-    if direct_setup_update_authorized {
-        let existing_metadata = current.runtime_metadata.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::MissingConfiguration {
-                message: "Runtime metadata required for direct setup update".to_string(),
-            })
-        })?;
-        let runtime_metadata = crate::pending::prepare_direct_setup_update(
-            target_stack,
-            &stack_state,
-            &config,
-            &client_config,
-            existing_metadata,
-        )
-        .await?;
-        next.status = DeploymentStatus::InitialSetup;
-        next.stack_state = Some(stack_state);
-        next.error = None;
-        next.runtime_metadata = Some(runtime_metadata);
-        return Ok(DeploymentStepResult {
-            state: next,
-            suggested_delay_ms: None,
-            update_heartbeat: false,
-            heartbeats: vec![],
-            observed_inventory_batches: vec![],
-        });
-    }
 
     // Run deployment-time preflights: compatibility checks + mutations + runtime checks
     // Store the mutated stack to use for the actual update and for future compatibility checks
@@ -332,6 +280,23 @@ pub async fn handle_updating(
                 message: "Pending prepared stack not found in runtime metadata".to_string(),
             })
         })?;
+
+    // Frozen resources omitted by a newer release remain setup-owned and must
+    // not be deleted by an ordinary update. Keep their installed definitions
+    // in the execution target while allowing explicitly runtime-managed frozen
+    // resources (currently ComputeCluster capacity) to reconcile changed
+    // configuration through their management controller.
+    if let Some(installed_stack) = runtime_metadata.prepared_stack.as_ref() {
+        for (resource_id, entry) in installed_stack.resources() {
+            if entry.lifecycle == ResourceLifecycle::Frozen
+                && !target_stack.resources.contains_key(resource_id)
+            {
+                target_stack
+                    .resources
+                    .insert(resource_id.clone(), entry.clone());
+            }
+        }
+    }
     // Inject environment variables into the prepared stack
     crate::helpers::inject_environment_variables(&mut target_stack, &config, current.platform)?;
 
@@ -347,7 +312,7 @@ pub async fn handle_updating(
     // Sync secrets to vault before updating workload resources.
     // The vault is Running and secrets may have been updated
     // This checks the hash and only syncs if needed
-    info!("Syncing secrets to vault before updating live resources");
+    info!("Syncing secrets to vault before updating managed resources");
     let synced = crate::helpers::sync_secrets_to_vault(
         &target_stack,
         &stack_state,
@@ -366,7 +331,7 @@ pub async fn handle_updating(
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
         .running_resource_policy(RunningResourcePolicy::OptIn)
-        .lifecycle_filter(vec![ResourceLifecycle::Live])
+        .lifecycle_filter(vec![ResourceLifecycle::Live, ResourceLifecycle::Frozen])
         .service_provider(service_provider)
         .build()
         .context(ErrorData::StackExecutionFailed {
@@ -435,7 +400,6 @@ pub async fn handle_updating(
         next.error = None;
         runtime_metadata.prepared_stack = runtime_metadata.pending_prepared_stack.take();
         runtime_metadata.setup_update_authorization = None;
-        runtime_metadata.direct_setup_update_authorization = None;
         next.runtime_metadata = Some(runtime_metadata);
         // Promote target to current: update successful
         next.current_release = next.target_release.clone();
@@ -603,50 +567,7 @@ fn prune_deprovisioned_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{
-        DirectSetupUpdateAuthorization, InitialSetupAuthority, Kv, Resource, ResourceLifecycle,
-        StackResourceState, Worker, WorkerCode,
-    };
-
-    #[test]
-    fn direct_setup_update_requires_explicit_same_release_authority() {
-        let mut metadata = RuntimeMetadata {
-            initial_setup_authority: InitialSetupAuthority::DirectSetup,
-            direct_setup_update_authorization: Some(DirectSetupUpdateAuthorization {
-                operation_id: "operation".to_string(),
-                release_id: "release-a".to_string(),
-            }),
-            ..RuntimeMetadata::default()
-        };
-
-        assert!(direct_setup_update_is_authorized(
-            Some(&metadata),
-            Some("release-a"),
-            Some("release-a")
-        ));
-        assert!(!direct_setup_update_is_authorized(
-            Some(&metadata),
-            Some("release-a"),
-            Some("release-b")
-        ));
-        assert!(!direct_setup_update_is_authorized(
-            Some(&metadata),
-            Some("release-b"),
-            Some("release-a")
-        ));
-
-        metadata.initial_setup_authority = InitialSetupAuthority::ImportedHandoff;
-        assert!(!direct_setup_update_is_authorized(
-            Some(&metadata),
-            Some("release-a"),
-            Some("release-a")
-        ));
-        assert!(!direct_setup_update_is_authorized(
-            None,
-            Some("release-a"),
-            Some("release-a")
-        ));
-    }
+    use alien_core::{Kv, Resource, ResourceLifecycle, StackResourceState, Worker, WorkerCode};
 
     fn state_entry(resource: Resource, status: ResourceStatus) -> StackResourceState {
         let mut entry = StackResourceState::new_pending(
