@@ -4248,149 +4248,162 @@ pub async fn push_initial_setup(
         operation: "acquire sync lock".to_string(),
     })?;
 
-    if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
-        config = serde_json::from_value(acquired_config)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to deserialize deploymentConfig from acquired deployment"
-                    .to_string(),
-            })?;
+    let setup_attempt = async {
+        if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+            config = serde_json::from_value(acquired_config)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to deserialize deploymentConfig from acquired deployment"
+                        .to_string(),
+                })?;
 
-        if let Some(net_args) = network_args {
-            let network_platform = base_platform.unwrap_or(platform);
-            let network_override =
-                network::parse_network_settings(net_args, network_platform.as_str()).map_err(
-                    |e| {
-                        AlienError::new(ErrorData::ValidationError {
-                            field: "network".to_string(),
-                            message: e,
-                        })
-                    },
-                )?;
-            if let Some(ns) = network_override {
-                config.stack_settings.network = Some(ns);
+            if let Some(net_args) = network_args {
+                let network_platform = base_platform.unwrap_or(platform);
+                let network_override =
+                    network::parse_network_settings(net_args, network_platform.as_str()).map_err(
+                        |e| {
+                            AlienError::new(ErrorData::ValidationError {
+                                field: "network".to_string(),
+                                message: e,
+                            })
+                        },
+                    )?;
+                if let Some(ns) = network_override {
+                    config.stack_settings.network = Some(ns);
+                }
             }
+
+            config.manager_url = Some(manager_base_url.to_string());
+            config.deployment_token = Some(deployment_token.to_string());
+            config.management_config = setup_management_config.clone();
+            config.base_platform = base_platform.or(config.base_platform);
+            let acquired_stack_settings = config.stack_settings.clone();
+            apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
         }
 
-        config.manager_url = Some(manager_base_url.to_string());
-        config.deployment_token = Some(deployment_token.to_string());
-        config.management_config = setup_management_config.clone();
-        config.base_platform = base_platform.or(config.base_platform);
-        let acquired_stack_settings = config.stack_settings.clone();
-        apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
-    }
+        // Re-fetch the deployment state now that we hold the lock.
+        // The manager may have advanced the state while we were waiting.
+        let deployment = client
+            .get_deployment()
+            .id(deployment_id)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to get deployment from manager".to_string(),
+            })?
+            .into_inner();
 
-    // Re-fetch the deployment state now that we hold the lock.
-    // The manager may have advanced the state while we were waiting.
-    let deployment = client
-        .get_deployment()
-        .id(deployment_id)
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to get deployment from manager".to_string(),
-        })?
-        .into_inner();
+        let status = parse_deployment_status(&deployment.status)?;
 
-    let status = parse_deployment_status(&deployment.status)?;
+        // Reconstruct release identity from the state protected by the acquired
+        // lock. Setup refreshes of an existing deployment must preserve the
+        // current release while using desired-or-current as their setup target;
+        // reporting current_release=None would make Platform durably erase the
+        // release pointer on the first setup reconcile.
+        let (current_release, target_release) = load_setup_releases(
+            &client,
+            deployment.current_release_id.as_deref(),
+            deployment.desired_release_id.as_deref(),
+            platform,
+        )
+        .await?;
 
-    // Reconstruct release identity from the state protected by the acquired
-    // lock. Setup refreshes of an existing deployment must preserve the
-    // current release while using desired-or-current as their setup target;
-    // reporting current_release=None would make Platform durably erase the
-    // release pointer on the first setup reconcile.
-    let (current_release, target_release) = load_setup_releases(
-        &client,
-        deployment.current_release_id.as_deref(),
-        deployment.desired_release_id.as_deref(),
-        platform,
-    )
-    .await?;
+        state.status = status;
+        state.current_release = current_release;
+        state.target_release = target_release;
+        state.stack_state = deployment
+            .stack_state
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize stack_state from manager".to_string(),
+            })?;
+        state.runtime_metadata = deployment
+            .runtime_metadata
+            .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize runtime_metadata from manager".to_string(),
+            })?;
 
-    state.status = status;
-    state.current_release = current_release;
-    state.target_release = target_release;
-    state.stack_state = deployment
-        .stack_state
-        .map(serde_json::from_value)
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize stack_state from manager".to_string(),
-        })?;
-    state.runtime_metadata = deployment
-        .runtime_metadata
-        .map(|rm| serde_json::to_value(rm).and_then(serde_json::from_value))
-        .transpose()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "Failed to deserialize runtime_metadata from manager".to_string(),
-        })?;
-
-    if requires_direct_setup_preparation(&state.status) {
-        let stack_state = state.stack_state.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "A running deployment has no stack state for setup update".to_string(),
-            })
-        })?;
-        let target_stack = state
-            .target_release
-            .as_ref()
-            .map(|release| release.stack.clone())
-            .ok_or_else(|| {
+        if requires_direct_setup_preparation(&state.status) {
+            let stack_state = state.stack_state.as_ref().ok_or_else(|| {
                 AlienError::new(ErrorData::ConfigurationError {
-                    message: "A setup update requires a desired release".to_string(),
+                    message: "A running deployment has no stack state for setup update".to_string(),
                 })
             })?;
-        let existing_metadata = state.runtime_metadata.as_ref().ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: "A running deployment has no prepared setup metadata".to_string(),
-            })
-        })?;
-        state.runtime_metadata = Some(
-            alien_deployment::prepare_direct_setup_update(
-                target_stack,
-                stack_state,
-                &config,
-                &client_config,
-                existing_metadata,
-            )
-            .await
-            .context(ErrorData::DeploymentFailed {
-                operation: "prepare direct setup update".to_string(),
-            })?,
+            let target_stack = state
+                .target_release
+                .as_ref()
+                .map(|release| release.stack.clone())
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message: "A setup update requires a desired release".to_string(),
+                    })
+                })?;
+            let existing_metadata = state.runtime_metadata.as_ref().ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "A running deployment has no prepared setup metadata".to_string(),
+                })
+            })?;
+            state.runtime_metadata = Some(
+                alien_deployment::prepare_direct_setup_update(
+                    target_stack,
+                    stack_state,
+                    &config,
+                    &client_config,
+                    existing_metadata,
+                )
+                .await
+                .context(ErrorData::DeploymentFailed {
+                    operation: "prepare direct setup update".to_string(),
+                })?,
+            );
+            state.status = DeploymentStatus::InitialSetup;
+        }
+
+        tracing::info!(
+            has_runtime_metadata = state.runtime_metadata.is_some(),
+            "push_initial_setup: state after re-fetch (before step loop)"
         );
-        state.status = DeploymentStatus::InitialSetup;
+
+        // Run the shared step loop with per-step reconciliation via the manager API
+        let transport = ManagerApiTransport::new(client.clone(), session.clone());
+        let policy = RunnerPolicy {
+            max_steps: 400,
+            // Push model: run initial setup only, then hand off to the manager.
+            // The CLI drives Pending → InitialSetup → Provisioning, then stops.
+            // The manager picks up from Provisioning and drives to Running.
+            operation: LoopOperation::InitialSetup,
+            delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
+        };
+
+        Ok::<_, AlienError<ErrorData>>(
+            shared_run_step_loop(
+                &mut state,
+                &mut config,
+                &client_config,
+                deployment_id,
+                &policy,
+                &transport,
+                None,
+                on_progress.as_ref(),
+            )
+            .await,
+        )
     }
-
-    tracing::info!(
-        has_runtime_metadata = state.runtime_metadata.is_some(),
-        "push_initial_setup: state after re-fetch (before step loop)"
-    );
-
-    // Run the shared step loop with per-step reconciliation via the manager API
-    let transport = ManagerApiTransport::new(client.clone(), session.clone());
-    let policy = RunnerPolicy {
-        max_steps: 400,
-        // Push model: run initial setup only, then hand off to the manager.
-        // The CLI drives Pending → InitialSetup → Provisioning, then stops.
-        // The manager picks up from Provisioning and drives to Running.
-        operation: LoopOperation::InitialSetup,
-        delay_strategy: alien_deployment::runner::DelayStrategy::Inline,
-    };
-
-    let runner_result = shared_run_step_loop(
-        &mut state,
-        &mut config,
-        &client_config,
-        deployment_id,
-        &policy,
-        &transport,
-        None,
-        on_progress.as_ref(),
-    )
     .await;
+
+    let runner_result = match setup_attempt {
+        Ok(runner_result) => runner_result,
+        Err(error) => {
+            release_deployment(client, deployment_id, &session).await;
+            return Err(error);
+        }
+    };
 
     if let Ok(result) = &runner_result {
         if setup_revision_was_applied(&result.loop_result.outcome, &result.loop_result.stop_reason)
