@@ -443,6 +443,27 @@ mod tests {
     }
 
     #[test]
+    fn failed_setup_states_are_prepared_before_retrying() {
+        for status in [
+            DeploymentStatus::Running,
+            DeploymentStatus::UpdateFailed,
+            DeploymentStatus::RefreshFailed,
+            DeploymentStatus::InitialSetupFailed,
+            DeploymentStatus::ProvisioningFailed,
+        ] {
+            assert!(requires_direct_setup_preparation(&status), "{status:?}");
+        }
+
+        for status in [
+            DeploymentStatus::Pending,
+            DeploymentStatus::InitialSetup,
+            DeploymentStatus::Provisioning,
+        ] {
+            assert!(!requires_direct_setup_preparation(&status), "{status:?}");
+        }
+    }
+
+    #[test]
     fn setup_refresh_prefers_desired_release_and_falls_back_to_current() {
         assert_eq!(
             setup_release_id(Some("desired"), Some("current")),
@@ -2926,8 +2947,7 @@ fn hosted_setup_reconcile_required(
             | "refresh-failed"
             | "initial-setup-failed"
             | "provisioning-failed"
-    )
-        && packaged_revision.is_some()
+    ) && packaged_revision.is_some()
         && packaged_revision != applied_revision
 }
 
@@ -4206,12 +4226,7 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    if matches!(
-        state.status,
-        DeploymentStatus::Running
-            | DeploymentStatus::UpdateFailed
-            | DeploymentStatus::RefreshFailed
-    ) {
+    if requires_direct_setup_preparation(&state.status) {
         let stack_state = state.stack_state.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ConfigurationError {
                 message: "A running deployment has no stack state for setup update".to_string(),
@@ -4315,6 +4330,17 @@ pub async fn push_initial_setup(
             Ok(())
         }
     }
+}
+
+fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
+    matches!(
+        status,
+        DeploymentStatus::Running
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::ProvisioningFailed
+    )
 }
 
 fn should_collect_push_setup_environment_info(platform: Platform) -> bool {
