@@ -7716,6 +7716,28 @@
           }
         }
       },
+      "GcpAgentPlatformSandboxHeartbeatData": {
+        "type": "object",
+        "description": "GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.\n\nNo session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management\npermission set holds. No template state either — emission is gated on reading it `ACTIVE`,\nwhich is what `status` already says.",
+        "required": [
+          "status",
+          "engine",
+          "templateId"
+        ],
+        "properties": {
+          "engine": {
+            "type": "string",
+            "description": "Reasoning engine the template hangs under, without which the template id names nothing."
+          },
+          "status": {
+            "$ref": "#/components/schemas/SandboxHeartbeatStatus"
+          },
+          "templateId": {
+            "type": "string",
+            "description": "The template sessions are currently cut from."
+          }
+        }
+      },
       "GcpArtifactRegistryHeartbeatData": {
         "type": "object",
         "required": [
@@ -15693,6 +15715,27 @@
                     "type": "string",
                     "enum": [
                       "azureSandboxGroup"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/GcpAgentPlatformSandboxHeartbeatData"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "backend"
+                ],
+                "properties": {
+                  "backend": {
+                    "type": "string",
+                    "enum": [
+                      "gcpAgentPlatform"
                     ]
                   }
                 }

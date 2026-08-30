@@ -523,10 +523,11 @@ fn deployment_model_wire(model: DeploymentModel) -> alien_manager_api::types::De
 mod tests {
     use super::*;
     use alien_core::{
-        ContainerHeartbeatData, HeartbeatBackend, HeartbeatCollectionIssue,
-        HeartbeatCollectionIssueReason, HeartbeatIssueSeverity, KubernetesContainerHeartbeatData,
-        KubernetesWorkloadKind, ObservedHealth, Platform, ProviderLifecycleState,
-        ResourceHeartbeatData, ResourceType, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
+        ContainerHeartbeatData, GcpAgentPlatformSandboxHeartbeatData, HeartbeatBackend,
+        HeartbeatCollectionIssue, HeartbeatCollectionIssueReason, HeartbeatIssueSeverity,
+        KubernetesContainerHeartbeatData, KubernetesWorkloadKind, ObservedHealth, Platform,
+        ProviderLifecycleState, ResourceHeartbeatData, ResourceType, SandboxHeartbeatData,
+        SandboxHeartbeatStatus, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
     };
     use chrono::TimeZone;
 
@@ -625,6 +626,42 @@ mod tests {
         assert!(value.get("collection").is_none());
         assert!(value["data"]["data"].get("summary").is_none());
         assert!(value["data"]["data"].get("detail").is_none());
+    }
+
+    /// The generated type is built from the manager OpenAPI spec, so a variant added to
+    /// `alien-core` without regenerating it fails here — in the client, before any HTTP call.
+    #[test]
+    fn converts_gcp_sandbox_heartbeats_to_generated_manager_request_type() {
+        let heartbeat = ResourceHeartbeat {
+            deployment_id: Some("dep_test".to_string()),
+            resource_id: "agent-sbx".to_string(),
+            resource_type: ResourceType::from("sandbox"),
+            controller_platform: Platform::Gcp,
+            backend: HeartbeatBackend::Gcp,
+            observed_at: chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap(),
+            data: ResourceHeartbeatData::Sandbox(SandboxHeartbeatData::GcpAgentPlatform(
+                GcpAgentPlatformSandboxHeartbeatData {
+                    status: SandboxHeartbeatStatus::default(),
+                    engine: "eng".to_string(),
+                    template_id: "tpl1".to_string(),
+                },
+            )),
+            raw: vec![],
+        };
+
+        let heartbeats = to_manager_api_heartbeats(vec![heartbeat])
+            .expect("core heartbeat should convert to generated manager API heartbeat");
+
+        let value = serde_json::to_value(&heartbeats[0]).expect("heartbeat should serialize");
+
+        assert_eq!(value["resourceId"], "agent-sbx");
+        assert_eq!(value["resourceType"], "sandbox");
+        assert_eq!(value["data"]["resourceType"], "sandbox");
+        assert_eq!(value["data"]["data"]["backend"], "gcpAgentPlatform");
+        assert_eq!(value["data"]["data"]["engine"], "eng");
+        assert_eq!(value["data"]["data"]["templateId"], "tpl1");
+        assert_eq!(value["data"]["data"]["status"]["health"], "healthy");
+        assert_eq!(value["data"]["data"]["status"]["lifecycle"], "running");
     }
 
     #[test]
