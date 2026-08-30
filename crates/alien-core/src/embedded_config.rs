@@ -39,6 +39,10 @@ pub struct DeployCliConfig {
     /// Unix install script URL for this CLI package.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub install_script_url: Option<String>,
+    /// Package build revision for setup-affecting code and artifacts. Existing
+    /// direct-setup deployments reconcile setup once when this value changes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup_revision: Option<String>,
     /// Branded environment variable that contains the deployment token.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub token_env_var: Option<String>,
@@ -195,6 +199,7 @@ mod tests {
                 "https://packages.example.com/acme/machine-bundle.json".into(),
             ),
             install_script_url: Some("https://packages.example.com/acme/install.sh".into()),
+            setup_revision: Some("build-123".into()),
             token_env_var: Some("ACME_DEPLOYMENT_TOKEN".into()),
             name: Some("acme-deploy".into()),
         };

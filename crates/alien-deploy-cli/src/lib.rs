@@ -183,6 +183,7 @@ mod tests {
             agent_binary_url: None,
             machine_bundle_url: None,
             install_script_url: None,
+            setup_revision: None,
             token_env_var: None,
             name: Some("acmectl".to_string()),
             display_name: Some("Acme Deployment CLI".to_string()),
