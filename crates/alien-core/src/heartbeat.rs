@@ -1597,6 +1597,7 @@ impl Default for PostgresHeartbeatStatus {
 pub enum SandboxHeartbeatData {
     AwsMicrovm(AwsMicrovmSandboxHeartbeatData),
     AzureSandboxGroup(AzureSandboxGroupHeartbeatData),
+    GcpAgentPlatform(GcpAgentPlatformSandboxHeartbeatData),
     KubernetesPods(KubernetesSandboxHeartbeatData),
     Local(LocalSandboxHeartbeatData),
 }
@@ -1652,6 +1653,22 @@ pub struct AzureSandboxGroupHeartbeatData {
     pub status: SandboxHeartbeatStatus,
     pub sandbox_group: String,
     pub provisioning_state: Option<String>,
+}
+
+/// GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.
+///
+/// No session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management
+/// permission set holds. No template state either — emission is gated on reading it `ACTIVE`,
+/// which is what `status` already says.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct GcpAgentPlatformSandboxHeartbeatData {
+    pub status: SandboxHeartbeatStatus,
+    /// Reasoning engine the template hangs under, without which the template id names nothing.
+    pub engine: String,
+    /// The template sessions are currently cut from.
+    pub template_id: String,
 }
 
 /// Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
@@ -2869,6 +2886,43 @@ mod tests {
         assert_eq!(daemon["data"]["backend"], "kubernetes");
         assert_eq!(worker["resourceType"], "worker");
         assert_eq!(worker["data"]["backend"], "awsLambda");
+    }
+
+    /// A variant that compiles can still be unreadable on the wire: the transport round-trips every
+    /// heartbeat through the generated manager type, which matches on the tag string alone.
+    #[test]
+    fn gcp_sandbox_heartbeat_keeps_its_wire_tag_and_camel_case_names() {
+        let data = ResourceHeartbeatData::Sandbox(SandboxHeartbeatData::GcpAgentPlatform(
+            GcpAgentPlatformSandboxHeartbeatData {
+                status: SandboxHeartbeatStatus::default(),
+                engine: "eng".to_string(),
+                template_id: "tpl1".to_string(),
+            },
+        ));
+
+        let value = serde_json::to_value(&data).unwrap();
+        assert_eq!(
+            value,
+            json!({
+                "resourceType": "sandbox",
+                "data": {
+                    "backend": "gcpAgentPlatform",
+                    "status": {
+                        "health": "healthy",
+                        "lifecycle": "running",
+                        "message": null,
+                        "stale": false,
+                        "partial": false,
+                        "collectionIssues": []
+                    },
+                    "engine": "eng",
+                    "templateId": "tpl1"
+                }
+            })
+        );
+
+        let parsed: ResourceHeartbeatData = serde_json::from_value(value).unwrap();
+        assert_eq!(parsed, data);
     }
 
     #[test]

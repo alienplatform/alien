@@ -397,6 +397,25 @@ impl GcpAgentPlatformTemplateController {
             }));
         }
 
+        ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
+            deployment_id: None,
+            resource_id: config.id.clone(),
+            resource_type: Sandbox::RESOURCE_TYPE,
+            controller_platform: alien_core::Platform::Gcp,
+            backend: alien_core::HeartbeatBackend::Gcp,
+            observed_at: chrono::Utc::now(),
+            data: alien_core::ResourceHeartbeatData::Sandbox(
+                alien_core::SandboxHeartbeatData::GcpAgentPlatform(
+                    alien_core::GcpAgentPlatformSandboxHeartbeatData {
+                        status: alien_core::SandboxHeartbeatStatus::default(),
+                        engine,
+                        template_id,
+                    },
+                ),
+            ),
+            raw: vec![],
+        });
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -791,6 +810,75 @@ mod tests {
             .await
             .expect("delete runs to terminal");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// Ready must re-report on every reconcile, not once on the way in: emitting only on entry
+    /// stops reporting after create.
+    #[tokio::test]
+    async fn every_ready_reconcile_emits_one_healthy_heartbeat() {
+        use alien_core::{
+            ObservedHealth, ProviderLifecycleState, ResourceHeartbeatData, SandboxHeartbeatData,
+        };
+
+        let provider = provider_with(happy_client());
+        let mut executor = build_executor(
+            sandbox_with(SandboxEgress::Deny, "ubuntu:24.04", None, None),
+            provider,
+        )
+        .await;
+
+        executor
+            .run_until_terminal()
+            .await
+            .expect("create runs to a steady state");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        for reconcile in 1..=3 {
+            executor.step().await.expect("a Ready reconcile succeeds");
+            assert_eq!(
+                executor.status(),
+                ResourceStatus::Running,
+                "reconcile {reconcile} stays Ready"
+            );
+
+            let heartbeats = executor.last_heartbeats();
+            assert_eq!(
+                heartbeats.len(),
+                1,
+                "reconcile {reconcile} emits exactly one heartbeat"
+            );
+            let heartbeat = &heartbeats[0];
+            assert_eq!(heartbeat.resource_id, "agent-sbx");
+            assert_eq!(heartbeat.resource_type, Sandbox::RESOURCE_TYPE);
+            assert_eq!(heartbeat.controller_platform, Platform::Gcp);
+            assert_eq!(heartbeat.backend, alien_core::HeartbeatBackend::Gcp);
+            assert!(heartbeat.raw.is_empty(), "no raw payload is collected");
+
+            let ResourceHeartbeatData::Sandbox(SandboxHeartbeatData::GcpAgentPlatform(data)) =
+                &heartbeat.data
+            else {
+                panic!(
+                    "expected a GCP Agent Platform sandbox heartbeat, got {:?}",
+                    heartbeat.data
+                );
+            };
+            assert_eq!(
+                data.status.health,
+                ObservedHealth::Healthy,
+                "an ACTIVE template was read, so health is measured healthy"
+            );
+            assert_eq!(
+                data.status.lifecycle,
+                ProviderLifecycleState::Running,
+                "an ACTIVE template maps to lifecycle running"
+            );
+            assert_eq!(data.status.message, None);
+            assert!(!data.status.stale);
+            assert!(!data.status.partial);
+            assert!(data.status.collection_issues.is_empty());
+            assert_eq!(data.engine, "eng");
+            assert_eq!(data.template_id, "tpl1");
+        }
     }
 
     #[tokio::test]
