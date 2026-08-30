@@ -308,18 +308,26 @@ pub async fn acquire_setup_run_deployment(
         deployment_model,
         Some("setup-run".to_string()),
         Some("cli".to_string()),
-        Some(vec![
-            "pending".to_string(),
-            "preflights-failed".to_string(),
-            "initial-setup".to_string(),
-            "initial-setup-failed".to_string(),
-            "waiting-for-machines".to_string(),
-            "running".to_string(),
-            "update-failed".to_string(),
-            "refresh-failed".to_string(),
-        ]),
+        Some(setup_run_acquire_statuses()),
     )
     .await
+}
+
+fn setup_run_acquire_statuses() -> Vec<String> {
+    [
+        "pending",
+        "preflights-failed",
+        "initial-setup",
+        "initial-setup-failed",
+        "waiting-for-machines",
+        "running",
+        "update-failed",
+        "refresh-failed",
+        "provisioning-failed",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 /// Acquire a deployment lock for a caller that owns setup-time teardown.
@@ -532,6 +540,18 @@ mod tests {
 
         error.http_status_code = Some(409);
         assert!(!is_missing_deployment_response(&error));
+    }
+
+    #[test]
+    fn setup_run_can_recover_failed_setup_and_provisioning_states() {
+        let statuses = setup_run_acquire_statuses();
+
+        assert!(statuses
+            .iter()
+            .any(|status| status == "initial-setup-failed"));
+        assert!(statuses
+            .iter()
+            .any(|status| status == "provisioning-failed"));
     }
 
     fn sample_heartbeat() -> ResourceHeartbeat {

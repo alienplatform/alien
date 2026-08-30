@@ -904,9 +904,9 @@ mod failure_domain_tests {
         let settings: StackSettings = serde_json::from_value(serde_json::json!({
             "publicEndpoints": {
                 "loader": {
-                    "api": "https://10m5el.compute.islo.ai",
-                    "shares": "https://shares.10m5el.compute.islo.ai",
-                    "webhooks": "https://webhooks.10m5el.compute.islo.ai"
+                    "api": "https://loader.compute.example.com",
+                    "shares": "https://shares.compute.example.com",
+                    "webhooks": "https://webhooks.compute.example.com"
                 }
             }
         }))
@@ -915,7 +915,7 @@ mod failure_domain_tests {
         assert_eq!(
             serde_json::to_value(settings).expect("stack settings should serialize")
                 ["publicEndpoints"]["loader"]["shares"],
-            "https://shares.10m5el.compute.islo.ai"
+            "https://shares.compute.example.com"
         );
     }
 }
