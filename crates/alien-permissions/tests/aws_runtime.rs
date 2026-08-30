@@ -609,7 +609,7 @@ fn test_compute_cluster_management_can_pass_stack_prefixed_instance_roles() {
 }
 
 #[test]
-fn test_compute_cluster_management_can_reconcile_stack_prefixed_instance_role_policy() {
+fn test_compute_cluster_management_cannot_mutate_instance_role_policy() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
         get_permission_set("compute-cluster/management").expect("permission set exists");
@@ -619,19 +619,12 @@ fn test_compute_cluster_management_can_reconcile_stack_prefixed_instance_role_po
         .generate_policy(permission_set, BindingTarget::Stack, &context)
         .expect("Should generate AWS policy successfully");
 
-    let role_policy_statement = result
-        .statement
-        .iter()
-        .find(|statement| statement.action.contains(&"iam:PutRolePolicy".to_string()))
-        .expect("compute-cluster management should grant inline role policy reconciliation");
-
-    assert!(role_policy_statement
-        .action
-        .contains(&"iam:DeleteRolePolicy".to_string()));
-    assert_eq!(
-        role_policy_statement.resource,
-        vec!["arn:aws:iam::123456789012:role/my-stack-*-role".to_string()]
-    );
+    assert!(result.statement.iter().all(|statement| {
+        !statement.action.contains(&"iam:PutRolePolicy".to_string())
+            && !statement
+                .action
+                .contains(&"iam:DeleteRolePolicy".to_string())
+    }));
 }
 
 #[test]
