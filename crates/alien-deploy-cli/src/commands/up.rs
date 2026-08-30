@@ -345,6 +345,28 @@ mod tests {
     }
 
     #[test]
+    fn hosted_compute_update_rejects_other_setting_changes() {
+        let current: StackSettings = serde_json::from_value(serde_json::json!({
+            "deploymentModel": "push",
+            "compute": { "pools": {} },
+            "network": { "type": "use-default" }
+        }))
+        .expect("valid current stack settings");
+        let requested: StackSettings = serde_json::from_value(serde_json::json!({
+            "deploymentModel": "push",
+            "compute": {
+                "pools": {
+                    "workers": { "mode": "fixed", "machines": 2, "machine": "m7i.large" }
+                }
+            },
+            "network": { "type": "create" }
+        }))
+        .expect("valid requested stack settings");
+
+        assert!(has_non_compute_changes(&current, &requested));
+    }
+
+    #[test]
     fn stable_channel_accepts_exact_semver_tag() {
         assert_eq!(
             parse_stable_channel("v3.1.4\n").expect("valid stable channel"),
@@ -1329,6 +1351,12 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 message: "Failed to deserialize current stack settings".to_string(),
             })?
             .unwrap_or_default();
+        if has_non_compute_changes(&current_stack_settings, &stack_settings) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "An active hosted deployment can update compute settings only; apply other deployment-setting changes separately."
+                    .to_string(),
+            }));
+        }
         if current_stack_settings.compute != stack_settings.compute {
             update_hosted_compute_settings(
                 &resolved.base_url,
@@ -2681,6 +2709,12 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
         .context(ErrorData::ConfigurationError {
             message: "Failed to create HTTP client".to_string(),
         })
+}
+
+fn has_non_compute_changes(current: &StackSettings, requested: &StackSettings) -> bool {
+    let mut requested_without_compute = requested.clone();
+    requested_without_compute.compute = current.compute.clone();
+    requested_without_compute != *current
 }
 
 async fn update_hosted_compute_settings(
