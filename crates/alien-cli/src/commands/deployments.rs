@@ -2002,6 +2002,7 @@ async fn create_deployment_task(
         public_endpoints: None,
     };
 
+    let environment_variable_count = variables.len();
     let request = NewDeploymentRequest {
         setup_item: None,
         name: alien_platform_api::types::NewDeploymentRequestName::try_from(name.to_string())
@@ -2090,8 +2091,11 @@ async fn create_deployment_task(
         println!("   Platform: {:?}", deployment.platform);
         println!("   Deployment Group: {}", *deployment.deployment_group_id);
         println!("   Status: {:?}", deployment.status);
-        if let Some(env_vars) = &deployment.environment_variables {
-            println!("   Environment Variables: {} configured", env_vars.len());
+        if environment_variable_count > 0 {
+            println!(
+                "   Environment Variables: {} configured",
+                environment_variable_count
+            );
         }
         if let Some(token) = token {
             println!("   Token: {}", token);
