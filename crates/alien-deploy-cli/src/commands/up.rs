@@ -363,7 +363,12 @@ mod tests {
         }))
         .expect("valid requested stack settings");
 
-        assert!(has_non_compute_changes(&current, &requested));
+        assert!(has_explicit_non_compute_changes(
+            &current, &requested, true, false, false
+        ));
+        assert!(!has_explicit_non_compute_changes(
+            &current, &requested, false, false, false
+        ));
     }
 
     #[test]
@@ -1351,7 +1356,26 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 message: "Failed to deserialize current stack settings".to_string(),
             })?
             .unwrap_or_default();
-        if has_non_compute_changes(&current_stack_settings, &stack_settings) {
+        let explicit_network = args.network.network_mode != NetworkMode::Auto
+            || deploy_config
+                .as_ref()
+                .and_then(|config| config.network.as_ref())
+                .is_some();
+        let explicit_updates = deploy_config
+            .as_ref()
+            .and_then(|config| config.updates.as_ref())
+            .is_some();
+        let explicit_telemetry = deploy_config
+            .as_ref()
+            .and_then(|config| config.telemetry.as_ref())
+            .is_some();
+        if has_explicit_non_compute_changes(
+            &current_stack_settings,
+            &stack_settings,
+            explicit_network,
+            explicit_updates,
+            explicit_telemetry,
+        ) {
             return Err(AlienError::new(ErrorData::ConfigurationError {
                 message: "An active hosted deployment can update compute settings only; apply other deployment-setting changes separately."
                     .to_string(),
@@ -2711,10 +2735,16 @@ pub(crate) fn create_manager_http_client(token: &str) -> Result<reqwest::Client>
         })
 }
 
-fn has_non_compute_changes(current: &StackSettings, requested: &StackSettings) -> bool {
-    let mut requested_without_compute = requested.clone();
-    requested_without_compute.compute = current.compute.clone();
-    requested_without_compute != *current
+fn has_explicit_non_compute_changes(
+    current: &StackSettings,
+    requested: &StackSettings,
+    network: bool,
+    updates: bool,
+    telemetry: bool,
+) -> bool {
+    (network && requested.network != current.network)
+        || (updates && requested.updates != current.updates)
+        || (telemetry && requested.telemetry != current.telemetry)
 }
 
 async fn update_hosted_compute_settings(
