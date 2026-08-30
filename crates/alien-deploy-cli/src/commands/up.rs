@@ -473,6 +473,82 @@ mod tests {
         assert_eq!(setup_release_id(None, None), None);
     }
 
+    fn mock_release(id: &str) -> serde_json::Value {
+        let stack = Stack::new(format!("stack-{id}"))
+            .permissions(alien_core::PermissionsConfig::default())
+            .build();
+        serde_json::json!({
+            "id": id,
+            "workspaceId": "ws_test",
+            "projectId": "prj_test",
+            "stack": { "aws": stack },
+            "gitMetadata": null,
+            "createdAt": "2026-01-01T00:00:00Z",
+            "setupFingerprints": {}
+        })
+    }
+
+    #[tokio::test]
+    async fn setup_refresh_preserves_current_release_and_loads_distinct_target() {
+        let server = MockServer::start_async().await;
+        let current = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_current");
+                then.status(200).json_body(mock_release("rel_current"));
+            })
+            .await;
+        let desired = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_desired");
+                then.status(200).json_body(mock_release("rel_desired"));
+            })
+            .await;
+        let client = create_manager_client("deployment-secret", &server.base_url()).unwrap();
+
+        let (current_release, target_release) = load_setup_releases(
+            &client,
+            Some("rel_current"),
+            Some("rel_desired"),
+            Platform::Aws,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            current_release.and_then(|release| release.release_id),
+            Some("rel_current".to_string())
+        );
+        assert_eq!(
+            target_release.and_then(|release| release.release_id),
+            Some("rel_desired".to_string())
+        );
+        current.assert_hits_async(1).await;
+        desired.assert_hits_async(1).await;
+    }
+
+    #[tokio::test]
+    async fn setup_refresh_reuses_current_release_as_target() {
+        let server = MockServer::start_async().await;
+        let current = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET)
+                    .path("/v1/releases/rel_current");
+                then.status(200).json_body(mock_release("rel_current"));
+            })
+            .await;
+        let client = create_manager_client("deployment-secret", &server.base_url()).unwrap();
+
+        let (current_release, target_release) =
+            load_setup_releases(&client, Some("rel_current"), None, Platform::Aws)
+                .await
+                .unwrap();
+
+        assert_eq!(current_release, target_release);
+        current.assert_hits_async(1).await;
+    }
+
     #[test]
     fn setup_revision_is_applied_at_manager_handoff() {
         assert!(setup_revision_was_applied(
@@ -2955,6 +3031,64 @@ fn setup_release_id<'a>(desired: Option<&'a str>, current: Option<&'a str>) -> O
     desired.or(current)
 }
 
+async fn fetch_setup_release(
+    client: &ServerClient,
+    release_id: &str,
+    platform: Platform,
+) -> Result<ReleaseInfo> {
+    let response = client
+        .get_release()
+        .id(release_id)
+        .send()
+        .await
+        .into_sdk_error_reading_body()
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!("Failed to fetch release {release_id} from manager"),
+        })?;
+    let release = response.into_inner();
+    let platform_stack =
+        release_stack_value_for_platform(release.stack, platform).ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "Release {} has no stack for platform {}",
+                    release_id,
+                    platform.as_str()
+                ),
+            })
+        })?;
+    let stack = serde_json::from_value(platform_stack)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to parse release stack".to_string(),
+        })?;
+    Ok(ReleaseInfo {
+        release_id: Some(release.id),
+        version: None,
+        description: None,
+        stack,
+    })
+}
+
+async fn load_setup_releases(
+    client: &ServerClient,
+    current_release_id: Option<&str>,
+    desired_release_id: Option<&str>,
+    platform: Platform,
+) -> Result<(Option<ReleaseInfo>, Option<ReleaseInfo>)> {
+    let current_release = match current_release_id {
+        Some(release_id) => Some(fetch_setup_release(client, release_id, platform).await?),
+        None => None,
+    };
+    let target_release_id = setup_release_id(desired_release_id, current_release_id);
+    let target_release = match target_release_id {
+        Some(release_id) if Some(release_id) == current_release_id => current_release.clone(),
+        Some(release_id) => Some(fetch_setup_release(client, release_id, platform).await?),
+        None => None,
+    };
+    Ok((current_release, target_release))
+}
+
 fn setup_revision_was_applied(outcome: &LoopOutcome, stop_reason: &LoopStopReason) -> bool {
     matches!(outcome, LoopOutcome::Success)
         || matches!(
@@ -4012,58 +4146,11 @@ pub async fn push_initial_setup(
             message: "Failed to deserialize environment_info from manager".to_string(),
         })?;
 
-    // If there's a desired release, fetch the full release info. A failed fetch must fail the
-    // setup, not silently degrade to a no-release deploy: swallowing it would report success while
-    // having installed nothing the caller asked for.
-    let target_release = if let Some(release_id) = setup_release_id(
-        deployment.desired_release_id.as_deref(),
-        deployment.current_release_id.as_deref(),
-    ) {
-        let resp = client
-            .get_release()
-            .id(release_id)
-            .send()
-            .await
-            .into_sdk_error_reading_body()
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to fetch desired release {release_id} from manager"),
-            })?;
-        let rel = resp.into_inner();
-        let platform_stack_value = release_stack_value_for_platform(rel.stack, platform)
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                        "Release {} has no stack for platform {}",
-                        release_id,
-                        platform.as_str()
-                    ),
-                })
-            })?;
-
-        // No stack rewriting — release already stores proxy URIs.
-        // Controllers use image URIs as-is.
-        let stack = serde_json::from_value(platform_stack_value)
-            .into_alien_error()
-            .context(ErrorData::ConfigurationError {
-                message: "Failed to parse release stack".to_string(),
-            })?;
-
-        Some(ReleaseInfo {
-            release_id: Some(rel.id),
-            version: None,
-            description: None,
-            stack,
-        })
-    } else {
-        None
-    };
-
     let mut state = DeploymentState {
         status,
         platform,
         current_release: None,
-        target_release,
+        target_release: None,
         stack_state,
         error: None,
         environment_info,
@@ -4208,7 +4295,22 @@ pub async fn push_initial_setup(
 
     let status = parse_deployment_status(&deployment.status)?;
 
+    // Reconstruct release identity from the state protected by the acquired
+    // lock. Setup refreshes of an existing deployment must preserve the
+    // current release while using desired-or-current as their setup target;
+    // reporting current_release=None would make Platform durably erase the
+    // release pointer on the first setup reconcile.
+    let (current_release, target_release) = load_setup_releases(
+        &client,
+        deployment.current_release_id.as_deref(),
+        deployment.desired_release_id.as_deref(),
+        platform,
+    )
+    .await?;
+
     state.status = status;
+    state.current_release = current_release;
+    state.target_release = target_release;
     state.stack_state = deployment
         .stack_state
         .map(serde_json::from_value)
