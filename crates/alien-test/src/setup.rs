@@ -64,6 +64,7 @@ pub async fn setup_target(
         &deployment.token,
         None, // no network override from tests
         None,
+        None, // generated package setup revision
     )
     .await
     {
