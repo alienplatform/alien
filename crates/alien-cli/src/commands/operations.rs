@@ -271,7 +271,6 @@ async fn invoke_task(
             operation,
             options.params,
             options.access_duration,
-            options.json,
         )
         .await?
     } else {
@@ -385,7 +384,6 @@ async fn request_access_then_reinvoke(
     operation: &str,
     params_json: &str,
     access_duration: &str,
-    json: bool,
 ) -> Result<alien_platform_api::types::InvokeOperationResponse> {
     let params: Option<Value> = Some(
         serde_json::from_str(params_json)
@@ -424,18 +422,17 @@ async fn request_access_then_reinvoke(
         })?
         .into_inner();
 
-    if json {
-        // JSON callers get no further output until this function returns
-        // (up to an hour later) unless we hand back the request ID and the
-        // approve command as soon as each becomes available — otherwise an
-        // automation caller has no way to learn what to approve.
-        print_json(&json!({ "id": created.id, "status": created.status }))?;
-    } else {
-        println!(
-            "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
-            created.id
-        );
-    }
+    // Progress (this message, the approve command once available) always
+    // goes to stderr. In --json mode, stdout is reserved for exactly one
+    // JSON document — the final result — so a caller can pipe it straight
+    // into a parser; printing progress there too (even as separate JSON
+    // objects) would make stdout unparseable as a single value. Same idea
+    // as `docker pull` writing progress to stderr and the final digest to
+    // stdout.
+    eprintln!(
+        "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        created.id
+    );
 
     let deadline = std::time::Instant::now() + Duration::from_secs(3600);
     let mut printed_kubectl_approve = false;
@@ -461,14 +458,7 @@ async fn request_access_then_reinvoke(
             )
             .await?;
             if let Some(command) = &kubectl_approve {
-                if json {
-                    print_json(&json!({
-                        "id": created.id,
-                        "kubectlApprove": command,
-                    }))?;
-                } else {
-                    println!("Run this in-cluster to approve:\n  {command}\n");
-                }
+                eprintln!("Run this in-cluster to approve:\n  {command}\n");
                 printed_kubectl_approve = true;
             }
         }
@@ -616,20 +606,36 @@ async fn verify_operation(
         // full interval unconditionally can overrun the timeout by up to
         // interval + request latency while still reporting only the
         // configured duration.
-        tokio::time::sleep(interval.min(timeout - elapsed)).await;
+        let remaining = timeout - elapsed;
+        tokio::time::sleep(interval.min(remaining)).await;
 
-        let check = sdk_client
-            .verify_operation_check()
-            .workspace(workspace)
-            .project(project)
-            .body(VerifyOperationCheckRequest {
-                deployment_id: deployment_id.to_string(),
-                plugin: plugin.to_string(),
-                operation: operation.to_string(),
-                write_result: Some(write_result.clone()),
-            })
-            .send()
-            .await
+        // Bound the request itself by what's left of the timeout too — a
+        // slow or stalled response must not keep this running past the
+        // declared duration. A timeout here is treated the same as
+        // "not yet verified", not an error: the write already succeeded.
+        let remaining_after_sleep = timeout.saturating_sub(start.elapsed());
+        if remaining_after_sleep.is_zero() {
+            break;
+        }
+        let check_result = tokio::time::timeout(
+            remaining_after_sleep,
+            sdk_client
+                .verify_operation_check()
+                .workspace(workspace)
+                .project(project)
+                .body(VerifyOperationCheckRequest {
+                    deployment_id: deployment_id.to_string(),
+                    plugin: plugin.to_string(),
+                    operation: operation.to_string(),
+                    write_result: Some(write_result.clone()),
+                })
+                .send(),
+        )
+        .await;
+        let Ok(send_result) = check_result else {
+            break;
+        };
+        let check = send_result
             .into_sdk_error()
             .context(ErrorData::ApiRequestFailed {
                 message: format!("checking verification for '{plugin}/{operation}'"),
