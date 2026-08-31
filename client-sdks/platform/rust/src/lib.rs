@@ -362,6 +362,7 @@ mod tests {
             "platform": "machines",
             "protocolVersion": 1,
             "runtimeMetadata": {
+                "directSetupRevision": "setup-revision-2",
                 "pendingPreparedStack": {
                     "id": "updated-stack",
                     "resources": {}
@@ -387,6 +388,10 @@ mod tests {
         let serialized =
             serde_json::to_value(sdk_request.state).expect("deployment state should serialize");
 
+        assert_eq!(
+            serialized["runtimeMetadata"]["directSetupRevision"],
+            "setup-revision-2"
+        );
         assert_eq!(
             serialized["runtimeMetadata"]["pendingPreparedStack"]["id"],
             "updated-stack"
