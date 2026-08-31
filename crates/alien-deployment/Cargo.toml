@@ -52,6 +52,7 @@ tokio-test = "0.4"
 tempfile = "3"
 indexmap = "2"
 chrono = "0.4"
+httpmock.workspace = true
 
 [dev-dependencies.alien-infra]
 workspace = true

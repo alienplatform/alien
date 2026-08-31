@@ -21,8 +21,8 @@ use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
     manager_api_transport::{
         acquire_runtime_delete_deployment, acquire_setup_delete_deployment,
-        acquire_setup_run_deployment, final_reconcile, release_deployment, ManagerApiTransport,
-        SetupDeleteAcquireOutcome,
+        acquire_setup_run_deployment, combine_operation_and_finalization, final_reconcile,
+        release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
     },
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
@@ -4400,7 +4400,13 @@ pub async fn push_initial_setup(
     let runner_result = match setup_attempt {
         Ok(runner_result) => runner_result,
         Err(error) => {
-            release_deployment(client, deployment_id, &session).await;
+            if let Err(release_error) = release_deployment(client, deployment_id, &session).await {
+                return Err(error.context(ErrorData::GenericError {
+                    message: format!(
+                        "Setup preparation failed and lease release also failed: {release_error}"
+                    ),
+                }));
+            }
             return Err(error);
         }
     };
@@ -4417,8 +4423,10 @@ pub async fn push_initial_setup(
     }
 
     // Always reconcile + release, even on error.
-    final_reconcile(client, deployment_id, &session, &state).await;
-    release_deployment(client, deployment_id, &session).await;
+    let runner_result = combine_operation_and_finalization(
+        runner_result,
+        final_reconcile(client, deployment_id, &session, &state).await,
+    );
 
     // Handle runner result after lock release
     let result = runner_result.context(ErrorData::DeploymentFailed {
@@ -4692,8 +4700,10 @@ async fn run_runtime_deletion(
     .await;
 
     // Always reconcile + release, even on error
-    final_reconcile(client, deployment_id, &session, state).await;
-    release_deployment(client, deployment_id, &session).await;
+    let runner_result = combine_operation_and_finalization(
+        runner_result,
+        final_reconcile(client, deployment_id, &session, state).await,
+    );
 
     // Handle runner result after lock release
     let result = runner_result.context(ErrorData::DeploymentFailed {
@@ -4799,8 +4809,10 @@ async fn run_setup_deletion(
     });
 
     // Always reconcile + release, even on error
-    final_reconcile(client, deployment_id, &session, state).await;
-    release_deployment(client, deployment_id, &session).await;
+    let runner_result = combine_operation_and_finalization(
+        runner_result,
+        final_reconcile(client, deployment_id, &session, state).await,
+    );
 
     let result = runner_result.context(ErrorData::DeploymentFailed {
         operation: "setup teardown".to_string(),

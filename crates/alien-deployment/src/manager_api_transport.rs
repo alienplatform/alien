@@ -9,11 +9,11 @@
 //! | alien-terraform  | `manager_url` from SyncAcquire response            |
 
 use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, ResourceHeartbeat};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
 use async_trait::async_trait;
 use serde::Serialize;
-use tracing::{error, info};
+use tracing::info;
 
 use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
 
@@ -214,6 +214,28 @@ pub enum SetupDeleteAcquireOutcome {
     Acquired,
     /// Runtime cleanup already deleted the deployment record.
     AlreadyDeleted,
+}
+
+/// Preserve an operation failure while also reporting a finalization failure.
+pub fn combine_operation_and_finalization<T, E>(
+    operation_result: Result<T, AlienError<E>>,
+    finalization_result: Result<(), AlienError>,
+) -> Result<T, AlienError>
+where
+    E: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    match (operation_result, finalization_result) {
+        (Ok(value), Ok(())) => Ok(value),
+        (Ok(_), Err(finalization_error)) => Err(finalization_error),
+        (Err(operation_error), Ok(())) => Err(operation_error.into_generic()),
+        (Err(operation_error), Err(finalization_error)) => Err(operation_error
+            .into_generic()
+            .context(alien_error::GenericError {
+                message: format!(
+                    "Operation failed and deployment finalization also failed: {finalization_error}"
+                ),
+            })),
+    }
 }
 
 /// Acquire a deployment lock for CLI-owned runtime deletion.
@@ -466,49 +488,69 @@ async fn acquire_deployment_with_statuses(
     unreachable!()
 }
 
-/// Persist the final deployment state to the manager.
+/// Persist the final deployment state and release its manager lease.
 ///
-/// Best-effort — failures are logged but do not propagate, because the lock
-/// must still be released.
+/// Lease release is attempted even when serialization or reconciliation fails.
+/// A missing deployment is successful only for a completed deletion.
 pub async fn final_reconcile(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
     state: &DeploymentState,
-) {
-    let state_json = serde_json::to_value(state).unwrap_or_default();
-    if let Err(e) = client
-        .reconcile()
-        .body(alien_manager_api::types::ReconcileRequest {
-            deployment_id: deployment_id.to_string(),
-            session: session.to_string(),
-            state: state_json,
-            update_heartbeat: Some(false),
-            suggested_delay_ms: None,
-            resource_heartbeats: vec![],
-            observed_inventory_batches: vec![],
-            capabilities: Vec::new(),
-            operator_version: None,
-        })
-        .send()
-        .await
-        .into_sdk_error_reading_body()
-        .await
-    {
-        if state.status == alien_core::DeploymentStatus::Deleted
-            && is_missing_deployment_response(&e)
+) -> Result<(), AlienError> {
+    let reconcile_result = async {
+        let state_json =
+            serde_json::to_value(state)
+                .into_alien_error()
+                .context(alien_error::GenericError {
+                    message: "Failed to serialize final deployment state".to_string(),
+                })?;
+        client
+            .reconcile()
+            .body(alien_manager_api::types::ReconcileRequest {
+                deployment_id: deployment_id.to_string(),
+                session: session.to_string(),
+                state: state_json,
+                update_heartbeat: Some(false),
+                suggested_delay_ms: None,
+                resource_heartbeats: vec![],
+                observed_inventory_batches: vec![],
+                capabilities: Vec::new(),
+                operator_version: None,
+            })
+            .send()
+            .await
+            .into_sdk_error_reading_body()
+            .await
+            .map(|_| ())
+    }
+    .await;
+
+    let reconcile_result = match reconcile_result {
+        Err(error)
+            if state.status == alien_core::DeploymentStatus::Deleted
+                && is_missing_deployment_response(&error) =>
         {
             info!(
                 deployment_id = %deployment_id,
                 "Deployment was removed before final deletion reconciliation"
             );
-            return;
+            Ok(())
         }
-        error!(
-            deployment_id = %deployment_id,
-            error = %e,
-            "Failed to reconcile final deployment state"
-        );
+        result => result,
+    };
+
+    let release_result = release_deployment(client, deployment_id, session).await;
+    match (reconcile_result, release_result) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Err(reconcile_error), Err(release_error)) => {
+            Err(reconcile_error.context(alien_error::GenericError {
+                message: format!(
+                    "Final deployment reconciliation failed and lease release also failed: {release_error}"
+                ),
+            }))
+        }
     }
 }
 
@@ -530,6 +572,7 @@ mod tests {
         SandboxHeartbeatStatus, WorkloadHeartbeatStatus, WorkloadReplicaStatus,
     };
     use chrono::TimeZone;
+    use httpmock::prelude::*;
 
     #[test]
     fn only_not_found_means_deleted_cleanup_is_already_complete() {
@@ -541,6 +584,105 @@ mod tests {
 
         error.http_status_code = Some(409);
         assert!(!is_missing_deployment_response(&error));
+    }
+
+    #[test]
+    fn operation_error_is_retained_when_finalization_also_fails() {
+        let operation_error = AlienError::new(alien_error::GenericError {
+            message: "runner failed".to_string(),
+        });
+        let finalization_error = AlienError::new(alien_error::GenericError {
+            message: "reconcile failed".to_string(),
+        });
+
+        let error = combine_operation_and_finalization::<(), _>(
+            Err(operation_error),
+            Err(finalization_error),
+        )
+        .expect_err("both failures must be reported");
+
+        assert!(error.message.contains("reconcile failed"));
+        assert_eq!(
+            error
+                .source
+                .as_deref()
+                .map(|source| source.message.as_str()),
+            Some("runner failed")
+        );
+    }
+
+    #[tokio::test]
+    async fn final_reconcile_releases_lease_after_reconcile_failure() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(500).body("reconcile failed");
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(200);
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let state = DeploymentState {
+            status: alien_core::DeploymentStatus::Running,
+            platform: alien_core::Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        let error = final_reconcile(&client, "deployment-1", "session-1", &state)
+            .await
+            .expect_err("reconcile failure must propagate");
+
+        assert_eq!(error.http_status_code, Some(500));
+        reconcile.assert_async().await;
+        release.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn deleted_missing_deployment_is_successful_and_still_releases() {
+        let server = MockServer::start_async().await;
+        let reconcile = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/reconcile");
+                then.status(404).body("missing");
+            })
+            .await;
+        let release = server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/sync/release");
+                then.status(404).body("missing");
+            })
+            .await;
+        let client = ManagerClient::new(&server.base_url());
+        let state = DeploymentState {
+            status: alien_core::DeploymentStatus::Deleted,
+            platform: alien_core::Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+
+        final_reconcile(&client, "deployment-1", "session-1", &state)
+            .await
+            .expect("missing deleted deployment should be complete");
+        reconcile.assert_async().await;
+        release.assert_async().await;
     }
 
     #[test]
@@ -689,9 +831,12 @@ mod tests {
 
 /// Release the deployment lock.
 ///
-/// Best-effort — failures are logged but do not propagate.
-pub async fn release_deployment(client: &ManagerClient, deployment_id: &str, session: &str) {
-    if let Err(e) = client
+pub async fn release_deployment(
+    client: &ManagerClient,
+    deployment_id: &str,
+    session: &str,
+) -> Result<(), AlienError> {
+    if let Err(error) = client
         .release()
         .body(alien_manager_api::types::ReleaseRequest {
             deployment_id: deployment_id.to_string(),
@@ -702,19 +847,18 @@ pub async fn release_deployment(client: &ManagerClient, deployment_id: &str, ses
         .into_sdk_error_reading_body()
         .await
     {
-        if is_missing_deployment_response(&e) {
+        if is_missing_deployment_response(&error) {
             info!(
                 deployment_id = %deployment_id,
                 "Deployment was already removed; no sync lock remains to release"
             );
-            return;
+            return Ok(());
         }
-        error!(
-            deployment_id = %deployment_id,
-            error = %e,
-            "Failed to release sync lock"
-        );
+        return Err(error.context(alien_error::GenericError {
+            message: "Failed to release sync lock".to_string(),
+        }));
     }
+    Ok(())
 }
 
 fn is_missing_deployment_response(error: &AlienError) -> bool {

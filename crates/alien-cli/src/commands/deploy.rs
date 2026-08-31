@@ -21,8 +21,8 @@ use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
 use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, NetworkSettings, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
-    acquire_deployment_with_payload, acquire_setup_run_deployment, final_reconcile,
-    release_deployment, ManagerApiTransport,
+    acquire_deployment_with_payload, acquire_setup_run_deployment,
+    combine_operation_and_finalization, final_reconcile, ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -1696,14 +1696,16 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     .await;
 
     // Always reconcile + release, even on error
-    final_reconcile(
-        &manager_client,
-        &tracked_deployment.deployment_id,
-        &session,
-        &current,
-    )
-    .await;
-    release_deployment(&manager_client, &tracked_deployment.deployment_id, &session).await;
+    let runner_result = combine_operation_and_finalization(
+        runner_result,
+        final_reconcile(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            &current,
+        )
+        .await,
+    );
 
     let RunnerResult {
         loop_result,
