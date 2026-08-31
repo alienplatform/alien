@@ -197,8 +197,7 @@ fn to_manager_api_observed_inventory_batches(
 // the same protocol:
 //   1. acquire_deployment()   — lock the deployment with a retry loop
 //   2. run_step_loop()        — step until terminal (uses ManagerApiTransport)
-//   3. final_reconcile()      — persist terminal state (even on error)
-//   4. release_deployment()   — unlock (even on error)
+//   3. final_reconcile()      — persist terminal state and always attempt unlock
 // ---------------------------------------------------------------------------
 
 /// Maximum number of acquire attempts (60 × 2s = 2 minutes).
