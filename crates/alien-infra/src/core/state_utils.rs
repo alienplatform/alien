@@ -232,6 +232,13 @@ pub trait StackStateExt {
     /// Returns the IDs of resources that were successfully retried.
     fn retry_failed(&mut self) -> Result<Vec<String>>;
 
+    /// Same as [`StackStateExt::retry_failed`], limited to resources whose
+    /// lifecycle matches the provided filter.
+    fn retry_failed_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>>;
+
     /// Prepares the stack for destroy operations by handling failed resources appropriately.
     /// - For ProvisionFailed/UpdateFailed/RefreshFailed resources: transitions them to delete start
     /// - For DeleteFailed resources: retries the delete operation
@@ -284,6 +291,27 @@ impl StackStateExt for StackState {
         }
 
         tracing::info!(retried_resource_ids = ?retried_resource_ids, "Completed retry operation on stack");
+        Ok(retried_resource_ids)
+    }
+
+    fn retry_failed_with_lifecycle_filter(
+        &mut self,
+        lifecycle_filter: &[ResourceLifecycle],
+    ) -> Result<Vec<String>> {
+        let mut retried_resource_ids = Vec::new();
+
+        for (resource_id, resource_state) in &mut self.resources {
+            if !lifecycle_filter.contains(&resource_lifecycle(resource_id, resource_state)?) {
+                continue;
+            }
+
+            if resource_state.retry_failed()? {
+                tracing::info!(resource_id = %resource_id, "Successfully retried failed resource");
+                retried_resource_ids.push(resource_id.clone());
+            }
+        }
+
+        tracing::info!(retried_resource_ids = ?retried_resource_ids, "Completed filtered retry operation on stack");
         Ok(retried_resource_ids)
     }
 
@@ -541,6 +569,50 @@ mod tests {
     use alien_core::{Platform, Resource, ResourceStatus, StackResourceState, StackState};
     use alien_core::{Worker, WorkerCode};
     use alien_error::GenericError;
+
+    #[test]
+    fn filtered_retry_recovers_only_failed_resources_in_the_selected_lifecycle() {
+        fn failed_worker(id: &str, lifecycle: ResourceLifecycle) -> StackResourceState {
+            let worker = Worker::new(id.to_string())
+                .code(WorkerCode::Image {
+                    image: "example.com/worker:latest".to_string(),
+                })
+                .permissions("execution".to_string())
+                .build();
+            let mut state = StackResourceState::new_pending(
+                "worker".to_string(),
+                Resource::new(worker),
+                Some(lifecycle),
+                Vec::new(),
+            );
+            state.status = ResourceStatus::RefreshFailed;
+            state
+        }
+
+        let mut stack_state = StackState::new(Platform::Test);
+        stack_state.resources.insert(
+            "setup-owned".to_string(),
+            failed_worker("setup-owned", ResourceLifecycle::Frozen),
+        );
+        stack_state.resources.insert(
+            "runtime-owned".to_string(),
+            failed_worker("runtime-owned", ResourceLifecycle::Live),
+        );
+
+        let retried = stack_state
+            .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+            .unwrap();
+
+        assert_eq!(retried, vec!["setup-owned"]);
+        assert_eq!(
+            stack_state.resources["setup-owned"].status,
+            ResourceStatus::Pending
+        );
+        assert_eq!(
+            stack_state.resources["runtime-owned"].status,
+            ResourceStatus::RefreshFailed
+        );
+    }
 
     #[tokio::test]
     async fn test_prepare_for_destroy_provision_failed() {

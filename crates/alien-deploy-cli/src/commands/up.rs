@@ -13,9 +13,9 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo, Stack,
-    StackInputDefinition, StackInputKind, StackInputProvider, StackSettings, TelemetryMode,
-    UpdatesMode, Worker,
+    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
+    ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
+    StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
 use alien_deployment::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
@@ -27,7 +27,7 @@ use alien_deployment::{
     runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
-use alien_infra::ClientConfigExt;
+use alien_infra::{ClientConfigExt, StackStateExt};
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_manager_api::{Client as ServerClient, SdkResultExt as ManagerSdkResultExt};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
@@ -4362,6 +4362,16 @@ pub async fn push_initial_setup(
                     operation: "prepare direct setup update".to_string(),
                 })?,
             );
+            let stack_state = state.stack_state.as_mut().ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: "A setup update requires stack state".to_string(),
+                })
+            })?;
+            stack_state
+                .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
+                .context(ErrorData::DeploymentFailed {
+                    operation: "retry failed setup-owned resources".to_string(),
+                })?;
             state.status = DeploymentStatus::InitialSetup;
         }
 
