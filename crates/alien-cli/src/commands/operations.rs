@@ -242,7 +242,9 @@ async fn invoke_task(
         })?
         .into_inner();
 
-    let invocation = if invocation.status == InvokeOperationResponseStatus::PendingApproval {
+    let (invocation, access_request_id) = if invocation.status
+        == InvokeOperationResponseStatus::PendingApproval
+    {
         if !options.request_access {
             if options.json {
                 print_json(&invocation)?;
@@ -262,7 +264,7 @@ async fn invoke_task(
             return Ok(());
         }
 
-        request_access_then_reinvoke(
+        let (invocation, access_request_id) = request_access_then_reinvoke(
             &sdk_client,
             workspace,
             project,
@@ -272,9 +274,10 @@ async fn invoke_task(
             options.params,
             options.access_duration,
         )
-        .await?
+        .await?;
+        (invocation, Some(access_request_id))
     } else {
-        invocation
+        (invocation, None)
     };
 
     let command_id = invocation.command_id.ok_or_else(|| {
@@ -316,6 +319,7 @@ async fn invoke_task(
         &deployment_id,
         plugin,
         operation,
+        access_request_id.as_deref(),
         &result,
     )
     .await
@@ -384,7 +388,7 @@ async fn request_access_then_reinvoke(
     operation: &str,
     params_json: &str,
     access_duration: &str,
-) -> Result<alien_platform_api::types::InvokeOperationResponse> {
+) -> Result<(alien_platform_api::types::InvokeOperationResponse, String)> {
     let params: Option<Value> = Some(
         serde_json::from_str(params_json)
             .into_alien_error()
@@ -495,7 +499,7 @@ async fn request_access_then_reinvoke(
             field: "params".to_string(),
             message: "Invalid JSON".to_string(),
         })?;
-    sdk_client
+    let response = sdk_client
         .invoke_operation()
         .workspace(workspace)
         .project(project)
@@ -513,8 +517,9 @@ async fn request_access_then_reinvoke(
         .context(ErrorData::ApiRequestFailed {
             message: format!("invoking operation '{plugin}/{operation}' after approval"),
             url: None,
-        })
-        .map(|response| response.into_inner())
+        })?
+        .into_inner();
+    Ok((response, created.id.to_string()))
 }
 
 /// Poll `POST /v1/operations/verify-check` per the operation's own declared
@@ -545,6 +550,7 @@ async fn verify_operation(
     deployment_id: &str,
     plugin: &str,
     operation: &str,
+    access_request_id: Option<&str>,
     write_result: &Value,
 ) -> Result<VerificationOutcome> {
     // The declared verification timeout covers this whole function, not just
@@ -579,6 +585,8 @@ async fn verify_operation(
                 deployment_id: deployment_id.to_string(),
                 plugin: plugin.to_string(),
                 operation: operation.to_string(),
+                access_request_id: access_request_id.map(str::to_string),
+                remediation_plan_id: None,
                 write_result: Some(write_result.clone()),
             })
             .send(),
@@ -660,6 +668,8 @@ async fn verify_operation(
                     deployment_id: deployment_id.to_string(),
                     plugin: plugin.to_string(),
                     operation: operation.to_string(),
+                    access_request_id: access_request_id.map(str::to_string),
+                    remediation_plan_id: None,
                     write_result: Some(write_result.clone()),
                 })
                 .send(),
