@@ -13,7 +13,8 @@ use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, Platform};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
-    acquire_setup_delete_deployment, final_reconcile, release_deployment, ManagerApiTransport,
+    acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
+    ManagerApiTransport,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -322,14 +323,16 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     };
 
     // Always reconcile + release
-    final_reconcile(
-        &manager_client,
-        &tracked_deployment.deployment_id,
-        &session,
-        &current,
-    )
-    .await;
-    release_deployment(&manager_client, &tracked_deployment.deployment_id, &session).await;
+    let runner_result = combine_operation_and_finalization(
+        runner_result,
+        final_reconcile(
+            &manager_client,
+            &tracked_deployment.deployment_id,
+            &session,
+            &current,
+        )
+        .await,
+    );
 
     let RunnerResult {
         loop_result,

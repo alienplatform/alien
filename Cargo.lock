@@ -618,6 +618,7 @@ dependencies = [
  "chrono",
  "hex",
  "hostname 0.4.2",
+ "httpmock",
  "indexmap 2.14.1",
  "reqwest 0.12.28",
  "serde",
