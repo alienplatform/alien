@@ -547,6 +547,13 @@ async fn verify_operation(
     operation: &str,
     write_result: &Value,
 ) -> Result<VerificationOutcome> {
+    // The declared verification timeout covers this whole function, not just
+    // the retry loop below — start the clock before the FIRST verify-check
+    // call, not after it returns. Starting it later would let a slow (but
+    // still within-bound) initial call add its own latency on top of the
+    // declared timeout instead of counting against it.
+    let start = std::time::Instant::now();
+
     // This first call is the one that DECLARES the timeout/retry policy — we
     // can't bound it by "what's left of the timeout" since that isn't known
     // yet. Bound it by a fixed ceiling instead, generous enough to allow for
@@ -614,7 +621,6 @@ async fn verify_operation(
         .map(|secs| Duration::from_secs(secs.max(0) as u64))
         .unwrap_or(Duration::from_secs(60));
     let interval = Duration::from_secs(retry.interval_seconds.max(0) as u64);
-    let start = std::time::Instant::now();
 
     for _attempt in 1..retry.max_attempts.max(1) {
         let elapsed = start.elapsed();
