@@ -1122,3 +1122,115 @@ fn the_engine_is_reduced_to_a_bare_segment() {
         "the full resource name is reduced to the engine id"
     );
 }
+
+// ---- capabilities, session fields and terminate idempotency ------------------------------------
+
+/// The client-shaped access denial: what a delete of a sandbox under an engine this deployment was
+/// not granted returns. Measured against the live API, which answers a cross-engine `:execute` with
+/// `PERMISSION_DENIED` naming the sandbox environment.
+fn access_denied() -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+        resource_type: "SandboxEnvironment".to_string(),
+        resource_name: "s1".to_string(),
+    })
+    .context(AgentPlatformErrorData::RequestFailed {
+        operation: "delete sandbox".to_string(),
+        message: "s1".to_string(),
+    })
+}
+
+/// The declared ttl decides whether sessions from this object carry a deadline at all.
+///
+/// Both directions are asserted: with no ttl the create body sends none and the service default
+/// applies, so reporting `sessionLifetime` would promise a ceiling nobody asked for and nothing
+/// applies. A hardcoded `false` would pass the first assertion alone.
+#[test]
+fn capabilities_reflect_the_declared_session_ttl() {
+    assert!(
+        provider(MockAgentPlatformApi::new())
+            .capabilities()
+            .session_lifetime,
+        "a declared ttl makes the capability real"
+    );
+
+    let untimed = GcpAgentPlatformSandbox::new(
+        Arc::new(MockAgentPlatformApi::new()),
+        ENGINE_FULL.to_string(),
+        TEMPLATE.to_string(),
+        None,
+    );
+    assert!(
+        !untimed.capabilities().session_lifetime,
+        "no declared ttl means no session this object creates is terminated at a deadline"
+    );
+
+    // The rest of the row is the platform ceiling, unchanged.
+    assert!(untimed.capabilities().snapshot);
+    assert!(untimed.capabilities().files);
+}
+
+/// A tenant key has nowhere to go in the create body, so it is refused rather than dropped.
+///
+/// The code is asserted rather than the prose. `create_sandbox` is expected never: the failure
+/// this pins is a sandbox that starts anyway and serves every tenant from one box.
+#[tokio::test]
+async fn a_tenant_key_is_refused_rather_than_dropped() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_create_sandbox().never();
+
+    let error = provider(client)
+        .create(CreateSessionRequest {
+            tenant_key: Some("tenant-1".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("a tenant key Agent Platform cannot honour is refused");
+
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(
+        error.to_string().contains("tenantKey"),
+        "the refusal has to name the field a caller must remove: {error}"
+    );
+}
+
+/// Terminating a session that is already gone succeeds, because gone is the state it asks for.
+///
+/// The poll is expected never: an absent session has nothing to confirm, and reaching the poll at
+/// all would mean the delete's not-found had been treated as a failure.
+#[tokio::test]
+async fn terminate_of_an_absent_session_succeeds() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(not_found()));
+    client.expect_get_sandbox().never();
+
+    provider(client)
+        .terminate("s1")
+        .await
+        .expect("terminating an absent session succeeds");
+}
+
+/// A session this deployment cannot reach is still refused, and this is the half a careless
+/// idempotency fix breaks.
+///
+/// Mapping every delete failure to `Ok` would make `terminate` report containment for a sandbox
+/// under another deployment's engine that was never deleted — the caller would believe untrusted
+/// code had been stopped. Only not-found may pass.
+#[tokio::test]
+async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(access_denied()));
+    client.expect_get_sandbox().never();
+
+    let error = provider(client)
+        .terminate("s1")
+        .await
+        .expect_err("a refused delete is not containment");
+
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+}

@@ -498,8 +498,13 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
+    /// Narrows the platform ceiling to this instance: the TTL is fixed at construction from the
+    /// declaration, so with none declared every session this object creates runs to the service
+    /// default and none is terminated at a deadline the caller asked for.
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::gcp_agent_platform()
+        let mut capabilities = SandboxCapabilities::gcp_agent_platform();
+        capabilities.session_lifetime = self.session_ttl_seconds.is_some();
+        capabilities
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
@@ -513,6 +518,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
                           each command instead"
                     .to_string(),
                 field_name: Some("env".to_string()),
+            }));
+        }
+
+        // Refused rather than dropped, for the same reason as `env` above: `SandboxCreateRequest`
+        // has nowhere to put a tenant key, so accepting one would put a caller's tenants in one
+        // shared sandbox while the call reported success.
+        if request.tenant_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no tenantKey; create one sandbox per \
+                         tenant instead"
+                    .to_string(),
             }));
         }
 
@@ -849,13 +866,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Accepted, not completed: the client returns before the sandbox is gone. Returning here
         // would report containment while the code may still run, which is the whole point of
         // terminate — so the delete is confirmed by polling to not-found.
-        self.client
-            .delete_sandbox(&self.engine, session_id)
-            .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: TERMINATE.to_string(),
-                reason: format!("the delete of session '{session_id}' was not accepted"),
-            })?;
+        // A session that is already gone is the state terminate exists to reach, so not-found is
+        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
+        // for a session another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await {
+            if !is_not_found(&error) {
+                return Err(error.context(ErrorData::SandboxUnreachable {
+                    operation: TERMINATE.to_string(),
+                    reason: format!("the delete of session '{session_id}' was not accepted"),
+                }));
+            }
+            return Ok(());
+        }
 
         for _ in 0..TERMINATE_POLL_ATTEMPTS {
             match self.client.get_sandbox(&self.engine, session_id).await {

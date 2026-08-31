@@ -155,6 +155,9 @@ pub struct CreateSandbox {
     pub cpu: String,
     /// Memory in the data plane's units, such as `2048Mi`.
     pub memory: String,
+    /// Disk in the data plane's units, such as `40960Mi`. Absent lets the data plane derive one
+    /// from the cpu, which is what it does when the key is not sent.
+    pub disk: Option<String>,
     /// Variables placed in the sandbox. It inherits nothing, so a variable exists only if it is
     /// sent here.
     pub environment: BTreeMap<String, String>,
@@ -176,6 +179,13 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         "sourcesRef": { "diskImage": { "name": request.disk_image, "isPublic": true } },
         "resources": { "cpu": request.cpu, "memory": request.memory },
     });
+
+    // Sent only when declared. The data plane derives a disk from the cpu when the key is absent
+    // — `250m` yields `5120Mi` — so sending a placeholder would replace a correct default with a
+    // guess, while omitting a declared one silently ignores the ceiling the customer wrote down.
+    if let Some(disk) = &request.disk {
+        body["resources"]["disk"] = serde_json::json!(disk);
+    }
 
     if !request.environment.is_empty() {
         body["environment"] = serde_json::json!(request.environment);
@@ -692,6 +702,7 @@ mod tests {
                     disk_image: "ubuntu".to_string(),
                     cpu: "1".to_string(),
                     memory: "2Gi".to_string(),
+                    disk: None,
                     environment: Default::default(),
                     egress: None,
                     idle_suspend_seconds: None,
@@ -945,6 +956,7 @@ mod tests {
             disk_image: "ubuntu".to_string(),
             cpu: "1000m".to_string(),
             memory: "2048Mi".to_string(),
+            disk: None,
             environment: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
             egress: Some(EgressPolicy {
                 default_action: "Deny".to_string(),

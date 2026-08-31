@@ -98,6 +98,15 @@ impl TfEmitter for AzureSandboxEmitter {
             ));
         }
 
+        // The data plane takes the ceilings at create and nowhere else, so a declaration that
+        // stops here is one the sandbox never hears about. Emitted only when declared: absent
+        // means the data plane's own default, which is not the same as asserting a size.
+        if let Some(limits) = sandbox.limits.as_ref() {
+            fields.push(("cpu", Expression::String(limits.cpu.clone())));
+            fields.push(("memory", Expression::String(limits.memory.clone())));
+            fields.push(("disk", Expression::String(limits.disk.clone())));
+        }
+
         Ok(Some(expr::object(fields)))
     }
 }
@@ -200,6 +209,9 @@ mod tests {
             egress: SandboxEgress::Allow,
             idle_suspend_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
+            cpu: Some(BindingValue::Value("1000m".to_string())),
+            memory: Some(BindingValue::Value("2048Mi".to_string())),
+            disk: Some(BindingValue::Value("20480Mi".to_string())),
         };
         let keys = serde_json::to_value(&binding).expect("the binding serializes");
 

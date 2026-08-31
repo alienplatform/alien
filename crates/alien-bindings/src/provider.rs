@@ -1942,17 +1942,29 @@ impl BindingsProviderApi for BindingsProvider {
                     .into_value(binding_name, "diskImage")
                     .map_err(|_| invalid("diskImage"))?;
 
-                // Ceilings stay the service defaults: `.limits()` is refused on Azure at plan
-                // time, so nothing declares them and there is no value to carry. They move into
-                // the binding when `enforcedLimits` flips, not before.
+                // A binding rendered before Azure carried ceilings has none, and those deployments
+                // keep running — so an absent value falls back to the same default it has always
+                // had rather than failing to resolve.
+                let declared = |value: Option<alien_core::bindings::BindingValue<String>>,
+                                field: &'static str| {
+                    value
+                        .map(|value| value.into_value(binding_name, field))
+                        .transpose()
+                        .map_err(|_| invalid(field))
+                };
+                let cpu = declared(azure_binding.cpu, "cpu")?;
+                let memory = declared(azure_binding.memory, "memory")?;
+                let disk = declared(azure_binding.disk, "disk")?;
+
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
                     Arc::new(client),
                     group,
                     disk_image,
                     azure_binding.egress,
                     azure_binding.idle_suspend_seconds,
-                    DEFAULT_AZURE_CPU.to_string(),
-                    DEFAULT_AZURE_MEMORY.to_string(),
+                    cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
+                    memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
+                    disk,
                 ));
                 Ok(sandbox)
             }

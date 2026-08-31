@@ -87,6 +87,13 @@ pub struct MicrovmTier {
 /// Longest life AWS will run a MicroVM for, from `RunMicrovm`'s `maximumDurationInSeconds`.
 const AWS_MAX_SESSION_LIFETIME_SECONDS: u32 = 28_800;
 
+/// Azure's session sizing rule, quoted from the data plane's own refusal of an oversized request:
+/// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
+const AZURE_CPU_STEP_MILLICORES: i64 = 250;
+const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
+const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
+const AZURE_DISK_MIB_PER_CORE: i64 = 20 * 1024;
+
 const MICROVM_TIERS: &[MicrovmTier] = &[
     MicrovmTier {
         baseline_memory_mib: 512,
@@ -265,15 +272,26 @@ impl SandboxCapabilities {
                 // preview capability is. Returning the anonymous URL would publish the port.
                 preview: false,
                 suspend_resume: true,
-                // The one cloud of the five that could offer this, and the blocker is ours:
-                // `snapshot()` returns an id and `CreateSessionRequest` has no field to consume
-                // one, so no backend can complete the round trip. Nothing in the resource model
-                // owns such an artifact either, and Microsoft states snapshots are not garbage
-                // collected — an id with no owner is a bill that grows.
+                // False for a client reason, not a cloud one, and measured rather than assumed:
+                // the data plane completes the round trip today — `POST …/snapshot` returns a
+                // document, and a sandbox created from `sourcesRef.snapshot.id` carries the
+                // pre-snapshot filesystem and drops the post-snapshot one. What is missing is
+                // ours on both ends: this client has no snapshot call at all, and
+                // `CreateSessionRequest` has no field to consume an id with. Closing it also
+                // needs an owner for the artifact — Microsoft does not garbage collect snapshots
+                // and `stop` mints one on every suspend, so an id with no owner is a bill that
+                // grows. Declared false until all three are settled, because a capability that
+                // cannot be reached through the trait is a claim a caller cannot act on.
                 snapshot: false,
                 domain_egress_rules: true,
                 egress_deny: true,
-                enforced_limits: false,
+                // Measured on the wire, twice: the data plane takes a continuous cpu/memory/disk
+                // surface and states its own rule in the refusal — `CPU must be n×250m for
+                // n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. A declared
+                // `250m`/`512Mi` gives `nproc=1` and a 727 MB `MemTotal` inside, and an
+                // over-allocation raises `MemoryError` while the sandbox stays running. There is
+                // no tier enum; `azure_session_limits` checks the rule above at plan time.
+                enforced_limits: true,
                 process_limit: false,
                 // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
                 // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
@@ -578,6 +596,10 @@ impl Sandbox {
         // as bounded while the sandbox is not.
         capabilities.require(SandboxCapability::EnforcedLimits, platform)?;
 
+        if platform == Platform::Azure {
+            self.azure_session_limits()?;
+        }
+
         if platform == Platform::Aws {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
@@ -644,6 +666,76 @@ impl Sandbox {
             ));
         }
         Ok(image)
+    }
+
+    /// Checks the declared ceilings against the rule Azure states in its own refusal.
+    ///
+    /// Quoted from the data plane, which is where this rule is authoritative: *CPU must be n×250m
+    /// for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*. The surface is
+    /// continuous, not a size enum, so the values Alien already exposes map straight through and
+    /// there is nothing to snap to.
+    ///
+    /// Refused here rather than at the first session, for the same reason [`Self::microvm_tier`]
+    /// is: a value outside the rule renders into the package and fails at create, where the
+    /// customer reads it as a runtime fault rather than a declaration they can fix.
+    pub fn azure_session_limits(&self) -> Result<()> {
+        let Some(limits) = self.limits.as_ref() else {
+            // Nothing declared takes the data plane's own default, which is inside the rule.
+            return Ok(());
+        };
+
+        let refused = |field: &str, value: &str, reason: &str| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: field.to_string(),
+                value: value.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+
+        let cpu_millicores = millicores(&limits.cpu)
+            .ok_or_else(|| refused("cpu", &limits.cpu, "expected cores or millicores"))?;
+
+        // The multiple is checked, not just the range: `333m` sits inside 0.25–16 cores and is
+        // still refused on the wire, so a bounds-only check would pass a declaration that fails
+        // at create.
+        if cpu_millicores % AZURE_CPU_STEP_MILLICORES != 0
+            || !(AZURE_CPU_STEP_MILLICORES..=AZURE_MAX_CPU_MILLICORES).contains(&cpu_millicores)
+        {
+            return Err(refused(
+                "cpu",
+                &limits.cpu,
+                "Azure allocates cpu in steps of 250m from 250m to 16000m",
+            ));
+        }
+
+        // Both ceilings are derived from the cpu, so they cannot be checked before it is known.
+        let memory_ceiling_mib = cpu_millicores * AZURE_MEMORY_MIB_PER_CORE / 1000;
+        let disk_ceiling_mib = cpu_millicores * AZURE_DISK_MIB_PER_CORE / 1000;
+
+        let memory_mib = quantity_mib(&limits.memory)
+            .ok_or_else(|| refused("memory", &limits.memory, "Azure sizes memory in whole MiB"))?;
+        if memory_mib > memory_ceiling_mib {
+            return Err(refused(
+                "memory",
+                &limits.memory,
+                &format!("Azure allows at most 2Gi of memory per core, or {memory_ceiling_mib}Mi \
+                          at the declared cpu"),
+            ));
+        }
+
+        let disk_mib = quantity_mib(&limits.disk)
+            .ok_or_else(|| refused("disk", &limits.disk, "Azure sizes disk in whole MiB"))?;
+        if disk_mib > disk_ceiling_mib {
+            return Err(refused(
+                "disk",
+                &limits.disk,
+                &format!("Azure allows at most 20Gi of disk per core, or {disk_ceiling_mib}Mi at \
+                          the declared cpu"),
+            ));
+        }
+
+        Ok(())
     }
 
     /// The MicroVM size that keeps every declared ceiling, or why none does.
@@ -1173,9 +1265,9 @@ mod tests {
         // one where `deny` and a hostname list are the same object.
         assert!(azure.domain_egress_rules);
         assert!(azure.egress_deny);
-        // The data plane takes no ceiling, so a declaration of one is refused rather than
-        // accepted and dropped.
-        assert!(!azure.enforced_limits);
+        // Measured, not assumed: the data plane honours a continuous cpu/memory/disk surface and
+        // refuses anything outside `n×250m` with the rule in the message.
+        assert!(azure.enforced_limits);
         assert!(azure.suspend_resume);
         // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
         // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
@@ -1401,15 +1493,19 @@ mod tests {
             .expect("Azure creates the sandbox under a Deny policy with full inspection");
     }
 
-    /// Ceilings are rejected per-platform where unsupported — rejected when *declared*. With
-    /// limits mandatory that would read as "GCP sandboxes cannot exist", contradicting the
-    /// create, exec, files and terminate GCP does support.
+    /// A sandbox naming no ceilings is valid everywhere, and still resolves to a concrete set.
+    ///
+    /// This used to assert the other half too — that Azure refused *declared* ceilings, because
+    /// it was the one platform with `enforcedLimits: false`. It no longer is: the data plane was
+    /// measured honouring cpu, memory and disk, so there is no platform left that takes a sandbox
+    /// and ignores its ceilings, and that half of the assertion has no subject. What replaces it
+    /// is `azure_sizes_follow_the_rule_the_data_plane_states`, which checks the rule Azure
+    /// actually applies rather than that it applies none.
     #[test]
-    fn a_platform_that_cannot_enforce_limits_still_takes_a_sandbox_without_them() {
-        let declared = sandbox_with(SandboxEgress::Deny, Vec::new());
-        declared
+    fn a_sandbox_declaring_no_ceilings_takes_the_platforms_own() {
+        sandbox_with(SandboxEgress::Deny, Vec::new())
             .validate_for_platform(Platform::Azure)
-            .expect_err("declaring ceilings Azure cannot enforce is rejected");
+            .expect("ceilings inside Azure's rule are accepted");
 
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
@@ -1428,6 +1524,47 @@ mod tests {
 
         // A backend still gets a concrete set, so nothing downstream has to invent one.
         assert_eq!(undeclared.resolved_limits().cpu, "1");
+    }
+
+    /// Azure states its own sizing rule when it refuses, and this is that rule.
+    ///
+    /// Measured on the live data plane rather than taken from the docs page, which still shows a
+    /// five-value XS-XL tier table that does not exist: `250m`, `1500m` and `4000m` are all
+    /// accepted and honoured, `32000m` and `333m` are both refused. Checked at plan time because
+    /// the alternative is a package that renders cleanly and dies at the customer's first session.
+    #[test]
+    fn azure_sizes_follow_the_rule_the_data_plane_states() {
+        let sized = |cpu: &str, memory: &str, disk: &str| {
+            let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+            let limits = sandbox.limits.as_mut().expect("the fixture declares limits");
+            limits.cpu = cpu.to_string();
+            limits.memory = memory.to_string();
+            limits.disk = disk.to_string();
+            sandbox.validate_for_platform(Platform::Azure)
+        };
+
+        sized("250m", "512Mi", "5120Mi").expect("the smallest step the data plane accepts");
+        sized("4000m", "8192Mi", "40960Mi").expect("all three honoured on the wire");
+        sized("16000m", "32Gi", "320Gi").expect("the top of the range");
+
+        // A multiple, not just a range: `333m` sits inside 0.25-16 cores and the data plane still
+        // refuses it, so a bounds-only check would pass a declaration that fails at create.
+        let off_step = sized("333m", "512Mi", "5120Mi").expect_err("333m is not a step of 250m");
+        assert_eq!(off_step.code, "SANDBOX_LIMIT_INVALID", "{off_step}");
+        assert!(off_step.to_string().contains("cpu"), "{off_step}");
+
+        let too_big = sized("32000m", "64Gi", "640Gi").expect_err("32 cores is over the ceiling");
+        assert_eq!(too_big.code, "SANDBOX_LIMIT_INVALID", "{too_big}");
+
+        // Both ceilings are derived from the cpu, so the same memory passes at one size and fails
+        // at another - which is what makes them worth checking rather than bounding absolutely.
+        sized("1000m", "2Gi", "20Gi").expect("2Gi is exactly one core's worth");
+        let over_memory = sized("250m", "2Gi", "5120Mi").expect_err("2Gi needs a full core");
+        assert_eq!(over_memory.code, "SANDBOX_LIMIT_INVALID", "{over_memory}");
+        assert!(over_memory.to_string().contains("memory"), "{over_memory}");
+
+        let over_disk = sized("250m", "512Mi", "20Gi").expect_err("20Gi needs a full core");
+        assert!(over_disk.to_string().contains("disk"), "{over_disk}");
     }
 
     #[test]
