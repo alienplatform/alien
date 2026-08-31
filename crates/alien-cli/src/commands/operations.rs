@@ -547,24 +547,43 @@ async fn verify_operation(
     operation: &str,
     write_result: &Value,
 ) -> Result<VerificationOutcome> {
-    let deadline_check = sdk_client
-        .verify_operation_check()
-        .workspace(workspace)
-        .project(project)
-        .body(VerifyOperationCheckRequest {
-            deployment_id: deployment_id.to_string(),
-            plugin: plugin.to_string(),
-            operation: operation.to_string(),
-            write_result: Some(write_result.clone()),
-        })
-        .send()
-        .await
-        .into_sdk_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("checking verification for '{plugin}/{operation}'"),
+    // This first call is the one that DECLARES the timeout/retry policy — we
+    // can't bound it by "what's left of the timeout" since that isn't known
+    // yet. Bound it by a fixed ceiling instead, generous enough to allow for
+    // real network latency over the API's own ~9s request watchdog, so a
+    // slow or stalled response can't block the CLI indefinitely after the
+    // write already completed.
+    const INITIAL_VERIFY_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+    let deadline_check = tokio::time::timeout(
+        INITIAL_VERIFY_CHECK_TIMEOUT,
+        sdk_client
+            .verify_operation_check()
+            .workspace(workspace)
+            .project(project)
+            .body(VerifyOperationCheckRequest {
+                deployment_id: deployment_id.to_string(),
+                plugin: plugin.to_string(),
+                operation: operation.to_string(),
+                write_result: Some(write_result.clone()),
+            })
+            .send(),
+    )
+    .await
+    .map_err(|_| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "checking verification for '{plugin}/{operation}' timed out after {}s",
+                INITIAL_VERIFY_CHECK_TIMEOUT.as_secs()
+            ),
             url: None,
-        })?
-        .into_inner();
+        })
+    })?
+    .into_sdk_error()
+    .context(ErrorData::ApiRequestFailed {
+        message: format!("checking verification for '{plugin}/{operation}'"),
+        url: None,
+    })?
+    .into_inner();
 
     match deadline_check.outcome {
         VerifyOperationCheckResponseOutcome::Skipped => {
