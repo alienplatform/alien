@@ -560,6 +560,14 @@ async fn verify_operation(
     // real network latency over the API's own ~9s request watchdog, so a
     // slow or stalled response can't block the CLI indefinitely after the
     // write already completed.
+    //
+    // KNOWN LIMITATION: an operation whose declared timeoutSeconds is itself
+    // under this ceiling can still see the total call exceed its own
+    // declared timeout, if this first response lands late (but still within
+    // the ceiling) — there is no way to bound this call by a timeout it is
+    // the one discovering. Every call after this one strictly respects the
+    // remaining declared budget (see the retry loop below); only this first
+    // response's own latency is outside that accounting.
     const INITIAL_VERIFY_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
     let deadline_check = tokio::time::timeout(
         INITIAL_VERIFY_CHECK_TIMEOUT,
