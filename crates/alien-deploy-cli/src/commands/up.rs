@@ -13,7 +13,7 @@ use alien_core::embedded_config::DeployCliConfig;
 use alien_core::{
     parse_public_endpoint_assignment, validate_public_endpoint_urls, ClientConfig, ComputeSettings,
     Container, Daemon, DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus,
-    ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
+    EnvironmentInfo, ManagementConfig, NetworkSettings, Platform, PublicEndpointUrls, ReleaseInfo,
     ResourceLifecycle, Stack, StackInputDefinition, StackInputKind, StackInputProvider,
     StackSettings, TelemetryMode, UpdatesMode, Worker,
 };
@@ -440,6 +440,60 @@ mod tests {
             Some("package-a")
         ));
         assert!(!hosted_setup_reconcile_required("running", None, None));
+    }
+
+    #[test]
+    fn hosted_setup_keeps_an_existing_cloud_identity_pinned() {
+        let aws: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "aws",
+            "accountId": "123456789012",
+            "region": "us-east-2"
+        }))
+        .unwrap();
+        assert!(validate_push_environment_identity(&aws, &aws).is_ok());
+
+        let wrong_aws: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "aws",
+            "accountId": "999999999999",
+            "region": "us-east-1"
+        }))
+        .unwrap();
+        let error = validate_push_environment_identity(&aws, &wrong_aws)
+            .expect_err("account and region changes must fail closed");
+        let rendered = error.to_string();
+        assert!(rendered.contains("existing cloud environment"));
+
+        let gcp: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "gcp",
+            "projectNumber": "123456789012",
+            "projectId": "primary-project",
+            "region": "us-central1"
+        }))
+        .unwrap();
+        let wrong_gcp: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "gcp",
+            "projectNumber": "210987654321",
+            "projectId": "other-project",
+            "region": "europe-west1"
+        }))
+        .unwrap();
+        assert!(validate_push_environment_identity(&gcp, &wrong_gcp).is_err());
+
+        let azure: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "azure",
+            "tenantId": "tenant-a",
+            "subscriptionId": "subscription-a",
+            "location": "eastus2"
+        }))
+        .unwrap();
+        let wrong_azure: EnvironmentInfo = serde_json::from_value(serde_json::json!({
+            "platform": "azure",
+            "tenantId": "tenant-a",
+            "subscriptionId": "subscription-b",
+            "location": "westus2"
+        }))
+        .unwrap();
+        assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
     }
 
     #[test]
@@ -1550,6 +1604,34 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
                 .and_then(serde_json::Value::as_str)
                 .map(ToString::to_string)
         });
+    if init.deployment_model == DeploymentModel::Push
+        && hosted_platform
+        && requires_install_context(platform)
+    {
+        let existing_environment_info = current_deployment
+            .environment_info
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize environment_info from manager".to_string(),
+            })?
+            .map(serde_json::from_value)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to deserialize environment_info from manager".to_string(),
+            })?;
+        if let Some(existing_environment_info) = existing_environment_info.as_ref() {
+            validate_existing_push_environment_identity(
+                existing_environment_info,
+                platform,
+                base_platform,
+            )
+            .await?;
+        }
+    }
     if init.deployment_model == DeploymentModel::Push
         && hosted_platform
         && requires_install_context(platform)
@@ -3025,6 +3107,45 @@ fn hosted_setup_reconcile_required(
             | "provisioning-failed"
     ) && packaged_revision.is_some()
         && packaged_revision != applied_revision
+}
+
+async fn validate_existing_push_environment_identity(
+    existing: &EnvironmentInfo,
+    platform: Platform,
+    base_platform: Option<Platform>,
+) -> Result<()> {
+    let credential_platform = base_platform.unwrap_or(platform);
+    let client_config = ClientConfig::from_std_env(credential_platform)
+        .await
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to load {} credentials from environment. Ensure the required environment variables are set.",
+                credential_platform
+            ),
+        })?;
+    let observed = alien_deployment::collect_environment_info(credential_platform, &client_config)
+        .await
+        .context(ErrorData::DeploymentFailed {
+            operation: "target environment-info validation".to_string(),
+        })?;
+
+    validate_push_environment_identity(existing, &observed)
+}
+
+fn validate_push_environment_identity(
+    existing: &EnvironmentInfo,
+    observed: &EnvironmentInfo,
+) -> Result<()> {
+    if existing == observed {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::ValidationError {
+        field: "environment".to_string(),
+        message: format!(
+            "This deployment is bound to {existing:?}, but the active cloud credentials resolve to {observed:?}. Select the deployment's existing cloud environment before retrying setup."
+        ),
+    }))
 }
 
 fn setup_release_id<'a>(desired: Option<&'a str>, current: Option<&'a str>) -> Option<&'a str> {
