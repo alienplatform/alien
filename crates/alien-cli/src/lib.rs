@@ -21,6 +21,8 @@ pub mod test_utils;
 #[cfg(feature = "platform")]
 use crate::auth::normalize_workspace_name;
 #[cfg(feature = "platform")]
+use crate::commands::access_requests::{access_requests_task, AccessRequestsArgs};
+#[cfg(feature = "platform")]
 use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
 use crate::commands::operations::{operations_task, OperationsArgs};
@@ -143,6 +145,8 @@ impl Cli {
             #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => args.json,
             #[cfg(feature = "platform")]
+            Some(Commands::AccessRequests(args)) => args.json,
+            #[cfg(feature = "platform")]
             Some(Commands::Packages(args)) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::DeploymentGroups(args)) => args.wants_json_output(),
@@ -212,6 +216,11 @@ pub enum Commands {
     #[cfg(feature = "platform")]
     #[command(alias = "operation")]
     Operations(OperationsArgs),
+
+    /// Request time-boxed operation access
+    #[cfg(feature = "platform")]
+    #[command(name = "access-requests", alias = "access-request")]
+    AccessRequests(AccessRequestsArgs),
 
     /// List, inspect, and download project packages
     #[cfg(feature = "platform")]
@@ -1647,6 +1656,8 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => operations_task(args, ctx).await?,
+            #[cfg(feature = "platform")]
+            Some(Commands::AccessRequests(args)) => access_requests_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::Packages(args)) => packages_task(args, ctx).await?,
             #[cfg(feature = "platform")]
