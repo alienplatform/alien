@@ -161,7 +161,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         "no attribute of an image that is not created may be read: {rendered}"
     );
 
-    // Setup registration builds its expected set from `should_emit_in_setup` and refuses one
+    // Setup registration builds its expected set from `emits_setup_scaffolding` and refuses one
     // missing any of them (`alien-manager/src/routes/stack.rs`), which is why the emitter
     // returns a runtime import ref instead of nothing — dropping it fails every install.
     assert!(
