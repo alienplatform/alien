@@ -1,6 +1,6 @@
 use crate::ResourceLifecycle;
 
-/// When a resource type contributes resources to the setup artifact.
+/// When a resource type contributes anything to the setup artifact.
 ///
 /// Most types answer with the lifecycle alone. A sandbox does not: a Live one still needs the
 /// setup stack to create its build role, since the runtime controller may only *pass* it —
@@ -11,7 +11,9 @@ pub enum SetupEmission {
     Never,
     /// Emitted only when the resource is Frozen.
     WhenFrozen,
-    /// Emitted under either lifecycle, with the emitter narrowing what it writes.
+    /// Scaffolding under either lifecycle. Setup still only *owns* the Frozen one — the Live
+    /// resource itself belongs to a runtime controller, which is why the two accessors below
+    /// disagree for exactly these types.
     Always,
 }
 
@@ -63,7 +65,24 @@ impl ResourceOwnershipPolicy {
         }
     }
 
+    /// Whether setup *owns* this resource: it creates it, and no runtime controller will.
+    ///
+    /// Gating, lifecycle checks and permission compilation ask this. A Live sandbox answers
+    /// `false` here and `true` from [`Self::emits_setup_scaffolding`]; answering the two with
+    /// one predicate classifies it as setup-created, which keeps its gate out of the runtime
+    /// strip and builds the image for a deployer who declined it.
     pub const fn should_emit_in_setup(self, lifecycle: ResourceLifecycle) -> bool {
+        !matches!(self.emit_in_setup, SetupEmission::Never)
+            && matches!(lifecycle, ResourceLifecycle::Frozen)
+    }
+
+    /// Whether the setup artifact renders anything for this resource, its own scaffolding
+    /// included — a Live sandbox's build role, which its controller may pass but not create.
+    ///
+    /// The generators and registration's expected set ask this, and must agree: registration
+    /// refuses a payload naming a resource setup does not emit, and one missing a resource it
+    /// does, so a disagreement fails every install after the stack has already completed.
+    pub const fn emits_setup_scaffolding(self, lifecycle: ResourceLifecycle) -> bool {
         match self.emit_in_setup {
             SetupEmission::Never => false,
             SetupEmission::WhenFrozen => matches!(lifecycle, ResourceLifecycle::Frozen),
@@ -236,13 +255,69 @@ mod tests {
         assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
         assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
         assert!(policy.allows_lifecycle(ResourceLifecycle::Live));
-        // Both, and that is the point: a Live sandbox still needs the setup stack to create the
-        // build role its runtime controller is only permitted to pass. The emitter narrows what
-        // it writes; the policy does not.
-        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
-        assert!(policy.should_emit_in_setup(ResourceLifecycle::Live));
         assert!(policy.requires_management_permissions());
         assert!(policy.has_runtime_cleanup_before_teardown());
+    }
+
+    /// The sandbox is the only type whose two answers differ, and each half is load-bearing:
+    /// setup must still install the build role its controller may only pass, while the image
+    /// belongs to that controller and so must reach the runtime strip a decline runs through.
+    #[test]
+    fn a_live_sandbox_is_scaffolded_by_setup_but_not_owned_by_it() {
+        let policy = ownership_policy_for_resource_type("sandbox");
+
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.emits_setup_scaffolding(ResourceLifecycle::Frozen));
+
+        assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
+        assert!(policy.emits_setup_scaffolding(ResourceLifecycle::Live));
+    }
+
+    /// Pins the non-regression claim for every other type at once: before the split one
+    /// predicate served both questions, so any type whose answers now diverge has silently
+    /// changed behaviour at nine call sites.
+    #[test]
+    fn only_the_sandbox_separates_ownership_from_scaffolding() {
+        let types = crate::gateability::MANIFEST_TYPES
+            .iter()
+            .copied()
+            .chain([
+                "function",
+                "container-cluster",
+                "compute-cluster",
+                "artifact-registry",
+                "key",
+                "build",
+                "network",
+                "remote-stack-management",
+                "resource-access",
+                "service-account",
+                "service_activation",
+                "service-activation",
+                "azure_resource_group",
+                "azure-resource-group",
+                "azure_storage_account",
+                "azure-storage-account",
+                "azure_container_apps_environment",
+                "azure-container-apps-environment",
+                "azure_service_bus_namespace",
+                "azure-service-bus-namespace",
+                "an-unregistered-extension-type",
+            ]);
+
+        for resource_type in types {
+            if resource_type == "sandbox" {
+                continue;
+            }
+            let policy = ownership_policy_for_resource_type(resource_type);
+            for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                assert_eq!(
+                    policy.should_emit_in_setup(lifecycle),
+                    policy.emits_setup_scaffolding(lifecycle),
+                    "'{resource_type}' answers the two questions differently under {lifecycle:?}"
+                );
+            }
+        }
     }
 
     #[test]

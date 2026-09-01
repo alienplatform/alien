@@ -799,6 +799,81 @@ mod tests {
             .collect()
     }
 
+    /// A Live sandbox is created by its runtime controller, so its gate must resolve in the
+    /// runtime strip. Classifying it as setup-created instead fixes the answer at install and
+    /// leaves the controller building an image the deployer said no to.
+    #[test]
+    fn a_declined_live_sandbox_never_reaches_its_controller() {
+        let input = StackInputDefinition::deployer_boolean(
+            "agentsEnabled",
+            "Enable the agent sandbox",
+            "Whether to run the agent sandbox.",
+            Some(true),
+        );
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Deny)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("gated-stack".to_string())
+            .inputs(vec![input])
+            .add_enabled_when(sandbox, ResourceLifecycle::Live, "agentsEnabled")
+            .build();
+
+        assert!(
+            !frozen_gating_inputs(&stack).contains("agentsEnabled"),
+            "a runtime-built sandbox's gate is not fixed at install"
+        );
+
+        let mut declined = std::collections::HashMap::new();
+        declined.insert("agentsEnabled".to_string(), serde_json::Value::Bool(false));
+        let stripped = strip_declined_live_resources(
+            stack.clone(),
+            &declined,
+            &alien_core::GateAnswers::default(),
+            &std::collections::HashSet::new(),
+        )
+        .expect("strip should resolve the gate");
+        assert!(
+            !stripped.resources.contains_key("agents"),
+            "a declined sandbox must leave the desired stack, or its controller builds the image"
+        );
+
+        let mut accepted = std::collections::HashMap::new();
+        accepted.insert("agentsEnabled".to_string(), serde_json::Value::Bool(true));
+        let kept = strip_declined_live_resources(
+            stack.clone(),
+            &accepted,
+            &alien_core::GateAnswers::default(),
+            &std::collections::HashSet::new(),
+        )
+        .expect("strip should resolve the gate");
+        assert!(
+            kept.resources.contains_key("agents"),
+            "an accepted sandbox must survive the strip"
+        );
+
+        // With no value supplied the gate falls to the declared default, and nothing carries the
+        // install-time answer here: a live gate has no fixity, so the strip cannot learn that a
+        // deployer already declined the same input when the setup artifact rendered. ALIEN-657.
+        let default_answer = strip_declined_live_resources(
+            stack,
+            &std::collections::HashMap::new(),
+            &alien_core::GateAnswers::default(),
+            &std::collections::HashSet::new(),
+        )
+        .expect("strip should resolve the gate");
+        assert!(
+            default_answer.resources.contains_key("agents"),
+            "an unanswered live gate resolves to its declared default"
+        );
+    }
+
     /// A declined store takes the linking worker's reference with it, while the
     /// worker itself keeps its own lifecycle.
     #[test]

@@ -322,7 +322,7 @@ pub fn generate_cloudformation_template(
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
-        if !ownership.should_emit_in_setup(resource.lifecycle) {
+        if !ownership.emits_setup_scaffolding(resource.lifecycle) {
             continue;
         }
         // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not
