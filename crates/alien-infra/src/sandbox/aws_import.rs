@@ -125,8 +125,8 @@ impl ResourceImporter for AwsSandboxImporter {
             return Ok(imported);
         };
 
-        let existing_controller: AwsSandboxController = serde_json::from_value(existing_state)
-            .map_err(|error| {
+        let existing_controller =
+            AwsSandboxController::from_persisted(existing_state).map_err(|error| {
                 AlienError::new(CoreErrorData::GenericError {
                     message: format!(
                         "sandbox '{}' has unreadable controller state: {error}",

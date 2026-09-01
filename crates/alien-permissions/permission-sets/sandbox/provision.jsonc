@@ -11,7 +11,7 @@
           //
           // UpdateMicrovmImage is the roll a new release's bundle takes onto an image that
           // already exists. It accepts no request tags, so unlike the create below it can only
-          // be authorized here, against the image ARN.
+          // be authorized here, against the image ARN pattern the stack binding compiles.
           "actions": [
             "lambda:UpdateMicrovmImage",
             "lambda:DeleteMicrovmImage",

@@ -53,6 +53,14 @@ const BUILD_MAX_POLLS: u32 = 90;
 /// this.
 const MAX_SESSION_LIFETIME_SECONDS: i64 = 28_800;
 
+/// A version a roll replaced, and when it stopped serving.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct RetiredVersion {
+    pub(crate) version: String,
+    pub(crate) retired_at: chrono::DateTime<chrono::Utc>,
+}
+
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
@@ -74,12 +82,11 @@ pub struct AwsSandboxController {
     /// no claim that the new release is serving.
     #[serde(default)]
     pub(crate) pending_bundle_uri: Option<String>,
-    /// Version a roll replaced, retained while sessions started from it may still be running.
+    /// Versions rolls replaced, each retained while sessions started from it may still be
+    /// running. A list, not a slot: two rolls inside one retention window would otherwise
+    /// overwrite the first retired version and leak it forever.
     #[serde(default)]
-    pub(crate) previous_version: Option<String>,
-    /// When `previous_version` stopped serving, which starts its retention window.
-    #[serde(default)]
-    pub(crate) retired_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub(crate) retired_versions: Vec<RetiredVersion>,
     /// Region the MicroVMs run in. Held here because the binding is built without a context.
     pub(crate) region: Option<String>,
     /// Role passed to `CreateMicrovmImage`. Setup owns it because `sandbox/provision` grants
@@ -260,6 +267,14 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+        // A retry resumes here after a failed build. With no version left to poll, the fix is
+        // a fresh build, which the update path submits from the desired bundle.
+        if self.pending_version.is_none() && self.image_identifier.is_some() {
+            return Ok(HandlerAction::Continue {
+                state: UpdatingImage,
+                suggested_delay: None,
+            });
+        }
         let (image_identifier, image_version) = self.require_image(&config.id)?;
 
         let aws_config = ctx.get_aws_config()?;
@@ -291,6 +306,10 @@ impl AwsSandboxController {
                 })
             }
             VersionReadiness::Failed => {
+                // Drop the dead version so a retry resubmits the build instead of polling it
+                // again; the serving version, if any, is untouched.
+                self.pending_version = None;
+                self.pending_bundle_uri = None;
                 // The version's own reason plus each failed build's — the build reason is the
                 // one that says what actually broke (a bad FROM, a denied pull). A generic
                 // error after 160 seconds is the worst debugging experience this resource can
@@ -356,7 +375,7 @@ impl AwsSandboxController {
             }
             self.region = Some(aws_config.region.clone());
 
-            self.reap_retired_version(&client, &config.id).await?;
+            self.reap_retired_versions(&client, &config.id).await?;
 
             // Session counts require `lambda:ListMicrovms`, which AWS authorizes against no
             // resource type — no sandbox permission set grants it, so the count travels as
@@ -771,6 +790,24 @@ impl AwsSandboxController {
 }
 
 impl AwsSandboxController {
+    /// Reads persisted state, mapping the two state names an earlier controller version wrote
+    /// that this one does not have: `awaitImage` (a setup-baked image not yet observed) settles
+    /// into `ready`, whose handler re-reads the image, and `deleting` resumes at the version
+    /// sweep, where the ownership guard skips a setup-owned image.
+    pub(crate) fn from_persisted(mut value: serde_json::Value) -> serde_json::Result<Self> {
+        if let Some(state) = value.get("state").and_then(serde_json::Value::as_str) {
+            let mapped = match state {
+                "awaitImage" => Some("ready"),
+                "deleting" => Some("deletingImageVersions"),
+                _ => None,
+            };
+            if let Some(mapped) = mapped {
+                value["state"] = serde_json::Value::String(mapped.to_string());
+            }
+        }
+        serde_json::from_value(value)
+    }
+
     /// Whether this controller built the image and therefore owns its deletion.
     ///
     /// The lifecycle in stack state is the honest source. A state that carries none falls
@@ -810,59 +847,64 @@ impl AwsSandboxController {
             return;
         };
         if let Some(replaced) = self.active_version.replace(pending) {
-            self.previous_version = Some(replaced);
-            self.retired_at = Some(chrono::Utc::now());
+            self.retired_versions.push(RetiredVersion {
+                version: replaced,
+                retired_at: chrono::Utc::now(),
+            });
         }
         if let Some(bundle) = self.pending_bundle_uri.take() {
             self.bundle_uri = Some(bundle);
         }
     }
 
-    /// Deletes the version a roll replaced, once nothing started from it can still be running.
+    /// Deletes the versions rolls replaced, once nothing started from them can still be running.
     ///
     /// Sessions cannot be enumerated (see the module doc), so the only sound signal is time: a
     /// MicroVM cannot outlive the declared ceiling, and AWS's own 8-hour maximum stands in when
     /// the declaration sets none.
-    async fn reap_retired_version(
+    async fn reap_retired_versions(
         &mut self,
         client: &std::sync::Arc<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
         resource_id: &str,
     ) -> Result<()> {
-        let (Some(version), Some(retired_at), Some(identifier)) = (
-            self.previous_version.clone(),
-            self.retired_at,
-            self.image_identifier.clone(),
-        ) else {
+        let Some(identifier) = self.image_identifier.clone() else {
             return Ok(());
         };
-
         let window = self
             .max_lifetime_seconds
             .map(i64::from)
             .unwrap_or(MAX_SESSION_LIFETIME_SECONDS);
-        if (chrono::Utc::now() - retired_at).num_seconds() < window {
-            return Ok(());
-        }
+        let now = chrono::Utc::now();
 
-        match client
-            .delete_microvm_image_version(&identifier, &version)
-            .await
-        {
-            Ok(()) => {}
-            Err(error) if is_remote_resource_absent(&error) => {}
-            Err(error) => {
-                return Err(error).context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to delete retired MicroVM image '{identifier}' version '{version}'"
-                    ),
-                    resource_id: Some(resource_id.to_string()),
-                });
+        let mut kept = Vec::with_capacity(self.retired_versions.len());
+        for retired in std::mem::take(&mut self.retired_versions) {
+            if (now - retired.retired_at).num_seconds() < window {
+                kept.push(retired);
+                continue;
             }
+            match client
+                .delete_microvm_image_version(&identifier, &retired.version)
+                .await
+            {
+                Ok(()) => {}
+                Err(error) if is_remote_resource_absent(&error) => {}
+                Err(error) => {
+                    // Keep it for the next tick rather than forgetting it; the others already
+                    // deleted stay deleted.
+                    kept.push(retired.clone());
+                    self.retired_versions = kept;
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to delete retired MicroVM image '{identifier}' version '{}'",
+                            retired.version
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    });
+                }
+            }
+            debug!(sandbox_id = %resource_id, version = %retired.version, "retired MicroVM image version deleted");
         }
-
-        self.previous_version = None;
-        self.retired_at = None;
-        debug!(sandbox_id = %resource_id, version = %version, "retired MicroVM image version deleted");
+        self.retired_versions = kept;
         Ok(())
     }
 
@@ -1267,6 +1309,69 @@ mod tests {
         assert!(same_a.starts_with("p-agents-"));
     }
 
+    /// Two rolls inside one retention window must retire two versions, not overwrite the
+    /// first: a version that leaves the record is a version nothing ever deletes.
+    #[test]
+    fn back_to_back_rolls_retire_every_replaced_version() {
+        let mut controller = ready_controller();
+        controller.pending_version = Some("2.0".to_string());
+        controller.promote_pending_version();
+        controller.pending_version = Some("3.0".to_string());
+        controller.promote_pending_version();
+
+        assert_eq!(controller.active_version.as_deref(), Some("3.0"));
+        let retired: Vec<&str> = controller
+            .retired_versions
+            .iter()
+            .map(|r| r.version.as_str())
+            .collect();
+        assert_eq!(
+            retired,
+            vec!["1.0", "2.0"],
+            "both replaced versions await their window"
+        );
+    }
+
+    /// A retry after a failed build resumes at the poll. With the dead version dropped, the
+    /// poll hands off to a fresh build instead of reporting the same failure forever.
+    #[tokio::test]
+    async fn a_retry_after_a_failed_build_resubmits_instead_of_repolling() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        // No get_microvm_image_version expectation: polling the dead version again would panic.
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(|_, _| {
+                Ok(
+                    alien_aws_clients::lambda_microvms::UpdateMicrovmImageResponse {
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        name: Some("test-agents".to_string()),
+                        state: Some("CREATED".to_string()),
+                        image_version: Some("2.0".to_string()),
+                    },
+                )
+            });
+        let mut controller = ready_controller();
+        controller.state = AwsSandboxState::WaitingForRolledImageActive;
+        controller.pending_version = None;
+        controller.pending_bundle_uri = None;
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("the poll hands off to a fresh build");
+        executor.step().await.expect("the fresh build is submitted");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.pending_version.as_deref(), Some("2.0"));
+        assert_eq!(
+            controller.active_version.as_deref(),
+            Some("1.0"),
+            "serving version untouched"
+        );
+    }
+
     /// The full runtime build: the create call must satisfy the already-deployed
     /// `sandbox/provision` grant — the `deployment` and `managed-by: runtime` request tags
     /// are what the policy conditions on, the build role is what it authorizes as a pass —
@@ -1396,6 +1501,9 @@ mod tests {
                             minimum_memory_in_mib: 2048,
                         }]
                     && request.client_token.starts_with("agents-")
+                    // PUT semantics: a field left out is dropped, and this is the one that keeps
+                    // sandbox contents out of the customer's logs.
+                    && request.logging == Some(MicrovmImageLogging::Disabled {})
             })
             .times(1)
             .returning(|_, _| {
@@ -1479,12 +1587,15 @@ mod tests {
         assert_eq!(controller.active_version.as_deref(), Some("2.0"));
         assert!(controller.pending_version.is_none());
         assert_eq!(
-            controller.previous_version.as_deref(),
+            controller
+                .retired_versions
+                .first()
+                .map(|r| r.version.as_str()),
             Some("1.0"),
             "the replaced version is retained until its sessions can no longer be running"
         );
         assert!(
-            controller.retired_at.is_some(),
+            !controller.retired_versions.is_empty(),
             "retention starts at the switch"
         );
         assert_eq!(
@@ -1707,8 +1818,10 @@ mod tests {
         let mut controller = ready_controller();
         controller.bundle_uri = Some(BUNDLE_URI.to_string());
         controller.max_lifetime_seconds = Some(1800);
-        controller.previous_version = Some("1.0".to_string());
-        controller.retired_at = Some(chrono::Utc::now() - chrono::Duration::seconds(60));
+        controller.retired_versions = vec![RetiredVersion {
+            version: "1.0".to_string(),
+            retired_at: chrono::Utc::now() - chrono::Duration::seconds(60),
+        }];
         let mut inside_window = executor(controller, client).await;
         inside_window
             .step()
@@ -1718,8 +1831,9 @@ mod tests {
             inside_window
                 .internal_state::<AwsSandboxController>()
                 .expect("typed controller")
-                .previous_version
-                .as_deref(),
+                .retired_versions
+                .first()
+                .map(|retired| retired.version.as_str()),
             Some("1.0"),
             "a version whose sessions may still be running must not be deleted"
         );
@@ -1742,16 +1856,17 @@ mod tests {
         let mut controller = ready_controller();
         controller.bundle_uri = Some(BUNDLE_URI.to_string());
         controller.max_lifetime_seconds = Some(1800);
-        controller.previous_version = Some("1.0".to_string());
-        controller.retired_at = Some(chrono::Utc::now() - chrono::Duration::seconds(3600));
+        controller.retired_versions = vec![RetiredVersion {
+            version: "1.0".to_string(),
+            retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+        }];
         let mut executor = executor(controller, client).await;
         executor.step().await.expect("ready tick past the window");
 
         let controller = executor
             .internal_state::<AwsSandboxController>()
             .expect("typed controller");
-        assert!(controller.previous_version.is_none());
-        assert!(controller.retired_at.is_none());
+        assert!(controller.retired_versions.is_empty());
     }
 
     /// State written before a sandbox's image could be rebuilt carried one version field and no
@@ -1762,6 +1877,43 @@ mod tests {
     /// hold name a build or a delete that was already in flight, and resuming one from a
     /// different controller's notion of progress is not something this can honour.
     #[test]
+    /// The two state names an earlier controller version wrote that this one lacks must still
+    /// load, and land where their meaning survives: a not-yet-observed setup image becomes a
+    /// Ready that re-reads it; an in-flight delete resumes at the sweep.
+    #[test]
+    fn states_written_by_an_earlier_controller_version_still_load() {
+        let record = |state: &str| {
+            serde_json::json!({
+                "_controllerStateVersion": 1,
+                "allowEgress": false,
+                "egressConnectorArns": [],
+                "imageArn": IMAGE_ARN,
+                "imageIdentifier": "sbx-image",
+                "imageVersion": "1.0",
+                "internalStayCount": null,
+                "previewPorts": [],
+                "region": "us-east-1",
+                "state": state,
+                "type": "AwsSandboxController"
+            })
+        };
+        let awaiting = AwsSandboxController::from_persisted(record("awaitImage"))
+            .expect("awaitImage must load");
+        assert!(matches!(awaiting.state, AwsSandboxState::Ready));
+        assert!(
+            awaiting.get_binding_params().expect("readable").is_some(),
+            "a setup-baked image with its fields recorded keeps its binding"
+        );
+        let deleting =
+            AwsSandboxController::from_persisted(record("deleting")).expect("deleting must load");
+        assert!(matches!(
+            deleting.state,
+            AwsSandboxState::DeletingImageVersions
+        ));
+        let unknown = AwsSandboxController::from_persisted(record("neverExisted"));
+        assert!(unknown.is_err(), "no other unknown state is guessed at");
+    }
+
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({
             "_controllerStateVersion": 1,
