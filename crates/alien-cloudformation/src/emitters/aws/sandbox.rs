@@ -236,10 +236,9 @@ impl CfEmitter for AwsSandboxEmitter {
 
         let mut resources = vec![role];
         resources.append(&mut egress_resources);
-        // A Live sandbox builds its image from the runtime controller, once the deployment has
-        // registered and the customer's account is a principal Alien's registry can be opened to.
-        // Everything the build needs still comes from here: the controller may pass the build
-        // role and the connector, and creates neither.
+        // A Live sandbox's image is built by the runtime controller once the deployment
+        // registers — only then is the customer account a principal Alien's registry can open
+        // to. The build role and connector still come from here; the controller may pass them.
         if !provisioned_at_runtime(ctx) {
             resources.push(image);
         }
@@ -287,6 +286,12 @@ impl CfEmitter for AwsSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
+        // `AwsSandboxBinding` requires `imageArn` and `imageVersion`, which a runtime-provisioned
+        // sandbox does not have until its controller has built. A partial binding fails to
+        // deserialize in the workload that reads it, so none is offered here.
+        if provisioned_at_runtime(ctx) {
+            return Ok(None);
+        }
         let mut fields = vec![
             ("service".to_string(), CfExpression::from("sandbox-aws")),
             ("previewPorts".to_string(), preview_ports(sandbox)),
@@ -300,19 +305,14 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
-        // A runtime-provisioned sandbox has no image resource to read these from, and a GetAtt
-        // against one the template does not create is a template CloudFormation refuses. The
-        // controller supplies both once the image is ACTIVE.
-        if !provisioned_at_runtime(ctx) {
-            fields.push((
-                "imageArn".to_string(),
-                CfExpression::get_att(image_id, "ImageArn"),
-            ));
-            fields.push((
-                "imageVersion".to_string(),
-                CfExpression::get_att(image_id, "LatestActiveImageVersion"),
-            ));
-        }
+        fields.push((
+            "imageArn".to_string(),
+            CfExpression::get_att(image_id, "ImageArn"),
+        ));
+        fields.push((
+            "imageVersion".to_string(),
+            CfExpression::get_att(image_id, "LatestActiveImageVersion"),
+        ));
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds".to_string(),
@@ -399,12 +399,9 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 
 /// What a runtime-provisioned sandbox registers.
 ///
-/// The image fields are absent because the image is: `Fn::GetAtt(<image>, "ImageArn")` cannot
-/// resolve against a resource the template no longer creates, and that coupling is the whole
-/// reason the build had to move. In their place go the two things the controller cannot derive —
-/// the build role it passes and the bundle it builds from — and the egress facts, which the setup
-/// stack still owns. The controller records the image ARN and version in resource state, the way a
-/// Worker records its function ARN.
+/// The image fields are absent because the image doesn't exist yet. In their place go what the
+/// controller cannot derive — the build role it passes and the bundle it builds from — plus the
+/// egress facts the setup stack still owns.
 fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
     let role_id = format!("{image_id}BuildRole");
     Ok(CfExpression::object([

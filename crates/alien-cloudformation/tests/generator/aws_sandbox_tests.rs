@@ -5,8 +5,9 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
-    SandboxEgress, SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
+    import::data::AwsSandboxImportData, Network, NetworkSettings, RemoteBindings,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack,
+    StackSettings, Worker, WorkerCode,
 };
 
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
@@ -60,17 +61,67 @@ fn resource_types(template: &alien_cloudformation::CfTemplate) -> Vec<String> {
         .collect()
 }
 
-/// A Live sandbox moves the image build to runtime — and nothing else.
+/// The `importData` a rendered registration carries for one resource id.
 ///
-/// The two halves matter equally. The image must be gone, because that is the whole point: it can
-/// only be built once the customer's account is a principal Alien's registry has been opened to,
-/// which is not true during stack creation. The build role must remain, because
-/// `sandbox/provision` grants the runtime controller `iam:PassRole` and no `iam:CreateRole` — a
-/// template that dropped the role with the image would leave the controller with nothing to pass.
+/// CloudFormation intrinsics stand in for values only the deployed stack knows, so each is
+/// replaced by a placeholder string — the shape is what the importer contract is judged on, not
+/// the resolved values.
+fn registration_import_data(
+    template: &alien_cloudformation::CfTemplate,
+    resource_id: &str,
+) -> serde_json::Value {
+    fn resolve(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map
+                    .keys()
+                    .any(|key| key.starts_with("Fn::") || key == "Ref")
+                {
+                    return serde_json::Value::String("resolved-at-deploy-time".to_string());
+                }
+                serde_json::Value::Object(
+                    map.iter().map(|(k, v)| (k.clone(), resolve(v))).collect(),
+                )
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(resolve).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn find(value: &serde_json::Value, resource_id: &str) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.get("id").and_then(serde_json::Value::as_str) == Some(resource_id) {
+                    if let Some(import_data) = map.get("importData") {
+                        return Some(resolve(import_data));
+                    }
+                }
+                map.values().find_map(|nested| find(nested, resource_id))
+            }
+            serde_json::Value::Array(items) => {
+                items.iter().find_map(|nested| find(nested, resource_id))
+            }
+            _ => None,
+        }
+    }
+
+    let rendered = serde_json::to_value(&template.resources).expect("serializes");
+    find(&rendered, resource_id)
+        .unwrap_or_else(|| panic!("no registration importData for '{resource_id}'"))
+}
+
+/// The image must be gone — it can only be built once the customer's account is a principal
+/// Alien's registry has opened to, not true during stack creation — and the build role must
+/// stay, since `sandbox/provision` grants the controller `iam:PassRole` but no `iam:CreateRole`.
 #[test]
 fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
-    let (stack, settings) =
-        sandbox_stack_with_lifecycle("acme-sandbox-live", SandboxEgress::Deny, ResourceLifecycle::Live);
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-live",
+        SandboxEgress::Deny,
+        ResourceLifecycle::Live,
+    );
     let (template, _yaml) = render_built_ins_template(
         &stack,
         settings,
@@ -110,13 +161,31 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         "no attribute of an image that is not created may be read: {rendered}"
     );
 
-    // Setup registration builds its expected set from `should_emit_in_setup` and refuses a
-    // registration missing any of them (`alien-manager/src/routes/stack.rs`). A Live sandbox is
-    // emitted in setup, so it owes an entry — which is why the emitter returns a runtime import
-    // ref rather than nothing. Dropping that would fail every install at registration.
+    // Setup registration builds its expected set from `should_emit_in_setup` and refuses one
+    // missing any of them (`alien-manager/src/routes/stack.rs`), which is why the emitter returns
+    // a runtime import ref instead of nothing — dropping it would fail every install at registration.
     assert!(
         rendered.contains("\"agents\""),
         "the sandbox must still register under its own id: {rendered}"
+    );
+
+    // The registration is the last step of a customer's install, and the contract it is parsed
+    // against lives in another crate. Asserting the rendered payload merely *mentions*
+    // `buildRoleArn` would pass while the importer rejected the whole object — so parse it.
+    let import_data = registration_import_data(&template, "agents");
+    let parsed: AwsSandboxImportData =
+        serde_json::from_value(import_data.clone()).unwrap_or_else(|error| {
+            panic!("the importer must accept what the emitter renders: {error}\n{import_data:#}")
+        });
+    assert_eq!(parsed.image_arn, None, "there is no image to name yet");
+    assert_eq!(parsed.image_version, None);
+    assert!(
+        parsed.build_role_arn.is_some(),
+        "the controller is handed the role it may only pass: {import_data:#}"
+    );
+    assert!(
+        parsed.bundle_uri.is_some(),
+        "the controller is handed the bundle it builds from: {import_data:#}"
     );
 }
 
@@ -147,6 +216,15 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
         !rendered.contains("buildRoleArn"),
         "a Frozen sandbox hands the controller nothing to build with: {rendered}"
     );
+
+    let import_data = registration_import_data(&template, "agents");
+    let parsed: AwsSandboxImportData = serde_json::from_value(import_data.clone())
+        .unwrap_or_else(|error| panic!("the importer must accept it: {error}\n{import_data:#}"));
+    assert!(
+        parsed.image_arn.is_some() && parsed.image_version.is_some(),
+        "a setup-built sandbox registers the image it created: {import_data:#}"
+    );
+    assert_eq!(parsed.build_role_arn, None);
 }
 
 /// `egress: deny` has to be built, not assumed.

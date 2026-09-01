@@ -449,17 +449,12 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
     (stack, settings)
 }
 
-/// A Live sandbox moves the image build to runtime — and moves nothing else.
+/// The image must be gone — it can only be built once the customer's account is a principal
+/// Alien's registry has opened to, not true during `terraform apply` — and the build role must
+/// remain, since `sandbox/provision` grants `iam:PassRole` but no `iam:CreateRole`.
 ///
-/// Both halves are load-bearing. The image must be gone: it can only be built once the customer's
-/// account is a principal Alien's registry has been opened to, and that is not true during
-/// `terraform apply`. The build role must remain: `sandbox/provision` grants the runtime
-/// controller `iam:PassRole` and no `iam:CreateRole`, so a module that dropped the role along with
-/// the image would leave the controller with nothing to pass.
-///
-/// Validated with real `terraform validate` rather than by matching text, because the failure this
-/// guards against is a plan-time one — reading `LatestActiveImageVersion` off a resource the module
-/// no longer declares.
+/// Validated with real `terraform validate`, not text matching: the failure this guards against
+/// is a plan-time one — reading `LatestActiveImageVersion` off a resource the module no longer declares.
 #[test]
 fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
     let (stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);

@@ -353,8 +353,13 @@ impl TfEmitter for AwsSandboxEmitter {
 
         let mut fragment = TfFragment::empty()
             .with_resource(build_role)
-            .with_resource(build_policy)
-            .with_resource(iam_propagation);
+            .with_resource(build_policy);
+        // The barrier exists to let the roles propagate before the connector and the image are
+        // created. An open, runtime-provisioned sandbox creates neither, so keeping it would ship
+        // a customer a thirty-second wait that gates nothing.
+        if !open || !provisioned_at_runtime(ctx) {
+            fragment = fragment.with_resource(iam_propagation);
+        }
         // A Live sandbox is built by the runtime controller once the deployment has registered,
         // because only then is the customer's account a principal Alien's registry can be opened
         // to. The role and the connector stay: the controller may pass them and creates neither.
@@ -403,6 +408,12 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        // `AwsSandboxBinding` requires `imageArn` and `imageVersion`, which a runtime-provisioned
+        // sandbox does not have until its controller has built. A partial binding fails to
+        // deserialize in the workload that reads it, so none is offered here.
+        if provisioned_at_runtime(ctx) {
+            return Ok(None);
+        }
         let mut fields = vec![
             ("service", Expression::String("sandbox-aws".to_string())),
             ("previewPorts", preview_ports(sandbox)),
@@ -416,15 +427,11 @@ impl TfEmitter for AwsSandboxEmitter {
                 expr::traversal(["data", "aws_region", "current", "region"]),
             ),
         ];
-        // Reading an attribute off a resource this module no longer declares is a plan-time
-        // failure, not a runtime one. The controller supplies both once the image is ACTIVE.
-        if !provisioned_at_runtime(ctx) {
-            fields.push(("imageArn", image_property(label, "ImageArn")));
-            fields.push((
-                "imageVersion",
-                image_property(label, "LatestActiveImageVersion"),
-            ));
-        }
+        fields.push(("imageArn", image_property(label, "ImageArn")));
+        fields.push((
+            "imageVersion",
+            image_property(label, "LatestActiveImageVersion"),
+        ));
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds",
@@ -448,7 +455,7 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 
 /// What a runtime-provisioned sandbox registers.
 ///
-/// The image fields are absent because the image is. In their place go the two things the
+/// The image fields are absent because the image doesn't exist yet. In their place go what the
 /// controller cannot derive — the build role it passes and the bundle it builds from — plus the
 /// egress facts the module still owns.
 fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {

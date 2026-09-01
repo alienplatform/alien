@@ -214,16 +214,17 @@ mod tests {
         }
     }
 
-    /// A sandbox declaration is the Frozen image and pool, not a session. Sessions are created at
-    /// runtime and cleaned up with the parent, so there is no Live entry for a gate to sit on.
+    /// A sandbox declaration is the image and its pool, never a session — sessions are created at
+    /// runtime and cleaned up with the parent, so neither gate sits on one. Both lifecycles gate
+    /// because both are real: Frozen bakes the image at stack creation, Live builds it at runtime.
     #[test]
-    fn sandbox_gates_as_a_frozen_resource() {
+    fn sandbox_gates_under_either_lifecycle() {
         assert_eq!(gate_refusal("sandbox", "agents"), None);
         let gateability = type_gateability("sandbox");
-        assert!(gateability.frozen, "the declaration itself gates at setup");
+        assert!(gateability.frozen, "a setup-baked image gates at setup");
         assert!(
-            !gateability.live,
-            "sessions are not declared, so a live gate would have nothing to refuse"
+            gateability.live,
+            "a runtime-built image gates in the runtime strip"
         );
     }
 

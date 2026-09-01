@@ -73,6 +73,25 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 ));
             }
 
+            // A linked sandbox's binding carries `imageArn` and `imageVersion`, both required
+            // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller has
+            // built, so the setup artifact would emit a binding that fails to deserialize at startup.
+            for link in alien_core::links_of(&resource_entry.config) {
+                let Some(target) = stack.resources.get(link.id()) else {
+                    continue;
+                };
+                if target.config.downcast_ref::<Sandbox>().is_some()
+                    && target.lifecycle == ResourceLifecycle::Live
+                {
+                    errors.push(format!(
+                        "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
+                         image is built after setup, so setup cannot bind to it",
+                        resource_id,
+                        link.id()
+                    ));
+                }
+            }
+
             let Some(storage) = resource_entry.config.downcast_ref::<Storage>() else {
                 continue;
             };
@@ -378,7 +397,12 @@ mod tests {
     /// controller that does not exist — a deployment that hangs rather than one that fails.
     #[tokio::test]
     async fn a_live_sandbox_is_refused_on_every_platform_but_aws() {
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Kubernetes, Platform::Local] {
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
             let result = FrozenResourceLifecycleCheck
                 .check(&sandbox_stack(ResourceLifecycle::Live), platform)
                 .await
@@ -392,7 +416,12 @@ mod tests {
                 .errors
                 .iter()
                 .find(|error| error.contains("only AWS provisions a sandbox at runtime"))
-                .unwrap_or_else(|| panic!("the refusal must name why, on {platform:?}: {:?}", result.errors));
+                .unwrap_or_else(|| {
+                    panic!(
+                        "the refusal must name why, on {platform:?}: {:?}",
+                        result.errors
+                    )
+                });
             assert!(
                 message.contains(platform.as_str()),
                 "the refusal must name the platform it applies to: {message}"
@@ -404,6 +433,102 @@ mod tests {
                 "the refusal must not carry collapsed indentation: {message}"
             );
         }
+    }
+
+    /// A Worker's binding to a sandbox carries `imageArn` and `imageVersion`, both required fields
+    /// of `AwsSandboxBinding`. A Live sandbox has neither at setup time, so the binding would fail
+    /// to deserialize at Worker startup instead of at plan time — the wrong end to discover it.
+    #[tokio::test]
+    async fn linking_a_live_sandbox_is_refused_at_plan_time() {
+        let mut stack = sandbox_stack(ResourceLifecycle::Live);
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(
+                &alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .session(alien_core::SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+            )
+            .build();
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let result = FrozenResourceLifecycleCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("the check runs");
+
+        assert!(!result.success, "a link to a Live sandbox must be refused");
+        assert!(
+            result
+                .errors
+                .iter()
+                .any(|error| error.contains("links sandbox 'agents'")
+                    && error.contains("setup cannot bind to it")),
+            "the refusal must name the link and why: {:?}",
+            result.errors
+        );
+    }
+
+    /// The same link against a Frozen sandbox is exactly what ships today.
+    #[tokio::test]
+    async fn linking_a_frozen_sandbox_stays_valid() {
+        let mut stack = sandbox_stack(ResourceLifecycle::Frozen);
+        let worker = alien_core::Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(alien_core::WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .link(
+                &alien_core::Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .session(alien_core::SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+            )
+            .build();
+        stack.resources.insert(
+            "api".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(worker),
+                lifecycle: ResourceLifecycle::Live,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let result = FrozenResourceLifecycleCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(
+            result.success,
+            "a link to a Frozen sandbox is the shipping path: {:?}",
+            result.errors
+        );
     }
 
     /// AWS accepts both, and every other platform keeps the Frozen sandbox it has today.
@@ -420,7 +545,11 @@ mod tests {
                 .check(&sandbox_stack(ResourceLifecycle::Frozen), platform)
                 .await
                 .expect("the check runs");
-            assert!(result.success, "a Frozen sandbox must stay valid on {platform:?}: {:?}", result.errors);
+            assert!(
+                result.success,
+                "a Frozen sandbox must stay valid on {platform:?}: {:?}",
+                result.errors
+            );
         }
 
         let result = FrozenResourceLifecycleCheck

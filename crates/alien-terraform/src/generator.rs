@@ -3208,6 +3208,23 @@ fn readme_md(
             "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
         });
 
+    // An installer reads "apply succeeded" as "the package is installed". For a runtime-built
+    // sandbox that is not true, and the gap is minutes long, so the artifact says so itself.
+    let registration_note = if stack.resources.values().any(|entry| {
+        entry.config.resource_type().0.as_ref() == "sandbox"
+            && entry.lifecycle == ResourceLifecycle::Live
+    }) {
+        format!(
+            "{registration_note}\nThis module installs the sandbox's build role, its egress \
+             connector, and the permissions the image build uses - but not the sandbox image \
+             itself. The image is built after the deployment registers and takes roughly two to \
+             three minutes, so a completed apply does not mean the sandbox can accept sessions \
+             yet.\n"
+        )
+    } else {
+        registration_note
+    };
+
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
     let setup_only = stack

@@ -278,4 +278,44 @@ mod tests {
         assert!(!native.allow_egress);
         assert_eq!(native.preview_ports, vec![3000]);
     }
+
+    /// A runtime-provisioned sandbox registers without an image; the build role and bundle take
+    /// its place. A contract that rejects this payload fails only after `terraform apply` or
+    /// stack creation has already succeeded, in the customer's own account.
+    #[test]
+    fn a_runtime_provisioned_sandbox_registers_without_an_image() {
+        let runtime: AwsSandboxImportData = serde_json::from_value(json!({
+            "egressConnectorArns": ["arn:aws:lambda:us-east-2:123456789012:network-connector/c-1"],
+            "allowEgress": "false",
+            "previewPorts": ["8080"],
+            "buildRoleArn": "arn:aws:iam::123456789012:role/acme-agents-build",
+            "bundleUri": "s3://acme-artifacts-us-east-2/agents/bundle.zip",
+        }))
+        .expect("a runtime-provisioned sandbox must register without image fields");
+
+        assert_eq!(runtime.image_arn, None);
+        assert_eq!(runtime.image_identifier, None);
+        assert_eq!(runtime.image_version, None);
+        assert_eq!(
+            runtime.build_role_arn.as_deref(),
+            Some("arn:aws:iam::123456789012:role/acme-agents-build")
+        );
+        assert_eq!(
+            runtime.bundle_uri.as_deref(),
+            Some("s3://acme-artifacts-us-east-2/agents/bundle.zip")
+        );
+        assert_eq!(runtime.preview_ports, vec![8080]);
+
+        // The setup-built shape carries no build inputs, so the two are distinguishable rather
+        // than merely both accepted.
+        let frozen: AwsSandboxImportData = serde_json::from_value(json!({
+            "imageIdentifier": "runner",
+            "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image/runner",
+            "imageVersion": "1.0",
+        }))
+        .expect("the setup-built shape still parses");
+        assert_eq!(frozen.build_role_arn, None);
+        assert_eq!(frozen.bundle_uri, None);
+        assert_eq!(frozen.image_version.as_deref(), Some("1.0"));
+    }
 }

@@ -3,10 +3,8 @@ use crate::ResourceLifecycle;
 /// When a resource type contributes resources to the setup artifact.
 ///
 /// Most types answer with the lifecycle alone. A sandbox does not: a Live one still needs the
-/// setup stack to create its build role, because the runtime controller may only *pass* that role
-/// — `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`, the same shape
-/// `worker/provision` uses for the service-account role a Worker is passed. Only the image itself
-/// moves to runtime, and the emitter decides that from the lifecycle.
+/// setup stack to create its build role, since the runtime controller may only *pass* it —
+/// `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`. Only the image moves to runtime.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupEmission {
     /// Never part of the setup artifact; a runtime controller owns the whole resource.
@@ -160,9 +158,8 @@ const fn frozen_with_runtime_cleanup() -> ResourceOwnershipPolicy {
 /// A sandbox may be baked by the setup stack or provisioned by a runtime controller.
 ///
 /// Live is what lets the base image come from Alien's private registry: the cross-account read is
-/// granted by a repository policy naming the customer's account, which is not known until the
-/// deployment registers, and registration cannot precede a setup-stack build. Frozen stays the
-/// default so a stack that already installed a setup-stack image keeps it.
+/// granted by a repository policy naming the customer's account, which isn't known until the
+/// deployment registers. Frozen stays the default so an already-installed stack keeps its image.
 const fn sandbox_lifecycle() -> ResourceOwnershipPolicy {
     ResourceOwnershipPolicy::new(
         ResourceLifecycle::Frozen,
