@@ -30,6 +30,7 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
+use sha2::{Digest, Sha256};
 
 /// Port the in-image agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: u16 = 8971;
@@ -90,7 +91,7 @@ pub struct AwsSandboxController {
 
 #[controller]
 impl AwsSandboxController {
-    // ─────────────── CREATE FLOW ───────────────────────────────────────────
+    // ─────────────── CREATE FLOW ──────────────────────────────────────────
 
     #[flow_entry(Create)]
     #[handler(
@@ -141,6 +142,7 @@ impl AwsSandboxController {
         // a registry the build role can reach; the only image this call names is AWS's managed
         // base, and the build's connector is AWS's own — it must reach a registry, which the
         // session-time deny connector cannot.
+        let client_token = build_client_token(&image_name, &bundle_uri);
         let request = CreateMicrovmImageRequest::builder()
             .name(image_name.clone())
             .description(format!("Sandbox {}", config.id))
@@ -167,9 +169,10 @@ impl AwsSandboxController {
                     .into_iter()
                     .collect::<BTreeMap<_, _>>(),
             )
-            // Stable per resource, so a retried create returns the prior success instead of
-            // failing on the duplicate name.
-            .client_token(image_name.clone())
+            // Keyed on the bundle, not just the resource: a retry of the same release replays
+            // the prior success, while a new release's changed bundle gets a fresh identity
+            // rather than replaying the image built from the previous one.
+            .client_token(client_token)
             .build();
 
         let created =
@@ -645,6 +648,19 @@ impl AwsSandboxController {
 
 /// The Lambda-managed base image the build runs on. The vendor's own base is inside the
 /// bundle's Dockerfile, not here.
+/// A create idempotency token that changes with the bundle. `CreateMicrovmImage` replays a
+/// prior success for a repeated token, so folding the content-addressed bundle in keeps a retry
+/// idempotent while a genuinely new build asks for a new image rather than the old one.
+fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
+    let digest = Sha256::digest(bundle_uri.as_bytes());
+    // Sixteen hex chars of the bundle digest is plenty to separate one release from the next,
+    // and keeps the token well under the API's length ceiling.
+    format!("{image_name}-{:x}", digest)
+        .chars()
+        .take(image_name.len() + 1 + 16)
+        .collect()
+}
+
 fn managed_base_image_arn(region: &str) -> String {
     format!(
         "arn:{}:lambda:{region}:aws:microvm-image:al2023-1",
@@ -881,6 +897,21 @@ mod tests {
 
     // ─────────────── CREATE FLOW ──────────────────────────────────────────
 
+    /// A retry of the same release must replay, a new release must not: the token separates
+    /// two bundles and stays put for one.
+    #[test]
+    fn the_client_token_tracks_the_bundle_not_just_the_resource() {
+        let same_a = build_client_token("p-agents", "s3://b/sandbox-bundle/aaaa/bundle.zip");
+        let same_b = build_client_token("p-agents", "s3://b/sandbox-bundle/aaaa/bundle.zip");
+        let other = build_client_token("p-agents", "s3://b/sandbox-bundle/bbbb/bundle.zip");
+        assert_eq!(
+            same_a, same_b,
+            "one bundle keeps one token so a retry replays"
+        );
+        assert_ne!(same_a, other, "a new bundle must not replay the old build");
+        assert!(same_a.starts_with("p-agents-"));
+    }
+
     /// The full runtime build: the create call must satisfy the already-deployed
     /// `sandbox/provision` grant — the `deployment` and `managed-by: runtime` request tags
     /// are what the policy conditions on, the build role is what it authorizes as a pass —
@@ -892,7 +923,9 @@ mod tests {
             .expect_create_microvm_image()
             .withf(|request| {
                 request.name == "test-agents"
-                    && request.client_token == "test-agents"
+                    // Token carries the bundle digest so a new release is a new logical create.
+                    && request.client_token.starts_with("test-agents-")
+                    && request.client_token != "test-agents"
                     && request.build_role_arn == BUILD_ROLE_ARN
                     && request.code_artifact.uri == BUNDLE_URI
                     && request.base_image_arn
