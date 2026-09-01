@@ -1,6 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{ownership_policy_for_resource_type, Platform, ResourceLifecycle, Stack, Storage};
+use alien_core::{
+    ownership_policy_for_resource_type, Platform, ResourceLifecycle, Sandbox, Stack, Storage,
+};
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
 ///
@@ -53,6 +55,20 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     resource_type,
                     resource_entry.lifecycle,
                     policy.allowed_lifecycles()
+                ));
+            }
+
+            // Only AWS has a runtime sandbox controller that builds the image itself. On the
+            // other backends a Live sandbox would be accepted, emitted nowhere, and provisioned
+            // by nobody.
+            if resource_entry.config.downcast_ref::<Sandbox>().is_some()
+                && resource_entry.lifecycle == ResourceLifecycle::Live
+                && platform != Platform::Aws
+            {
+                errors.push(format!(
+                    "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not support;                      only AWS provisions a sandbox at runtime",
+                    resource_id,
+                    platform.as_str()
                 ));
             }
 

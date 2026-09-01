@@ -24,6 +24,14 @@ fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
 
 /// A sandbox and the network its egress connector attaches to, which the emitter requires.
 fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
+    sandbox_stack_with_lifecycle(name, egress, ResourceLifecycle::Frozen)
+}
+
+fn sandbox_stack_with_lifecycle(
+    name: &str,
+    egress: SandboxEgress,
+    lifecycle: ResourceLifecycle,
+) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
             cidr: None,
@@ -38,9 +46,98 @@ fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
                 .build(),
             ResourceLifecycle::Frozen,
         )
-        .add(sandbox_fixture(egress), ResourceLifecycle::Frozen)
+        .add(sandbox_fixture(egress), lifecycle)
         .build();
     (stack, settings)
+}
+
+/// Every resource type the rendered template declares.
+fn resource_types(template: &alien_cloudformation::CfTemplate) -> Vec<String> {
+    template
+        .resources
+        .values()
+        .map(|resource| resource.resource_type.clone())
+        .collect()
+}
+
+/// A Live sandbox moves the image build to runtime — and nothing else.
+///
+/// The two halves matter equally. The image must be gone, because that is the whole point: it can
+/// only be built once the customer's account is a principal Alien's registry has been opened to,
+/// which is not true during stack creation. The build role must remain, because
+/// `sandbox/provision` grants the runtime controller `iam:PassRole` and no `iam:CreateRole` — a
+/// template that dropped the role with the image would leave the controller with nothing to pass.
+#[test]
+fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
+    let (stack, settings) =
+        sandbox_stack_with_lifecycle("acme-sandbox-live", SandboxEgress::Deny, ResourceLifecycle::Live);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live sandbox",
+    );
+
+    let types = resource_types(&template);
+    assert!(
+        !types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Live sandbox must not bake its image into stack creation: {types:?}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "the build role the controller passes must still be installed: {types:?}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsEgressConnector"),
+        "the connector the build and the session are passed must still be installed: {types:?}"
+    );
+
+    // The registration has to carry the two things the controller cannot derive, and must not
+    // carry a GetAtt against the image resource this template no longer creates.
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    assert!(
+        rendered.contains("buildRoleArn"),
+        "registration must name the build role: {rendered}"
+    );
+    assert!(
+        rendered.contains("bundleUri"),
+        "registration must name the bundle the controller builds from: {rendered}"
+    );
+    assert!(
+        !rendered.contains("LatestActiveImageVersion"),
+        "no attribute of an image that is not created may be read: {rendered}"
+    );
+}
+
+/// The Frozen path is the one every installed stack is on, and it does not move.
+#[test]
+fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-frozen", SandboxEgress::Deny);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "frozen sandbox",
+    );
+
+    let types = resource_types(&template);
+    assert!(
+        types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Frozen sandbox is built by stack creation: {types:?}"
+    );
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    assert!(
+        rendered.contains("LatestActiveImageVersion"),
+        "registration reads the version off the image it created: {rendered}"
+    );
+    assert!(
+        !rendered.contains("buildRoleArn"),
+        "a Frozen sandbox hands the controller nothing to build with: {rendered}"
+    );
 }
 
 /// `egress: deny` has to be built, not assumed.

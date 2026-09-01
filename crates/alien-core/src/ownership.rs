@@ -1,11 +1,28 @@
 use crate::ResourceLifecycle;
 
+/// When a resource type contributes resources to the setup artifact.
+///
+/// Most types answer with the lifecycle alone. A sandbox does not: a Live one still needs the
+/// setup stack to create its build role, because the runtime controller may only *pass* that role
+/// — `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`, the same shape
+/// `worker/provision` uses for the service-account role a Worker is passed. Only the image itself
+/// moves to runtime, and the emitter decides that from the lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupEmission {
+    /// Never part of the setup artifact; a runtime controller owns the whole resource.
+    Never,
+    /// Emitted only when the resource is Frozen.
+    WhenFrozen,
+    /// Emitted under either lifecycle, with the emitter narrowing what it writes.
+    Always,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceOwnershipPolicy {
     default_lifecycle: ResourceLifecycle,
     allow_frozen: bool,
     allow_live: bool,
-    emit_in_setup: bool,
+    emit_in_setup: SetupEmission,
     requires_management_permissions: bool,
     runtime_cleanup_before_teardown: bool,
 }
@@ -15,7 +32,7 @@ impl ResourceOwnershipPolicy {
         default_lifecycle: ResourceLifecycle,
         allow_frozen: bool,
         allow_live: bool,
-        emit_in_setup: bool,
+        emit_in_setup: SetupEmission,
         requires_management_permissions: bool,
         runtime_cleanup_before_teardown: bool,
     ) -> Self {
@@ -49,7 +66,11 @@ impl ResourceOwnershipPolicy {
     }
 
     pub const fn should_emit_in_setup(self, lifecycle: ResourceLifecycle) -> bool {
-        self.emit_in_setup && matches!(lifecycle, ResourceLifecycle::Frozen)
+        match self.emit_in_setup {
+            SetupEmission::Never => false,
+            SetupEmission::WhenFrozen => matches!(lifecycle, ResourceLifecycle::Frozen),
+            SetupEmission::Always => true,
+        }
     }
 
     pub const fn requires_management_permissions(self) -> bool {
@@ -74,7 +95,8 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
     match resource_type {
         "function" | "container-cluster" => removed_resource_type(),
         "worker" | "daemon" | "container" => live_only(),
-        "compute-cluster" | "sandbox" => frozen_with_runtime_cleanup(),
+        "compute-cluster" => frozen_with_runtime_cleanup(),
+        "sandbox" => sandbox_lifecycle(),
         "artifact-registry" | "key" => frozen_with_management(),
         "build"
         | "network"
@@ -103,27 +125,86 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
 }
 
 const fn frozen_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        false,
+        false,
+    )
 }
 
 const fn frozen_with_management() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        true,
+        false,
+    )
 }
 
 const fn frozen_with_runtime_cleanup() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, true)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        true,
+        true,
+    )
+}
+
+/// A sandbox may be baked by the setup stack or provisioned by a runtime controller.
+///
+/// Live is what lets the base image come from Alien's private registry: the cross-account read is
+/// granted by a repository policy naming the customer's account, which is not known until the
+/// deployment registers, and registration cannot precede a setup-stack build. Frozen stays the
+/// default so a stack that already installed a setup-stack image keeps it.
+const fn sandbox_lifecycle() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        true,
+        SetupEmission::Always,
+        true,
+        true,
+    )
 }
 
 const fn live_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Live,
+        false,
+        true,
+        SetupEmission::Never,
+        false,
+        false,
+    )
 }
 
 const fn removed_resource_type() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, false, false, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Live,
+        false,
+        false,
+        SetupEmission::Never,
+        false,
+        false,
+    )
 }
 
 const fn user_choice() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        true,
+        SetupEmission::WhenFrozen,
+        false,
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -148,6 +229,21 @@ mod tests {
         assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
         assert!(!policy.allows_lifecycle(ResourceLifecycle::Live));
         assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.requires_management_permissions());
+        assert!(policy.has_runtime_cleanup_before_teardown());
+    }
+
+    #[test]
+    fn sandbox_defaults_to_frozen_but_may_be_live() {
+        let policy = ownership_policy_for_resource_type("sandbox");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Live));
+        // Both, and that is the point: a Live sandbox still needs the setup stack to create the
+        // build role its runtime controller is only permitted to pass. The emitter narrows what
+        // it writes; the policy does not.
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Live));
         assert!(policy.requires_management_permissions());
         assert!(policy.has_runtime_cleanup_before_teardown());
     }

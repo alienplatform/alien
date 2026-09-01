@@ -428,6 +428,63 @@ fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
     (stack, settings)
 }
 
+/// The same stack with the sandbox declared Live, which is what moves the build to runtime.
+fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new(name.to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox_fixture(egress), ResourceLifecycle::Live)
+        .build();
+    (stack, settings)
+}
+
+/// A Live sandbox moves the image build to runtime — and moves nothing else.
+///
+/// Both halves are load-bearing. The image must be gone: it can only be built once the customer's
+/// account is a principal Alien's registry has been opened to, and that is not true during
+/// `terraform apply`. The build role must remain: `sandbox/provision` grants the runtime
+/// controller `iam:PassRole` and no `iam:CreateRole`, so a module that dropped the role along with
+/// the image would leave the controller with nothing to pass.
+///
+/// Validated with real `terraform validate` rather than by matching text, because the failure this
+/// guards against is a plan-time one — reading `LatestActiveImageVersion` off a resource the module
+/// no longer declares.
+#[test]
+fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
+    let (stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    assert_terraform_valid(&module, "live sandbox module");
+
+    let rendered: String = module.iter().map(|(_, contents)| contents).collect();
+    assert!(
+        !rendered.contains("LatestActiveImageVersion"),
+        "no attribute of an image the module does not declare may be read:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("resource \"aws_iam_role\" \"agents\""),
+        "the build role the controller passes must still be installed:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("buildRoleArn") && rendered.contains("bundleUri"),
+        "registration must hand the controller the role and the bundle:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("awscc_lambda_network_connector"),
+        "the connector the build and the session are passed must still be installed:\n{rendered}"
+    );
+}
+
 /// `egress: deny` has to be built, not assumed.
 ///
 /// A MicroVM started with no egress connector reaches the public internet — verified against a

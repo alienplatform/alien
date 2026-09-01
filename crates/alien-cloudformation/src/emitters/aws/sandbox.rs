@@ -15,8 +15,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, Result, Sandbox,
-    SandboxCode, SandboxEgress,
+    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, ResourceLifecycle,
+    Result, Sandbox, SandboxCode, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -236,7 +236,13 @@ impl CfEmitter for AwsSandboxEmitter {
 
         let mut resources = vec![role];
         resources.append(&mut egress_resources);
-        resources.push(image);
+        // A Live sandbox builds its image from the runtime controller, once the deployment has
+        // registered and the customer's account is a principal Alien's registry can be opened to.
+        // Everything the build needs still comes from here: the controller may pass the build
+        // role and the connector, and creates neither.
+        if !provisioned_at_runtime(ctx) {
+            resources.push(image);
+        }
         if let Some(policy) = remote_access_policy(ctx)? {
             resources.push(policy);
         }
@@ -246,6 +252,9 @@ impl CfEmitter for AwsSandboxEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
+        if provisioned_at_runtime(ctx) {
+            return runtime_import_ref(sandbox, image_id);
+        }
         Ok(CfExpression::object([
             ("previewPorts", preview_ports(sandbox)),
             (
@@ -289,16 +298,21 @@ impl CfEmitter for AwsSandboxEmitter {
                 "allowEgress".to_string(),
                 CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
-            (
-                "imageArn".to_string(),
-                CfExpression::get_att(image_id, "ImageArn"),
-            ),
-            (
-                "imageVersion".to_string(),
-                CfExpression::get_att(image_id, "LatestActiveImageVersion"),
-            ),
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
+        // A runtime-provisioned sandbox has no image resource to read these from, and a GetAtt
+        // against one the template does not create is a template CloudFormation refuses. The
+        // controller supplies both once the image is ACTIVE.
+        if !provisioned_at_runtime(ctx) {
+            fields.push((
+                "imageArn".to_string(),
+                CfExpression::get_att(image_id, "ImageArn"),
+            ));
+            fields.push((
+                "imageVersion".to_string(),
+                CfExpression::get_att(image_id, "LatestActiveImageVersion"),
+            ));
+        }
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds".to_string(),
@@ -376,6 +390,36 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
         .properties
         .insert("PolicyDocument".to_string(), document);
     Ok(Some(policy))
+}
+
+/// Whether this sandbox's image is built by the runtime controller rather than by stack creation.
+fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
+    ctx.resource.lifecycle == ResourceLifecycle::Live
+}
+
+/// What a runtime-provisioned sandbox registers.
+///
+/// The image fields are absent because the image is: `Fn::GetAtt(<image>, "ImageArn")` cannot
+/// resolve against a resource the template no longer creates, and that coupling is the whole
+/// reason the build had to move. In their place go the two things the controller cannot derive —
+/// the build role it passes and the bundle it builds from — and the egress facts, which the setup
+/// stack still owns. The controller records the image ARN and version in resource state, the way a
+/// Worker records its function ARN.
+fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
+    let role_id = format!("{image_id}BuildRole");
+    Ok(CfExpression::object([
+        ("previewPorts", preview_ports(sandbox)),
+        (
+            "egressConnectorArns",
+            egress_connector_arns(sandbox, image_id),
+        ),
+        (
+            "allowEgress",
+            CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+        ),
+        ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
+        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+    ]))
 }
 
 /// The ports a preview capability may be minted for.

@@ -17,8 +17,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
-    NetworkSettings, RemoteBindings, Result, Sandbox, SandboxCode, SandboxEgress,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    NetworkSettings, RemoteBindings, ResourceLifecycle, Result, Sandbox, SandboxCode,
+    SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -354,8 +354,13 @@ impl TfEmitter for AwsSandboxEmitter {
         let mut fragment = TfFragment::empty()
             .with_resource(build_role)
             .with_resource(build_policy)
-            .with_resource(iam_propagation)
-            .with_resource(image);
+            .with_resource(iam_propagation);
+        // A Live sandbox is built by the runtime controller once the deployment has registered,
+        // because only then is the customer's account a principal Alien's registry can be opened
+        // to. The role and the connector stay: the controller may pass them and creates neither.
+        if !provisioned_at_runtime(ctx) {
+            fragment = fragment.with_resource(image);
+        }
         if !open {
             fragment = fragment
                 .with_resource(operator_role)
@@ -370,6 +375,9 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        if provisioned_at_runtime(ctx) {
+            return runtime_import_ref(sandbox, label);
+        }
         Ok(expr::object([
             ("previewPorts", preview_ports(sandbox)),
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
@@ -403,16 +411,20 @@ impl TfEmitter for AwsSandboxEmitter {
                 "allowEgress",
                 Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
-            ("imageArn", image_property(label, "ImageArn")),
-            (
-                "imageVersion",
-                image_property(label, "LatestActiveImageVersion"),
-            ),
             (
                 "region",
                 expr::traversal(["data", "aws_region", "current", "region"]),
             ),
         ];
+        // Reading an attribute off a resource this module no longer declares is a plan-time
+        // failure, not a runtime one. The controller supplies both once the image is ACTIVE.
+        if !provisioned_at_runtime(ctx) {
+            fields.push(("imageArn", image_property(label, "ImageArn")));
+            fields.push((
+                "imageVersion",
+                image_property(label, "LatestActiveImageVersion"),
+            ));
+        }
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds",
@@ -427,6 +439,32 @@ impl TfEmitter for AwsSandboxEmitter {
         }
         Ok(Some(expr::object(fields)))
     }
+}
+
+/// Whether this sandbox's image is built by the runtime controller rather than by `terraform apply`.
+fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
+    ctx.resource.lifecycle == ResourceLifecycle::Live
+}
+
+/// What a runtime-provisioned sandbox registers.
+///
+/// The image fields are absent because the image is. In their place go the two things the
+/// controller cannot derive — the build role it passes and the bundle it builds from — plus the
+/// egress facts the module still owns.
+fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
+    Ok(expr::object([
+        ("previewPorts", preview_ports(sandbox)),
+        ("egressConnectorArns", egress_connector_arns(sandbox, label)),
+        (
+            "allowEgress",
+            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+        ),
+        (
+            "buildRoleArn",
+            expr::traversal(["aws_iam_role", label, "arn"]),
+        ),
+        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+    ]))
 }
 
 /// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
