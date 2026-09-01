@@ -617,7 +617,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.actions.as_deref(),
+                        &code_spans(entry.grant.actions.as_deref()),
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.resources.join(", "), target, resource_id)
                         }),
@@ -629,7 +629,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.permissions.as_deref(),
+                        &code_spans(entry.grant.permissions.as_deref()),
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.scope, target, resource_id)
                         }),
@@ -652,13 +652,23 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                         .predefined_roles
                         .iter()
                         .flatten()
-                        .map(|role| format!("{role} (role)"))
+                        // The annotation sits outside the code span: a reader has to be able to
+                        // tell the role's real name from a note about it, and this is the
+                        // strongest grant in the package.
+                        .map(|role| format!("`{role}` (built-in role)"))
                         .collect();
-                    granted.extend(entry.grant.data_actions.iter().flatten().cloned());
+                    granted.extend(
+                        entry
+                            .grant
+                            .data_actions
+                            .iter()
+                            .flatten()
+                            .map(|action| format!("`{action}`")),
+                    );
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        Some(&granted),
+                        &granted,
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.scope, target, resource_id)
                         }),
@@ -690,10 +700,21 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
         )
 }
 
+/// Wraps each name in a code span, for the callers whose entries are names and nothing else.
+fn code_spans(permissions: Option<&[String]>) -> Vec<String> {
+    permissions
+        .unwrap_or_default()
+        .iter()
+        .map(|permission| format!("`{permission}`"))
+        .collect()
+}
+
+/// `permissions` arrives already rendered as markdown, so a caller can annotate an entry outside
+/// its code span rather than inside the name.
 fn append_permission_entry(
     lines: &mut Vec<String>,
     description: Option<&str>,
-    permissions: Option<&[String]>,
+    permissions: &[String],
     scope: Option<String>,
 ) {
     if let Some(description) = description {
@@ -702,8 +723,8 @@ fn append_permission_entry(
     if let Some(scope) = scope {
         lines.push(format!("  Scope: `{scope}`"));
     }
-    for permission in permissions.unwrap_or_default() {
-        lines.push(format!("  - `{permission}`"));
+    for permission in permissions {
+        lines.push(format!("  - {permission}"));
     }
 }
 
@@ -3314,6 +3335,16 @@ fn readme_md(
     } else {
         ""
     };
+    // The two things an Azure platform approver stops on -- a preview API version and a provider
+    // check turned off -- with the reason in the artifact rather than only in Alien's source.
+    let azure_sandbox_note = if target.cloud_platform() == alien_core::Platform::Azure
+        && stack.resources().any(|(_, entry)| {
+            entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE
+        }) {
+        "\n\n## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at a pinned preview API version, because the AzureRM provider has no typed resource for `Microsoft.App/sandboxGroups`. That resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered."
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -3332,7 +3363,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
-{kubernetes_operations}{retained_key_operations}",
+{kubernetes_operations}{retained_key_operations}{azure_sandbox_note}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,
@@ -3340,7 +3371,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
-        retained_key_operations = retained_key_operations
+        retained_key_operations = retained_key_operations,
+        azure_sandbox_note = azure_sandbox_note
     )
 }
 

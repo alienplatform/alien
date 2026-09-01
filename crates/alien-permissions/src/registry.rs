@@ -229,7 +229,12 @@ fn action_reaches_a_microvm_session(action: &str) -> bool {
             .iter()
             .chain(MICROVM_SESSION_LIFECYCLE_ACTIONS)
             .any(|known| known.to_ascii_lowercase().starts_with(literal));
-        return covers_a_known_verb || reaches_the_microvm_namespace(literal);
+        // Every literal run, not only the one before the first `*`: `lambda:Foo*Microvm` names
+        // the namespace after the wildcard, and reading the head alone would answer no while the
+        // grant authorizes a MicroVM verb. Each run is cleared the same way, so the `MicrovmImage`
+        // exclusion still applies to whichever run carries the name.
+        return covers_a_known_verb
+            || action.split('*').any(reaches_the_microvm_namespace);
     }
     action
         .strip_prefix("lambda:")
@@ -371,6 +376,47 @@ mod tests {
             "nonexistent/permission",
             Platform::Aws
         ));
+    }
+
+    /// The wildcard branch decides whether a grant is claimed by the remote caller instead of the
+    /// deployment's management identity, so a shape it answers no to stays on an identity a second
+    /// tenant holds. Reading only the run before the first `*` answered no to a pattern naming the
+    /// namespace after it.
+    #[test]
+    fn a_wildcard_naming_microvm_anywhere_reaches_a_session() {
+        for action in [
+            "lambda:Foo*Microvm",
+            "lambda:*Microvm",
+            "lambda:RunMicrovm",
+            "lambda:Run*",
+            "lambda:*",
+            "*",
+            "lambda:runmicrovm",
+            // Matches only image verbs, but a `lambda:` head prefixes every known session verb,
+            // so it is claimed anyway. Over-approximating here withholds a grant; under-
+            // approximating leaves one on an identity a second tenant holds.
+            "lambda:*MicrovmImage",
+        ] {
+            assert!(
+                action_reaches_a_microvm_session(action),
+                "{action} authorizes a MicroVM verb"
+            );
+        }
+
+        // The image a session launches from is not the session: `sandbox/provision` and
+        // `sandbox/heartbeat` hold these, and claiming them would strip a grant they need.
+        for action in [
+            "lambda:GetMicrovmImage",
+            "lambda:GetMicrovmImage*",
+            "lambda:GetMicrovmImage*Version",
+            "logs:PutLogEvents",
+            "s3:GetObject*",
+        ] {
+            assert!(
+                !action_reaches_a_microvm_session(action),
+                "{action} does not reach a session"
+            );
+        }
     }
 
     #[test]
