@@ -109,9 +109,13 @@
         // name, so the assignment names a resource the same template built. A resource-group
         // scope would reach every sibling sandbox in the deployment, which is what makes the
         // stack scope deliberately absent rather than merely unset.
+        //
+        // No `${stackPrefix}`: on Azure the emitter already resolves `${resourceName}` to the
+        // prefixed group name, so naming the prefix again renders a scope matching nothing in
+        // the document a security team approves this grant from.
         "binding": {
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
           }
         }
       }

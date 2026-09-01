@@ -15,7 +15,7 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::azure::helpers::{
         downcast, emit_remote_bindings_role_definitions, permission_context,
-        remote_bindings_role_label, required_label, resource_prefix_template, tags,
+        remote_bindings_role_label, required_label, tags,
     },
     expr,
 };
@@ -47,8 +47,16 @@ pub struct AzureSandboxEmitter;
 /// `local.resource_prefix` — the deployer's `var.resource_prefix` defaults to empty and is
 /// replaced by a generated one, so naming from the variable registers a group of `-<id>` while
 /// the management grant is scoped to the real one.
+///
+/// Normalized the way every other Azure resource names itself, for two reasons: a deployer's
+/// prefix may carry underscores and uppercase Azure rejects, and this is the form `PERMISSIONS.md`
+/// states as the grant's scope. A security team approves the grant from that document, so a name
+/// only the template knows would document a boundary they cannot check.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
-    resource_prefix_template(&ctx.resource_id)
+    expr::raw(format!(
+        "replace(lower(\"${{local.resource_prefix}}-{}\"), \"_\", \"-\")",
+        ctx.resource_id
+    ))
 }
 
 /// The declared outbound policy, in the shape the binding carries.

@@ -583,15 +583,55 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .collect::<Vec<_>>()
         .join("\n");
 
-    // Setup creates the group, at the pinned preview version.
+    // The scope PERMISSIONS.md documents has to name the group the module creates. A security
+    // team approves the grant from that document and cannot see the traversal the assignment
+    // actually uses, so a scope that renders to a different name -- or to an unsubstituted
+    // template token -- shows them a boundary the deployment does not have.
+    let group_name = module
+        .files
+        .get("agents.tf")
+        .expect("the sandbox group renders into its own file")
+        .lines()
+        // HCL pads `=` to align an attribute with its siblings, so match on the token.
+        .find_map(|line| line.split_whitespace().collect::<Vec<_>>().split_first().and_then(
+            |(first, rest)| (*first == "name" && rest.first() == Some(&"=")).then(|| rest[1..].join(" ")),
+        ))
+        .expect("the group carries a name");
+    let documented_scope = module
+        .files
+        .get("PERMISSIONS.md")
+        .expect("a remote binding publishes a permissions document")
+        .lines()
+        .find(|line| line.trim_start().starts_with("Scope:"))
+        .expect("the document states the grant's scope")
+        .to_string();
     assert!(
-        rendered.contains(r#"resource "azapi_resource" "agents""#),
-        "setup must create the sandbox group it grants on:\n{rendered}"
+        documented_scope.ends_with(&format!("/Microsoft.App/sandboxGroups/${{{group_name}}}`")),
+        "the documented scope must end at the created group.\n  documented: {documented_scope}\n  \
+         group name: {group_name}"
     );
-    assert!(
-        rendered.contains("Microsoft.App/sandboxGroups@2026-02-01-preview"),
-        "the group is created at the pinned preview version:\n{rendered}"
-    );
+    // Terraform's own interpolations survive into the document by design; a permission-set token
+    // does not. One left behind renders a scope that resolves to nothing, and the document is the
+    // only place a reader would ever see it.
+    let permissions_md = module
+        .files
+        .get("PERMISSIONS.md")
+        .expect("a remote binding publishes a permissions document");
+    for token in [
+        "${stackPrefix}",
+        "${resourceName}",
+        "${subscriptionId}",
+        "${resourceGroup}",
+        "${projectName}",
+        "${awsRegion}",
+        "${awsAccountId}",
+        "${storageAccountName}",
+    ] {
+        assert!(
+            !permissions_md.contains(token),
+            "{token} reached the approver's document unsubstituted:\n{permissions_md}"
+        );
+    }
 
     let assignment = rendered
         .split(r#"resource "azurerm_role_assignment" "agents_access_0""#)

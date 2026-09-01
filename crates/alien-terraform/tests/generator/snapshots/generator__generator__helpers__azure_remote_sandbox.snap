@@ -124,7 +124,7 @@ locals {
       id   = "agents"
       type = "sandbox"
       importData = {
-        sandboxGroup  = "${local.resource_prefix}-agents"
+        sandboxGroup  = replace(lower("${local.resource_prefix}-agents"), "_", "-")
         region        = var.azure_location
         resourceGroup = var.azure_resource_group_name
       }
@@ -157,7 +157,7 @@ resource "azurerm_resource_group" "default_resource_group" {
 === agents.tf ===
 resource "azapi_resource" "agents" {
   type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
-  name      = "${local.resource_prefix}-agents"
+  name      = replace(lower("${local.resource_prefix}-agents"), "_", "-")
   parent_id = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
   location  = var.azure_location
   body      = {}
@@ -311,7 +311,7 @@ Create and terminate sessions in this sandbox, and run arbitrary code inside the
 Permission set: `sandbox/remote-execute` (revision 1).
 
 - Create, drive and tear down sessions of the selected sandbox group.
-  Scope: `/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${replace(lower("${local.resource_prefix}-agents"), "_", "-")}`
+  Scope: `/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.App/sandboxGroups/${replace(lower("${local.resource_prefix}-agents"), "_", "-")}`
   - `Container Apps SandboxGroup Data Owner (role)`
 
 === README.md ===
