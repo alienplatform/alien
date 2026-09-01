@@ -860,7 +860,7 @@ mod tests {
 
         // With no value supplied the gate falls to the declared default, and nothing carries the
         // install-time answer here: a live gate has no fixity, so the strip cannot learn that a
-        // deployer already declined the same input when the setup artifact rendered. ALIEN-657.
+        // deployer already declined the same input when the setup artifact rendered.
         let default_answer = strip_declined_live_resources(
             stack,
             &std::collections::HashMap::new(),
