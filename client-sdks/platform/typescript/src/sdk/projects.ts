@@ -8,6 +8,7 @@ import { projectsConfigureDeployments } from "../funcs/projectsConfigureDeployme
 import { projectsConfigureKeys } from "../funcs/projectsConfigureKeys.js";
 import { projectsConfigureModels } from "../funcs/projectsConfigureModels.js";
 import { projectsConfigureRegistry } from "../funcs/projectsConfigureRegistry.js";
+import { projectsConfigureRemoteSandbox } from "../funcs/projectsConfigureRemoteSandbox.js";
 import { projectsConfigureSource } from "../funcs/projectsConfigureSource.js";
 import { projectsCreate } from "../funcs/projectsCreate.js";
 import { projectsCreateFromTemplate } from "../funcs/projectsCreateFromTemplate.js";
@@ -132,7 +133,7 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+   * Connect a GitHub repository or Alien template to an existing project.
    */
   async configureSource(
     request: operations.ConfigureProjectSourceRequest,
@@ -160,7 +161,7 @@ export class Projects extends ClientSDK {
   }
 
   /**
-   * Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
+   * Create a project by forking alienplatform/alien into your namespace.
    */
   async createFromTemplate(
     request?: operations.CreateProjectFromTemplateRequest | undefined,
@@ -335,6 +336,20 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CapabilityMaterialization> {
     return unwrapAsync(projectsConfigureRegistry(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
+   */
+  async configureRemoteSandbox(
+    request: operations.ConfigureProjectRemoteSandboxRequest,
+    options?: RequestOptions,
+  ): Promise<models.CapabilityMaterialization> {
+    return unwrapAsync(projectsConfigureRemoteSandbox(
       this,
       request,
       options,

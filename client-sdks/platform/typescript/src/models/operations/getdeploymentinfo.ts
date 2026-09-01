@@ -30,6 +30,7 @@ export const GetDeploymentInfoSetupItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type GetDeploymentInfoSetupItem = ClosedEnum<
   typeof GetDeploymentInfoSetupItem

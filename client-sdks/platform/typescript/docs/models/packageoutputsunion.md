@@ -49,6 +49,19 @@ const value: models.OutputsCloudformation = {
 };
 ```
 
+### `models.OutputsSandboxBundle`
+
+```typescript
+const value: models.OutputsSandboxBundle = {
+  bundleUriTemplate: "<value>",
+  objectKey: "<value>",
+  regions: [],
+  sha256: "<value>",
+  size: 830757,
+  type: "sandbox-bundle",
+};
+```
+
 ### `models.OutputsTerraform`
 
 ```typescript

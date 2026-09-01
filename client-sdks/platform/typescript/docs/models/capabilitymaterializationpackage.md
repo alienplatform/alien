@@ -6,7 +6,7 @@
 import { CapabilityMaterializationPackage } from "@alienplatform/platform-api/models";
 
 let value: CapabilityMaterializationPackage = {
-  type: "cloudformation",
+  type: "terraform",
   status: "pending",
 };
 ```

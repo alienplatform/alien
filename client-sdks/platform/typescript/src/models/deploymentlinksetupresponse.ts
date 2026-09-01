@@ -56,6 +56,7 @@ export const DeploymentLinkSetupResponseSetupItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type DeploymentLinkSetupResponseSetupItem = ClosedEnum<
   typeof DeploymentLinkSetupResponseSetupItem
@@ -69,6 +70,7 @@ export const VisiblePackageType = {
   Cloudformation: "cloudformation",
   Helm: "helm",
   OperatorImage: "operator-image",
+  SandboxBundle: "sandbox-bundle",
   Terraform: "terraform",
 } as const;
 /**

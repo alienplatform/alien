@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
+ * Create a project by forking alienplatform/alien into your namespace.
  */
 export function projectsCreateFromTemplate(
   client: AlienCore,

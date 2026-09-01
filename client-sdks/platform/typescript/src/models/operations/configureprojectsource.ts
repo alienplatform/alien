@@ -417,12 +417,20 @@ export type ConfigureProjectSourceRegistry = {
   credentialPolicy: ConfigureProjectSourceCredentialPolicy;
 };
 
+export type ConfigureProjectSourceRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type ConfigureProjectSourceCapabilities = {
   deployments?: ConfigureProjectSourceDeployments | undefined;
   keys?: ConfigureProjectSourceKeys | undefined;
   models?: ConfigureProjectSourceModels | undefined;
   buckets?: ConfigureProjectSourceBuckets | undefined;
   registry?: ConfigureProjectSourceRegistry | undefined;
+  remoteSandbox?: ConfigureProjectSourceRemoteSandbox | undefined;
 };
 
 /**
@@ -483,7 +491,7 @@ export type ConfigureProjectSourceTemplateResponse = {
 };
 
 /**
- * Project source connected and GitHub Actions configured.
+ * Project source connected.
  */
 export type ConfigureProjectSourceResponse = {
   /**
@@ -1070,6 +1078,28 @@ export function configureProjectSourceRegistryFromJSON(
 }
 
 /** @internal */
+export const ConfigureProjectSourceRemoteSandbox$inboundSchema: z.ZodType<
+  ConfigureProjectSourceRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function configureProjectSourceRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigureProjectSourceCapabilities$inboundSchema: z.ZodType<
   ConfigureProjectSourceCapabilities,
   unknown
@@ -1080,6 +1110,8 @@ export const ConfigureProjectSourceCapabilities$inboundSchema: z.ZodType<
   models: z.lazy(() => ConfigureProjectSourceModels$inboundSchema).optional(),
   buckets: z.lazy(() => ConfigureProjectSourceBuckets$inboundSchema).optional(),
   registry: z.lazy(() => ConfigureProjectSourceRegistry$inboundSchema)
+    .optional(),
+  remoteSandbox: z.lazy(() => ConfigureProjectSourceRemoteSandbox$inboundSchema)
     .optional(),
 });
 

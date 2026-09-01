@@ -20,16 +20,14 @@ let value: ListPackagesResponse = {
       setupFingerprints: {},
       packageBuildInputHash: "<value>",
       config: {
-        displayName: "Virginia51",
-        name: "<value>",
-        type: "cli",
+        type: "cloudformation",
       },
-      retries: 480954,
-      createdAt: new Date("2024-03-13T23:16:16.358Z"),
-      updatedAt: new Date("2024-08-14T21:19:41.899Z"),
+      retries: 966006,
+      createdAt: new Date("2025-04-14T11:51:09.728Z"),
+      updatedAt: new Date("2024-08-25T22:26:49.704Z"),
     },
   ],
-  nextCursor: "<value>",
+  nextCursor: null,
 };
 ```
 

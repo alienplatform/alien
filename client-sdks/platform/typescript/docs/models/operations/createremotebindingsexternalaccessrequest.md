@@ -10,7 +10,7 @@ let value: CreateRemoteBindingsExternalAccessRequest = {
   workspace: "my-workspace",
   remoteBindingsExternalAccessRequest: {
     externalId: "ext_example_01",
-    capability: "storage",
+    capability: "sandbox",
   },
 };
 ```

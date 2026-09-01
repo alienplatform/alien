@@ -4731,6 +4731,14 @@ export type PersistImportedDeploymentRequestSetupUpdateAuthorizationUnion =
  */
 export type PersistImportedDeploymentRequestRuntimeMetadata = {
   /**
+   * Last generated CLI package revision whose direct setup was applied.
+   *
+   * @remarks
+   * This lets a newer generated CLI refresh setup-owned infrastructure once
+   * before handing runtime changes back to the hosted manager.
+   */
+  directSetupRevision?: string | null | undefined;
+  /**
    * Actor that owns structural work during the initial setup phase.
    */
   initialSetupAuthority?:
@@ -14273,6 +14281,7 @@ export function persistImportedDeploymentRequestSetupUpdateAuthorizationUnionToJ
 
 /** @internal */
 export type PersistImportedDeploymentRequestRuntimeMetadata$Outbound = {
+  directSetupRevision?: string | null | undefined;
   initialSetupAuthority?: string | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   lastSyncedSecretNames?: Array<string> | undefined;
@@ -14301,6 +14310,7 @@ export const PersistImportedDeploymentRequestRuntimeMetadata$outboundSchema:
     PersistImportedDeploymentRequestRuntimeMetadata$Outbound,
     PersistImportedDeploymentRequestRuntimeMetadata
   > = z.object({
+    directSetupRevision: z.nullable(z.string()).optional(),
     initialSetupAuthority:
       PersistImportedDeploymentRequestInitialSetupAuthority$outboundSchema
         .optional(),

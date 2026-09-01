@@ -41,10 +41,10 @@ let value: DeploymentInfo = {
   modelAvailabilitySources: [],
   setupItems: [
     {
-      item: "registry",
+      item: "sandbox",
       source: {
         type: "built-in",
-        definitionId: "customer-registry",
+        definitionId: "customer-sandbox",
         version: "<value>",
         sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       },
@@ -64,9 +64,7 @@ let value: DeploymentInfo = {
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
+      allowedSetupMethods: [],
     },
     environmentVariables: [],
     items: [

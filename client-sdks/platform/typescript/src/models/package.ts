@@ -20,6 +20,7 @@ export const PackageTypeEnum = {
   Cloudformation: "cloudformation",
   Helm: "helm",
   OperatorImage: "operator-image",
+  SandboxBundle: "sandbox-bundle",
   Terraform: "terraform",
 } as const;
 /**
@@ -55,6 +56,37 @@ export type ConfigTerraform = {
    */
   supportedAwsRegions?: Array<string> | undefined;
   type: "terraform";
+};
+
+/**
+ * Configuration for a sandbox bundle package.
+ *
+ * @remarks
+ *
+ * The bundle is a zip holding one Dockerfile that layers the published Alien sandbox agent
+ * onto the vendor's base image; everything the builder writes is derived from these fields.
+ */
+export type ConfigSandboxBundle = {
+  /**
+   * Full reference of the published sandbox agent image copied into the bundle.
+   */
+  agentImage: string;
+  /**
+   * The vendor's base container image the sandbox filesystem starts from.
+   */
+  baseImage: string;
+  /**
+   * Object key the bundle is written under in every regional bundle store.
+   */
+  objectKey: string;
+  /**
+   * Regions whose bundle store must receive this bundle. Part of the build input hash,
+   *
+   * @remarks
+   * so a newly supported region re-mints the bundle instead of silently missing it.
+   */
+  supportedAwsRegions?: Array<string> | undefined;
+  type: "sandbox-bundle";
 };
 
 /**
@@ -170,6 +202,7 @@ export type Config =
   | ConfigCloudformation
   | ConfigHelm
   | ConfigOperatorImage
+  | ConfigSandboxBundle
   | ConfigTerraform;
 
 /**
@@ -286,6 +319,40 @@ export type OutputsTerraform = {
    */
   provider: PackageProvider;
   type: OutputsTypeTerraform;
+};
+
+export const OutputsTypeSandboxBundle = {
+  SandboxBundle: "sandbox-bundle",
+} as const;
+export type OutputsTypeSandboxBundle = ClosedEnum<
+  typeof OutputsTypeSandboxBundle
+>;
+
+/**
+ * Outputs from a sandbox bundle package build.
+ */
+export type OutputsSandboxBundle = {
+  /**
+   * Bundle URI with the {region} token in the bucket, resolved by the deploy-time emitters.
+   */
+  bundleUriTemplate: string;
+  /**
+   * Object key the bundle was written under in every regional bundle store.
+   */
+  objectKey: string;
+  /**
+   * Regions whose bundle store received this bundle.
+   */
+  regions: Array<string>;
+  /**
+   * SHA256 checksum of the bundle zip.
+   */
+  sha256: string;
+  /**
+   * Bundle zip size in bytes.
+   */
+  size: number;
+  type: OutputsTypeSandboxBundle;
 };
 
 /**
@@ -454,6 +521,7 @@ export type OutputsCli = {
  * Package outputs (only when status is 'ready')
  */
 export type PackageOutputsUnion =
+  | OutputsSandboxBundle
   | OutputsCli
   | OutputsOperatorImage
   | OutputsHelm
@@ -518,11 +586,13 @@ export type Package = {
     | ConfigCloudformation
     | ConfigHelm
     | ConfigOperatorImage
+    | ConfigSandboxBundle
     | ConfigTerraform;
   /**
    * Package outputs (only when status is 'ready')
    */
   outputs?:
+    | OutputsSandboxBundle
     | OutputsCli
     | OutputsOperatorImage
     | OutputsHelm
@@ -587,6 +657,28 @@ export function configTerraformFromJSON(
     jsonString,
     (x) => ConfigTerraform$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'ConfigTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const ConfigSandboxBundle$inboundSchema: z.ZodType<
+  ConfigSandboxBundle,
+  unknown
+> = z.object({
+  agentImage: z.string(),
+  baseImage: z.string(),
+  objectKey: z.string(),
+  supportedAwsRegions: z.array(z.string()).optional(),
+  type: z.literal("sandbox-bundle"),
+});
+
+export function configSandboxBundleFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigSandboxBundle, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigSandboxBundle$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigSandboxBundle' from JSON`,
   );
 }
 
@@ -680,6 +772,7 @@ export const Config$inboundSchema: z.ZodType<Config, unknown> = z.union([
   z.lazy(() => ConfigCloudformation$inboundSchema),
   z.lazy(() => ConfigHelm$inboundSchema),
   z.lazy(() => ConfigOperatorImage$inboundSchema),
+  z.lazy(() => ConfigSandboxBundle$inboundSchema),
   z.lazy(() => ConfigTerraform$inboundSchema),
 ]);
 
@@ -799,6 +892,34 @@ export function outputsTerraformFromJSON(
     jsonString,
     (x) => OutputsTerraform$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'OutputsTerraform' from JSON`,
+  );
+}
+
+/** @internal */
+export const OutputsTypeSandboxBundle$inboundSchema: z.ZodEnum<
+  typeof OutputsTypeSandboxBundle
+> = z.enum(OutputsTypeSandboxBundle);
+
+/** @internal */
+export const OutputsSandboxBundle$inboundSchema: z.ZodType<
+  OutputsSandboxBundle,
+  unknown
+> = z.object({
+  bundleUriTemplate: z.string(),
+  objectKey: z.string(),
+  regions: z.array(z.string()),
+  sha256: z.string(),
+  size: z.int(),
+  type: OutputsTypeSandboxBundle$inboundSchema,
+});
+
+export function outputsSandboxBundleFromJSON(
+  jsonString: string,
+): SafeParseResult<OutputsSandboxBundle, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OutputsSandboxBundle$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OutputsSandboxBundle' from JSON`,
   );
 }
 
@@ -965,6 +1086,7 @@ export const PackageOutputsUnion$inboundSchema: z.ZodType<
   PackageOutputsUnion,
   unknown
 > = z.union([
+  z.lazy(() => OutputsSandboxBundle$inboundSchema),
   z.lazy(() => OutputsCli$inboundSchema),
   z.lazy(() => OutputsOperatorImage$inboundSchema),
   z.lazy(() => OutputsHelm$inboundSchema),
@@ -1004,10 +1126,12 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
     z.lazy(() => ConfigCloudformation$inboundSchema),
     z.lazy(() => ConfigHelm$inboundSchema),
     z.lazy(() => ConfigOperatorImage$inboundSchema),
+    z.lazy(() => ConfigSandboxBundle$inboundSchema),
     z.lazy(() => ConfigTerraform$inboundSchema),
   ]),
   outputs: z.nullable(
     z.union([
+      z.lazy(() => OutputsSandboxBundle$inboundSchema),
       z.lazy(() => OutputsCli$inboundSchema),
       z.lazy(() => OutputsOperatorImage$inboundSchema),
       z.lazy(() => OutputsHelm$inboundSchema),

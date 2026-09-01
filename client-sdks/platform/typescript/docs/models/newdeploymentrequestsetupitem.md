@@ -7,11 +7,11 @@ Customer setup item selected from this deployment-group token.
 ```typescript
 import { NewDeploymentRequestSetupItem } from "@alienplatform/platform-api/models";
 
-let value: NewDeploymentRequestSetupItem = "registry";
+let value: NewDeploymentRequestSetupItem = "sandbox";
 ```
 
 ## Values
 
 ```typescript
-"deployment" | "models" | "keys" | "bucket" | "registry"
+"deployment" | "models" | "keys" | "bucket" | "registry" | "sandbox"
 ```

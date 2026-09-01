@@ -50,11 +50,21 @@ export type SummaryRegistry = {
   notConnected: number;
 };
 
+export type SummaryRemoteSandbox = {
+  enabled: boolean;
+  connected: number;
+  settingUp: number;
+  needsAttention: number;
+  revoked: number;
+  notConnected: number;
+};
+
 export type SummaryCapabilities = {
   models: SummaryModels;
   keys: SummaryKeys;
   buckets: SummaryBuckets;
   registry: SummaryRegistry;
+  remoteSandbox: SummaryRemoteSandbox;
 };
 
 export type ProjectCapabilityOverviewSummary = {
@@ -67,6 +77,7 @@ export const ModelsCapability = {
   Keys: "keys",
   Buckets: "buckets",
   Registry: "registry",
+  RemoteSandbox: "remoteSandbox",
 } as const;
 export type ModelsCapability = ClosedEnum<typeof ModelsCapability>;
 
@@ -206,6 +217,7 @@ export const KeysCapability = {
   Keys: "keys",
   Buckets: "buckets",
   Registry: "registry",
+  RemoteSandbox: "remoteSandbox",
 } as const;
 export type KeysCapability = ClosedEnum<typeof KeysCapability>;
 
@@ -345,6 +357,7 @@ export const BucketsCapability = {
   Keys: "keys",
   Buckets: "buckets",
   Registry: "registry",
+  RemoteSandbox: "remoteSandbox",
 } as const;
 export type BucketsCapability = ClosedEnum<typeof BucketsCapability>;
 
@@ -488,6 +501,7 @@ export const RegistryCapability = {
   Keys: "keys",
   Buckets: "buckets",
   Registry: "registry",
+  RemoteSandbox: "remoteSandbox",
 } as const;
 export type RegistryCapability = ClosedEnum<typeof RegistryCapability>;
 
@@ -626,11 +640,162 @@ export type GroupRegistry = {
   registry?: GroupRegistryRegistry | undefined;
 };
 
+export const RemoteSandboxCapability = {
+  Models: "models",
+  Keys: "keys",
+  Buckets: "buckets",
+  Registry: "registry",
+  RemoteSandbox: "remoteSandbox",
+} as const;
+export type RemoteSandboxCapability = ClosedEnum<
+  typeof RemoteSandboxCapability
+>;
+
+export const RemoteSandboxState = {
+  NotConnected: "not-connected",
+  SettingUp: "setting-up",
+  Connected: "connected",
+  NeedsAttention: "needs-attention",
+  Revoked: "revoked",
+} as const;
+export type RemoteSandboxState = ClosedEnum<typeof RemoteSandboxState>;
+
+export const RemoteSandboxPlatform = {
+  Aws: "aws",
+  Gcp: "gcp",
+  Azure: "azure",
+  Local: "local",
+  Kubernetes: "kubernetes",
+  Machines: "machines",
+  Test: "test",
+} as const;
+export type RemoteSandboxPlatform = ClosedEnum<typeof RemoteSandboxPlatform>;
+
+export const RemoteSandboxHealth = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type RemoteSandboxHealth = ClosedEnum<typeof RemoteSandboxHealth>;
+
+export type RemoteSandboxObservation = {
+  provider: string | null;
+  platform: RemoteSandboxPlatform | null;
+  resourceId: string | null;
+  location: string | null;
+  account: string | null;
+  observedAt: Date | null;
+  stale: boolean;
+  partial: boolean;
+  health: RemoteSandboxHealth | null;
+  lifecycle: string | null;
+  message: string | null;
+};
+
+export const RemoteSandboxAvailability = {
+  Available: "available",
+  Blocked: "blocked",
+  Unknown: "unknown",
+} as const;
+export type RemoteSandboxAvailability = ClosedEnum<
+  typeof RemoteSandboxAvailability
+>;
+
+export const RemoteSandboxAccessTest = {
+  Verified: "verified",
+  Failed: "failed",
+  NotChecked: "not-checked",
+} as const;
+export type RemoteSandboxAccessTest = ClosedEnum<
+  typeof RemoteSandboxAccessTest
+>;
+
+export type RemoteSandboxModelCoverage = {
+  publicModelId: string;
+  required: boolean;
+  availability: RemoteSandboxAvailability;
+  blockerCodes: Array<string>;
+  accessTest: RemoteSandboxAccessTest;
+  accessObservedAt: Date | null;
+};
+
+export const RemoteSandboxProvider = {
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type RemoteSandboxProvider = ClosedEnum<typeof RemoteSandboxProvider>;
+
+export const RemoteSandboxCredentialStatus = {
+  Pending: "pending",
+  Valid: "valid",
+  Invalid: "invalid",
+  Unknown: "unknown",
+} as const;
+export type RemoteSandboxCredentialStatus = ClosedEnum<
+  typeof RemoteSandboxCredentialStatus
+>;
+
+export type RemoteSandboxDirectProvider = {
+  provider: RemoteSandboxProvider;
+  providerEndpoint: string | null;
+  keyFingerprint: string;
+  credentialStatus: RemoteSandboxCredentialStatus;
+  credentialCheckedAt: Date | null;
+  catalogObservedAt: Date | null;
+};
+
+export const RemoteSandboxRootState = {
+  Pending: "pending",
+  Ready: "ready",
+  Revoked: "revoked",
+} as const;
+export type RemoteSandboxRootState = ClosedEnum<typeof RemoteSandboxRootState>;
+
+export type RemoteSandboxRoot = {
+  state: RemoteSandboxRootState;
+  createdAt: Date | null;
+};
+
+export const RemoteSandboxCredentialPolicy = {
+  PullOnly: "pull-only",
+  PushAndPull: "push-and-pull",
+  Mixed: "mixed",
+  None: "none",
+} as const;
+export type RemoteSandboxCredentialPolicy = ClosedEnum<
+  typeof RemoteSandboxCredentialPolicy
+>;
+
+export type RemoteSandboxRegistry = {
+  repositories: number;
+  credentials: number;
+  credentialPolicy: RemoteSandboxCredentialPolicy;
+  lastVerifiedAt: Date | null;
+};
+
+export type GroupRemoteSandbox = {
+  capability: RemoteSandboxCapability;
+  enabled: boolean;
+  state: RemoteSandboxState;
+  /**
+   * Unique identifier for the deployment.
+   */
+  deploymentId: string | null;
+  observation: RemoteSandboxObservation | null;
+  modelCoverage?: Array<RemoteSandboxModelCoverage> | undefined;
+  directProvider?: RemoteSandboxDirectProvider | undefined;
+  root?: RemoteSandboxRoot | undefined;
+  registry?: RemoteSandboxRegistry | undefined;
+};
+
 export type GroupCapabilities = {
   models: GroupModels;
   keys: GroupKeys;
   buckets: GroupBuckets;
   registry: GroupRegistry;
+  remoteSandbox: GroupRemoteSandbox;
 };
 
 export type Group = {
@@ -743,6 +908,29 @@ export function summaryRegistryFromJSON(
 }
 
 /** @internal */
+export const SummaryRemoteSandbox$inboundSchema: z.ZodType<
+  SummaryRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  connected: z.int(),
+  settingUp: z.int(),
+  needsAttention: z.int(),
+  revoked: z.int(),
+  notConnected: z.int(),
+});
+
+export function summaryRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<SummaryRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SummaryRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SummaryRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const SummaryCapabilities$inboundSchema: z.ZodType<
   SummaryCapabilities,
   unknown
@@ -751,6 +939,7 @@ export const SummaryCapabilities$inboundSchema: z.ZodType<
   keys: z.lazy(() => SummaryKeys$inboundSchema),
   buckets: z.lazy(() => SummaryBuckets$inboundSchema),
   registry: z.lazy(() => SummaryRegistry$inboundSchema),
+  remoteSandbox: z.lazy(() => SummaryRemoteSandbox$inboundSchema),
 });
 
 export function summaryCapabilitiesFromJSON(
@@ -1560,6 +1749,210 @@ export function groupRegistryFromJSON(
 }
 
 /** @internal */
+export const RemoteSandboxCapability$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxCapability
+> = z.enum(RemoteSandboxCapability);
+
+/** @internal */
+export const RemoteSandboxState$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxState
+> = z.enum(RemoteSandboxState);
+
+/** @internal */
+export const RemoteSandboxPlatform$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxPlatform
+> = z.enum(RemoteSandboxPlatform);
+
+/** @internal */
+export const RemoteSandboxHealth$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxHealth
+> = z.enum(RemoteSandboxHealth);
+
+/** @internal */
+export const RemoteSandboxObservation$inboundSchema: z.ZodType<
+  RemoteSandboxObservation,
+  unknown
+> = z.object({
+  provider: z.nullable(z.string()),
+  platform: z.nullable(RemoteSandboxPlatform$inboundSchema),
+  resourceId: z.nullable(z.string()),
+  location: z.nullable(z.string()),
+  account: z.nullable(z.string()),
+  observedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  stale: z.boolean(),
+  partial: z.boolean(),
+  health: z.nullable(RemoteSandboxHealth$inboundSchema),
+  lifecycle: z.nullable(z.string()),
+  message: z.nullable(z.string()),
+});
+
+export function remoteSandboxObservationFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteSandboxObservation, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteSandboxObservation$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteSandboxObservation' from JSON`,
+  );
+}
+
+/** @internal */
+export const RemoteSandboxAvailability$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxAvailability
+> = z.enum(RemoteSandboxAvailability);
+
+/** @internal */
+export const RemoteSandboxAccessTest$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxAccessTest
+> = z.enum(RemoteSandboxAccessTest);
+
+/** @internal */
+export const RemoteSandboxModelCoverage$inboundSchema: z.ZodType<
+  RemoteSandboxModelCoverage,
+  unknown
+> = z.object({
+  publicModelId: z.string(),
+  required: z.boolean(),
+  availability: RemoteSandboxAvailability$inboundSchema,
+  blockerCodes: z.array(z.string()),
+  accessTest: RemoteSandboxAccessTest$inboundSchema,
+  accessObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+});
+
+export function remoteSandboxModelCoverageFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteSandboxModelCoverage, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteSandboxModelCoverage$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteSandboxModelCoverage' from JSON`,
+  );
+}
+
+/** @internal */
+export const RemoteSandboxProvider$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxProvider
+> = z.enum(RemoteSandboxProvider);
+
+/** @internal */
+export const RemoteSandboxCredentialStatus$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxCredentialStatus
+> = z.enum(RemoteSandboxCredentialStatus);
+
+/** @internal */
+export const RemoteSandboxDirectProvider$inboundSchema: z.ZodType<
+  RemoteSandboxDirectProvider,
+  unknown
+> = z.object({
+  provider: RemoteSandboxProvider$inboundSchema,
+  providerEndpoint: z.nullable(z.string()),
+  keyFingerprint: z.string(),
+  credentialStatus: RemoteSandboxCredentialStatus$inboundSchema,
+  credentialCheckedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+  catalogObservedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+});
+
+export function remoteSandboxDirectProviderFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteSandboxDirectProvider, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteSandboxDirectProvider$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteSandboxDirectProvider' from JSON`,
+  );
+}
+
+/** @internal */
+export const RemoteSandboxRootState$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxRootState
+> = z.enum(RemoteSandboxRootState);
+
+/** @internal */
+export const RemoteSandboxRoot$inboundSchema: z.ZodType<
+  RemoteSandboxRoot,
+  unknown
+> = z.object({
+  state: RemoteSandboxRootState$inboundSchema,
+  createdAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+});
+
+export function remoteSandboxRootFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteSandboxRoot, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteSandboxRoot$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteSandboxRoot' from JSON`,
+  );
+}
+
+/** @internal */
+export const RemoteSandboxCredentialPolicy$inboundSchema: z.ZodEnum<
+  typeof RemoteSandboxCredentialPolicy
+> = z.enum(RemoteSandboxCredentialPolicy);
+
+/** @internal */
+export const RemoteSandboxRegistry$inboundSchema: z.ZodType<
+  RemoteSandboxRegistry,
+  unknown
+> = z.object({
+  repositories: z.int(),
+  credentials: z.int(),
+  credentialPolicy: RemoteSandboxCredentialPolicy$inboundSchema,
+  lastVerifiedAt: z.nullable(
+    z.iso.datetime({ offset: true }).transform(v => new Date(v)),
+  ),
+});
+
+export function remoteSandboxRegistryFromJSON(
+  jsonString: string,
+): SafeParseResult<RemoteSandboxRegistry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RemoteSandboxRegistry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RemoteSandboxRegistry' from JSON`,
+  );
+}
+
+/** @internal */
+export const GroupRemoteSandbox$inboundSchema: z.ZodType<
+  GroupRemoteSandbox,
+  unknown
+> = z.object({
+  capability: RemoteSandboxCapability$inboundSchema,
+  enabled: z.boolean(),
+  state: RemoteSandboxState$inboundSchema,
+  deploymentId: z.nullable(z.string()),
+  observation: z.nullable(z.lazy(() => RemoteSandboxObservation$inboundSchema)),
+  modelCoverage: z.array(z.lazy(() => RemoteSandboxModelCoverage$inboundSchema))
+    .optional(),
+  directProvider: z.lazy(() => RemoteSandboxDirectProvider$inboundSchema)
+    .optional(),
+  root: z.lazy(() => RemoteSandboxRoot$inboundSchema).optional(),
+  registry: z.lazy(() => RemoteSandboxRegistry$inboundSchema).optional(),
+});
+
+export function groupRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<GroupRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => GroupRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GroupRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const GroupCapabilities$inboundSchema: z.ZodType<
   GroupCapabilities,
   unknown
@@ -1568,6 +1961,7 @@ export const GroupCapabilities$inboundSchema: z.ZodType<
   keys: z.lazy(() => GroupKeys$inboundSchema),
   buckets: z.lazy(() => GroupBuckets$inboundSchema),
   registry: z.lazy(() => GroupRegistry$inboundSchema),
+  remoteSandbox: z.lazy(() => GroupRemoteSandbox$inboundSchema),
 });
 
 export function groupCapabilitiesFromJSON(

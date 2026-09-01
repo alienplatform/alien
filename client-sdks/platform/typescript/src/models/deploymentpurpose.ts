@@ -14,6 +14,7 @@ export const DeploymentPurpose = {
   Ai: "ai",
   Storage: "storage",
   ContainerRegistry: "container-registry",
+  Sandbox: "sandbox",
 } as const;
 /**
  * Filter by deployment purpose

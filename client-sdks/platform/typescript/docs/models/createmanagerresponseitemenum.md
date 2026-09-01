@@ -5,11 +5,11 @@
 ```typescript
 import { CreateManagerResponseItemEnum } from "@alienplatform/platform-api/models";
 
-let value: CreateManagerResponseItemEnum = "registry";
+let value: CreateManagerResponseItemEnum = "sandbox";
 ```
 
 ## Values
 
 ```typescript
-"deployment" | "models" | "keys" | "bucket" | "registry"
+"deployment" | "models" | "keys" | "bucket" | "registry" | "sandbox"
 ```

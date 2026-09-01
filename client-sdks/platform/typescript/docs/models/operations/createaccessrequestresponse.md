@@ -17,6 +17,9 @@ let value: CreateAccessRequestResponse = {
     {
       command: "kubernetes/get-pods",
       summary: "List pods in the ingestion namespace",
+      params: {
+        "pod": "ingester-p4kwm",
+      },
     },
   ],
   status: "rejected",

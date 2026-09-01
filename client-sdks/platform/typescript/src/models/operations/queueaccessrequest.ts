@@ -19,6 +19,7 @@ export type QueueAccessRequestRequest = {
 export type QueueAccessRequestCommand = {
   command: string;
   summary: string;
+  params?: any | null | undefined;
 };
 
 export const QueueAccessRequestStatus = {
@@ -77,6 +78,7 @@ export const QueueAccessRequestCommand$inboundSchema: z.ZodType<
 > = z.object({
   command: z.string(),
   summary: z.string(),
+  params: z.nullable(z.any()).optional(),
 });
 
 export function queueAccessRequestCommandFromJSON(

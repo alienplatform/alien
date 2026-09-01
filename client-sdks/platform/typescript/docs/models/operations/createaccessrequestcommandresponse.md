@@ -8,6 +8,9 @@ import { CreateAccessRequestCommandResponse } from "@alienplatform/platform-api/
 let value: CreateAccessRequestCommandResponse = {
   command: "kubernetes/get-pods",
   summary: "List pods in the ingestion namespace",
+  params: {
+    "pod": "ingester-p4kwm",
+  },
 };
 ```
 
@@ -17,3 +20,4 @@ let value: CreateAccessRequestCommandResponse = {
 | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ | ------------------------------------ |
 | `command`                            | *string*                             | :heavy_check_mark:                   | N/A                                  | kubernetes/get-pods                  |
 | `summary`                            | *string*                             | :heavy_check_mark:                   | N/A                                  | List pods in the ingestion namespace |
+| `params`                             | *any*                                | :heavy_minus_sign:                   | N/A                                  | {<br/>"pod": "ingester-p4kwm"<br/>}  |

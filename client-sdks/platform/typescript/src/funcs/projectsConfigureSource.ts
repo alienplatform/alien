@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+ * Connect a GitHub repository or Alien template to an existing project.
  */
 export function projectsConfigureSource(
   client: AlienCore,

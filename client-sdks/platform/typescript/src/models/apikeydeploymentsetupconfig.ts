@@ -22,6 +22,7 @@ export const APIKeyDeploymentSetupConfigItemEnum = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type APIKeyDeploymentSetupConfigItemEnum = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigItemEnum
@@ -32,6 +33,7 @@ export const APIKeyDeploymentSetupConfigDefinitionId = {
   CustomerKey: "customer-key",
   CustomerStorage: "customer-storage",
   CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
 } as const;
 export type APIKeyDeploymentSetupConfigDefinitionId = ClosedEnum<
   typeof APIKeyDeploymentSetupConfigDefinitionId

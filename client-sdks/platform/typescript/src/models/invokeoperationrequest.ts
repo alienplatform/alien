@@ -21,6 +21,10 @@ export type InvokeOperationRequest = {
    * JSON params passed to the operation.
    */
   params?: any | null | undefined;
+  /**
+   * A remediation plan (`plan_…`) whose access request the customer has already approved for this exact command. When set and the plan's access request is `customer-approved` and lists this `plugin/operation`, the invocation is authorized by that approval and dispatches immediately regardless of the project's operations policy — the customer already signed off on this exact command via the access-request flow, so the project's default `manual` policy (meant for ad-hoc, unreviewed invocations) would otherwise require a second, redundant approval for the same action.
+   */
+  remediationPlanId?: string | undefined;
 };
 
 /** @internal */
@@ -29,6 +33,7 @@ export type InvokeOperationRequest$Outbound = {
   plugin: string;
   operation: string;
   params?: any | null | undefined;
+  remediationPlanId?: string | undefined;
 };
 
 /** @internal */
@@ -40,6 +45,7 @@ export const InvokeOperationRequest$outboundSchema: z.ZodType<
   plugin: z.string(),
   operation: z.string(),
   params: z.nullable(z.any()).optional(),
+  remediationPlanId: z.string().optional(),
 });
 
 export function invokeOperationRequestToJSON(

@@ -6,7 +6,7 @@
 import { GroupBuckets } from "@alienplatform/platform-api/models";
 
 let value: GroupBuckets = {
-  capability: "registry",
+  capability: "remoteSandbox",
   enabled: false,
   state: "not-connected",
   deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",

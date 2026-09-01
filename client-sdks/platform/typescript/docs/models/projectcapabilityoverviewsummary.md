@@ -40,6 +40,14 @@ let value: ProjectCapabilityOverviewSummary = {
       revoked: 697113,
       notConnected: 723984,
     },
+    remoteSandbox: {
+      enabled: false,
+      connected: 965448,
+      settingUp: 892003,
+      needsAttention: 68118,
+      revoked: 27267,
+      notConnected: 127508,
+    },
   },
 };
 ```

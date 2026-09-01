@@ -6,10 +6,10 @@
 import { DeploymentInfoSetupConfigItem } from "@alienplatform/platform-api/models";
 
 let value: DeploymentInfoSetupConfigItem = {
-  item: "keys",
+  item: "bucket",
   source: {
     type: "built-in",
-    definitionId: "customer-registry",
+    definitionId: "customer-sandbox",
     version: "<value>",
     sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   },

@@ -8,7 +8,7 @@
 
 ## create
 
-Ensures the Deployment Group identified by Project and external ID, then creates a replacement group-scoped setup link with exact captured sources.
+Ensures the Deployment Group identified by Project and external ID, then creates a group-scoped setup link with exact captured sources.
 
 ### Example Usage
 
@@ -27,21 +27,6 @@ async function run() {
       externalId: "ext_example_01",
       name: "prod-us-east-1",
       project: "<value>",
-      deploymentSetupConfig: {
-        metadata: {
-          "key": "<value>",
-          "key1": "<value>",
-        },
-        policy: {
-          allowedPlatforms: [
-            "aws",
-          ],
-          allowedSetupMethods: [
-            "helm",
-          ],
-        },
-        environmentVariables: [],
-      },
     },
   });
 
@@ -72,21 +57,6 @@ async function run() {
       externalId: "ext_example_01",
       name: "prod-us-east-1",
       project: "<value>",
-      deploymentSetupConfig: {
-        metadata: {
-          "key": "<value>",
-          "key1": "<value>",
-        },
-        policy: {
-          allowedPlatforms: [
-            "aws",
-          ],
-          allowedSetupMethods: [
-            "helm",
-          ],
-        },
-        environmentVariables: [],
-      },
     },
   });
   if (res.ok) {

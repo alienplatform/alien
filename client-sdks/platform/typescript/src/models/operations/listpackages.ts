@@ -17,6 +17,7 @@ export const ListPackagesType = {
   Cloudformation: "cloudformation",
   Helm: "helm",
   OperatorImage: "operator-image",
+  SandboxBundle: "sandbox-bundle",
   Terraform: "terraform",
 } as const;
 /**

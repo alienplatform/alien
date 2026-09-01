@@ -30,6 +30,7 @@ export const CreateManagerResponseItemEnum = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type CreateManagerResponseItemEnum = ClosedEnum<
   typeof CreateManagerResponseItemEnum
@@ -40,6 +41,7 @@ export const CreateManagerResponseDefinitionId = {
   CustomerKey: "customer-key",
   CustomerStorage: "customer-storage",
   CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
 } as const;
 export type CreateManagerResponseDefinitionId = ClosedEnum<
   typeof CreateManagerResponseDefinitionId

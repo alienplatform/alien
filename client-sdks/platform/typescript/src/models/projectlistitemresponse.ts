@@ -351,12 +351,20 @@ export type ProjectListItemResponseRegistry = {
   credentialPolicy: ProjectListItemResponseCredentialPolicy;
 };
 
+export type ProjectListItemResponseRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type ProjectListItemResponseCapabilities = {
   deployments?: ProjectListItemResponseDeployments | undefined;
   keys?: ProjectListItemResponseKeys | undefined;
   models?: ProjectListItemResponseModels | undefined;
   buckets?: ProjectListItemResponseBuckets | undefined;
   registry?: ProjectListItemResponseRegistry | undefined;
+  remoteSandbox?: ProjectListItemResponseRemoteSandbox | undefined;
 };
 
 /**
@@ -788,6 +796,28 @@ export function projectListItemResponseRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseRemoteSandbox$inboundSchema: z.ZodType<
+  ProjectListItemResponseRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function projectListItemResponseRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ProjectListItemResponseRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponseCapabilities$inboundSchema: z.ZodType<
   ProjectListItemResponseCapabilities,
   unknown
@@ -800,6 +830,9 @@ export const ProjectListItemResponseCapabilities$inboundSchema: z.ZodType<
     .optional(),
   registry: z.lazy(() => ProjectListItemResponseRegistry$inboundSchema)
     .optional(),
+  remoteSandbox: z.lazy(() =>
+    ProjectListItemResponseRemoteSandbox$inboundSchema
+  ).optional(),
 });
 
 export function projectListItemResponseCapabilitiesFromJSON(

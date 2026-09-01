@@ -18,7 +18,7 @@ const value: models.CreateManagerResponseSourceProjectRelease = {
 ```typescript
 const value: models.CreateManagerResponseSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-registry",
+  definitionId: "customer-sandbox",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

@@ -192,11 +192,11 @@ export type TargetDeploymentHorizonMachineImageUnion =
   | TargetDeploymentHorizonMachineImage
   | any;
 
-export const ComputeBackendConfigType = {
+export const TargetDeploymentComputeBackendType = {
   Horizon: "horizon",
 } as const;
-export type ComputeBackendConfigType = ClosedEnum<
-  typeof ComputeBackendConfigType
+export type TargetDeploymentComputeBackendType = ClosedEnum<
+  typeof TargetDeploymentComputeBackendType
 >;
 
 /**
@@ -225,7 +225,7 @@ export type TargetDeploymentComputeBackendHorizon = {
    * Horizon control-plane API base URL.
    */
   url: string;
-  type: ComputeBackendConfigType;
+  type: TargetDeploymentComputeBackendType;
 };
 
 export type TargetDeploymentComputeBackendUnion =
@@ -512,15 +512,15 @@ export type TargetDeploymentDomainMetadataUnion =
 /**
  * Type of environment variable
  */
-export const ConfigEnvironmentVariablesType = {
+export const TargetDeploymentEnvironmentVariablesType = {
   Plain: "plain",
   Secret: "secret",
 } as const;
 /**
  * Type of environment variable
  */
-export type ConfigEnvironmentVariablesType = ClosedEnum<
-  typeof ConfigEnvironmentVariablesType
+export type TargetDeploymentEnvironmentVariablesType = ClosedEnum<
+  typeof TargetDeploymentEnvironmentVariablesType
 >;
 
 /**
@@ -538,7 +538,7 @@ export type TargetDeploymentVariable = {
   /**
    * Type of environment variable
    */
-  type: ConfigEnvironmentVariablesType;
+  type: TargetDeploymentEnvironmentVariablesType;
   /**
    * Variable value (decrypted - deployment has access to decryption keys)
    */
@@ -586,10 +586,10 @@ export type TargetDeploymentApiKey = {
  */
 export type TargetDeploymentApiKeyUnion = TargetDeploymentApiKey | any | string;
 
-export const ConfigTypeAi = {
+export const TargetDeploymentTypeAi = {
   Ai: "ai",
 } as const;
-export type ConfigTypeAi = ClosedEnum<typeof ConfigTypeAi>;
+export type TargetDeploymentTypeAi = ClosedEnum<typeof TargetDeploymentTypeAi>;
 
 /**
  * External AI provider binding configuration (BYO-key).
@@ -613,7 +613,7 @@ export type TargetDeploymentExternalBindingsAi = {
    * The external AI provider name (e.g., "openai", "anthropic")
    */
   provider: string;
-  type: ConfigTypeAi;
+  type: TargetDeploymentTypeAi;
 };
 
 /**
@@ -714,10 +714,12 @@ export type TargetDeploymentUsernameUnion5 =
   | any
   | string;
 
-export const ConfigTypePostgres5 = {
+export const TargetDeploymentTypePostgres5 = {
   Postgres: "postgres",
 } as const;
-export type ConfigTypePostgres5 = ClosedEnum<typeof ConfigTypePostgres5>;
+export type TargetDeploymentTypePostgres5 = ClosedEnum<
+  typeof TargetDeploymentTypePostgres5
+>;
 
 /**
  * Local embedded Postgres binding.
@@ -753,7 +755,7 @@ export type TargetDeploymentExternalBindingsLocalPostgres = {
    */
   username?: TargetDeploymentUsername5 | any | string | null | undefined;
   service: "local-postgres";
-  type: ConfigTypePostgres5;
+  type: TargetDeploymentTypePostgres5;
 };
 
 /**
@@ -878,10 +880,12 @@ export type TargetDeploymentUsernameUnion4 =
   | any
   | string;
 
-export const ConfigTypePostgres4 = {
+export const TargetDeploymentTypePostgres4 = {
   Postgres: "postgres",
 } as const;
-export type ConfigTypePostgres4 = ClosedEnum<typeof ConfigTypePostgres4>;
+export type TargetDeploymentTypePostgres4 = ClosedEnum<
+  typeof TargetDeploymentTypePostgres4
+>;
 
 /**
  * Operator-provided / BYO database binding.
@@ -933,7 +937,7 @@ export type TargetDeploymentExternalBindingsExternal = {
    */
   username?: TargetDeploymentUsername4 | any | string | null | undefined;
   service: "external";
-  type: ConfigTypePostgres4;
+  type: TargetDeploymentTypePostgres4;
 };
 
 /**
@@ -1060,10 +1064,12 @@ export type TargetDeploymentUsernameUnion3 =
   | any
   | string;
 
-export const ConfigTypePostgres3 = {
+export const TargetDeploymentTypePostgres3 = {
   Postgres: "postgres",
 } as const;
-export type ConfigTypePostgres3 = ClosedEnum<typeof ConfigTypePostgres3>;
+export type TargetDeploymentTypePostgres3 = ClosedEnum<
+  typeof TargetDeploymentTypePostgres3
+>;
 
 /**
  * Azure Flexible Server binding.
@@ -1110,7 +1116,7 @@ export type TargetDeploymentExternalBindingsFlexibleServer = {
    */
   username?: TargetDeploymentUsername3 | any | string | null | undefined;
   service: "flexible-server";
-  type: ConfigTypePostgres3;
+  type: TargetDeploymentTypePostgres3;
 };
 
 /**
@@ -1263,10 +1269,12 @@ export type TargetDeploymentUsernameUnion2 =
   | any
   | string;
 
-export const ConfigTypePostgres2 = {
+export const TargetDeploymentTypePostgres2 = {
   Postgres: "postgres",
 } as const;
-export type ConfigTypePostgres2 = ClosedEnum<typeof ConfigTypePostgres2>;
+export type TargetDeploymentTypePostgres2 = ClosedEnum<
+  typeof TargetDeploymentTypePostgres2
+>;
 
 /**
  * GCP Cloud SQL binding.
@@ -1325,7 +1333,7 @@ export type TargetDeploymentExternalBindingsCloudSQL = {
    */
   username?: TargetDeploymentUsername2 | any | string | null | undefined;
   service: "cloud-sql";
-  type: ConfigTypePostgres2;
+  type: TargetDeploymentTypePostgres2;
 };
 
 /**
@@ -1455,10 +1463,12 @@ export type TargetDeploymentUsernameUnion1 =
   | any
   | string;
 
-export const ConfigTypePostgres1 = {
+export const TargetDeploymentTypePostgres1 = {
   Postgres: "postgres",
 } as const;
-export type ConfigTypePostgres1 = ClosedEnum<typeof ConfigTypePostgres1>;
+export type TargetDeploymentTypePostgres1 = ClosedEnum<
+  typeof TargetDeploymentTypePostgres1
+>;
 
 /**
  * AWS Aurora Serverless v2 binding.
@@ -1510,7 +1520,7 @@ export type TargetDeploymentExternalBindingsAurora = {
    */
   username?: TargetDeploymentUsername1 | any | string | null | undefined;
   service: "aurora";
-  type: ConfigTypePostgres1;
+  type: TargetDeploymentTypePostgres1;
 };
 
 /**
@@ -1642,11 +1652,11 @@ export type TargetDeploymentStaticIp = {
   secretRef: TargetDeploymentStaticIpSecretRef;
 };
 
-export const ConfigTypeContainerAppsEnvironment = {
+export const TargetDeploymentTypeContainerAppsEnvironment = {
   ContainerAppsEnvironment: "container_apps_environment",
 } as const;
-export type ConfigTypeContainerAppsEnvironment = ClosedEnum<
-  typeof ConfigTypeContainerAppsEnvironment
+export type TargetDeploymentTypeContainerAppsEnvironment = ClosedEnum<
+  typeof TargetDeploymentTypeContainerAppsEnvironment
 >;
 
 /**
@@ -1703,7 +1713,7 @@ export type TargetDeploymentExternalBindingsContainerAppsEnvironment = {
    */
   resourceId?: TargetDeploymentResourceId | any | string | null | undefined;
   staticIp?: any | null | undefined;
-  type: ConfigTypeContainerAppsEnvironment;
+  type: TargetDeploymentTypeContainerAppsEnvironment;
 };
 
 /**
@@ -1732,10 +1742,12 @@ export type TargetDeploymentDataDirUnion2 =
   | any
   | string;
 
-export const ConfigTypeVault5 = {
+export const TargetDeploymentTypeVault5 = {
   Vault: "vault",
 } as const;
-export type ConfigTypeVault5 = ClosedEnum<typeof ConfigTypeVault5>;
+export type TargetDeploymentTypeVault5 = ClosedEnum<
+  typeof TargetDeploymentTypeVault5
+>;
 
 /**
  * Local development vault binding (for testing/development)
@@ -1753,7 +1765,7 @@ export type TargetDeploymentExternalBindingsLocalVault = {
    */
   vaultName: string;
   service: "local-vault";
-  type: ConfigTypeVault5;
+  type: TargetDeploymentTypeVault5;
 };
 
 /**
@@ -1808,10 +1820,12 @@ export type TargetDeploymentVaultPrefixUnion3 =
   | any
   | string;
 
-export const ConfigTypeVault4 = {
+export const TargetDeploymentTypeVault4 = {
   Vault: "vault",
 } as const;
-export type ConfigTypeVault4 = ClosedEnum<typeof ConfigTypeVault4>;
+export type TargetDeploymentTypeVault4 = ClosedEnum<
+  typeof TargetDeploymentTypeVault4
+>;
 
 /**
  * Kubernetes Secrets vault binding configuration
@@ -1832,7 +1846,7 @@ export type TargetDeploymentExternalBindingsKubernetesSecret = {
    */
   vaultPrefix?: TargetDeploymentVaultPrefix3 | any | string | null | undefined;
   service: "kubernetes-secret";
-  type: ConfigTypeVault4;
+  type: TargetDeploymentTypeVault4;
 };
 
 /**
@@ -1861,10 +1875,12 @@ export type TargetDeploymentVaultNameUnion =
   | any
   | string;
 
-export const ConfigTypeVault3 = {
+export const TargetDeploymentTypeVault3 = {
   Vault: "vault",
 } as const;
-export type ConfigTypeVault3 = ClosedEnum<typeof ConfigTypeVault3>;
+export type TargetDeploymentTypeVault3 = ClosedEnum<
+  typeof TargetDeploymentTypeVault3
+>;
 
 /**
  * Azure Key Vault binding configuration
@@ -1878,7 +1894,7 @@ export type TargetDeploymentExternalBindingsKeyVault = {
    */
   vaultName?: TargetDeploymentVaultName | any | string | null | undefined;
   service: "key-vault";
-  type: ConfigTypeVault3;
+  type: TargetDeploymentTypeVault3;
 };
 
 /**
@@ -1907,10 +1923,12 @@ export type TargetDeploymentVaultPrefixUnion2 =
   | any
   | string;
 
-export const ConfigTypeVault2 = {
+export const TargetDeploymentTypeVault2 = {
   Vault: "vault",
 } as const;
-export type ConfigTypeVault2 = ClosedEnum<typeof ConfigTypeVault2>;
+export type TargetDeploymentTypeVault2 = ClosedEnum<
+  typeof TargetDeploymentTypeVault2
+>;
 
 /**
  * GCP Secret Manager vault binding configuration
@@ -1924,7 +1942,7 @@ export type TargetDeploymentExternalBindingsSecretManager = {
    */
   vaultPrefix?: TargetDeploymentVaultPrefix2 | any | string | null | undefined;
   service: "secret-manager";
-  type: ConfigTypeVault2;
+  type: TargetDeploymentTypeVault2;
 };
 
 /**
@@ -1953,10 +1971,12 @@ export type TargetDeploymentVaultPrefixUnion1 =
   | any
   | string;
 
-export const ConfigTypeVault1 = {
+export const TargetDeploymentTypeVault1 = {
   Vault: "vault",
 } as const;
-export type ConfigTypeVault1 = ClosedEnum<typeof ConfigTypeVault1>;
+export type TargetDeploymentTypeVault1 = ClosedEnum<
+  typeof TargetDeploymentTypeVault1
+>;
 
 /**
  * AWS SSM Parameter Store vault binding configuration
@@ -1970,7 +1990,7 @@ export type TargetDeploymentExternalBindingsParameterStore = {
    */
   vaultPrefix?: TargetDeploymentVaultPrefix1 | any | string | null | undefined;
   service: "parameter-store";
-  type: ConfigTypeVault1;
+  type: TargetDeploymentTypeVault1;
 };
 
 /**
@@ -2024,11 +2044,11 @@ export type TargetDeploymentRegistryUrlUnion =
   | any
   | string;
 
-export const ConfigTypeArtifactRegistry4 = {
+export const TargetDeploymentTypeArtifactRegistry4 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type ConfigTypeArtifactRegistry4 = ClosedEnum<
-  typeof ConfigTypeArtifactRegistry4
+export type TargetDeploymentTypeArtifactRegistry4 = ClosedEnum<
+  typeof TargetDeploymentTypeArtifactRegistry4
 >;
 
 /**
@@ -2056,7 +2076,7 @@ export type TargetDeploymentExternalBindingsLocal = {
    */
   registryUrl?: TargetDeploymentRegistryUrl | any | string | null | undefined;
   service: "local";
-  type: ConfigTypeArtifactRegistry4;
+  type: TargetDeploymentTypeArtifactRegistry4;
 };
 
 /**
@@ -2115,11 +2135,11 @@ export type TargetDeploymentRepositoryNameUnion =
   | any
   | string;
 
-export const ConfigTypeArtifactRegistry3 = {
+export const TargetDeploymentTypeArtifactRegistry3 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type ConfigTypeArtifactRegistry3 = ClosedEnum<
-  typeof ConfigTypeArtifactRegistry3
+export type TargetDeploymentTypeArtifactRegistry3 = ClosedEnum<
+  typeof TargetDeploymentTypeArtifactRegistry3
 >;
 
 /**
@@ -2141,7 +2161,7 @@ export type TargetDeploymentExternalBindingsGar = {
     | null
     | undefined;
   service: "gar";
-  type: ConfigTypeArtifactRegistry3;
+  type: TargetDeploymentTypeArtifactRegistry3;
 };
 
 /**
@@ -2211,11 +2231,11 @@ export type TargetDeploymentResourceGroupNameUnion2 =
   | any
   | string;
 
-export const ConfigTypeArtifactRegistry2 = {
+export const TargetDeploymentTypeArtifactRegistry2 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type ConfigTypeArtifactRegistry2 = ClosedEnum<
-  typeof ConfigTypeArtifactRegistry2
+export type TargetDeploymentTypeArtifactRegistry2 = ClosedEnum<
+  typeof TargetDeploymentTypeArtifactRegistry2
 >;
 
 /**
@@ -2243,7 +2263,7 @@ export type TargetDeploymentExternalBindingsAcr = {
     | null
     | undefined;
   service: "acr";
-  type: ConfigTypeArtifactRegistry2;
+  type: TargetDeploymentTypeArtifactRegistry2;
 };
 
 /**
@@ -2302,11 +2322,11 @@ export type TargetDeploymentRepositoryPrefixUnion =
   | any
   | string;
 
-export const ConfigTypeArtifactRegistry1 = {
+export const TargetDeploymentTypeArtifactRegistry1 = {
   ArtifactRegistry: "artifact_registry",
 } as const;
-export type ConfigTypeArtifactRegistry1 = ClosedEnum<
-  typeof ConfigTypeArtifactRegistry1
+export type TargetDeploymentTypeArtifactRegistry1 = ClosedEnum<
+  typeof TargetDeploymentTypeArtifactRegistry1
 >;
 
 /**
@@ -2328,7 +2348,7 @@ export type TargetDeploymentExternalBindingsEcr = {
     | null
     | undefined;
   service: "ecr";
-  type: ConfigTypeArtifactRegistry1;
+  type: TargetDeploymentTypeArtifactRegistry1;
 };
 
 /**
@@ -2381,10 +2401,12 @@ export type TargetDeploymentKeyPrefix2 = {
   secretRef: TargetDeploymentKeyPrefixSecretRef2;
 };
 
-export const ConfigTypeKv5 = {
+export const TargetDeploymentTypeKv5 = {
   Kv: "kv",
 } as const;
-export type ConfigTypeKv5 = ClosedEnum<typeof ConfigTypeKv5>;
+export type TargetDeploymentTypeKv5 = ClosedEnum<
+  typeof TargetDeploymentTypeKv5
+>;
 
 /**
  * Local development KV binding configuration
@@ -2399,7 +2421,7 @@ export type TargetDeploymentExternalBindingsLocalKv = {
   dataDir?: TargetDeploymentDataDir1 | any | string | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "local-kv";
-  type: ConfigTypeKv5;
+  type: TargetDeploymentTypeKv5;
 };
 
 /**
@@ -2458,10 +2480,12 @@ export type TargetDeploymentKeyPrefix1 = {
   secretRef: TargetDeploymentKeyPrefixSecretRef1;
 };
 
-export const ConfigTypeKv4 = {
+export const TargetDeploymentTypeKv4 = {
   Kv: "kv",
 } as const;
-export type ConfigTypeKv4 = ClosedEnum<typeof ConfigTypeKv4>;
+export type TargetDeploymentTypeKv4 = ClosedEnum<
+  typeof TargetDeploymentTypeKv4
+>;
 
 /**
  * Redis KV binding configuration
@@ -2482,7 +2506,7 @@ export type TargetDeploymentExternalBindingsRedis = {
   database?: any | null | undefined;
   keyPrefix?: any | null | undefined;
   service: "redis";
-  type: ConfigTypeKv4;
+  type: TargetDeploymentTypeKv4;
 };
 
 /**
@@ -2563,10 +2587,12 @@ export type TargetDeploymentTableNameUnion2 =
   | any
   | string;
 
-export const ConfigTypeKv3 = {
+export const TargetDeploymentTypeKv3 = {
   Kv: "kv",
 } as const;
-export type ConfigTypeKv3 = ClosedEnum<typeof ConfigTypeKv3>;
+export type TargetDeploymentTypeKv3 = ClosedEnum<
+  typeof TargetDeploymentTypeKv3
+>;
 
 /**
  * Azure Table Storage KV binding configuration
@@ -2599,7 +2625,7 @@ export type TargetDeploymentExternalBindingsTablestorage = {
    */
   tableName?: TargetDeploymentTableName2 | any | string | null | undefined;
   service: "tablestorage";
-  type: ConfigTypeKv3;
+  type: TargetDeploymentTypeKv3;
 };
 
 /**
@@ -2680,10 +2706,12 @@ export type TargetDeploymentProjectIdUnion =
   | any
   | string;
 
-export const ConfigTypeKv2 = {
+export const TargetDeploymentTypeKv2 = {
   Kv: "kv",
 } as const;
-export type ConfigTypeKv2 = ClosedEnum<typeof ConfigTypeKv2>;
+export type TargetDeploymentTypeKv2 = ClosedEnum<
+  typeof TargetDeploymentTypeKv2
+>;
 
 /**
  * GCP Firestore KV binding configuration
@@ -2716,7 +2744,7 @@ export type TargetDeploymentExternalBindingsFirestore = {
    */
   projectId?: TargetDeploymentProjectId | any | string | null | undefined;
   service: "firestore";
-  type: ConfigTypeKv2;
+  type: TargetDeploymentTypeKv2;
 };
 
 /**
@@ -2783,10 +2811,12 @@ export type TargetDeploymentTableNameUnion1 =
   | any
   | string;
 
-export const ConfigTypeKv1 = {
+export const TargetDeploymentTypeKv1 = {
   Kv: "kv",
 } as const;
-export type ConfigTypeKv1 = ClosedEnum<typeof ConfigTypeKv1>;
+export type TargetDeploymentTypeKv1 = ClosedEnum<
+  typeof TargetDeploymentTypeKv1
+>;
 
 /**
  * AWS DynamoDB KV binding configuration
@@ -2808,7 +2838,7 @@ export type TargetDeploymentExternalBindingsDynamodb = {
    */
   tableName?: TargetDeploymentTableName1 | any | string | null | undefined;
   service: "dynamodb";
-  type: ConfigTypeKv1;
+  type: TargetDeploymentTypeKv1;
 };
 
 /**
@@ -2847,10 +2877,12 @@ export type TargetDeploymentQueuePathUnion =
   | any
   | string;
 
-export const ConfigTypeQueue4 = {
+export const TargetDeploymentTypeQueue4 = {
   Queue: "queue",
 } as const;
-export type ConfigTypeQueue4 = ClosedEnum<typeof ConfigTypeQueue4>;
+export type TargetDeploymentTypeQueue4 = ClosedEnum<
+  typeof TargetDeploymentTypeQueue4
+>;
 
 /**
  * Local queue parameters
@@ -2864,7 +2896,7 @@ export type TargetDeploymentExternalBindingsLocalQueue = {
    */
   queuePath?: TargetDeploymentQueuePath | any | string | null | undefined;
   service: "local-queue";
-  type: ConfigTypeQueue4;
+  type: TargetDeploymentTypeQueue4;
 };
 
 /**
@@ -2919,10 +2951,12 @@ export type TargetDeploymentQueueNameUnion =
   | any
   | string;
 
-export const ConfigTypeQueue3 = {
+export const TargetDeploymentTypeQueue3 = {
   Queue: "queue",
 } as const;
-export type ConfigTypeQueue3 = ClosedEnum<typeof ConfigTypeQueue3>;
+export type TargetDeploymentTypeQueue3 = ClosedEnum<
+  typeof TargetDeploymentTypeQueue3
+>;
 
 /**
  * Azure Service Bus parameters
@@ -2943,7 +2977,7 @@ export type TargetDeploymentExternalBindingsServicebus = {
    */
   queueName?: TargetDeploymentQueueName | any | string | null | undefined;
   service: "servicebus";
-  type: ConfigTypeQueue3;
+  type: TargetDeploymentTypeQueue3;
 };
 
 /**
@@ -2995,10 +3029,12 @@ export type TargetDeploymentTopic = {
  */
 export type TargetDeploymentTopicUnion = TargetDeploymentTopic | any | string;
 
-export const ConfigTypeQueue2 = {
+export const TargetDeploymentTypeQueue2 = {
   Queue: "queue",
 } as const;
-export type ConfigTypeQueue2 = ClosedEnum<typeof ConfigTypeQueue2>;
+export type TargetDeploymentTypeQueue2 = ClosedEnum<
+  typeof TargetDeploymentTypeQueue2
+>;
 
 /**
  * GCP Pub/Sub parameters
@@ -3019,7 +3055,7 @@ export type TargetDeploymentExternalBindingsPubsub = {
    */
   topic?: TargetDeploymentTopic | any | string | null | undefined;
   service: "pubsub";
-  type: ConfigTypeQueue2;
+  type: TargetDeploymentTypeQueue2;
 };
 
 /**
@@ -3048,10 +3084,12 @@ export type TargetDeploymentQueueUrlUnion =
   | any
   | string;
 
-export const ConfigTypeQueue1 = {
+export const TargetDeploymentTypeQueue1 = {
   Queue: "queue",
 } as const;
-export type ConfigTypeQueue1 = ClosedEnum<typeof ConfigTypeQueue1>;
+export type TargetDeploymentTypeQueue1 = ClosedEnum<
+  typeof TargetDeploymentTypeQueue1
+>;
 
 /**
  * AWS SQS queue parameters
@@ -3065,7 +3103,7 @@ export type TargetDeploymentExternalBindingsSqs = {
    */
   queueUrl?: TargetDeploymentQueueUrl | any | string | null | undefined;
   service: "sqs";
-  type: ConfigTypeQueue1;
+  type: TargetDeploymentTypeQueue1;
 };
 
 /**
@@ -3103,10 +3141,12 @@ export type TargetDeploymentStoragePathUnion =
   | any
   | string;
 
-export const ConfigTypeStorage4 = {
+export const TargetDeploymentTypeStorage4 = {
   Storage: "storage",
 } as const;
-export type ConfigTypeStorage4 = ClosedEnum<typeof ConfigTypeStorage4>;
+export type TargetDeploymentTypeStorage4 = ClosedEnum<
+  typeof TargetDeploymentTypeStorage4
+>;
 
 /**
  * Local filesystem storage binding configuration
@@ -3120,7 +3160,7 @@ export type TargetDeploymentExternalBindingsLocalStorage = {
    */
   storagePath?: TargetDeploymentStoragePath | any | string | null | undefined;
   service: "local-storage";
-  type: ConfigTypeStorage4;
+  type: TargetDeploymentTypeStorage4;
 };
 
 /**
@@ -3149,10 +3189,12 @@ export type TargetDeploymentBucketNameUnion2 =
   | any
   | string;
 
-export const ConfigTypeStorage3 = {
+export const TargetDeploymentTypeStorage3 = {
   Storage: "storage",
 } as const;
-export type ConfigTypeStorage3 = ClosedEnum<typeof ConfigTypeStorage3>;
+export type TargetDeploymentTypeStorage3 = ClosedEnum<
+  typeof TargetDeploymentTypeStorage3
+>;
 
 /**
  * Google Cloud Storage binding configuration
@@ -3166,7 +3208,7 @@ export type TargetDeploymentExternalBindingsGcs = {
    */
   bucketName?: TargetDeploymentBucketName2 | any | string | null | undefined;
   service: "gcs";
-  type: ConfigTypeStorage3;
+  type: TargetDeploymentTypeStorage3;
 };
 
 /**
@@ -3221,10 +3263,12 @@ export type TargetDeploymentContainerNameUnion =
   | any
   | string;
 
-export const ConfigTypeStorage2 = {
+export const TargetDeploymentTypeStorage2 = {
   Storage: "storage",
 } as const;
-export type ConfigTypeStorage2 = ClosedEnum<typeof ConfigTypeStorage2>;
+export type TargetDeploymentTypeStorage2 = ClosedEnum<
+  typeof TargetDeploymentTypeStorage2
+>;
 
 /**
  * Azure Blob Storage binding configuration
@@ -3250,7 +3294,7 @@ export type TargetDeploymentExternalBindingsBlob = {
     | null
     | undefined;
   service: "blob";
-  type: ConfigTypeStorage2;
+  type: TargetDeploymentTypeStorage2;
 };
 
 /**
@@ -3279,10 +3323,12 @@ export type TargetDeploymentBucketNameUnion1 =
   | any
   | string;
 
-export const ConfigTypeStorage1 = {
+export const TargetDeploymentTypeStorage1 = {
   Storage: "storage",
 } as const;
-export type ConfigTypeStorage1 = ClosedEnum<typeof ConfigTypeStorage1>;
+export type TargetDeploymentTypeStorage1 = ClosedEnum<
+  typeof TargetDeploymentTypeStorage1
+>;
 
 /**
  * AWS S3 storage binding configuration
@@ -3296,7 +3342,7 @@ export type TargetDeploymentExternalBindingsS3 = {
    */
   bucketName?: TargetDeploymentBucketName1 | any | string | null | undefined;
   service: "s3";
-  type: ConfigTypeStorage1;
+  type: TargetDeploymentTypeStorage1;
 };
 
 /**
@@ -4438,26 +4484,12 @@ export type TargetDeploymentKubernetes = {
 
 export type TargetDeploymentKubernetesUnion = TargetDeploymentKubernetes | any;
 
-/**
- * Application log handling for a deployment.
- */
-export type TargetDeploymentLogs = {
-  /**
-   * Normalize severity fields from supported structured application logs into
-   *
-   * @remarks
-   * the OTLP severity fields. The original log body is preserved. Disabled by
-   * default.
-   */
-  parseApplicationLevels?: boolean | undefined;
-};
-
-export type TargetDeploymentLogsUnion = TargetDeploymentLogs | any;
-
-export const ConfigTypeByoVnetAzure = {
+export const TargetDeploymentTypeByoVnetAzure = {
   ByoVnetAzure: "byo-vnet-azure",
 } as const;
-export type ConfigTypeByoVnetAzure = ClosedEnum<typeof ConfigTypeByoVnetAzure>;
+export type TargetDeploymentTypeByoVnetAzure = ClosedEnum<
+  typeof TargetDeploymentTypeByoVnetAzure
+>;
 
 export type TargetDeploymentNetworkByoVnetAzure = {
   /**
@@ -4482,17 +4514,19 @@ export type TargetDeploymentNetworkByoVnetAzure = {
    * Name of the public subnet within the VNet
    */
   publicSubnetName: string;
-  type: ConfigTypeByoVnetAzure;
+  type: TargetDeploymentTypeByoVnetAzure;
   /**
    * The full resource ID of the existing VNet
    */
   vnetResourceId: string;
 };
 
-export const ConfigTypeByoVpcGcp = {
+export const TargetDeploymentTypeByoVpcGcp = {
   ByoVpcGcp: "byo-vpc-gcp",
 } as const;
-export type ConfigTypeByoVpcGcp = ClosedEnum<typeof ConfigTypeByoVpcGcp>;
+export type TargetDeploymentTypeByoVpcGcp = ClosedEnum<
+  typeof TargetDeploymentTypeByoVpcGcp
+>;
 
 export type TargetDeploymentNetworkByoVpcGcp = {
   /**
@@ -4507,13 +4541,15 @@ export type TargetDeploymentNetworkByoVpcGcp = {
    * The name of the subnet to use
    */
   subnetName: string;
-  type: ConfigTypeByoVpcGcp;
+  type: TargetDeploymentTypeByoVpcGcp;
 };
 
-export const ConfigTypeByoVpcAws = {
+export const TargetDeploymentTypeByoVpcAws = {
   ByoVpcAws: "byo-vpc-aws",
 } as const;
-export type ConfigTypeByoVpcAws = ClosedEnum<typeof ConfigTypeByoVpcAws>;
+export type TargetDeploymentTypeByoVpcAws = ClosedEnum<
+  typeof TargetDeploymentTypeByoVpcAws
+>;
 
 export type TargetDeploymentNetworkByoVpcAws = {
   /**
@@ -4528,17 +4564,19 @@ export type TargetDeploymentNetworkByoVpcAws = {
    * Optional security group IDs to use
    */
   securityGroupIds?: Array<string> | undefined;
-  type: ConfigTypeByoVpcAws;
+  type: TargetDeploymentTypeByoVpcAws;
   /**
    * The ID of the existing VPC
    */
   vpcId: string;
 };
 
-export const ConfigTypeCreate = {
+export const TargetDeploymentTypeCreate = {
   Create: "create",
 } as const;
-export type ConfigTypeCreate = ClosedEnum<typeof ConfigTypeCreate>;
+export type TargetDeploymentTypeCreate = ClosedEnum<
+  typeof TargetDeploymentTypeCreate
+>;
 
 export type TargetDeploymentNetworkCreate = {
   /**
@@ -4552,16 +4590,18 @@ export type TargetDeploymentNetworkCreate = {
    * to reduce conflicts (e.g., "10.{hash}.0.0/16").
    */
   cidr?: string | null | undefined;
-  type: ConfigTypeCreate;
+  type: TargetDeploymentTypeCreate;
 };
 
-export const ConfigTypeUseDefault = {
+export const TargetDeploymentTypeUseDefault = {
   UseDefault: "use-default",
 } as const;
-export type ConfigTypeUseDefault = ClosedEnum<typeof ConfigTypeUseDefault>;
+export type TargetDeploymentTypeUseDefault = ClosedEnum<
+  typeof TargetDeploymentTypeUseDefault
+>;
 
 export type TargetDeploymentNetworkUseDefault = {
-  type: ConfigTypeUseDefault;
+  type: TargetDeploymentTypeUseDefault;
 };
 
 export type TargetDeploymentNetworkUnion =
@@ -4637,7 +4677,6 @@ export type TargetDeploymentStackSettings = {
    */
   heartbeats?: TargetDeploymentHeartbeats | undefined;
   kubernetes?: TargetDeploymentKubernetes | any | null | undefined;
-  logs?: TargetDeploymentLogs | any | null | undefined;
   network?:
     | TargetDeploymentNetworkByoVpcAws
     | TargetDeploymentNetworkByoVpcGcp
@@ -6660,9 +6699,9 @@ export function targetDeploymentHorizonMachineImageUnionFromJSON(
 }
 
 /** @internal */
-export const ComputeBackendConfigType$inboundSchema: z.ZodEnum<
-  typeof ComputeBackendConfigType
-> = z.enum(ComputeBackendConfigType);
+export const TargetDeploymentComputeBackendType$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentComputeBackendType
+> = z.enum(TargetDeploymentComputeBackendType);
 
 /** @internal */
 export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
@@ -6680,7 +6719,7 @@ export const TargetDeploymentComputeBackendHorizon$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   url: z.string(),
-  type: ComputeBackendConfigType$inboundSchema,
+  type: TargetDeploymentComputeBackendType$inboundSchema,
 });
 
 export function targetDeploymentComputeBackendHorizonFromJSON(
@@ -6868,9 +6907,9 @@ export function targetDeploymentDomainMetadataUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigEnvironmentVariablesType$inboundSchema: z.ZodEnum<
-  typeof ConfigEnvironmentVariablesType
-> = z.enum(ConfigEnvironmentVariablesType);
+export const TargetDeploymentEnvironmentVariablesType$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentEnvironmentVariablesType
+> = z.enum(TargetDeploymentEnvironmentVariablesType);
 
 /** @internal */
 export const TargetDeploymentVariable$inboundSchema: z.ZodType<
@@ -6879,7 +6918,7 @@ export const TargetDeploymentVariable$inboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   targetResources: z.nullable(z.array(z.string())).optional(),
-  type: ConfigEnvironmentVariablesType$inboundSchema,
+  type: TargetDeploymentEnvironmentVariablesType$inboundSchema,
   value: z.string(),
 });
 
@@ -6972,8 +7011,9 @@ export function targetDeploymentApiKeyUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeAi$inboundSchema: z.ZodEnum<typeof ConfigTypeAi> = z
-  .enum(ConfigTypeAi);
+export const TargetDeploymentTypeAi$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeAi
+> = z.enum(TargetDeploymentTypeAi);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsAi$inboundSchema: z.ZodType<
@@ -6988,7 +7028,7 @@ export const TargetDeploymentExternalBindingsAi$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   provider: z.string(),
-  type: ConfigTypeAi$inboundSchema,
+  type: TargetDeploymentTypeAi$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsAiFromJSON(
@@ -7233,9 +7273,9 @@ export function targetDeploymentUsernameUnion5FromJSON(
 }
 
 /** @internal */
-export const ConfigTypePostgres5$inboundSchema: z.ZodEnum<
-  typeof ConfigTypePostgres5
-> = z.enum(ConfigTypePostgres5);
+export const TargetDeploymentTypePostgres5$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypePostgres5
+> = z.enum(TargetDeploymentTypePostgres5);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocalPostgres$inboundSchema:
@@ -7270,7 +7310,7 @@ export const TargetDeploymentExternalBindingsLocalPostgres$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("local-postgres"),
-    type: ConfigTypePostgres5$inboundSchema,
+    type: TargetDeploymentTypePostgres5$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsLocalPostgresFromJSON(
@@ -7525,9 +7565,9 @@ export function targetDeploymentUsernameUnion4FromJSON(
 }
 
 /** @internal */
-export const ConfigTypePostgres4$inboundSchema: z.ZodEnum<
-  typeof ConfigTypePostgres4
-> = z.enum(ConfigTypePostgres4);
+export const TargetDeploymentTypePostgres4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypePostgres4
+> = z.enum(TargetDeploymentTypePostgres4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsExternal$inboundSchema: z.ZodType<
@@ -7565,7 +7605,7 @@ export const TargetDeploymentExternalBindingsExternal$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("external"),
-  type: ConfigTypePostgres4$inboundSchema,
+  type: TargetDeploymentTypePostgres4$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsExternalFromJSON(
@@ -7879,9 +7919,9 @@ export function targetDeploymentUsernameUnion3FromJSON(
 }
 
 /** @internal */
-export const ConfigTypePostgres3$inboundSchema: z.ZodEnum<
-  typeof ConfigTypePostgres3
-> = z.enum(ConfigTypePostgres3);
+export const TargetDeploymentTypePostgres3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypePostgres3
+> = z.enum(TargetDeploymentTypePostgres3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsFlexibleServer$inboundSchema:
@@ -7913,7 +7953,7 @@ export const TargetDeploymentExternalBindingsFlexibleServer$inboundSchema:
         z.string(),
       ])).optional(),
       service: z.literal("flexible-server"),
-      type: ConfigTypePostgres3$inboundSchema,
+      type: TargetDeploymentTypePostgres3$inboundSchema,
     },
   );
 
@@ -8304,9 +8344,9 @@ export function targetDeploymentUsernameUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypePostgres2$inboundSchema: z.ZodEnum<
-  typeof ConfigTypePostgres2
-> = z.enum(ConfigTypePostgres2);
+export const TargetDeploymentTypePostgres2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypePostgres2
+> = z.enum(TargetDeploymentTypePostgres2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsCloudSQL$inboundSchema: z.ZodType<
@@ -8356,7 +8396,7 @@ export const TargetDeploymentExternalBindingsCloudSQL$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("cloud-sql"),
-  type: ConfigTypePostgres2$inboundSchema,
+  type: TargetDeploymentTypePostgres2$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsCloudSQLFromJSON(
@@ -8679,9 +8719,9 @@ export function targetDeploymentUsernameUnion1FromJSON(
 }
 
 /** @internal */
-export const ConfigTypePostgres1$inboundSchema: z.ZodEnum<
-  typeof ConfigTypePostgres1
-> = z.enum(ConfigTypePostgres1);
+export const TargetDeploymentTypePostgres1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypePostgres1
+> = z.enum(TargetDeploymentTypePostgres1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsAurora$inboundSchema: z.ZodType<
@@ -8724,7 +8764,7 @@ export const TargetDeploymentExternalBindingsAurora$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("aurora"),
-  type: ConfigTypePostgres1$inboundSchema,
+  type: TargetDeploymentTypePostgres1$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsAuroraFromJSON(
@@ -9052,9 +9092,10 @@ export function targetDeploymentStaticIpFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeContainerAppsEnvironment$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeContainerAppsEnvironment
-> = z.enum(ConfigTypeContainerAppsEnvironment);
+export const TargetDeploymentTypeContainerAppsEnvironment$inboundSchema:
+  z.ZodEnum<typeof TargetDeploymentTypeContainerAppsEnvironment> = z.enum(
+    TargetDeploymentTypeContainerAppsEnvironment,
+  );
 
 /** @internal */
 export const TargetDeploymentExternalBindingsContainerAppsEnvironment$inboundSchema:
@@ -9089,7 +9130,7 @@ export const TargetDeploymentExternalBindingsContainerAppsEnvironment$inboundSch
         ]),
       ).optional(),
       staticIp: z.nullable(z.any()).optional(),
-      type: ConfigTypeContainerAppsEnvironment$inboundSchema,
+      type: TargetDeploymentTypeContainerAppsEnvironment$inboundSchema,
     });
 
 export function targetDeploymentExternalBindingsContainerAppsEnvironmentFromJSON(
@@ -9165,9 +9206,9 @@ export function targetDeploymentDataDirUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeVault5$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeVault5
-> = z.enum(ConfigTypeVault5);
+export const TargetDeploymentTypeVault5$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeVault5
+> = z.enum(TargetDeploymentTypeVault5);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocalVault$inboundSchema:
@@ -9181,7 +9222,7 @@ export const TargetDeploymentExternalBindingsLocalVault$inboundSchema:
     ).optional(),
     vaultName: z.string(),
     service: z.literal("local-vault"),
-    type: ConfigTypeVault5$inboundSchema,
+    type: TargetDeploymentTypeVault5$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsLocalVaultFromJSON(
@@ -9317,9 +9358,9 @@ export function targetDeploymentVaultPrefixUnion3FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeVault4$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeVault4
-> = z.enum(ConfigTypeVault4);
+export const TargetDeploymentTypeVault4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeVault4
+> = z.enum(TargetDeploymentTypeVault4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsKubernetesSecret$inboundSchema:
@@ -9340,7 +9381,7 @@ export const TargetDeploymentExternalBindingsKubernetesSecret$inboundSchema:
         ]),
       ).optional(),
       service: z.literal("kubernetes-secret"),
-      type: ConfigTypeVault4$inboundSchema,
+      type: TargetDeploymentTypeVault4$inboundSchema,
     });
 
 export function targetDeploymentExternalBindingsKubernetesSecretFromJSON(
@@ -9418,9 +9459,9 @@ export function targetDeploymentVaultNameUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeVault3$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeVault3
-> = z.enum(ConfigTypeVault3);
+export const TargetDeploymentTypeVault3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeVault3
+> = z.enum(TargetDeploymentTypeVault3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsKeyVault$inboundSchema: z.ZodType<
@@ -9435,7 +9476,7 @@ export const TargetDeploymentExternalBindingsKeyVault$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("key-vault"),
-  type: ConfigTypeVault3$inboundSchema,
+  type: TargetDeploymentTypeVault3$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsKeyVaultFromJSON(
@@ -9513,9 +9554,9 @@ export function targetDeploymentVaultPrefixUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeVault2$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeVault2
-> = z.enum(ConfigTypeVault2);
+export const TargetDeploymentTypeVault2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeVault2
+> = z.enum(TargetDeploymentTypeVault2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsSecretManager$inboundSchema:
@@ -9528,7 +9569,7 @@ export const TargetDeploymentExternalBindingsSecretManager$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("secret-manager"),
-    type: ConfigTypeVault2$inboundSchema,
+    type: TargetDeploymentTypeVault2$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsSecretManagerFromJSON(
@@ -9606,9 +9647,9 @@ export function targetDeploymentVaultPrefixUnion1FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeVault1$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeVault1
-> = z.enum(ConfigTypeVault1);
+export const TargetDeploymentTypeVault1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeVault1
+> = z.enum(TargetDeploymentTypeVault1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsParameterStore$inboundSchema:
@@ -9620,7 +9661,7 @@ export const TargetDeploymentExternalBindingsParameterStore$inboundSchema:
         z.string(),
       ])).optional(),
       service: z.literal("parameter-store"),
-      type: ConfigTypeVault1$inboundSchema,
+      type: TargetDeploymentTypeVault1$inboundSchema,
     },
   );
 
@@ -9759,9 +9800,9 @@ export function targetDeploymentRegistryUrlUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeArtifactRegistry4$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeArtifactRegistry4
-> = z.enum(ConfigTypeArtifactRegistry4);
+export const TargetDeploymentTypeArtifactRegistry4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeArtifactRegistry4
+> = z.enum(TargetDeploymentTypeArtifactRegistry4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocal$inboundSchema: z.ZodType<
@@ -9777,7 +9818,7 @@ export const TargetDeploymentExternalBindingsLocal$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("local"),
-  type: ConfigTypeArtifactRegistry4$inboundSchema,
+  type: TargetDeploymentTypeArtifactRegistry4$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsLocalFromJSON(
@@ -9958,9 +9999,9 @@ export function targetDeploymentRepositoryNameUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeArtifactRegistry3$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeArtifactRegistry3
-> = z.enum(ConfigTypeArtifactRegistry3);
+export const TargetDeploymentTypeArtifactRegistry3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeArtifactRegistry3
+> = z.enum(TargetDeploymentTypeArtifactRegistry3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsGar$inboundSchema: z.ZodType<
@@ -9977,7 +10018,7 @@ export const TargetDeploymentExternalBindingsGar$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("gar"),
-  type: ConfigTypeArtifactRegistry3$inboundSchema,
+  type: TargetDeploymentTypeArtifactRegistry3$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsGarFromJSON(
@@ -10163,9 +10204,9 @@ export function targetDeploymentResourceGroupNameUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeArtifactRegistry2$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeArtifactRegistry2
-> = z.enum(ConfigTypeArtifactRegistry2);
+export const TargetDeploymentTypeArtifactRegistry2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeArtifactRegistry2
+> = z.enum(TargetDeploymentTypeArtifactRegistry2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsAcr$inboundSchema: z.ZodType<
@@ -10188,7 +10229,7 @@ export const TargetDeploymentExternalBindingsAcr$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("acr"),
-  type: ConfigTypeArtifactRegistry2$inboundSchema,
+  type: TargetDeploymentTypeArtifactRegistry2$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsAcrFromJSON(
@@ -10343,9 +10384,9 @@ export function targetDeploymentRepositoryPrefixUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeArtifactRegistry1$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeArtifactRegistry1
-> = z.enum(ConfigTypeArtifactRegistry1);
+export const TargetDeploymentTypeArtifactRegistry1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeArtifactRegistry1
+> = z.enum(TargetDeploymentTypeArtifactRegistry1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsEcr$inboundSchema: z.ZodType<
@@ -10362,7 +10403,7 @@ export const TargetDeploymentExternalBindingsEcr$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("ecr"),
-  type: ConfigTypeArtifactRegistry1$inboundSchema,
+  type: TargetDeploymentTypeArtifactRegistry1$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsEcrFromJSON(
@@ -10494,8 +10535,9 @@ export function targetDeploymentKeyPrefix2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeKv5$inboundSchema: z.ZodEnum<typeof ConfigTypeKv5> = z
-  .enum(ConfigTypeKv5);
+export const TargetDeploymentTypeKv5$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeKv5
+> = z.enum(TargetDeploymentTypeKv5);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocalKv$inboundSchema: z.ZodType<
@@ -10511,7 +10553,7 @@ export const TargetDeploymentExternalBindingsLocalKv$inboundSchema: z.ZodType<
   ).optional(),
   keyPrefix: z.nullable(z.any()).optional(),
   service: z.literal("local-kv"),
-  type: ConfigTypeKv5$inboundSchema,
+  type: TargetDeploymentTypeKv5$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsLocalKvFromJSON(
@@ -10666,8 +10708,9 @@ export function targetDeploymentKeyPrefix1FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeKv4$inboundSchema: z.ZodEnum<typeof ConfigTypeKv4> = z
-  .enum(ConfigTypeKv4);
+export const TargetDeploymentTypeKv4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeKv4
+> = z.enum(TargetDeploymentTypeKv4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsRedis$inboundSchema: z.ZodType<
@@ -10684,7 +10727,7 @@ export const TargetDeploymentExternalBindingsRedis$inboundSchema: z.ZodType<
   database: z.nullable(z.any()).optional(),
   keyPrefix: z.nullable(z.any()).optional(),
   service: z.literal("redis"),
-  type: ConfigTypeKv4$inboundSchema,
+  type: TargetDeploymentTypeKv4$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsRedisFromJSON(
@@ -10885,8 +10928,9 @@ export function targetDeploymentTableNameUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeKv3$inboundSchema: z.ZodEnum<typeof ConfigTypeKv3> = z
-  .enum(ConfigTypeKv3);
+export const TargetDeploymentTypeKv3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeKv3
+> = z.enum(TargetDeploymentTypeKv3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsTablestorage$inboundSchema:
@@ -10913,7 +10957,7 @@ export const TargetDeploymentExternalBindingsTablestorage$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("tablestorage"),
-    type: ConfigTypeKv3$inboundSchema,
+    type: TargetDeploymentTypeKv3$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsTablestorageFromJSON(
@@ -11115,8 +11159,9 @@ export function targetDeploymentProjectIdUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeKv2$inboundSchema: z.ZodEnum<typeof ConfigTypeKv2> = z
-  .enum(ConfigTypeKv2);
+export const TargetDeploymentTypeKv2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeKv2
+> = z.enum(TargetDeploymentTypeKv2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsFirestore$inboundSchema: z.ZodType<
@@ -11145,7 +11190,7 @@ export const TargetDeploymentExternalBindingsFirestore$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("firestore"),
-  type: ConfigTypeKv2$inboundSchema,
+  type: TargetDeploymentTypeKv2$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsFirestoreFromJSON(
@@ -11318,8 +11363,9 @@ export function targetDeploymentTableNameUnion1FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeKv1$inboundSchema: z.ZodEnum<typeof ConfigTypeKv1> = z
-  .enum(ConfigTypeKv1);
+export const TargetDeploymentTypeKv1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeKv1
+> = z.enum(TargetDeploymentTypeKv1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsDynamodb$inboundSchema: z.ZodType<
@@ -11342,7 +11388,7 @@ export const TargetDeploymentExternalBindingsDynamodb$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("dynamodb"),
-  type: ConfigTypeKv1$inboundSchema,
+  type: TargetDeploymentTypeKv1$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsDynamodbFromJSON(
@@ -11443,9 +11489,9 @@ export function targetDeploymentQueuePathUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeQueue4$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeQueue4
-> = z.enum(ConfigTypeQueue4);
+export const TargetDeploymentTypeQueue4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeQueue4
+> = z.enum(TargetDeploymentTypeQueue4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocalQueue$inboundSchema:
@@ -11458,7 +11504,7 @@ export const TargetDeploymentExternalBindingsLocalQueue$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("local-queue"),
-    type: ConfigTypeQueue4$inboundSchema,
+    type: TargetDeploymentTypeQueue4$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsLocalQueueFromJSON(
@@ -11594,9 +11640,9 @@ export function targetDeploymentQueueNameUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeQueue3$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeQueue3
-> = z.enum(ConfigTypeQueue3);
+export const TargetDeploymentTypeQueue3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeQueue3
+> = z.enum(TargetDeploymentTypeQueue3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsServicebus$inboundSchema:
@@ -11616,7 +11662,7 @@ export const TargetDeploymentExternalBindingsServicebus$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("servicebus"),
-    type: ConfigTypeQueue3$inboundSchema,
+    type: TargetDeploymentTypeQueue3$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsServicebusFromJSON(
@@ -11751,9 +11797,9 @@ export function targetDeploymentTopicUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeQueue2$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeQueue2
-> = z.enum(ConfigTypeQueue2);
+export const TargetDeploymentTypeQueue2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeQueue2
+> = z.enum(TargetDeploymentTypeQueue2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsPubsub$inboundSchema: z.ZodType<
@@ -11775,7 +11821,7 @@ export const TargetDeploymentExternalBindingsPubsub$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("pubsub"),
-  type: ConfigTypeQueue2$inboundSchema,
+  type: TargetDeploymentTypeQueue2$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsPubsubFromJSON(
@@ -11847,9 +11893,9 @@ export function targetDeploymentQueueUrlUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeQueue1$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeQueue1
-> = z.enum(ConfigTypeQueue1);
+export const TargetDeploymentTypeQueue1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeQueue1
+> = z.enum(TargetDeploymentTypeQueue1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsSqs$inboundSchema: z.ZodType<
@@ -11864,7 +11910,7 @@ export const TargetDeploymentExternalBindingsSqs$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("sqs"),
-  type: ConfigTypeQueue1$inboundSchema,
+  type: TargetDeploymentTypeQueue1$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsSqsFromJSON(
@@ -11959,9 +12005,9 @@ export function targetDeploymentStoragePathUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeStorage4$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeStorage4
-> = z.enum(ConfigTypeStorage4);
+export const TargetDeploymentTypeStorage4$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeStorage4
+> = z.enum(TargetDeploymentTypeStorage4);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsLocalStorage$inboundSchema:
@@ -11974,7 +12020,7 @@ export const TargetDeploymentExternalBindingsLocalStorage$inboundSchema:
       ]),
     ).optional(),
     service: z.literal("local-storage"),
-    type: ConfigTypeStorage4$inboundSchema,
+    type: TargetDeploymentTypeStorage4$inboundSchema,
   });
 
 export function targetDeploymentExternalBindingsLocalStorageFromJSON(
@@ -12052,9 +12098,9 @@ export function targetDeploymentBucketNameUnion2FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeStorage3$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeStorage3
-> = z.enum(ConfigTypeStorage3);
+export const TargetDeploymentTypeStorage3$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeStorage3
+> = z.enum(TargetDeploymentTypeStorage3);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsGcs$inboundSchema: z.ZodType<
@@ -12069,7 +12115,7 @@ export const TargetDeploymentExternalBindingsGcs$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("gcs"),
-  type: ConfigTypeStorage3$inboundSchema,
+  type: TargetDeploymentTypeStorage3$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsGcsFromJSON(
@@ -12201,9 +12247,9 @@ export function targetDeploymentContainerNameUnionFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeStorage2$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeStorage2
-> = z.enum(ConfigTypeStorage2);
+export const TargetDeploymentTypeStorage2$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeStorage2
+> = z.enum(TargetDeploymentTypeStorage2);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsBlob$inboundSchema: z.ZodType<
@@ -12225,7 +12271,7 @@ export const TargetDeploymentExternalBindingsBlob$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("blob"),
-  type: ConfigTypeStorage2$inboundSchema,
+  type: TargetDeploymentTypeStorage2$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsBlobFromJSON(
@@ -12298,9 +12344,9 @@ export function targetDeploymentBucketNameUnion1FromJSON(
 }
 
 /** @internal */
-export const ConfigTypeStorage1$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeStorage1
-> = z.enum(ConfigTypeStorage1);
+export const TargetDeploymentTypeStorage1$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeStorage1
+> = z.enum(TargetDeploymentTypeStorage1);
 
 /** @internal */
 export const TargetDeploymentExternalBindingsS3$inboundSchema: z.ZodType<
@@ -12315,7 +12361,7 @@ export const TargetDeploymentExternalBindingsS3$inboundSchema: z.ZodType<
     ]),
   ).optional(),
   service: z.literal("s3"),
-  type: ConfigTypeStorage1$inboundSchema,
+  type: TargetDeploymentTypeStorage1$inboundSchema,
 });
 
 export function targetDeploymentExternalBindingsS3FromJSON(
@@ -14274,43 +14320,9 @@ export function targetDeploymentKubernetesUnionFromJSON(
 }
 
 /** @internal */
-export const TargetDeploymentLogs$inboundSchema: z.ZodType<
-  TargetDeploymentLogs,
-  unknown
-> = z.object({
-  parseApplicationLevels: z.boolean().optional(),
-});
-
-export function targetDeploymentLogsFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentLogs, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentLogs$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentLogs' from JSON`,
-  );
-}
-
-/** @internal */
-export const TargetDeploymentLogsUnion$inboundSchema: z.ZodType<
-  TargetDeploymentLogsUnion,
-  unknown
-> = z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]);
-
-export function targetDeploymentLogsUnionFromJSON(
-  jsonString: string,
-): SafeParseResult<TargetDeploymentLogsUnion, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => TargetDeploymentLogsUnion$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'TargetDeploymentLogsUnion' from JSON`,
-  );
-}
-
-/** @internal */
-export const ConfigTypeByoVnetAzure$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeByoVnetAzure
-> = z.enum(ConfigTypeByoVnetAzure);
+export const TargetDeploymentTypeByoVnetAzure$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeByoVnetAzure
+> = z.enum(TargetDeploymentTypeByoVnetAzure);
 
 /** @internal */
 export const TargetDeploymentNetworkByoVnetAzure$inboundSchema: z.ZodType<
@@ -14321,7 +14333,7 @@ export const TargetDeploymentNetworkByoVnetAzure$inboundSchema: z.ZodType<
   private_endpoint_subnet_name: z.nullable(z.string()).optional(),
   private_subnet_name: z.string(),
   public_subnet_name: z.string(),
-  type: ConfigTypeByoVnetAzure$inboundSchema,
+  type: TargetDeploymentTypeByoVnetAzure$inboundSchema,
   vnet_resource_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -14345,9 +14357,9 @@ export function targetDeploymentNetworkByoVnetAzureFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeByoVpcGcp$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeByoVpcGcp
-> = z.enum(ConfigTypeByoVpcGcp);
+export const TargetDeploymentTypeByoVpcGcp$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeByoVpcGcp
+> = z.enum(TargetDeploymentTypeByoVpcGcp);
 
 /** @internal */
 export const TargetDeploymentNetworkByoVpcGcp$inboundSchema: z.ZodType<
@@ -14357,7 +14369,7 @@ export const TargetDeploymentNetworkByoVpcGcp$inboundSchema: z.ZodType<
   network_name: z.string(),
   region: z.string(),
   subnet_name: z.string(),
-  type: ConfigTypeByoVpcGcp$inboundSchema,
+  type: TargetDeploymentTypeByoVpcGcp$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "network_name": "networkName",
@@ -14376,9 +14388,9 @@ export function targetDeploymentNetworkByoVpcGcpFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeByoVpcAws$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeByoVpcAws
-> = z.enum(ConfigTypeByoVpcAws);
+export const TargetDeploymentTypeByoVpcAws$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeByoVpcAws
+> = z.enum(TargetDeploymentTypeByoVpcAws);
 
 /** @internal */
 export const TargetDeploymentNetworkByoVpcAws$inboundSchema: z.ZodType<
@@ -14388,7 +14400,7 @@ export const TargetDeploymentNetworkByoVpcAws$inboundSchema: z.ZodType<
   private_subnet_ids: z.array(z.string()),
   public_subnet_ids: z.array(z.string()),
   security_group_ids: z.array(z.string()).optional(),
-  type: ConfigTypeByoVpcAws$inboundSchema,
+  type: TargetDeploymentTypeByoVpcAws$inboundSchema,
   vpc_id: z.string(),
 }).transform((v) => {
   return remap$(v, {
@@ -14410,9 +14422,9 @@ export function targetDeploymentNetworkByoVpcAwsFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeCreate$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeCreate
-> = z.enum(ConfigTypeCreate);
+export const TargetDeploymentTypeCreate$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeCreate
+> = z.enum(TargetDeploymentTypeCreate);
 
 /** @internal */
 export const TargetDeploymentNetworkCreate$inboundSchema: z.ZodType<
@@ -14421,7 +14433,7 @@ export const TargetDeploymentNetworkCreate$inboundSchema: z.ZodType<
 > = z.object({
   availability_zones: z.int().optional(),
   cidr: z.nullable(z.string()).optional(),
-  type: ConfigTypeCreate$inboundSchema,
+  type: TargetDeploymentTypeCreate$inboundSchema,
 }).transform((v) => {
   return remap$(v, {
     "availability_zones": "availabilityZones",
@@ -14439,16 +14451,16 @@ export function targetDeploymentNetworkCreateFromJSON(
 }
 
 /** @internal */
-export const ConfigTypeUseDefault$inboundSchema: z.ZodEnum<
-  typeof ConfigTypeUseDefault
-> = z.enum(ConfigTypeUseDefault);
+export const TargetDeploymentTypeUseDefault$inboundSchema: z.ZodEnum<
+  typeof TargetDeploymentTypeUseDefault
+> = z.enum(TargetDeploymentTypeUseDefault);
 
 /** @internal */
 export const TargetDeploymentNetworkUseDefault$inboundSchema: z.ZodType<
   TargetDeploymentNetworkUseDefault,
   unknown
 > = z.object({
-  type: ConfigTypeUseDefault$inboundSchema,
+  type: TargetDeploymentTypeUseDefault$inboundSchema,
 });
 
 export function targetDeploymentNetworkUseDefaultFromJSON(
@@ -14512,9 +14524,6 @@ export const TargetDeploymentStackSettings$inboundSchema: z.ZodType<
   heartbeats: TargetDeploymentHeartbeats$inboundSchema.optional(),
   kubernetes: z.nullable(
     z.union([z.lazy(() => TargetDeploymentKubernetes$inboundSchema), z.any()]),
-  ).optional(),
-  logs: z.nullable(
-    z.union([z.lazy(() => TargetDeploymentLogs$inboundSchema), z.any()]),
   ).optional(),
   network: z.nullable(
     z.union([

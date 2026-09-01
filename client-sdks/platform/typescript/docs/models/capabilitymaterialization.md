@@ -11,7 +11,7 @@ let value: CapabilityMaterialization = {
     capabilities: {},
   },
   source: {
-    definitionId: "customer-key",
+    definitionId: "customer-storage",
     definitionVersion: "<value>",
     releaseId: "<id>",
   },

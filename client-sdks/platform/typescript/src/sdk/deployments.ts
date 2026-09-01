@@ -20,6 +20,7 @@ import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
 import { deploymentsSetFirstPartyDeploymentInputs } from "../funcs/deploymentsSetFirstPartyDeploymentInputs.js";
 import { deploymentsSetReleaseChannel } from "../funcs/deploymentsSetReleaseChannel.js";
+import { deploymentsUpdateCompute } from "../funcs/deploymentsUpdateCompute.js";
 import { deploymentsUpdateEnvironmentVariables } from "../funcs/deploymentsUpdateEnvironmentVariables.js";
 import { deploymentsUpdateInputs } from "../funcs/deploymentsUpdateInputs.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
@@ -280,7 +281,21 @@ export class Deployments extends ClientSDK {
   }
 
   /**
-   * Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+   * Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+   */
+  async updateCompute(
+    request: operations.UpdateDeploymentComputeRequest,
+    options?: RequestOptions,
+  ): Promise<operations.UpdateDeploymentComputeResponse> {
+    return unwrapAsync(deploymentsUpdateCompute(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
    */
   async updateEnvironmentVariables(
     request: operations.UpdateDeploymentEnvironmentVariablesRequest,

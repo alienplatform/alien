@@ -30,7 +30,7 @@ import { Result } from "../types/fp.js";
  * Create a customer setup link
  *
  * @remarks
- * Ensures the Deployment Group identified by Project and external ID, then creates a replacement group-scoped setup link with exact captured sources.
+ * Ensures the Deployment Group identified by Project and external ID, then creates a group-scoped setup link with exact captured sources.
  */
 export function setupLinksCreate(
   client: AlienCore,

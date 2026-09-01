@@ -7,7 +7,7 @@ import { GroupCapabilities } from "@alienplatform/platform-api/models";
 
 let value: GroupCapabilities = {
   models: {
-    capability: "registry",
+    capability: "remoteSandbox",
     enabled: true,
     state: "not-connected",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
@@ -82,14 +82,34 @@ let value: GroupCapabilities = {
       message: "<value>",
     },
   },
+  remoteSandbox: {
+    capability: "buckets",
+    enabled: false,
+    state: "not-connected",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    observation: {
+      provider: "<value>",
+      platform: "gcp",
+      resourceId: "<id>",
+      location: "<value>",
+      account: null,
+      observedAt: new Date("2025-11-23T13:41:17.370Z"),
+      stale: true,
+      partial: true,
+      health: "healthy",
+      lifecycle: "<value>",
+      message: "<value>",
+    },
+  },
 };
 ```
 
 ## Fields
 
-| Field                                              | Type                                               | Required                                           | Description                                        |
-| -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
-| `models`                                           | [models.GroupModels](../models/groupmodels.md)     | :heavy_check_mark:                                 | N/A                                                |
-| `keys`                                             | [models.GroupKeys](../models/groupkeys.md)         | :heavy_check_mark:                                 | N/A                                                |
-| `buckets`                                          | [models.GroupBuckets](../models/groupbuckets.md)   | :heavy_check_mark:                                 | N/A                                                |
-| `registry`                                         | [models.GroupRegistry](../models/groupregistry.md) | :heavy_check_mark:                                 | N/A                                                |
+| Field                                                        | Type                                                         | Required                                                     | Description                                                  |
+| ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ | ------------------------------------------------------------ |
+| `models`                                                     | [models.GroupModels](../models/groupmodels.md)               | :heavy_check_mark:                                           | N/A                                                          |
+| `keys`                                                       | [models.GroupKeys](../models/groupkeys.md)                   | :heavy_check_mark:                                           | N/A                                                          |
+| `buckets`                                                    | [models.GroupBuckets](../models/groupbuckets.md)             | :heavy_check_mark:                                           | N/A                                                          |
+| `registry`                                                   | [models.GroupRegistry](../models/groupregistry.md)           | :heavy_check_mark:                                           | N/A                                                          |
+| `remoteSandbox`                                              | [models.GroupRemoteSandbox](../models/groupremotesandbox.md) | :heavy_check_mark:                                           | N/A                                                          |

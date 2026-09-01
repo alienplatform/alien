@@ -12,6 +12,7 @@ import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 export type CommandRequest = {
   command: string;
   summary: string;
+  params?: any | null | undefined;
 };
 
 export type CreateAccessRequestRequestBody = {
@@ -33,6 +34,7 @@ export type CreateAccessRequestRequest = {
 export type CreateAccessRequestCommandResponse = {
   command: string;
   summary: string;
+  params?: any | null | undefined;
 };
 
 export const CreateAccessRequestStatus = {
@@ -64,6 +66,7 @@ export type CreateAccessRequestResponse = {
 export type CommandRequest$Outbound = {
   command: string;
   summary: string;
+  params?: any | null | undefined;
 };
 
 /** @internal */
@@ -73,6 +76,7 @@ export const CommandRequest$outboundSchema: z.ZodType<
 > = z.object({
   command: z.string(),
   summary: z.string(),
+  params: z.nullable(z.any()).optional(),
 });
 
 export function commandRequestToJSON(commandRequest: CommandRequest): string {
@@ -145,6 +149,7 @@ export const CreateAccessRequestCommandResponse$inboundSchema: z.ZodType<
 > = z.object({
   command: z.string(),
   summary: z.string(),
+  params: z.nullable(z.any()).optional(),
 });
 
 export function createAccessRequestCommandResponseFromJSON(

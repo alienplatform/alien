@@ -17,7 +17,7 @@ let value: ListDeploymentsResponse = {
       platform: "test",
       deploymentProtocolVersion: 120212,
       deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      purpose: "ai",
+      purpose: "storage",
       currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

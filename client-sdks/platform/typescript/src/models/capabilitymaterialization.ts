@@ -17,6 +17,7 @@ export const CapabilityMaterializationDefinitionId = {
   CustomerKey: "customer-key",
   CustomerStorage: "customer-storage",
   CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
 } as const;
 export type CapabilityMaterializationDefinitionId = ClosedEnum<
   typeof CapabilityMaterializationDefinitionId
@@ -31,6 +32,7 @@ export type CapabilityMaterializationSource = {
 export const CapabilityMaterializationType = {
   Cloudformation: "cloudformation",
   Terraform: "terraform",
+  SandboxBundle: "sandbox-bundle",
 } as const;
 export type CapabilityMaterializationType = ClosedEnum<
   typeof CapabilityMaterializationType

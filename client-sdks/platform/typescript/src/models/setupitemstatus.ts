@@ -14,6 +14,7 @@ export const SetupItemStatusItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type SetupItemStatusItem = ClosedEnum<typeof SetupItemStatusItem>;
 
@@ -22,6 +23,7 @@ export const SetupItemStatusDefinitionId = {
   CustomerKey: "customer-key",
   CustomerStorage: "customer-storage",
   CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
 } as const;
 export type SetupItemStatusDefinitionId = ClosedEnum<
   typeof SetupItemStatusDefinitionId

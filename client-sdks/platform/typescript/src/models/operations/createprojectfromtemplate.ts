@@ -560,12 +560,20 @@ export type CreateProjectFromTemplateRegistry = {
   credentialPolicy: CreateProjectFromTemplateCredentialPolicy;
 };
 
+export type CreateProjectFromTemplateRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type CreateProjectFromTemplateCapabilities = {
   deployments?: CreateProjectFromTemplateDeployments | undefined;
   keys?: CreateProjectFromTemplateKeys | undefined;
   models?: CreateProjectFromTemplateModels | undefined;
   buckets?: CreateProjectFromTemplateBuckets | undefined;
   registry?: CreateProjectFromTemplateRegistry | undefined;
+  remoteSandbox?: CreateProjectFromTemplateRemoteSandbox | undefined;
 };
 
 /**
@@ -1372,6 +1380,28 @@ export function createProjectFromTemplateRegistryFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateRemoteSandbox$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function createProjectFromTemplateRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      CreateProjectFromTemplateRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateCapabilities$inboundSchema: z.ZodType<
   CreateProjectFromTemplateCapabilities,
   unknown
@@ -1385,6 +1415,9 @@ export const CreateProjectFromTemplateCapabilities$inboundSchema: z.ZodType<
     .optional(),
   registry: z.lazy(() => CreateProjectFromTemplateRegistry$inboundSchema)
     .optional(),
+  remoteSandbox: z.lazy(() =>
+    CreateProjectFromTemplateRemoteSandbox$inboundSchema
+  ).optional(),
 });
 
 export function createProjectFromTemplateCapabilitiesFromJSON(

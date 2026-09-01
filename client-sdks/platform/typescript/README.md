@@ -277,7 +277,8 @@ run();
 * [retry](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](docs/sdks/deployments/README.md#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
-* [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+* [updateCompute](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+* [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ### [Domains](docs/sdks/domains/README.md)
@@ -365,9 +366,9 @@ run();
 * [update](docs/sdks/projects/README.md#update) - Update a project.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
-* [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+* [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 * [getDeploymentPortalDomain](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
-* [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
+* [createFromTemplate](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
 * [getTemplateUrls](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 * [getDeploymentLinkSetup](docs/sdks/projects/README.md#getdeploymentlinksetup) - Get the active release stack and portal-visible setup availability for deployment-link configuration.
 * [getActiveRelease](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
@@ -380,6 +381,7 @@ run();
 * [configureKeys](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
+* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getAiUsage](docs/sdks/projects/README.md#getaiusage)
 * [getEncryptionUsage](docs/sdks/projects/README.md#getencryptionusage)
@@ -561,7 +563,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 - [`deploymentsSetFirstPartyDeploymentInputs`](docs/sdks/deployments/README.md#setfirstpartydeploymentinputs) - Store operator-provided input values on a first-party deployment session token so CLI/local deploys apply them.
 - [`deploymentsSetReleaseChannel`](docs/sdks/deployments/README.md#setreleasechannel)
-- [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+- [`deploymentsUpdateCompute`](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+- [`deploymentsUpdateEnvironmentVariables`](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 - [`deploymentsUpdateInputs`](docs/sdks/deployments/README.md#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
 - [`domainsCreate`](docs/sdks/domains/README.md#create) - Create a workspace domain and optional initial endpoints.
 - [`domainsCreateEndpoint`](docs/sdks/domains/README.md#createendpoint) - Create an endpoint under a workspace domain.
@@ -627,9 +630,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsConfigureKeys`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 - [`projectsConfigureModels`](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
 - [`projectsConfigureRegistry`](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-- [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
+- [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
-- [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
+- [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
 - [`projectsDelete`](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 - [`projectsGet`](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
 - [`projectsGetActiveRelease`](docs/sdks/projects/README.md#getactiverelease) - Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.

@@ -11,26 +11,6 @@ let value: CreateSetupLinkRequest = {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
-    deploymentSetupConfig: {
-      metadata: {},
-      policy: {
-        allowedPlatforms: [],
-        allowedSetupMethods: [
-          "google-oauth",
-        ],
-      },
-      environmentVariables: [
-        {
-          name: "<value>",
-          value: "<value>",
-          type: "plain",
-          targetResources: [
-            "<value 1>",
-            "<value 2>",
-          ],
-        },
-      ],
-    },
   },
 };
 ```

@@ -13,6 +13,7 @@ export const PlanDeploymentComputeSetupItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type PlanDeploymentComputeSetupItem = ClosedEnum<
   typeof PlanDeploymentComputeSetupItem

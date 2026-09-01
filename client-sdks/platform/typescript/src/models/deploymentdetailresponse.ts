@@ -30,10 +30,6 @@ import {
   DeploymentUpdateOperationSummary,
   DeploymentUpdateOperationSummary$inboundSchema,
 } from "./deploymentupdateoperationsummary.js";
-import {
-  EnvironmentVariableConfig,
-  EnvironmentVariableConfig$inboundSchema,
-} from "./environmentvariableconfig.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
   OperatorCapabilityReport,
@@ -4965,6 +4961,14 @@ export type DeploymentDetailResponseSetupUpdateAuthorizationUnion =
  */
 export type DeploymentDetailResponseRuntimeMetadata = {
   /**
+   * Last generated CLI package revision whose direct setup was applied.
+   *
+   * @remarks
+   * This lets a newer generated CLI refresh setup-owned infrastructure once
+   * before handing runtime changes back to the hosted manager.
+   */
+  directSetupRevision?: string | null | undefined;
+  /**
    * Actor that owns structural work during the initial setup phase.
    */
   initialSetupAuthority?:
@@ -5135,42 +5139,6 @@ export type DeploymentDetailResponseError = {
 };
 
 /**
- * Snapshot of target environment variables for the deployment
- */
-export type DeploymentDetailResponseTargetEnvironmentVariables = {
-  /**
-   * Environment variables in the snapshot
-   */
-  variables: Array<EnvironmentVariableConfig>;
-  /**
-   * Deterministic hash of all variables for change detection
-   */
-  hash: string;
-  /**
-   * ISO 8601 timestamp when snapshot was created
-   */
-  createdAt: Date;
-};
-
-/**
- * Snapshot of current environment variables for the deployment
- */
-export type DeploymentDetailResponseCurrentEnvironmentVariables = {
-  /**
-   * Environment variables in the snapshot
-   */
-  variables: Array<EnvironmentVariableConfig>;
-  /**
-   * Deterministic hash of all variables for change detection
-   */
-  hash: string;
-  /**
-   * ISO 8601 timestamp when snapshot was created
-   */
-  createdAt: Date;
-};
-
-/**
  * Durable progress for deployment updates
  */
 export type DeploymentDetailResponseUpdateState = {
@@ -5319,24 +5287,6 @@ export type DeploymentDetailResponse = {
    * Latest error information if the deployment is in a failed state
    */
   error?: DeploymentDetailResponseError | null | undefined;
-  /**
-   * Configuration of environment variables for the deployment
-   */
-  environmentVariables?: Array<EnvironmentVariableConfig> | null | undefined;
-  /**
-   * Snapshot of target environment variables for the deployment
-   */
-  targetEnvironmentVariables?:
-    | DeploymentDetailResponseTargetEnvironmentVariables
-    | null
-    | undefined;
-  /**
-   * Snapshot of current environment variables for the deployment
-   */
-  currentEnvironmentVariables?:
-    | DeploymentDetailResponseCurrentEnvironmentVariables
-    | null
-    | undefined;
   /**
    * Durable progress for deployment updates
    */
@@ -13188,6 +13138,7 @@ export const DeploymentDetailResponseRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentDetailResponseRuntimeMetadata,
   unknown
 > = z.object({
+  directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority:
     DeploymentDetailResponseInitialSetupAuthority$inboundSchema.optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
@@ -13264,56 +13215,6 @@ export function deploymentDetailResponseErrorFromJSON(
     jsonString,
     (x) => DeploymentDetailResponseError$inboundSchema.parse(JSON.parse(x)),
     `Failed to parse 'DeploymentDetailResponseError' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseTargetEnvironmentVariables$inboundSchema:
-  z.ZodType<DeploymentDetailResponseTargetEnvironmentVariables, unknown> = z
-    .object({
-      variables: z.array(EnvironmentVariableConfig$inboundSchema),
-      hash: z.string(),
-      createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    });
-
-export function deploymentDetailResponseTargetEnvironmentVariablesFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseTargetEnvironmentVariables,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseTargetEnvironmentVariables$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseTargetEnvironmentVariables' from JSON`,
-  );
-}
-
-/** @internal */
-export const DeploymentDetailResponseCurrentEnvironmentVariables$inboundSchema:
-  z.ZodType<DeploymentDetailResponseCurrentEnvironmentVariables, unknown> = z
-    .object({
-      variables: z.array(EnvironmentVariableConfig$inboundSchema),
-      hash: z.string(),
-      createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
-    });
-
-export function deploymentDetailResponseCurrentEnvironmentVariablesFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  DeploymentDetailResponseCurrentEnvironmentVariables,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      DeploymentDetailResponseCurrentEnvironmentVariables$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'DeploymentDetailResponseCurrentEnvironmentVariables' from JSON`,
   );
 }
 
@@ -13398,19 +13299,6 @@ export const DeploymentDetailResponse$inboundSchema: z.ZodType<
   ).optional(),
   error: z.nullable(z.lazy(() => DeploymentDetailResponseError$inboundSchema))
     .optional(),
-  environmentVariables: z.nullable(
-    z.array(EnvironmentVariableConfig$inboundSchema),
-  ).optional(),
-  targetEnvironmentVariables: z.nullable(
-    z.lazy(() =>
-      DeploymentDetailResponseTargetEnvironmentVariables$inboundSchema
-    ),
-  ).optional(),
-  currentEnvironmentVariables: z.nullable(
-    z.lazy(() =>
-      DeploymentDetailResponseCurrentEnvironmentVariables$inboundSchema
-    ),
-  ).optional(),
   updateState: z.lazy(() => DeploymentDetailResponseUpdateState$inboundSchema)
     .optional(),
   createdAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
