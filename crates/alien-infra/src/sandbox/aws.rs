@@ -222,11 +222,34 @@ impl AwsSandboxController {
                     created.image_version,
                 )
             }
-            // Adopting costs no mutation: the build this image is already running is the one
-            // this handler would have asked for.
+            // An image under this name already exists: a create whose response was lost. Its
+            // running version cannot be tied to any bundle — the record names none — and a
+            // release may have changed the bundle since, so only the identity is adopted and the
+            // desired bundle is rolled onto it. One extra build in a rare recovery, never a wrong
+            // bundle recorded as deployed.
             Some(image) => {
-                drop(inputs);
-                ("GetMicrovmImage", image.image_arn, image.image_version)
+                let identifier = image.image_arn.clone().ok_or_else(|| {
+                    AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "GetMicrovmImage for '{image_name}' returned no image ARN"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })
+                })?;
+                let rolled = client
+                    .update_microvm_image(&identifier, inputs.update_request())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to roll adopted MicroVM image '{image_name}' onto the desired bundle"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                (
+                    "UpdateMicrovmImage",
+                    rolled.image_arn.or(Some(identifier)),
+                    rolled.image_version,
+                )
             }
         };
 
@@ -877,7 +900,8 @@ impl AwsSandboxController {
         let now = chrono::Utc::now();
 
         let mut kept = Vec::with_capacity(self.retired_versions.len());
-        for retired in std::mem::take(&mut self.retired_versions) {
+        let mut pending = std::mem::take(&mut self.retired_versions).into_iter();
+        while let Some(retired) = pending.next() {
             if (now - retired.retired_at).num_seconds() < window {
                 kept.push(retired);
                 continue;
@@ -889,9 +913,10 @@ impl AwsSandboxController {
                 Ok(()) => {}
                 Err(error) if is_remote_resource_absent(&error) => {}
                 Err(error) => {
-                    // Keep it for the next tick rather than forgetting it; the others already
-                    // deleted stay deleted.
+                    // Keep this one and every entry not yet visited for the next tick; the ones
+                    // already deleted stay deleted.
                     kept.push(retired.clone());
+                    kept.extend(pending);
                     self.retired_versions = kept;
                     return Err(error).context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -1372,6 +1397,130 @@ mod tests {
         );
     }
 
+    /// A delete failure mid-sweep must not forget the versions behind it: the failed one and
+    /// every entry not yet visited stay recorded for the next tick.
+    #[tokio::test]
+    async fn a_failed_sweep_keeps_the_unvisited_retired_versions() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("3.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|_, version| version == "1.0")
+            .times(1)
+            .returning(|_, _| {
+                Err(AlienError::new(CloudClientErrorData::GenericError {
+                    message: "throttled".to_string(),
+                }))
+            });
+        let mut controller = ready_controller();
+        controller.active_version = Some("3.0".to_string());
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        controller.max_lifetime_seconds = Some(60);
+        controller.retired_versions = vec![
+            RetiredVersion {
+                version: "1.0".to_string(),
+                retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+            },
+            RetiredVersion {
+                version: "2.0".to_string(),
+                retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+            },
+        ];
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect_err("the failed delete surfaces");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        let remaining: Vec<&str> = controller
+            .retired_versions
+            .iter()
+            .map(|r| r.version.as_str())
+            .collect();
+        assert_eq!(
+            remaining,
+            vec!["1.0", "2.0"],
+            "nothing behind the failure may be forgotten"
+        );
+    }
+
+    /// A create whose response was lost leaves an image under the derived name whose running
+    /// version cannot be tied to any bundle. Claiming the desired bundle for it would let a
+    /// release that changed in between count as deployed forever, so the probe adopts only the
+    /// identity and rolls the desired bundle onto it.
+    #[tokio::test]
+    async fn an_existing_image_is_adopted_by_identity_and_rolled_not_claimed() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == "test-agents")
+            .times(1)
+            .returning(|_| {
+                Ok(MicrovmImage {
+                    image_identifier: Some("test-agents".to_string()),
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        // No expect_create_microvm_image: a second create under the name would panic the mock.
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == IMAGE_ARN && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+        client
+            .expect_get_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .returning(|_, _| Ok(active_version()));
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("2.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+
+        let mut executor = executor(runtime_seeded_controller(), client).await;
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the adopted image rolls onto the desired bundle and becomes active");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller.active_version.as_deref(),
+            Some("2.0"),
+            "the rolled version serves"
+        );
+        assert_eq!(
+            controller.bundle_uri.as_deref(),
+            Some(BUNDLE_URI),
+            "recorded only after its build"
+        );
+    }
+
     /// The full runtime build: the create call must satisfy the already-deployed
     /// `sandbox/provision` grant — the `deployment` and `managed-by: runtime` request tags
     /// are what the policy conditions on, the build role is what it authorizes as a pass —
@@ -1475,9 +1624,6 @@ mod tests {
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
     }
 
-    /// A re-imported release lands here with fresh state while the image from the previous
-    /// release still exists under the account-unique name. The probe must adopt that image and
-    /// roll the new bundle onto it as a new version — a second create under the same name is
     // ─────────────── UPDATE FLOW ──────────────────────────────────────────
 
     /// A new release's bundle rolls onto the existing image as a further version, and the
