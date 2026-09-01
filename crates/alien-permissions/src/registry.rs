@@ -198,7 +198,7 @@ pub const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Dat
 /// `…/sandboxes/*` sits below. Matching only downwards would clear the two that matter most. Every
 /// verb under the namespace counts rather than a suffix allowlist, so a verb Azure adds later is
 /// reach until someone decides otherwise.
-pub fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
+fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
     const SANDBOX_NAMESPACE: &str = "microsoft.app/sandboxgroups/sandboxes";
     let action = action.to_ascii_lowercase();
     if action.contains('*') {

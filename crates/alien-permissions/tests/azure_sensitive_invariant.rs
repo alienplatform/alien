@@ -1,6 +1,4 @@
-use alien_permissions::{
-    data_action_reaches_a_sandbox_session, list_permission_set_ids, AZURE_SANDBOX_DATA_PLANE_ROLE,
-};
+use alien_permissions::{list_permission_set_ids, AZURE_SANDBOX_DATA_PLANE_ROLE};
 
 const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "Microsoft.Storage/storageAccounts/listKeys/action",
@@ -81,12 +79,19 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
                         !SENSITIVE_IMPLICIT_DATA_ACTIONS.contains(&data_action.as_str()),
                         "{permission_set_id} Azure entry {index} grants sensitive data action {data_action}"
                     );
-                    // By reach rather than by equality, so a wildcard cannot pass a list of exact
-                    // strings: `Microsoft.App/sandboxGroups/*` grants every one of them and
-                    // matches none of them.
+                    // A wildcard grants every action it covers while matching none of them by
+                    // string, so the list above cannot catch one on its own.
+                    //
+                    // Deliberately narrower than "reaches a session": creating and deleting
+                    // sandboxes *is* session reach for the single-tenancy gate, because whoever
+                    // starts one decides what runs in it — but it is not access to the contents
+                    // of a session someone else started, which is what this invariant is about.
+                    // `sandbox/management` legitimately carries the lifecycle verbs and must
+                    // keep passing here.
                     assert!(
-                        !data_action_reaches_a_sandbox_session(data_action),
-                        "{permission_set_id} Azure entry {index} reaches a sandbox session through {data_action}"
+                        !wildcard_covers_a_sensitive_data_action(data_action),
+                        "{permission_set_id} Azure entry {index} covers a sensitive data action \
+                         through the wildcard {data_action}"
                     );
                 }
             }
@@ -98,4 +103,18 @@ fn is_implicit_management_set(permission_set_id: &str) -> bool {
     permission_set_id.ends_with("/heartbeat")
         || permission_set_id.ends_with("/management")
         || permission_set_id.ends_with("/provision")
+}
+
+/// Whether a granted `dataAction` carrying a `*` covers any action on the sensitive list.
+///
+/// Compared as a prefix because that is what a wildcard means: `Microsoft.App/sandboxGroups/*`
+/// grants `…/sandboxes/executeShellCommand/action` while sharing no exact string with it.
+fn wildcard_covers_a_sensitive_data_action(granted: &str) -> bool {
+    let Some((literal, _)) = granted.split_once('*') else {
+        return false;
+    };
+    let literal = literal.to_ascii_lowercase();
+    SENSITIVE_IMPLICIT_DATA_ACTIONS
+        .iter()
+        .any(|sensitive| sensitive.to_ascii_lowercase().starts_with(&literal))
 }
