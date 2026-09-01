@@ -4794,6 +4794,14 @@ export type SyncListResponseSetupUpdateAuthorizationUnion =
  */
 export type SyncListResponseRuntimeMetadata = {
   /**
+   * Last generated CLI package revision whose direct setup was applied.
+   *
+   * @remarks
+   * This lets a newer generated CLI refresh setup-owned infrastructure once
+   * before handing runtime changes back to the hosted manager.
+   */
+  directSetupRevision?: string | null | undefined;
+  /**
    * Actor that owns structural work during the initial setup phase.
    */
   initialSetupAuthority?: SyncListResponseInitialSetupAuthority | undefined;
@@ -12573,6 +12581,7 @@ export const SyncListResponseRuntimeMetadata$inboundSchema: z.ZodType<
   SyncListResponseRuntimeMetadata,
   unknown
 > = z.object({
+  directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: SyncListResponseInitialSetupAuthority$inboundSchema
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),

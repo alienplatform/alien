@@ -4,25 +4,23 @@
 
 import * as z from "zod/v4";
 
-export type WhoamiRequest = {
+export type WhoamiGlobals = {
   /**
-   * Workspace to resolve the principal in. Required for user credentials because a user's role is per-workspace. Service accounts carry their workspace in the credential and may omit it.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
 };
 
+export type WhoamiRequest = {};
+
 /** @internal */
-export type WhoamiRequest$Outbound = {
-  workspace?: string | undefined;
-};
+export type WhoamiRequest$Outbound = {};
 
 /** @internal */
 export const WhoamiRequest$outboundSchema: z.ZodType<
   WhoamiRequest$Outbound,
   WhoamiRequest
-> = z.object({
-  workspace: z.string().optional(),
-});
+> = z.object({});
 
 export function whoamiRequestToJSON(whoamiRequest: WhoamiRequest): string {
   return JSON.stringify(WhoamiRequest$outboundSchema.parse(whoamiRequest));

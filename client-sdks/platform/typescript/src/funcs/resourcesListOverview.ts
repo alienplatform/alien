@@ -96,7 +96,7 @@ async function $do(
     "deploymentGroupId": payload.deploymentGroupId,
     "deploymentId": payload.deploymentId,
     "project": payload.project,
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

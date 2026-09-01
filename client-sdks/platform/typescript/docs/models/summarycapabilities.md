@@ -38,14 +38,23 @@ let value: SummaryCapabilities = {
     revoked: 697113,
     notConnected: 723984,
   },
+  remoteSandbox: {
+    enabled: false,
+    connected: 965448,
+    settingUp: 892003,
+    needsAttention: 68118,
+    revoked: 27267,
+    notConnected: 127508,
+  },
 };
 ```
 
 ## Fields
 
-| Field                                                  | Type                                                   | Required                                               | Description                                            |
-| ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ | ------------------------------------------------------ |
-| `models`                                               | [models.SummaryModels](../models/summarymodels.md)     | :heavy_check_mark:                                     | N/A                                                    |
-| `keys`                                                 | [models.SummaryKeys](../models/summarykeys.md)         | :heavy_check_mark:                                     | N/A                                                    |
-| `buckets`                                              | [models.SummaryBuckets](../models/summarybuckets.md)   | :heavy_check_mark:                                     | N/A                                                    |
-| `registry`                                             | [models.SummaryRegistry](../models/summaryregistry.md) | :heavy_check_mark:                                     | N/A                                                    |
+| Field                                                            | Type                                                             | Required                                                         | Description                                                      |
+| ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- | ---------------------------------------------------------------- |
+| `models`                                                         | [models.SummaryModels](../models/summarymodels.md)               | :heavy_check_mark:                                               | N/A                                                              |
+| `keys`                                                           | [models.SummaryKeys](../models/summarykeys.md)                   | :heavy_check_mark:                                               | N/A                                                              |
+| `buckets`                                                        | [models.SummaryBuckets](../models/summarybuckets.md)             | :heavy_check_mark:                                               | N/A                                                              |
+| `registry`                                                       | [models.SummaryRegistry](../models/summaryregistry.md)           | :heavy_check_mark:                                               | N/A                                                              |
+| `remoteSandbox`                                                  | [models.SummaryRemoteSandbox](../models/summaryremotesandbox.md) | :heavy_check_mark:                                               | N/A                                                              |

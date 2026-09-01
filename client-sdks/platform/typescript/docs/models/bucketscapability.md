@@ -11,5 +11,5 @@ let value: BucketsCapability = "buckets";
 ## Values
 
 ```typescript
-"models" | "keys" | "buckets" | "registry"
+"models" | "keys" | "buckets" | "registry" | "remoteSandbox"
 ```

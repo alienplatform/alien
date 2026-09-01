@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type ConfigureProjectAiProviderHeadersGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type ConfigureProjectAiProviderHeadersRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   aiProviderHeaders?: models.AIProviderHeaders | undefined;
 };
 
 /** @internal */
 export type ConfigureProjectAiProviderHeadersRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   AIProviderHeaders?: models.AIProviderHeaders$Outbound | undefined;
 };
 
@@ -31,7 +33,6 @@ export const ConfigureProjectAiProviderHeadersRequest$outboundSchema: z.ZodType<
   ConfigureProjectAiProviderHeadersRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   aiProviderHeaders: models.AIProviderHeaders$outboundSchema.optional(),
 }).transform((v) => {
   return remap$(v, {

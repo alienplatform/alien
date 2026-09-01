@@ -4,11 +4,14 @@
 
 import * as z from "zod/v4";
 
-export type GetOperationsPolicyRequest = {
+export type GetOperationsPolicyGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type GetOperationsPolicyRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -17,7 +20,6 @@ export type GetOperationsPolicyRequest = {
 
 /** @internal */
 export type GetOperationsPolicyRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
 };
 
@@ -26,7 +28,6 @@ export const GetOperationsPolicyRequest$outboundSchema: z.ZodType<
   GetOperationsPolicyRequest$Outbound,
   GetOperationsPolicyRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
 });
 

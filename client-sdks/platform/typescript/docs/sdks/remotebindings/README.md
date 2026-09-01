@@ -17,13 +17,13 @@ Selects a connected external resource by Project and external ID, then returns a
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.remoteBindings.createExternalAccess({
     idOrName: "my-project",
-    workspace: "my-workspace",
     remoteBindingsExternalAccessRequest: {
       externalId: "ext_example_01",
       capability: "storage",
@@ -47,13 +47,13 @@ import { remoteBindingsCreateExternalAccess } from "@alienplatform/platform-api/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await remoteBindingsCreateExternalAccess(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
     remoteBindingsExternalAccessRequest: {
       externalId: "ext_example_01",
       capability: "storage",

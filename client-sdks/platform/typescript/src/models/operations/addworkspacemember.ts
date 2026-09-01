@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type AddWorkspaceMemberGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type AddWorkspaceMemberRequestBody = {
   /**
    * Email of the user to add
@@ -19,10 +26,6 @@ export type AddWorkspaceMemberRequest = {
    * Unique identifier for the workspace.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: AddWorkspaceMemberRequestBody | undefined;
 };
 
@@ -54,7 +57,6 @@ export function addWorkspaceMemberRequestBodyToJSON(
 /** @internal */
 export type AddWorkspaceMemberRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   RequestBody?: AddWorkspaceMemberRequestBody$Outbound | undefined;
 };
 
@@ -64,7 +66,6 @@ export const AddWorkspaceMemberRequest$outboundSchema: z.ZodType<
   AddWorkspaceMemberRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => AddWorkspaceMemberRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

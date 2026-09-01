@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Connect a GitHub repository or Alien template to an existing project and configure its release workflow.
+ * Connect a GitHub repository or Alien template to an existing project.
  */
 export function projectsConfigureSource(
   client: AlienCore,
@@ -96,7 +96,7 @@ async function $do(
   const path = pathToFunc("/v1/projects/{idOrName}/source")(pathParams);
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

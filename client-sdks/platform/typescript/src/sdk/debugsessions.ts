@@ -30,24 +30,10 @@ export class DebugSessions extends ClientSDK {
    * Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
    */
   async create(
-    request?: operations.CreateDebugSessionRequest | undefined,
+    request?: models.CreateDebugSessionRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.DebugSession> {
     return unwrapAsync(debugSessionsCreate(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * Retrieve a debug session by ID.
-   */
-  async get(
-    request: operations.GetDebugSessionRequest,
-    options?: RequestOptions,
-  ): Promise<models.DebugSession> {
-    return unwrapAsync(debugSessionsGet(
       this,
       request,
       options,
@@ -62,6 +48,20 @@ export class DebugSessions extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DebugSession> {
     return unwrapAsync(debugSessionsUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Retrieve a debug session by ID.
+   */
+  async get(
+    request: operations.GetDebugSessionRequest,
+    options?: RequestOptions,
+  ): Promise<models.DebugSession> {
+    return unwrapAsync(debugSessionsGet(
       this,
       request,
       options,

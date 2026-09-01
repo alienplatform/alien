@@ -33,7 +33,7 @@ export class Releases extends ClientSDK {
    * Create a new release.
    */
   async create(
-    request?: operations.CreateReleaseRequest | undefined,
+    request?: models.CreateReleaseRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.Release> {
     return unwrapAsync(releasesCreate(

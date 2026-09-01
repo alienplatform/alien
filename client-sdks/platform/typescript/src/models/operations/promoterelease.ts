@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 
+export type PromoteReleaseGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type PromoteReleaseRequestBody = {
   /**
    * Unique identifier for the release.
@@ -18,10 +25,6 @@ export type PromoteReleaseRequestBody = {
 
 export type PromoteReleaseRequest = {
   name: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -55,7 +58,6 @@ export function promoteReleaseRequestBodyToJSON(
 /** @internal */
 export type PromoteReleaseRequest$Outbound = {
   name: string;
-  workspace?: string | undefined;
   project: string;
   RequestBody?: PromoteReleaseRequestBody$Outbound | undefined;
 };
@@ -66,7 +68,6 @@ export const PromoteReleaseRequest$outboundSchema: z.ZodType<
   PromoteReleaseRequest
 > = z.object({
   name: z.string(),
-  workspace: z.string().optional(),
   project: z.string(),
   requestBody: z.lazy(() => PromoteReleaseRequestBody$outboundSchema)
     .optional(),

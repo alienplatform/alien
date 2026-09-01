@@ -8,12 +8,14 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
-export type ListDomainsRequest = {
+export type ListDomainsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
 };
+
+export type ListDomainsRequest = {};
 
 /**
  * Retrieved domains.
@@ -23,17 +25,13 @@ export type ListDomainsResponse = {
 };
 
 /** @internal */
-export type ListDomainsRequest$Outbound = {
-  workspace?: string | undefined;
-};
+export type ListDomainsRequest$Outbound = {};
 
 /** @internal */
 export const ListDomainsRequest$outboundSchema: z.ZodType<
   ListDomainsRequest$Outbound,
   ListDomainsRequest
-> = z.object({
-  workspace: z.string().optional(),
-});
+> = z.object({});
 
 export function listDomainsRequestToJSON(
   listDomainsRequest: ListDomainsRequest,

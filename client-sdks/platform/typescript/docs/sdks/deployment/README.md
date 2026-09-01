@@ -19,13 +19,12 @@ Get deployment information for the deployment portal. Accepts both deployment-sc
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.deployment.getInfo({
-    workspace: "my-workspace",
-  });
+  const result = await alien.deployment.getInfo();
 
   console.log(result);
 }
@@ -44,13 +43,12 @@ import { deploymentGetInfo } from "@alienplatform/platform-api/funcs/deploymentG
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await deploymentGetInfo(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await deploymentGetInfo(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -94,13 +92,12 @@ Plan deployment compute for the active release before stack preparation. The res
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.deployment.planCompute({
-    workspace: "my-workspace",
-  });
+  const result = await alien.deployment.planCompute();
 
   console.log(result);
 }
@@ -119,13 +116,12 @@ import { deploymentPlanCompute } from "@alienplatform/platform-api/funcs/deploym
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await deploymentPlanCompute(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await deploymentPlanCompute(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -169,13 +165,12 @@ Prepare the active release stack for a deployment portal setup session. The resp
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.deployment.prepareStack({
-    workspace: "my-workspace",
-  });
+  const result = await alien.deployment.prepareStack();
 
   console.log(result);
 }
@@ -194,13 +189,12 @@ import { deploymentPrepareStack } from "@alienplatform/platform-api/funcs/deploy
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await deploymentPrepareStack(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await deploymentPrepareStack(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

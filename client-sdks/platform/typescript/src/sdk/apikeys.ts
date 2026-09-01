@@ -32,7 +32,7 @@ export class ApiKeys extends ClientSDK {
    * Create a new API key.
    */
   async create(
-    request?: operations.CreateAPIKeyRequest | undefined,
+    request?: models.CreateAPIKeyRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.CreateAPIKeyResponse> {
     return unwrapAsync(apiKeysCreate(
@@ -57,20 +57,6 @@ export class ApiKeys extends ClientSDK {
   }
 
   /**
-   * Revoke (soft delete) an API key.
-   */
-  async revoke(
-    request: operations.RevokeAPIKeyRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(apiKeysRevoke(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update an API key (enable/disable, change description).
    */
   async update(
@@ -85,10 +71,24 @@ export class ApiKeys extends ClientSDK {
   }
 
   /**
+   * Revoke (soft delete) an API key.
+   */
+  async revoke(
+    request: operations.RevokeAPIKeyRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(apiKeysRevoke(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Permanently delete multiple API keys.
    */
   async deleteMultiple(
-    request?: operations.DeleteAPIKeysRequest | undefined,
+    request?: models.DeleteAPIKeysRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.DeleteAPIKeysResponse> {
     return unwrapAsync(apiKeysDeleteMultiple(

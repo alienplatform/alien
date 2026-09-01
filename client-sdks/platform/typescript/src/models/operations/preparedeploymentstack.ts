@@ -7,12 +7,20 @@ import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
+export type PrepareDeploymentStackGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const PrepareDeploymentStackSetupItem = {
   Deployment: "deployment",
   Models: "models",
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type PrepareDeploymentStackSetupItem = ClosedEnum<
   typeof PrepareDeploymentStackSetupItem
@@ -1152,20 +1160,12 @@ export type PrepareDeploymentStackStackSettings = {
   updates?: PrepareDeploymentStackUpdates | undefined;
 };
 
-export type PrepareDeploymentStackRequestBody = {
+export type PrepareDeploymentStackRequest = {
   setupItem?: PrepareDeploymentStackSetupItem | undefined;
   platform: PrepareDeploymentStackPlatform;
   setupMethod: models.DeploymentSetupMethod;
   region?: string | undefined;
   stackSettings: PrepareDeploymentStackStackSettings;
-};
-
-export type PrepareDeploymentStackRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: PrepareDeploymentStackRequestBody | undefined;
 };
 
 /** @internal */
@@ -3643,7 +3643,7 @@ export function prepareDeploymentStackStackSettingsToJSON(
 }
 
 /** @internal */
-export type PrepareDeploymentStackRequestBody$Outbound = {
+export type PrepareDeploymentStackRequest$Outbound = {
   setupItem?: string | undefined;
   platform: string;
   setupMethod: string;
@@ -3652,9 +3652,9 @@ export type PrepareDeploymentStackRequestBody$Outbound = {
 };
 
 /** @internal */
-export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
-  PrepareDeploymentStackRequestBody$Outbound,
-  PrepareDeploymentStackRequestBody
+export const PrepareDeploymentStackRequest$outboundSchema: z.ZodType<
+  PrepareDeploymentStackRequest$Outbound,
+  PrepareDeploymentStackRequest
 > = z.object({
   setupItem: PrepareDeploymentStackSetupItem$outboundSchema.optional(),
   platform: PrepareDeploymentStackPlatform$outboundSchema,
@@ -3663,36 +3663,6 @@ export const PrepareDeploymentStackRequestBody$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() =>
     PrepareDeploymentStackStackSettings$outboundSchema
   ),
-});
-
-export function prepareDeploymentStackRequestBodyToJSON(
-  prepareDeploymentStackRequestBody: PrepareDeploymentStackRequestBody,
-): string {
-  return JSON.stringify(
-    PrepareDeploymentStackRequestBody$outboundSchema.parse(
-      prepareDeploymentStackRequestBody,
-    ),
-  );
-}
-
-/** @internal */
-export type PrepareDeploymentStackRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: PrepareDeploymentStackRequestBody$Outbound | undefined;
-};
-
-/** @internal */
-export const PrepareDeploymentStackRequest$outboundSchema: z.ZodType<
-  PrepareDeploymentStackRequest$Outbound,
-  PrepareDeploymentStackRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => PrepareDeploymentStackRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
 });
 
 export function prepareDeploymentStackRequestToJSON(

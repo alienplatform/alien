@@ -2,7 +2,8 @@
 //! workload's ambient credential, and stream the response back without translating
 //! the body. The only edit to the request body is rewriting the public model id to
 //! the catalog's upstream id. Successful JSON/SSE responses stream through
-//! byte-for-byte; provider error bodies are replaced with a stable safe error.
+//! byte-for-byte; provider error bodies are captured for usage diagnostics and replaced with a
+//! stable safe error for the caller.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,7 +27,7 @@ use crate::error::{ErrorData, Result};
 use crate::protocol::{translate_request, translate_response, SseTranslator, WireProtocol};
 use crate::usage::{
     observe_gateway_error, observe_response, AiGatewayRequestTiming, AiUsageClientApi,
-    AiUsageContext, AiUsageObserver, AiUsageProvider,
+    AiUsageContext, AiUsageObserver, AiUsageProvider, ProviderErrorBody,
 };
 
 mod bedrock;
@@ -52,6 +53,9 @@ pub(crate) use vertex::vertex_host;
 /// It bounds one request, not total memory: parsing then re-serializing then SigV4-hashing a
 /// body costs several multiples of it, and nothing here caps concurrency.
 const MAX_REQUEST_BODY: usize = 32 * 1024 * 1024;
+
+/// Bounds provider error bodies retained for customer diagnostics.
+const MAX_PROVIDER_ERROR_BODY: usize = 64 * 1024;
 
 /// Surfaces an oversized body as this crate's structured error. axum's own rejection is bare
 /// plain text, which would make this the one gateway failure a caller cannot parse as JSON.
@@ -428,14 +432,14 @@ fn parse_model_request(body: &[u8]) -> Result<(Value, String, String)> {
     Ok((payload, requested_model, model))
 }
 
-/// Stream a successful provider reply unchanged. Provider error bodies are not safe to
-/// expose: they can echo prompts, signed URLs, provider account details, or credentials.
-/// Preserve the useful HTTP class while returning one client-compatible error envelope.
-async fn forward_response(upstream: reqwest::Response) -> Result<Response> {
+/// Stream a successful provider reply unchanged. Capture a bounded provider error body for
+/// customer diagnostics while returning one stable client-compatible error envelope.
+async fn forward_response(mut upstream: reqwest::Response) -> Result<Response> {
     let provider_status =
         StatusCode::from_u16(upstream.status().as_u16()).unwrap_or(StatusCode::BAD_GATEWAY);
     if !provider_status.is_success() {
         let retry_after = upstream.headers().get(header::RETRY_AFTER).cloned();
+        let provider_error_body = capture_provider_error_body(&mut upstream).await;
         let (status, code, message, retryable) = match provider_status {
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => (
                 StatusCode::SERVICE_UNAVAILABLE,
@@ -477,6 +481,9 @@ async fn forward_response(upstream: reqwest::Response) -> Result<Response> {
             })),
         )
             .into_response();
+        if let Some(provider_error_body) = provider_error_body {
+            response.extensions_mut().insert(provider_error_body);
+        }
         if let Some(value) = retry_after {
             response.headers_mut().insert(header::RETRY_AFTER, value);
         }
@@ -494,6 +501,38 @@ async fn forward_response(upstream: reqwest::Response) -> Result<Response> {
         .context(ErrorData::Other {
             message: "could not build the proxied response".to_string(),
         })
+}
+
+async fn capture_provider_error_body(
+    upstream: &mut reqwest::Response,
+) -> Option<ProviderErrorBody> {
+    let mut body = Vec::new();
+    let mut truncated = false;
+    while body.len() <= MAX_PROVIDER_ERROR_BODY {
+        match upstream.chunk().await {
+            Ok(Some(chunk)) => {
+                let remaining = (MAX_PROVIDER_ERROR_BODY + 1).saturating_sub(body.len());
+                body.extend_from_slice(&chunk[..chunk.len().min(remaining)]);
+                if body.len() > MAX_PROVIDER_ERROR_BODY {
+                    truncated = true;
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => {
+                truncated = true;
+                break;
+            }
+        }
+    }
+    if body.is_empty() {
+        return None;
+    }
+    body.truncate(MAX_PROVIDER_ERROR_BODY);
+    Some(ProviderErrorBody {
+        body: String::from_utf8_lossy(&body).into_owned(),
+        truncated,
+    })
 }
 
 async fn translate_success_response(
@@ -1798,7 +1837,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn observes_sanitized_provider_failures_without_parsing_the_error_body() {
+    async fn observes_provider_error_body_without_exposing_it_to_the_caller() {
         let server = MockServer::start_async().await;
         server
             .mock_async(|when, then| {
@@ -1831,7 +1870,53 @@ mod tests {
             .expect("provider error observation");
         assert_eq!(event.outcome, AiUsageOutcome::ProviderError);
         assert_eq!(event.status, 429);
+        assert_eq!(
+            event.provider_error_body.as_deref(),
+            Some(r#"{"secret_provider_detail":"must not escape"}"#)
+        );
+        assert!(!event.provider_error_body_truncated);
         assert_eq!(event.tokens, AiTokenUsage::default());
+    }
+
+    #[tokio::test]
+    async fn truncates_provider_error_body_for_diagnostics() {
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/v1/chat/completions");
+                then.status(400)
+                    .body("x".repeat(MAX_PROVIDER_ERROR_BODY + 1));
+            })
+            .await;
+        let (sender, receiver) = mpsc::channel();
+        let observer: Arc<dyn AiUsageObserver> = Arc::new(TestUsageObserver(sender));
+        let url = serve(build_router_with_observer(
+            vec![direct_openai_route(&server.base_url())],
+            observer,
+        ))
+        .await;
+
+        let response = reqwest::Client::new()
+            .post(format!("{url}/llm/v1/chat/completions"))
+            .json(&json!({ "model": "gpt-4.1-mini", "messages": [] }))
+            .send()
+            .await
+            .expect("proxy response");
+        assert_eq!(response.status(), 400);
+        response.bytes().await.expect("safe error body");
+
+        let event = receiver
+            .recv_timeout(Duration::from_secs(1))
+            .expect("provider error observation");
+        assert_eq!(
+            event
+                .provider_error_body
+                .as_deref()
+                .expect("provider error body")
+                .len(),
+            MAX_PROVIDER_ERROR_BODY
+        );
+        assert!(event.provider_error_body_truncated);
     }
 
     #[test]

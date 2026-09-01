@@ -10,8 +10,8 @@
 * [listNames](#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [resolveTarget](#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
-* [get](#get) - Retrieve a command by ID.
 * [update](#update) - Update command state. Called by manager when command is dispatched or completes.
+* [get](#get) - Retrieve a command by ID.
 * [dispatch](#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
@@ -106,12 +106,12 @@ Retrieve commands. Use for dashboard analytics and command history.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.list({
-    workspace: "my-workspace",
     project: "my-project",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
@@ -133,12 +133,12 @@ import { commandsList } from "@alienplatform/platform-api/funcs/commandsList.js"
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsList(alien, {
-    workspace: "my-workspace",
     project: "my-project",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
@@ -184,16 +184,14 @@ Create command metadata. Called by manager when processing commands. Returns pro
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.create({
-    workspace: "my-workspace",
-    createCommandRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      name: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    name: "<value>",
   });
 
   console.log(result);
@@ -213,16 +211,14 @@ import { commandsCreate } from "@alienplatform/platform-api/funcs/commandsCreate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsCreate(alien, {
-    workspace: "my-workspace",
-    createCommandRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      name: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    name: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -239,7 +235,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateCommandRequest](../../models/operations/createcommandrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.CreateCommandRequest](../../models/createcommandrequest.md)                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -267,12 +263,12 @@ List distinct command names. Use for filter dropdowns in the dashboard.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.listNames({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -293,12 +289,12 @@ import { commandsListNames } from "@alienplatform/platform-api/funcs/commandsLis
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsListNames(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -343,12 +339,12 @@ List distinct deployments that have commands, including deployment group info. U
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.listDeployments({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -369,12 +365,12 @@ import { commandsListDeployments } from "@alienplatform/platform-api/funcs/comma
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsListDeployments(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -419,12 +415,12 @@ Resolve which resource a command for this deployment would be addressed to, and 
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.resolveTarget({
-    workspace: "my-workspace",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
@@ -445,12 +441,12 @@ import { commandsResolveTarget } from "@alienplatform/platform-api/funcs/command
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsResolveTarget(alien, {
-    workspace: "my-workspace",
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
@@ -485,83 +481,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## get
-
-Retrieve a command by ID.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="getCommand" method="get" path="/v1/commands/{id}" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.commands.get({
-    id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { commandsGet } from "@alienplatform/platform-api/funcs/commandsGet.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await commandsGet(alien, {
-    id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("commandsGet failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.GetCommandRequest](../../models/operations/getcommandrequest.md)                                                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.Command](../../models/command.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## update
 
 Update command state. Called by manager when command is dispatched or completes.
@@ -573,13 +492,13 @@ Update command state. Called by manager when command is dispatched or completes.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.update({
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -599,13 +518,13 @@ import { commandsUpdate } from "@alienplatform/platform-api/funcs/commandsUpdate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsUpdate(alien, {
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -639,6 +558,83 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## get
+
+Retrieve a command by ID.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getCommand" method="get" path="/v1/commands/{id}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.commands.get({
+    id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { commandsGet } from "@alienplatform/platform-api/funcs/commandsGet.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await commandsGet(alien, {
+    id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("commandsGet failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetCommandRequest](../../models/operations/getcommandrequest.md)                                                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.Command](../../models/command.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## dispatch
 
 Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
@@ -650,13 +646,13 @@ Atomically mark a command DISPATCHED unless it is already terminal. Returns whet
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.dispatch({
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -676,13 +672,13 @@ import { commandsDispatch } from "@alienplatform/platform-api/funcs/commandsDisp
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsDispatch(alien, {
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -727,13 +723,13 @@ Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIR
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.complete({
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -753,13 +749,13 @@ import { commandsComplete } from "@alienplatform/platform-api/funcs/commandsComp
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsComplete(alien, {
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -804,13 +800,13 @@ Atomically increment the command's attempt counter and return the new value.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.commands.incrementAttempt({
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -830,13 +826,13 @@ import { commandsIncrementAttempt } from "@alienplatform/platform-api/funcs/comm
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await commandsIncrementAttempt(alien, {
     id: "cmd_2sxjXxvOYct7IohT3ukliAzf",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

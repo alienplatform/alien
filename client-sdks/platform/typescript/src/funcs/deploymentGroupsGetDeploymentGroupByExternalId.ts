@@ -94,7 +94,7 @@ async function $do(
   const query = encodeFormQuery({
     "externalId": payload.externalId,
     "project": payload.project,
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

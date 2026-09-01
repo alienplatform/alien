@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a project by forking alienplatform/alien into your namespace, then configuring GitHub Actions.
+ * Create a project by forking alienplatform/alien into your namespace.
  */
 export function projectsCreateFromTemplate(
   client: AlienCore,
@@ -85,12 +85,14 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.RequestBody, { explode: true });
+  const body = payload === undefined
+    ? null
+    : encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/projects/import-template")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

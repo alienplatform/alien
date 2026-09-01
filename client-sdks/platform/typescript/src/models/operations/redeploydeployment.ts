@@ -8,15 +8,18 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type RedeployDeploymentGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type RedeployDeploymentRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /**
@@ -30,7 +33,6 @@ export type RedeployDeploymentResponse = {
 /** @internal */
 export type RedeployDeploymentRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -39,7 +41,6 @@ export const RedeployDeploymentRequest$outboundSchema: z.ZodType<
   RedeployDeploymentRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function redeployDeploymentRequestToJSON(

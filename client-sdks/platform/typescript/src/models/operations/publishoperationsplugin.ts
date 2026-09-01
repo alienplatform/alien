@@ -6,11 +6,14 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
-export type PublishOperationsPluginRequest = {
+export type PublishOperationsPluginGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type PublishOperationsPluginRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -22,7 +25,6 @@ export type PublishOperationsPluginRequest = {
 
 /** @internal */
 export type PublishOperationsPluginRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
   PublishOperationsPluginRequest?:
     | models.PublishOperationsPluginRequest$Outbound
@@ -34,7 +36,6 @@ export const PublishOperationsPluginRequest$outboundSchema: z.ZodType<
   PublishOperationsPluginRequest$Outbound,
   PublishOperationsPluginRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
   publishOperationsPluginRequest: models
     .PublishOperationsPluginRequest$outboundSchema.optional(),

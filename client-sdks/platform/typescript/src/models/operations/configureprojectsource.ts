@@ -10,6 +10,13 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ConfigureProjectSourceGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Template root directory inside alienplatform/alien
  */
@@ -83,10 +90,6 @@ export type ConfigureProjectSourceRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: ConfigureProjectSourceRepository | TemplateRequest | undefined;
 };
 
@@ -417,12 +420,20 @@ export type ConfigureProjectSourceRegistry = {
   credentialPolicy: ConfigureProjectSourceCredentialPolicy;
 };
 
+export type ConfigureProjectSourceRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type ConfigureProjectSourceCapabilities = {
   deployments?: ConfigureProjectSourceDeployments | undefined;
   keys?: ConfigureProjectSourceKeys | undefined;
   models?: ConfigureProjectSourceModels | undefined;
   buckets?: ConfigureProjectSourceBuckets | undefined;
   registry?: ConfigureProjectSourceRegistry | undefined;
+  remoteSandbox?: ConfigureProjectSourceRemoteSandbox | undefined;
 };
 
 /**
@@ -483,7 +494,7 @@ export type ConfigureProjectSourceTemplateResponse = {
 };
 
 /**
- * Project source connected and GitHub Actions configured.
+ * Project source connected.
  */
 export type ConfigureProjectSourceResponse = {
   /**
@@ -660,7 +671,6 @@ export function configureProjectSourceRequestBodyToJSON(
 /** @internal */
 export type ConfigureProjectSourceRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   RequestBody?:
     | ConfigureProjectSourceRepository$Outbound
     | TemplateRequest$Outbound
@@ -673,7 +683,6 @@ export const ConfigureProjectSourceRequest$outboundSchema: z.ZodType<
   ConfigureProjectSourceRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.union([
     z.lazy(() => ConfigureProjectSourceRepository$outboundSchema),
     z.lazy(() => TemplateRequest$outboundSchema),
@@ -1070,6 +1079,28 @@ export function configureProjectSourceRegistryFromJSON(
 }
 
 /** @internal */
+export const ConfigureProjectSourceRemoteSandbox$inboundSchema: z.ZodType<
+  ConfigureProjectSourceRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function configureProjectSourceRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ConfigureProjectSourceRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigureProjectSourceCapabilities$inboundSchema: z.ZodType<
   ConfigureProjectSourceCapabilities,
   unknown
@@ -1080,6 +1111,8 @@ export const ConfigureProjectSourceCapabilities$inboundSchema: z.ZodType<
   models: z.lazy(() => ConfigureProjectSourceModels$inboundSchema).optional(),
   buckets: z.lazy(() => ConfigureProjectSourceBuckets$inboundSchema).optional(),
   registry: z.lazy(() => ConfigureProjectSourceRegistry$inboundSchema)
+    .optional(),
+  remoteSandbox: z.lazy(() => ConfigureProjectSourceRemoteSandbox$inboundSchema)
     .optional(),
 });
 

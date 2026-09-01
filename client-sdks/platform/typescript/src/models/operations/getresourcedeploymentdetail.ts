@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type GetResourceDeploymentDetailGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const GetResourceDeploymentDetailArea = {
   Container: "container",
   Worker: "worker",
@@ -22,10 +29,6 @@ export type GetResourceDeploymentDetailRequest = {
   area: GetResourceDeploymentDetailArea;
   deploymentId: string;
   resourceId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -8507,7 +8510,6 @@ export type GetResourceDeploymentDetailRequest$Outbound = {
   area: string;
   deploymentId: string;
   resourceId: string;
-  workspace?: string | undefined;
   project: string;
 };
 
@@ -8519,7 +8521,6 @@ export const GetResourceDeploymentDetailRequest$outboundSchema: z.ZodType<
   area: GetResourceDeploymentDetailArea$outboundSchema,
   deploymentId: z.string(),
   resourceId: z.string(),
-  workspace: z.string().optional(),
   project: z.string(),
 });
 

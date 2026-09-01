@@ -4,25 +4,23 @@
 
 import * as z from "zod/v4";
 
-export type SlackIntegrationChannelsRequest = {
+export type SlackIntegrationChannelsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
 };
 
+export type SlackIntegrationChannelsRequest = {};
+
 /** @internal */
-export type SlackIntegrationChannelsRequest$Outbound = {
-  workspace?: string | undefined;
-};
+export type SlackIntegrationChannelsRequest$Outbound = {};
 
 /** @internal */
 export const SlackIntegrationChannelsRequest$outboundSchema: z.ZodType<
   SlackIntegrationChannelsRequest$Outbound,
   SlackIntegrationChannelsRequest
-> = z.object({
-  workspace: z.string().optional(),
-});
+> = z.object({});
 
 export function slackIntegrationChannelsRequestToJSON(
   slackIntegrationChannelsRequest: SlackIntegrationChannelsRequest,

@@ -7,7 +7,7 @@ import { CreateManagerResponseSourceBuiltIn } from "@alienplatform/platform-api/
 
 let value: CreateManagerResponseSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-registry",
+  definitionId: "customer-sandbox",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

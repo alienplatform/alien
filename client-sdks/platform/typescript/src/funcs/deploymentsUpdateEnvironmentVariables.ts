@@ -26,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+ * Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
  */
 export function deploymentsUpdateEnvironmentVariables(
   client: AlienCore,
@@ -103,7 +103,7 @@ async function $do(
   );
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

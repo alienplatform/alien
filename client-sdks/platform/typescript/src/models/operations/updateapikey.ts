@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type UpdateAPIKeyGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type UpdateAPIKeyRequest = {
   /**
    * Unique identifier for the api key.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   updateAPIKeyRequest?: models.UpdateAPIKeyRequest | undefined;
 };
 
 /** @internal */
 export type UpdateAPIKeyRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   UpdateAPIKeyRequest?: models.UpdateAPIKeyRequest$Outbound | undefined;
 };
 
@@ -31,7 +33,6 @@ export const UpdateAPIKeyRequest$outboundSchema: z.ZodType<
   UpdateAPIKeyRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   updateAPIKeyRequest: models.UpdateAPIKeyRequest$outboundSchema.optional(),
 }).transform((v) => {
   return remap$(v, {

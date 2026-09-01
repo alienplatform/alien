@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type ResolveManagerGcpOAuthProviderGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type ResolveManagerGcpOAuthProviderRequest = {
   /**
    * Unique identifier for a manager.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   resolveManagerGcpOAuthProviderRequest?:
     | models.ResolveManagerGcpOAuthProviderRequest
     | undefined;
@@ -23,7 +26,6 @@ export type ResolveManagerGcpOAuthProviderRequest = {
 /** @internal */
 export type ResolveManagerGcpOAuthProviderRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   ResolveManagerGcpOAuthProviderRequest?:
     | models.ResolveManagerGcpOAuthProviderRequest$Outbound
     | undefined;
@@ -35,7 +37,6 @@ export const ResolveManagerGcpOAuthProviderRequest$outboundSchema: z.ZodType<
   ResolveManagerGcpOAuthProviderRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   resolveManagerGcpOAuthProviderRequest: models
     .ResolveManagerGcpOAuthProviderRequest$outboundSchema.optional(),
 }).transform((v) => {

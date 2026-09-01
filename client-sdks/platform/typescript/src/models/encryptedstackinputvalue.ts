@@ -37,10 +37,6 @@ export type EncryptedStackInputValue = {
 export const EncryptedStackInputValueKind$inboundSchema: z.ZodEnum<
   typeof EncryptedStackInputValueKind
 > = z.enum(EncryptedStackInputValueKind);
-/** @internal */
-export const EncryptedStackInputValueKind$outboundSchema: z.ZodEnum<
-  typeof EncryptedStackInputValueKind
-> = EncryptedStackInputValueKind$inboundSchema;
 
 /** @internal */
 export const EncryptedStackInputValue$inboundSchema: z.ZodType<
@@ -51,30 +47,7 @@ export const EncryptedStackInputValue$inboundSchema: z.ZodType<
   kind: EncryptedStackInputValueKind$inboundSchema,
   secret: z.boolean(),
 });
-/** @internal */
-export type EncryptedStackInputValue$Outbound = {
-  value: string;
-  kind: string;
-  secret: boolean;
-};
 
-/** @internal */
-export const EncryptedStackInputValue$outboundSchema: z.ZodType<
-  EncryptedStackInputValue$Outbound,
-  EncryptedStackInputValue
-> = z.object({
-  value: z.string(),
-  kind: EncryptedStackInputValueKind$outboundSchema,
-  secret: z.boolean(),
-});
-
-export function encryptedStackInputValueToJSON(
-  encryptedStackInputValue: EncryptedStackInputValue,
-): string {
-  return JSON.stringify(
-    EncryptedStackInputValue$outboundSchema.parse(encryptedStackInputValue),
-  );
-}
 export function encryptedStackInputValueFromJSON(
   jsonString: string,
 ): SafeParseResult<EncryptedStackInputValue, SDKValidationError> {

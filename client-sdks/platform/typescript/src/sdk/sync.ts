@@ -18,7 +18,7 @@ export class Sync extends ClientSDK {
    * List full deployment records for manager operational loops. This endpoint is intentionally separate from the public deployments list, which returns lightweight UI rows.
    */
   async list(
-    request?: operations.SyncListRequest | undefined,
+    request?: models.SyncListRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.SyncListResponse> {
     return unwrapAsync(syncList(
@@ -32,7 +32,7 @@ export class Sync extends ClientSDK {
    * Get computed deployment state and configuration for a manager-side operation without acquiring the deployment reconciliation lock.
    */
   async context(
-    request?: operations.SyncContextRequest | undefined,
+    request?: models.SyncContextRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.SyncAcquireResponseDeployment> {
     return unwrapAsync(syncContext(
@@ -46,7 +46,7 @@ export class Sync extends ClientSDK {
    * Acquire a batch of deployments for processing. Used by Manager to atomically lock deployments matching filters. Each deployment in the batch must be released after processing.
    */
   async acquire(
-    request?: operations.SyncAcquireRequest | undefined,
+    request?: models.SyncAcquireRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.SyncAcquireResponse> {
     return unwrapAsync(syncAcquire(
@@ -60,7 +60,7 @@ export class Sync extends ClientSDK {
    * Reconcile deployment state. Push model requests that include a session verify lock ownership. Pull model state reports are accepted as authz-gated agent progress even when they carry an agent-sync session. Accepts full DeploymentState after step() execution.
    */
   async reconcile(
-    request: operations.SyncReconcileRequest,
+    request: models.SyncReconcileRequest,
     options?: RequestOptions,
   ): Promise<models.SyncReconcileResponse> {
     return unwrapAsync(syncReconcile(
@@ -71,7 +71,7 @@ export class Sync extends ClientSDK {
   }
 
   async renew(
-    request: operations.SyncRenewRequest,
+    request: models.SyncRenewRequest,
     options?: RequestOptions,
   ): Promise<operations.SyncRenewResponse> {
     return unwrapAsync(syncRenew(
@@ -85,7 +85,7 @@ export class Sync extends ClientSDK {
    * Release a deployment lock. Must be called after processing an acquired deployment, even if processing failed. This is critical to avoid deadlocks.
    */
   async release(
-    request: operations.SyncReleaseRequest,
+    request: models.SyncReleaseRequest,
     options?: RequestOptions,
   ): Promise<operations.SyncReleaseResponse> {
     return unwrapAsync(syncRelease(

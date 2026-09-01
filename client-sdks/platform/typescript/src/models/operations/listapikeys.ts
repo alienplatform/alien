@@ -8,11 +8,14 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
-export type ListAPIKeysRequest = {
+export type ListAPIKeysGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListAPIKeysRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -43,7 +46,6 @@ export type ListAPIKeysResponse = {
 
 /** @internal */
 export type ListAPIKeysRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   limit: number;
   cursor?: string | undefined;
@@ -54,7 +56,6 @@ export const ListAPIKeysRequest$outboundSchema: z.ZodType<
   ListAPIKeysRequest$Outbound,
   ListAPIKeysRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   limit: z.int().default(20),
   cursor: z.string().optional(),

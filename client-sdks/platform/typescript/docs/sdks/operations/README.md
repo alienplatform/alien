@@ -12,9 +12,12 @@
 * [getPolicy](#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
-* [createAccessRequest](#createaccessrequest) - Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+* [verifyCheck](#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+* [createAccessRequest](#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+* [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
 * [getAccessRequestCoordinates](#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
+* [getAccessRequest](#getaccessrequest) - Get an access request by id.
 
 ## listPlugins
 
@@ -27,12 +30,12 @@ List available operations plugins (builtin + custom) for a project, with their o
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.listPlugins({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -53,12 +56,12 @@ import { operationsListPlugins } from "@alienplatform/platform-api/funcs/operati
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsListPlugins(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -103,12 +106,12 @@ Register a custom operations plugin whose bundle ZIP has already been uploaded t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.publishPlugin({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -129,12 +132,12 @@ import { operationsPublishPlugin } from "@alienplatform/platform-api/funcs/opera
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsPublishPlugin(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -180,12 +183,12 @@ Replace the complete set of enabled built-in operations plugins for a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.setBuiltinPlugins({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -206,12 +209,12 @@ import { operationsSetBuiltinPlugins } from "@alienplatform/platform-api/funcs/o
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsSetBuiltinPlugins(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -257,12 +260,12 @@ Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.createBundleUploadUrl({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -283,12 +286,12 @@ import { operationsCreateBundleUploadUrl } from "@alienplatform/platform-api/fun
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsCreateBundleUploadUrl(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -334,13 +337,13 @@ Enable or disable an operations plugin (builtin or custom) for a project. Only e
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.setPluginEnabled({
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -361,13 +364,13 @@ import { operationsSetPluginEnabled } from "@alienplatform/platform-api/funcs/op
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsSetPluginEnabled(alien, {
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -413,12 +416,12 @@ Get a project's per-command approval policy. Mirrors what the operator enforces:
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.getPolicy({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -439,12 +442,12 @@ import { operationsGetPolicy } from "@alienplatform/platform-api/funcs/operation
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsGetPolicy(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -489,12 +492,12 @@ Replace a project's per-command approval policy (full rule set). Patterns are `p
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.updatePolicy({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -515,12 +518,12 @@ import { operationsUpdatePolicy } from "@alienplatform/platform-api/funcs/operat
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsUpdatePolicy(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -566,12 +569,12 @@ Invoke a plugin operation against a deployment. Honors the project's per-command
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.invoke({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -592,12 +595,12 @@ import { operationsInvoke } from "@alienplatform/platform-api/funcs/operationsIn
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsInvoke(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -632,9 +635,86 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## verifyCheck
+
+One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="verifyOperationCheck" method="post" path="/v1/operations/verify-check" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.verifyCheck({
+    project: "my-project",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsVerifyCheck } from "@alienplatform/platform-api/funcs/operationsVerifyCheck.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsVerifyCheck(alien, {
+    project: "my-project",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsVerifyCheck failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.VerifyOperationCheckRequest](../../models/operations/verifyoperationcheckrequest.md)                                                                               | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.VerifyOperationCheckResponse](../../models/verifyoperationcheckresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## createAccessRequest
 
-Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 
 ### Example Usage
 
@@ -643,18 +723,16 @@ Create a pending access request covering a remediation plan's commands. Awaits t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.createAccessRequest({
-    workspace: "my-workspace",
-    requestBody: {
-      deploymentId: "<id>",
-      remediationPlanId: "<id>",
-      title: "<value>",
-      commands: [],
-    },
+    deploymentId: "<id>",
+    commands: [],
+    operation: "kubernetes/restart-pod",
+    operationPattern: "kubernetes/*",
   });
 
   console.log(result);
@@ -674,18 +752,16 @@ import { operationsCreateAccessRequest } from "@alienplatform/platform-api/funcs
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsCreateAccessRequest(alien, {
-    workspace: "my-workspace",
-    requestBody: {
-      deploymentId: "<id>",
-      remediationPlanId: "<id>",
-      title: "<value>",
-      commands: [],
-    },
+    deploymentId: "<id>",
+    commands: [],
+    operation: "kubernetes/restart-pod",
+    operationPattern: "kubernetes/*",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -702,7 +778,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateAccessRequestRequest](../../models/operations/createaccessrequestrequest.md)                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.CreateAccessRequest](../../models/createaccessrequest.md)                                                                                                              | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -710,6 +786,85 @@ run();
 ### Response
 
 **Promise\<[operations.CreateAccessRequestResponse](../../models/operations/createaccessrequestresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## listAccessRequests
+
+List a project's access requests, newest first.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="listAccessRequests" method="get" path="/v1/access-requests" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.listAccessRequests({
+    project: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsListAccessRequests } from "@alienplatform/platform-api/funcs/operationsListAccessRequests.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsListAccessRequests(alien, {
+    project: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsListAccessRequests failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ListAccessRequestsRequest](../../models/operations/listaccessrequestsrequest.md)                                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.ListAccessRequestsResponse](../../models/operations/listaccessrequestsresponse.md)\>**
 
 ### Errors
 
@@ -730,13 +885,13 @@ Engineer gate — approve a pending access request, queuing it for the operator 
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.queueAccessRequest({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -756,13 +911,13 @@ import { operationsQueueAccessRequest } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsQueueAccessRequest(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -806,13 +961,13 @@ The customer's kubectl approve command for a queued access request, or null unti
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.getAccessRequestCoordinates({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -832,13 +987,13 @@ import { operationsGetAccessRequestCoordinates } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsGetAccessRequestCoordinates(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -863,6 +1018,82 @@ run();
 ### Response
 
 **Promise\<[operations.GetAccessRequestCoordinatesResponse](../../models/operations/getaccessrequestcoordinatesresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## getAccessRequest
+
+Get an access request by id.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="getAccessRequest" method="get" path="/v1/access-requests/{id}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.getAccessRequest({
+    id: "<id>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsGetAccessRequest } from "@alienplatform/platform-api/funcs/operationsGetAccessRequest.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsGetAccessRequest(alien, {
+    id: "<id>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsGetAccessRequest failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.GetAccessRequestRequest](../../models/operations/getaccessrequestrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.GetAccessRequestResponse](../../models/operations/getaccessrequestresponse.md)\>**
 
 ### Errors
 

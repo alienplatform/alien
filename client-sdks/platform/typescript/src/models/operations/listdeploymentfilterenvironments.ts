@@ -8,11 +8,14 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
-export type ListDeploymentFilterEnvironmentsRequest = {
+export type ListDeploymentFilterEnvironmentsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListDeploymentFilterEnvironmentsRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -47,7 +50,6 @@ export type ListDeploymentFilterEnvironmentsResponse = {
 
 /** @internal */
 export type ListDeploymentFilterEnvironmentsRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
 };
 
@@ -56,7 +58,6 @@ export const ListDeploymentFilterEnvironmentsRequest$outboundSchema: z.ZodType<
   ListDeploymentFilterEnvironmentsRequest$Outbound,
   ListDeploymentFilterEnvironmentsRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
 });
 

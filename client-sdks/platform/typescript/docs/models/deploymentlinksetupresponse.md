@@ -13,7 +13,7 @@ let value: DeploymentLinkSetupResponse = {
   },
   supportedPlatforms: [],
   setupItems: [
-    "registry",
+    "sandbox",
   ],
   visiblePackageTypes: [],
   visibleSetupMethods: [],

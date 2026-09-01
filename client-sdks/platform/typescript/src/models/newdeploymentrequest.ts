@@ -1387,6 +1387,7 @@ export const NewDeploymentRequestSetupItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 /**
  * Customer setup item selected from this deployment-group token.

@@ -11,5 +11,5 @@ let value: ModelsCapability = "keys";
 ## Values
 
 ```typescript
-"models" | "keys" | "buckets" | "registry"
+"models" | "keys" | "buckets" | "registry" | "remoteSandbox"
 ```

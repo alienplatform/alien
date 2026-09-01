@@ -11,5 +11,5 @@ let value: RemoteBindingsExternalAccessRequestCapability = "storage";
 ## Values
 
 ```typescript
-"storage"
+"storage" | "sandbox"
 ```

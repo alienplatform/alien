@@ -103,7 +103,7 @@ async function $do(
   )(pathParams);
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

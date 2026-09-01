@@ -18,13 +18,12 @@ List billing activity entries for the current workspace.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.billing.listAuditLog({
-    workspace: "my-workspace",
-  });
+  const result = await alien.billing.listAuditLog({});
 
   console.log(result);
 }
@@ -43,13 +42,12 @@ import { billingListAuditLog } from "@alienplatform/platform-api/funcs/billingLi
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await billingListAuditLog(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await billingListAuditLog(alien, {});
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -91,13 +89,12 @@ Get the workspace billing entitlements used for product feature gates. Autumn is
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.billing.getEntitlements({
-    workspace: "my-workspace",
-  });
+  const result = await alien.billing.getEntitlements();
 
   console.log(result);
 }
@@ -116,13 +113,12 @@ import { billingGetEntitlements } from "@alienplatform/platform-api/funcs/billin
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await billingGetEntitlements(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await billingGetEntitlements(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

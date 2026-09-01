@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type GenerateManagerBindingTokenGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type GenerateManagerBindingTokenRequest = {
   /**
    * Unique identifier for a manager.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   generateManagerBindingTokenRequest: models.GenerateManagerBindingTokenRequest;
 };
 
 /** @internal */
 export type GenerateManagerBindingTokenRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   GenerateManagerBindingTokenRequest:
     models.GenerateManagerBindingTokenRequest$Outbound;
 };
@@ -32,7 +34,6 @@ export const GenerateManagerBindingTokenRequest$outboundSchema: z.ZodType<
   GenerateManagerBindingTokenRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   generateManagerBindingTokenRequest:
     models.GenerateManagerBindingTokenRequest$outboundSchema,
 }).transform((v) => {

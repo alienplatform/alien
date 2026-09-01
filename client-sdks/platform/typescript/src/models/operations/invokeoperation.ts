@@ -6,11 +6,14 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
-export type InvokeOperationRequest = {
+export type InvokeOperationGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type InvokeOperationRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -20,7 +23,6 @@ export type InvokeOperationRequest = {
 
 /** @internal */
 export type InvokeOperationRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
   InvokeOperationRequest?: models.InvokeOperationRequest$Outbound | undefined;
 };
@@ -30,7 +32,6 @@ export const InvokeOperationRequest$outboundSchema: z.ZodType<
   InvokeOperationRequest$Outbound,
   InvokeOperationRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
   invokeOperationRequest: models.InvokeOperationRequest$outboundSchema
     .optional(),

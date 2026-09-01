@@ -22,6 +22,21 @@ export type OperationsPolicyRuleDecision = ClosedEnum<
   typeof OperationsPolicyRuleDecision
 >;
 
+/**
+ * For a wildcard pattern (`plugin/*` or `*`) only: the highest risk tier a WILDCARD ACCESS REQUEST against this pattern may cover. Null/absent means no wildcard grant above read-only is allowed for this pattern — write and destructive wildcards require an explicit rule setting this field. Ignored for exact `plugin/operation` rules (a named operation's risk is already its own declared tier) and for the auto/manual invoke decision itself.
+ */
+export const OperationsPolicyRuleMaxRisk = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+/**
+ * For a wildcard pattern (`plugin/*` or `*`) only: the highest risk tier a WILDCARD ACCESS REQUEST against this pattern may cover. Null/absent means no wildcard grant above read-only is allowed for this pattern — write and destructive wildcards require an explicit rule setting this field. Ignored for exact `plugin/operation` rules (a named operation's risk is already its own declared tier) and for the auto/manual invoke decision itself.
+ */
+export type OperationsPolicyRuleMaxRisk = ClosedEnum<
+  typeof OperationsPolicyRuleMaxRisk
+>;
+
 export type OperationsPolicyRule = {
   /**
    * `plugin/operation`, `plugin/*`, or `*`.
@@ -31,6 +46,10 @@ export type OperationsPolicyRule = {
    * auto: run immediately. manual: needs customer approval before running.
    */
   decision: OperationsPolicyRuleDecision;
+  /**
+   * For a wildcard pattern (`plugin/*` or `*`) only: the highest risk tier a WILDCARD ACCESS REQUEST against this pattern may cover. Null/absent means no wildcard grant above read-only is allowed for this pattern — write and destructive wildcards require an explicit rule setting this field. Ignored for exact `plugin/operation` rules (a named operation's risk is already its own declared tier) and for the auto/manual invoke decision itself.
+   */
+  maxRisk?: OperationsPolicyRuleMaxRisk | null | undefined;
 };
 
 /** @internal */
@@ -43,17 +62,28 @@ export const OperationsPolicyRuleDecision$outboundSchema: z.ZodEnum<
 > = OperationsPolicyRuleDecision$inboundSchema;
 
 /** @internal */
+export const OperationsPolicyRuleMaxRisk$inboundSchema: z.ZodEnum<
+  typeof OperationsPolicyRuleMaxRisk
+> = z.enum(OperationsPolicyRuleMaxRisk);
+/** @internal */
+export const OperationsPolicyRuleMaxRisk$outboundSchema: z.ZodEnum<
+  typeof OperationsPolicyRuleMaxRisk
+> = OperationsPolicyRuleMaxRisk$inboundSchema;
+
+/** @internal */
 export const OperationsPolicyRule$inboundSchema: z.ZodType<
   OperationsPolicyRule,
   unknown
 > = z.object({
   pattern: z.string(),
   decision: OperationsPolicyRuleDecision$inboundSchema,
+  maxRisk: z.nullable(OperationsPolicyRuleMaxRisk$inboundSchema).optional(),
 });
 /** @internal */
 export type OperationsPolicyRule$Outbound = {
   pattern: string;
   decision: string;
+  maxRisk?: string | null | undefined;
 };
 
 /** @internal */
@@ -63,6 +93,7 @@ export const OperationsPolicyRule$outboundSchema: z.ZodType<
 > = z.object({
   pattern: z.string(),
   decision: OperationsPolicyRuleDecision$outboundSchema,
+  maxRisk: z.nullable(OperationsPolicyRuleMaxRisk$outboundSchema).optional(),
 });
 
 export function operationsPolicyRuleToJSON(

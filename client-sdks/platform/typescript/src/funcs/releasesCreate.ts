@@ -22,7 +22,6 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
@@ -31,7 +30,7 @@ import { Result } from "../types/fp.js";
  */
 export function releasesCreate(
   client: AlienCore,
-  request?: operations.CreateReleaseRequest | undefined,
+  request?: models.CreateReleaseRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,7 +55,7 @@ export function releasesCreate(
 
 async function $do(
   client: AlienCore,
-  request?: operations.CreateReleaseRequest | undefined,
+  request?: models.CreateReleaseRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -78,21 +77,21 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.CreateReleaseRequest$outboundSchema.optional().parse(value),
+      models.CreateReleaseRequest$outboundSchema.optional().parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.CreateReleaseRequest, {
-    explode: true,
-  });
+  const body = payload === undefined
+    ? null
+    : encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/releases")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({
@@ -137,7 +136,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["400", "404", "409", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -163,7 +162,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(201, models.Release$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([400, 404, 409], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

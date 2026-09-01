@@ -4783,6 +4783,14 @@ export type DeploymentStateSetupUpdateAuthorizationUnion =
  */
 export type DeploymentStateRuntimeMetadata = {
   /**
+   * Last generated CLI package revision whose direct setup was applied.
+   *
+   * @remarks
+   * This lets a newer generated CLI refresh setup-owned infrastructure once
+   * before handing runtime changes back to the hosted manager.
+   */
+  directSetupRevision?: string | null | undefined;
+  /**
    * Actor that owns structural work during the initial setup phase.
    */
   initialSetupAuthority?: DeploymentStateInitialSetupAuthority | undefined;
@@ -21498,6 +21506,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
   DeploymentStateRuntimeMetadata,
   unknown
 > = z.object({
+  directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: DeploymentStateInitialSetupAuthority$inboundSchema
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),
@@ -21525,6 +21534,7 @@ export const DeploymentStateRuntimeMetadata$inboundSchema: z.ZodType<
 });
 /** @internal */
 export type DeploymentStateRuntimeMetadata$Outbound = {
+  directSetupRevision?: string | null | undefined;
   initialSetupAuthority?: string | undefined;
   lastSyncedEnvVarsHash?: string | null | undefined;
   lastSyncedSecretNames?: Array<string> | undefined;
@@ -21552,6 +21562,7 @@ export const DeploymentStateRuntimeMetadata$outboundSchema: z.ZodType<
   DeploymentStateRuntimeMetadata$Outbound,
   DeploymentStateRuntimeMetadata
 > = z.object({
+  directSetupRevision: z.nullable(z.string()).optional(),
   initialSetupAuthority: DeploymentStateInitialSetupAuthority$outboundSchema
     .optional(),
   lastSyncedEnvVarsHash: z.nullable(z.string()).optional(),

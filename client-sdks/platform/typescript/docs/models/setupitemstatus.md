@@ -6,7 +6,7 @@
 import { SetupItemStatus } from "@alienplatform/platform-api/models";
 
 let value: SetupItemStatus = {
-  item: "registry",
+  item: "sandbox",
   source: {
     type: "project-release",
     releaseChannel: "<value>",

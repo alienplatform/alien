@@ -31,6 +31,7 @@ export const ForwardImportRequestSetupItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 /**
  * Exact item selected from a tailored customer setup link.

@@ -22,7 +22,8 @@
 * [retry](#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
 * [getInputs](#getinputs) - Get the active input definitions and current non-secret values for a deployment.
 * [updateInputs](#updateinputs) - Update runtime stack inputs, rebuild their environment-variable mappings, and request a deployment update when runtime configuration changes.
-* [updateEnvironmentVariables](#updateenvironmentvariables) - Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+* [updateCompute](#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+* [updateEnvironmentVariables](#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
 
 ## list
@@ -36,13 +37,13 @@ Retrieve all deployments.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.list({
     project: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -62,13 +63,13 @@ import { deploymentsList } from "@alienplatform/platform-api/funcs/deploymentsLi
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsList(alien, {
     project: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -113,19 +114,17 @@ Create a new deployment. Deployment group tokens automatically use their group. 
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.create({
-    workspace: "my-workspace",
-    newDeploymentRequest: {
-      name: "acme-prod",
-      platform: "aws",
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-      project: "<value>",
-    },
+    name: "acme-prod",
+    platform: "aws",
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    project: "<value>",
   });
 
   console.log(result);
@@ -145,19 +144,17 @@ import { deploymentsCreate } from "@alienplatform/platform-api/funcs/deployments
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsCreate(alien, {
-    workspace: "my-workspace",
-    newDeploymentRequest: {
-      name: "acme-prod",
-      platform: "aws",
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-      project: "<value>",
-    },
+    name: "acme-prod",
+    platform: "aws",
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    project: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -174,7 +171,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateDeploymentRequest](../../models/operations/createdeploymentrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.NewDeploymentRequest](../../models/newdeploymentrequest.md)                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -202,12 +199,12 @@ Get aggregated deployment statistics. Returns total count and breakdown by statu
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.getStats({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -228,12 +225,12 @@ import { deploymentsGetStats } from "@alienplatform/platform-api/funcs/deploymen
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsGetStats(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -278,12 +275,12 @@ List distinct effective environments used by deployments. Used for filter dropdo
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.listFilterEnvironments({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -304,12 +301,12 @@ import { deploymentsListFilterEnvironments } from "@alienplatform/platform-api/f
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsListFilterEnvironments(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -354,12 +351,12 @@ List deployment groups with deployment counts. Used for filter dropdowns.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.listFilterDeploymentGroups({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -380,12 +377,12 @@ import { deploymentsListFilterDeploymentGroups } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsListFilterDeploymentGroups(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -430,13 +427,13 @@ Retrieve a deployment by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.get({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -456,13 +453,13 @@ import { deploymentsGet } from "@alienplatform/platform-api/funcs/deploymentsGet
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsGet(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -507,13 +504,13 @@ Get deployment connection information including command endpoint and resource UR
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.getInfo({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -533,13 +530,13 @@ import { deploymentsGetInfo } from "@alienplatform/platform-api/funcs/deployment
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsGetInfo(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -584,42 +581,40 @@ Import a deployment from resolved setup infrastructure such as CloudFormation, T
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.import({
-    workspace: "my-workspace",
-    importDeploymentRequest: {
-      mode: "forward",
-      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      source: {
-        deploymentName: "<value>",
-        resourcePrefix: "<value>",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "gcp",
-        region: "<value>",
-        setupTarget: "<value>",
-        setupImportFormatVersion: 1,
-        setupFingerprint: "<value>",
-        setupFingerprintVersion: 994015,
-        stackSettings: {},
-        managementConfig: {
-          platform: "kubernetes",
-        },
-        resources: [
-          {
-            id: "<id>",
-            type: "<value>",
-            importData: {
-              "key": "<value>",
-              "key1": "<value>",
-              "key2": "<value>",
-            },
-          },
-        ],
+    mode: "forward",
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    source: {
+      deploymentName: "<value>",
+      resourcePrefix: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      platform: "gcp",
+      region: "<value>",
+      setupTarget: "<value>",
+      setupImportFormatVersion: 1,
+      setupFingerprint: "<value>",
+      setupFingerprintVersion: 994015,
+      stackSettings: {},
+      managementConfig: {
+        platform: "kubernetes",
       },
+      resources: [
+        {
+          id: "<id>",
+          type: "<value>",
+          importData: {
+            "key": "<value>",
+            "key1": "<value>",
+            "key2": "<value>",
+          },
+        },
+      ],
     },
   });
 
@@ -640,42 +635,40 @@ import { deploymentsImport } from "@alienplatform/platform-api/funcs/deployments
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsImport(alien, {
-    workspace: "my-workspace",
-    importDeploymentRequest: {
-      mode: "forward",
-      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      source: {
-        deploymentName: "<value>",
-        resourcePrefix: "<value>",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "gcp",
-        region: "<value>",
-        setupTarget: "<value>",
-        setupImportFormatVersion: 1,
-        setupFingerprint: "<value>",
-        setupFingerprintVersion: 994015,
-        stackSettings: {},
-        managementConfig: {
-          platform: "kubernetes",
-        },
-        resources: [
-          {
-            id: "<id>",
-            type: "<value>",
-            importData: {
-              "key": "<value>",
-              "key1": "<value>",
-              "key2": "<value>",
-            },
-          },
-        ],
+    mode: "forward",
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    source: {
+      deploymentName: "<value>",
+      resourcePrefix: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      platform: "gcp",
+      region: "<value>",
+      setupTarget: "<value>",
+      setupImportFormatVersion: 1,
+      setupFingerprint: "<value>",
+      setupFingerprintVersion: 994015,
+      stackSettings: {},
+      managementConfig: {
+        platform: "kubernetes",
       },
+      resources: [
+        {
+          id: "<id>",
+          type: "<value>",
+          importData: {
+            "key": "<value>",
+            "key1": "<value>",
+            "key2": "<value>",
+          },
+        },
+      ],
     },
   });
   if (res.ok) {
@@ -693,7 +686,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ImportDeploymentRequest](../../models/operations/importdeploymentrequest.md)                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.ImportDeploymentRequest](../../models/importdeploymentrequest.md)                                                                                                      | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -792,38 +785,36 @@ Start a durable setup registration operation for CloudFormation, Terraform, or H
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.createSetupRegistrationOperation({
-    workspace: "my-workspace",
-    createSetupRegistrationOperationRequest: {
-      action: "update",
-      sourceKind: "terraform",
-      source: {
-        deploymentName: "<value>",
-        resourcePrefix: "<value>",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "test",
-        region: "<value>",
-        setupTarget: "<value>",
-        setupImportFormatVersion: 425975,
-        setupFingerprint: "<value>",
-        setupFingerprintVersion: 547456,
-        stackSettings: {},
-        resources: [
-          {
-            id: "<id>",
-            type: "<value>",
-            importData: {
+    action: "update",
+    sourceKind: "terraform",
+    source: {
+      deploymentName: "<value>",
+      resourcePrefix: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      platform: "test",
+      region: "<value>",
+      setupTarget: "<value>",
+      setupImportFormatVersion: 425975,
+      setupFingerprint: "<value>",
+      setupFingerprintVersion: 547456,
+      stackSettings: {},
+      resources: [
+        {
+          id: "<id>",
+          type: "<value>",
+          importData: {
 
-            },
           },
-        ],
-      },
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+        },
+      ],
     },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
   console.log(result);
@@ -843,38 +834,36 @@ import { deploymentsCreateSetupRegistrationOperation } from "@alienplatform/plat
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsCreateSetupRegistrationOperation(alien, {
-    workspace: "my-workspace",
-    createSetupRegistrationOperationRequest: {
-      action: "update",
-      sourceKind: "terraform",
-      source: {
-        deploymentName: "<value>",
-        resourcePrefix: "<value>",
-        releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-        platform: "test",
-        region: "<value>",
-        setupTarget: "<value>",
-        setupImportFormatVersion: 425975,
-        setupFingerprint: "<value>",
-        setupFingerprintVersion: 547456,
-        stackSettings: {},
-        resources: [
-          {
-            id: "<id>",
-            type: "<value>",
-            importData: {
+    action: "update",
+    sourceKind: "terraform",
+    source: {
+      deploymentName: "<value>",
+      resourcePrefix: "<value>",
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      platform: "test",
+      region: "<value>",
+      setupTarget: "<value>",
+      setupImportFormatVersion: 425975,
+      setupFingerprint: "<value>",
+      setupFingerprintVersion: 547456,
+      stackSettings: {},
+      resources: [
+        {
+          id: "<id>",
+          type: "<value>",
+          importData: {
   
-            },
           },
-        ],
-      },
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+        },
+      ],
     },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -891,7 +880,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateSetupRegistrationOperationRequest](../../models/operations/createsetupregistrationoperationrequest.md)                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.CreateSetupRegistrationOperationRequest](../../models/createsetupregistrationoperationrequest.md)                                                                      | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -919,13 +908,13 @@ Get setup registration operation status.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.getSetupRegistrationOperation({
     id: "setupop_y41lqnfosxuwqkzmiax7",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -945,13 +934,13 @@ import { deploymentsGetSetupRegistrationOperation } from "@alienplatform/platfor
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsGetSetupRegistrationOperation(alien, {
     id: "setupop_y41lqnfosxuwqkzmiax7",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -996,13 +985,13 @@ Delete, detach, or forget a deployment by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.delete({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1022,13 +1011,13 @@ import { deploymentsDelete } from "@alienplatform/platform-api/funcs/deployments
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsDelete(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1073,13 +1062,13 @@ Redeploy a running deployment with the same release and fresh environment variab
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.redeploy({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1099,13 +1088,13 @@ import { deploymentsRedeploy } from "@alienplatform/platform-api/funcs/deploymen
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsRedeploy(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1150,13 +1139,13 @@ Pin or unpin a running or runtime-failed deployment. Running deployments start a
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.pinRelease({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
     pinReleaseRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     },
@@ -1179,13 +1168,13 @@ import { deploymentsPinRelease } from "@alienplatform/platform-api/funcs/deploym
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsPinRelease(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
     pinReleaseRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     },
@@ -1231,13 +1220,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.setReleaseChannel({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1257,13 +1246,13 @@ import { deploymentsSetReleaseChannel } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsSetReleaseChannel(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1307,13 +1296,13 @@ Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resu
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.retry({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1333,13 +1322,13 @@ import { deploymentsRetry } from "@alienplatform/platform-api/funcs/deploymentsR
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsRetry(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1384,13 +1373,13 @@ Get the active input definitions and current non-secret values for a deployment.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.getInputs({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1410,13 +1399,13 @@ import { deploymentsGetInputs } from "@alienplatform/platform-api/funcs/deployme
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsGetInputs(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1461,13 +1450,13 @@ Update runtime stack inputs, rebuild their environment-variable mappings, and re
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.updateInputs({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1487,13 +1476,13 @@ import { deploymentsUpdateInputs } from "@alienplatform/platform-api/funcs/deplo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsUpdateInputs(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1527,9 +1516,86 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## updateCompute
+
+Update deployment-time compute pool selections and request reconciliation by the hosted manager.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="updateDeploymentCompute" method="patch" path="/v1/deployments/{id}/compute" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.updateCompute({
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsUpdateCompute } from "@alienplatform/platform-api/funcs/deploymentsUpdateCompute.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsUpdateCompute(alien, {
+    id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsUpdateCompute failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.UpdateDeploymentComputeRequest](../../models/operations/updatedeploymentcomputerequest.md)                                                                         | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.UpdateDeploymentComputeResponse](../../models/operations/updatedeploymentcomputeresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## updateEnvironmentVariables
 
-Update a deployment's environment variables. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
+Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 
 ### Example Usage
 
@@ -1538,13 +1604,13 @@ Update a deployment's environment variables. If the deployment is running and no
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.updateEnvironmentVariables({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1564,13 +1630,13 @@ import { deploymentsUpdateEnvironmentVariables } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsUpdateEnvironmentVariables(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1615,13 +1681,13 @@ Create a deployment token (deployment-scoped API key). The deployment must exist
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deployments.createToken({
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1641,13 +1707,13 @@ import { deploymentsCreateToken } from "@alienplatform/platform-api/funcs/deploy
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentsCreateToken(alien, {
     id: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

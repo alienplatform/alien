@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 
+export type CreateReleaseChannelGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CreateReleaseChannelRequestBody = {
   name: string;
   /**
@@ -14,10 +21,6 @@ export type CreateReleaseChannelRequestBody = {
 };
 
 export type CreateReleaseChannelRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -52,7 +55,6 @@ export function createReleaseChannelRequestBodyToJSON(
 
 /** @internal */
 export type CreateReleaseChannelRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
   RequestBody?: CreateReleaseChannelRequestBody$Outbound | undefined;
 };
@@ -62,7 +64,6 @@ export const CreateReleaseChannelRequest$outboundSchema: z.ZodType<
   CreateReleaseChannelRequest$Outbound,
   CreateReleaseChannelRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
   requestBody: z.lazy(() => CreateReleaseChannelRequestBody$outboundSchema)
     .optional(),

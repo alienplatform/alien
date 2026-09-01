@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type CreateRemoteBindingsExternalAccessGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CreateRemoteBindingsExternalAccessRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   remoteBindingsExternalAccessRequest:
     models.RemoteBindingsExternalAccessRequest;
 };
@@ -22,7 +25,6 @@ export type CreateRemoteBindingsExternalAccessRequest = {
 /** @internal */
 export type CreateRemoteBindingsExternalAccessRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   RemoteBindingsExternalAccessRequest:
     models.RemoteBindingsExternalAccessRequest$Outbound;
 };
@@ -34,7 +36,6 @@ export const CreateRemoteBindingsExternalAccessRequest$outboundSchema:
     CreateRemoteBindingsExternalAccessRequest
   > = z.object({
     idOrName: z.string(),
-    workspace: z.string().optional(),
     remoteBindingsExternalAccessRequest:
       models.RemoteBindingsExternalAccessRequest$outboundSchema,
   }).transform((v) => {

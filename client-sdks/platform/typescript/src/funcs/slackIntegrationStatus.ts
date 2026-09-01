@@ -6,7 +6,6 @@ import { AlienCore } from "../core.js";
 import { encodeFormQuery } from "../lib/encodings.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
-import { safeParse } from "../lib/schemas.js";
 import { RequestOptions } from "../lib/sdks.js";
 import { extractSecurity, resolveGlobalSecurity } from "../lib/security.js";
 import { pathToFunc } from "../lib/url.js";
@@ -30,7 +29,7 @@ import { Result } from "../types/fp.js";
  */
 export function slackIntegrationStatus(
   client: AlienCore,
-  request?: operations.SlackIntegrationStatusRequest | undefined,
+  _request?: operations.SlackIntegrationStatusRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -47,14 +46,14 @@ export function slackIntegrationStatus(
 > {
   return new APIPromise($do(
     client,
-    request,
+    _request,
     options,
   ));
 }
 
 async function $do(
   client: AlienCore,
-  request?: operations.SlackIntegrationStatusRequest | undefined,
+  _request?: operations.SlackIntegrationStatusRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -72,24 +71,10 @@ async function $do(
     APICall,
   ]
 > {
-  const parsed = safeParse(
-    request,
-    (value) =>
-      operations.SlackIntegrationStatusRequest$outboundSchema.optional().parse(
-        value,
-      ),
-    "Input validation failed",
-  );
-  if (!parsed.ok) {
-    return [parsed, { status: "invalid" }];
-  }
-  const payload = parsed.value;
-  const body = null;
-
   const path = pathToFunc("/v1/integrations/slack/status")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({
@@ -122,7 +107,6 @@ async function $do(
     path: path,
     headers: headers,
     query: query,
-    body: body,
     userAgent: client._options.userAgent,
     timeoutMs: options?.timeoutMs || client._options.timeoutMs || -1,
   }, options);

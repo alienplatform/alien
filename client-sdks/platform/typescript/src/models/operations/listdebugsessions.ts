@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
+export type ListDebugSessionsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Filter by deployment model (push/pull). Joins against the parent deployment.
  */
@@ -38,10 +45,6 @@ export type ListDebugSessionsProvider = ClosedEnum<
 >;
 
 export type ListDebugSessionsRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -84,7 +87,6 @@ export const ListDebugSessionsProvider$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ListDebugSessionsRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   deploymentId?: string | undefined;
   state?: string | undefined;
@@ -99,7 +101,6 @@ export const ListDebugSessionsRequest$outboundSchema: z.ZodType<
   ListDebugSessionsRequest$Outbound,
   ListDebugSessionsRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   deploymentId: z.string().optional(),
   state: models.DebugSessionState$outboundSchema.optional(),

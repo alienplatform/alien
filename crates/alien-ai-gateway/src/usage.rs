@@ -1,7 +1,7 @@
 //! Provider-neutral AI usage events.
 //!
-//! The gateway reports only request metadata and provider-supplied token counts.
-//! It never includes prompts, responses, headers, credentials, or provider error bodies.
+//! The gateway reports request metadata, provider-supplied token counts, and bounded provider
+//! error bodies. It never includes successful responses, request bodies, headers, or credentials.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -85,7 +85,17 @@ pub struct AiUsageEvent {
     pub provider_region: Option<String>,
     pub status: u16,
     pub outcome: AiUsageOutcome,
+    /// Bounded provider response body for failed requests.
+    pub provider_error_body: Option<String>,
+    /// Whether the provider response body exceeded the capture limit or could not be read fully.
+    pub provider_error_body_truncated: bool,
     pub tokens: AiTokenUsage,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ProviderErrorBody {
+    pub(crate) body: String,
+    pub(crate) truncated: bool,
 }
 
 /// Request identity and ingress clock supplied by an embedding gateway.
@@ -170,6 +180,7 @@ impl AiUsageContext {
         observer: &Arc<dyn AiUsageObserver>,
         outcome: AiUsageOutcome,
         status: u16,
+        provider_error_body: Option<ProviderErrorBody>,
         tokens: AiTokenUsage,
     ) {
         let gateway_duration = self
@@ -190,6 +201,11 @@ impl AiUsageContext {
             provider_region: self.provider_region,
             status,
             outcome,
+            provider_error_body: provider_error_body
+                .as_ref()
+                .map(|error_body| error_body.body.clone()),
+            provider_error_body_truncated: provider_error_body
+                .is_some_and(|error_body| error_body.truncated),
             tokens,
         };
         let observer = Arc::clone(observer);
@@ -210,6 +226,7 @@ struct ObservedBody {
     discard_sse_line: bool,
     streamed_tokens: AiTokenUsage,
     status: u16,
+    provider_error_body: Option<ProviderErrorBody>,
     complete: bool,
 }
 
@@ -284,7 +301,13 @@ impl ObservedBody {
         } else {
             AiTokenUsage::default()
         };
-        context.observe(&self.observer, outcome, status, tokens);
+        context.observe(
+            &self.observer,
+            outcome,
+            status,
+            self.provider_error_body.take(),
+            tokens,
+        );
     }
 }
 
@@ -304,8 +327,9 @@ pub(crate) fn observe_response(
     let Some(observer) = observer else {
         return response;
     };
-    let (parts, body) = response.into_parts();
+    let (mut parts, body) = response.into_parts();
     let status = parts.status.as_u16();
+    let provider_error_body = parts.extensions.remove::<ProviderErrorBody>();
     let state = ObservedBody {
         inner: Box::pin(body.into_data_stream()),
         observer: Arc::clone(observer),
@@ -315,6 +339,7 @@ pub(crate) fn observe_response(
         discard_sse_line: false,
         streamed_tokens: AiTokenUsage::default(),
         status,
+        provider_error_body,
         complete: false,
     };
     let stream = futures::stream::unfold(state, |mut state| async move {
@@ -352,6 +377,7 @@ pub(crate) fn observe_gateway_error(
             observer,
             AiUsageOutcome::GatewayError,
             status,
+            None,
             AiTokenUsage::default(),
         );
     }
@@ -516,6 +542,7 @@ mod tests {
             &observer,
             AiUsageOutcome::Success,
             200,
+            None,
             AiTokenUsage::default(),
         );
 
@@ -544,6 +571,7 @@ mod tests {
             discard_sse_line: false,
             streamed_tokens: AiTokenUsage::default(),
             status: 200,
+            provider_error_body: None,
             complete: false,
         };
         drop(state);

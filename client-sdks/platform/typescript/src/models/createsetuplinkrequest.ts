@@ -3,21 +3,41 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../types/enums.js";
 import {
-  DeploymentSetupConfig,
-  DeploymentSetupConfig$Outbound,
-  DeploymentSetupConfig$outboundSchema,
-} from "./deploymentsetupconfig.js";
+  DeploymentSetupConfigInput,
+  DeploymentSetupConfigInput$Outbound,
+  DeploymentSetupConfigInput$outboundSchema,
+} from "./deploymentsetupconfiginput.js";
 import {
   DeploymentSetupItemSelection,
   DeploymentSetupItemSelection$Outbound,
   DeploymentSetupItemSelection$outboundSchema,
 } from "./deploymentsetupitemselection.js";
 import {
+  SetupLinkEntryPoint,
+  SetupLinkEntryPoint$Outbound,
+  SetupLinkEntryPoint$outboundSchema,
+} from "./setuplinkentrypoint.js";
+import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
+
+export const CreateSetupLinkRequestSetupItemsEnum = {
+  All: "all",
+} as const;
+export type CreateSetupLinkRequestSetupItemsEnum = ClosedEnum<
+  typeof CreateSetupLinkRequestSetupItemsEnum
+>;
+
+/**
+ * Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior.
+ */
+export type CreateSetupLinkRequestSetupItemsUnion =
+  | CreateSetupLinkRequestSetupItemsEnum
+  | Array<DeploymentSetupItemSelection>;
 
 export type CreateSetupLinkRequest = {
   /**
@@ -44,13 +64,49 @@ export type CreateSetupLinkRequest = {
    * Optional expiration date for the API key
    */
   expiresAt?: Date | null | undefined;
-  deploymentSetupConfig: DeploymentSetupConfig;
+  deploymentSetupConfig?: DeploymentSetupConfigInput | undefined;
   /**
-   * Customer infrastructure to include. The server snapshots its exact reviewed sources.
+   * Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior.
    */
-  setupItems?: Array<DeploymentSetupItemSelection> | undefined;
+  setupItems?:
+    | CreateSetupLinkRequestSetupItemsEnum
+    | Array<DeploymentSetupItemSelection>
+    | undefined;
+  /**
+   * Portal destination to open first. This controls navigation, not authorization.
+   */
+  entryPoint?: SetupLinkEntryPoint | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
+
+/** @internal */
+export const CreateSetupLinkRequestSetupItemsEnum$outboundSchema: z.ZodEnum<
+  typeof CreateSetupLinkRequestSetupItemsEnum
+> = z.enum(CreateSetupLinkRequestSetupItemsEnum);
+
+/** @internal */
+export type CreateSetupLinkRequestSetupItemsUnion$Outbound =
+  | string
+  | Array<DeploymentSetupItemSelection$Outbound>;
+
+/** @internal */
+export const CreateSetupLinkRequestSetupItemsUnion$outboundSchema: z.ZodType<
+  CreateSetupLinkRequestSetupItemsUnion$Outbound,
+  CreateSetupLinkRequestSetupItemsUnion
+> = z.union([
+  CreateSetupLinkRequestSetupItemsEnum$outboundSchema,
+  z.array(DeploymentSetupItemSelection$outboundSchema),
+]);
+
+export function createSetupLinkRequestSetupItemsUnionToJSON(
+  createSetupLinkRequestSetupItemsUnion: CreateSetupLinkRequestSetupItemsUnion,
+): string {
+  return JSON.stringify(
+    CreateSetupLinkRequestSetupItemsUnion$outboundSchema.parse(
+      createSetupLinkRequestSetupItemsUnion,
+    ),
+  );
+}
 
 /** @internal */
 export type CreateSetupLinkRequest$Outbound = {
@@ -60,8 +116,12 @@ export type CreateSetupLinkRequest$Outbound = {
   maxDeployments: number;
   description?: string | undefined;
   expiresAt?: string | null | undefined;
-  deploymentSetupConfig: DeploymentSetupConfig$Outbound;
-  setupItems?: Array<DeploymentSetupItemSelection$Outbound> | undefined;
+  deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
+  setupItems?:
+    | string
+    | Array<DeploymentSetupItemSelection$Outbound>
+    | undefined;
+  entryPoint?: SetupLinkEntryPoint$Outbound | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
@@ -76,8 +136,12 @@ export const CreateSetupLinkRequest$outboundSchema: z.ZodType<
   maxDeployments: z.int().default(100),
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  deploymentSetupConfig: DeploymentSetupConfig$outboundSchema,
-  setupItems: z.array(DeploymentSetupItemSelection$outboundSchema).optional(),
+  deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),
+  setupItems: z.union([
+    CreateSetupLinkRequestSetupItemsEnum$outboundSchema,
+    z.array(DeploymentSetupItemSelection$outboundSchema),
+  ]).optional(),
+  entryPoint: SetupLinkEntryPoint$outboundSchema.optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
 });

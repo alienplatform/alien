@@ -335,12 +335,20 @@ export type ProjectRegistry = {
   credentialPolicy: ProjectCredentialPolicy;
 };
 
+export type ProjectRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type ProjectProjectCapabilitiesCapabilities = {
   deployments?: ProjectDeployments | undefined;
   keys?: ProjectKeys | undefined;
   models?: ProjectModels | undefined;
   buckets?: ProjectBuckets | undefined;
   registry?: ProjectRegistry | undefined;
+  remoteSandbox?: ProjectRemoteSandbox | undefined;
 };
 
 /**
@@ -733,6 +741,27 @@ export function projectRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectRemoteSandbox$inboundSchema: z.ZodType<
+  ProjectRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function projectRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectProjectCapabilitiesCapabilities$inboundSchema: z.ZodType<
   ProjectProjectCapabilitiesCapabilities,
   unknown
@@ -742,6 +771,7 @@ export const ProjectProjectCapabilitiesCapabilities$inboundSchema: z.ZodType<
   models: z.lazy(() => ProjectModels$inboundSchema).optional(),
   buckets: z.lazy(() => ProjectBuckets$inboundSchema).optional(),
   registry: z.lazy(() => ProjectRegistry$inboundSchema).optional(),
+  remoteSandbox: z.lazy(() => ProjectRemoteSandbox$inboundSchema).optional(),
 });
 
 export function projectProjectCapabilitiesCapabilitiesFromJSON(

@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type GetManagerManagementConfigGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Represents the target cloud platform.
  */
@@ -32,10 +39,6 @@ export type GetManagerManagementConfigRequest = {
    * Unique identifier for a manager.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Represents the target cloud platform.
    */
@@ -110,7 +113,6 @@ export const GetManagerManagementConfigQueryParamPlatform$outboundSchema:
 /** @internal */
 export type GetManagerManagementConfigRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   platform: string;
 };
 
@@ -120,7 +122,6 @@ export const GetManagerManagementConfigRequest$outboundSchema: z.ZodType<
   GetManagerManagementConfigRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   platform: GetManagerManagementConfigQueryParamPlatform$outboundSchema,
 });
 

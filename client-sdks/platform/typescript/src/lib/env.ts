@@ -3,16 +3,24 @@
  */
 
 import * as z from "zod/v4";
+import { SDKOptions } from "./config.js";
 import { dlv } from "./dlv.js";
 
 export interface Env {
   ALIEN_API_KEY?: string | undefined;
+
+  /**
+   * Sets the workspace parameter for all supported operations
+   */
+  ALIEN_WORKSPACE?: string | undefined;
 
   ALIEN_DEBUG?: boolean | undefined;
 }
 
 export const envSchema: z.ZodType<Env, unknown> = z.object({
   ALIEN_API_KEY: z.string().optional(),
+
+  ALIEN_WORKSPACE: z.string().optional(),
 
   ALIEN_DEBUG: z.coerce.boolean().optional(),
 });
@@ -54,4 +62,19 @@ export function env(): Env {
  */
 export function resetEnv() {
   envMemo = undefined;
+}
+
+/**
+ * Populates global parameters with environment variables.
+ */
+export function fillGlobals(options: SDKOptions): SDKOptions {
+  const clone = { ...options };
+
+  const envVars = env();
+
+  if (typeof envVars.ALIEN_WORKSPACE !== "undefined") {
+    clone.workspace ??= envVars.ALIEN_WORKSPACE;
+  }
+
+  return clone;
 }

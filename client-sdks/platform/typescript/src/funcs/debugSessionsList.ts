@@ -99,7 +99,7 @@ async function $do(
     "project": payload?.project,
     "provider": payload?.provider,
     "state": payload?.state,
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

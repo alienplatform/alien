@@ -177,13 +177,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.listWorkspaceInvitations({
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -203,13 +203,13 @@ import { listWorkspaceInvitations } from "@alienplatform/platform-api/funcs/list
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await listWorkspaceInvitations(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -252,13 +252,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.createWorkspaceInvitation({
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
     requestBody: {
       email: "Moriah.Rolfson@hotmail.com",
       role: "workspace.member",
@@ -282,13 +282,13 @@ import { createWorkspaceInvitation } from "@alienplatform/platform-api/funcs/cre
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await createWorkspaceInvitation(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
     requestBody: {
       email: "Moriah.Rolfson@hotmail.com",
       role: "workspace.member",
@@ -335,6 +335,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -342,7 +343,6 @@ async function run() {
   const result = await alien.resendWorkspaceInvitation({
     id: "ws_It13CUaGEhLLAB87simX0",
     invitationId: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -362,6 +362,7 @@ import { resendWorkspaceInvitation } from "@alienplatform/platform-api/funcs/res
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -369,7 +370,6 @@ async function run() {
   const res = await resendWorkspaceInvitation(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
     invitationId: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -412,6 +412,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -419,7 +420,6 @@ async function run() {
   await alien.revokeWorkspaceInvitation({
     id: "ws_It13CUaGEhLLAB87simX0",
     invitationId: "<id>",
-    workspace: "my-workspace",
   });
 
 
@@ -439,6 +439,7 @@ import { revokeWorkspaceInvitation } from "@alienplatform/platform-api/funcs/rev
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -446,7 +447,6 @@ async function run() {
   const res = await revokeWorkspaceInvitation(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
     invitationId: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -489,13 +489,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.getWorkspaceInviteLink({
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -515,13 +515,13 @@ import { getWorkspaceInviteLink } from "@alienplatform/platform-api/funcs/getWor
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await getWorkspaceInviteLink(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -564,13 +564,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.createWorkspaceInviteLink({
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
     requestBody: {
       role: "workspace.member",
     },
@@ -593,13 +593,13 @@ import { createWorkspaceInviteLink } from "@alienplatform/platform-api/funcs/cre
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await createWorkspaceInviteLink(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
     requestBody: {
       role: "workspace.member",
     },
@@ -645,13 +645,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   await alien.revokeWorkspaceInviteLink({
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
 
 
@@ -671,13 +671,13 @@ import { revokeWorkspaceInviteLink } from "@alienplatform/platform-api/funcs/rev
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await revokeWorkspaceInviteLink(alien, {
     id: "ws_It13CUaGEhLLAB87simX0",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

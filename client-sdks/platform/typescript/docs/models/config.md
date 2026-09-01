@@ -43,6 +43,17 @@ const value: models.ConfigOperatorImage = {
 };
 ```
 
+### `models.ConfigSandboxBundle`
+
+```typescript
+const value: models.ConfigSandboxBundle = {
+  agentImage: "<value>",
+  baseImage: "<value>",
+  objectKey: "<value>",
+  type: "sandbox-bundle",
+};
+```
+
 ### `models.ConfigTerraform`
 
 ```typescript

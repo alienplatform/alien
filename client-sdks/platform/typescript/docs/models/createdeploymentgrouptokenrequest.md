@@ -5,36 +5,16 @@
 ```typescript
 import { CreateDeploymentGroupTokenRequest } from "@alienplatform/platform-api/models";
 
-let value: CreateDeploymentGroupTokenRequest = {
-  deploymentSetupConfig: {
-    metadata: {},
-    policy: {
-      allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
-    },
-    environmentVariables: [
-      {
-        name: "<value>",
-        value: "<value>",
-        type: "plain",
-        targetResources: [
-          "<value 1>",
-          "<value 2>",
-        ],
-      },
-    ],
-  },
-};
+let value: CreateDeploymentGroupTokenRequest = {};
 ```
 
 ## Fields
 
-| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
-| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `description`                                                                                 | *string*                                                                                      | :heavy_minus_sign:                                                                            | Description for the API key                                                                   |
-| `expiresAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | Optional expiration date for the API key                                                      |
-| `deploymentSetupConfig`                                                                       | [models.DeploymentSetupConfig](../models/deploymentsetupconfig.md)                            | :heavy_check_mark:                                                                            | N/A                                                                                           |
-| `setupItems`                                                                                  | [models.DeploymentSetupItemSelection](../models/deploymentsetupitemselection.md)[]            | :heavy_minus_sign:                                                                            | Customer infrastructure to include. The server snapshots its exact reviewed sources.          |
-| `inputValues`                                                                                 | Record<string, *models.StackInputValueRequest*>                                               | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| Field                                                                                                                             | Type                                                                                                                              | Required                                                                                                                          | Description                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `description`                                                                                                                     | *string*                                                                                                                          | :heavy_minus_sign:                                                                                                                | Description for the API key                                                                                                       |
+| `expiresAt`                                                                                                                       | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                     | :heavy_minus_sign:                                                                                                                | Optional expiration date for the API key                                                                                          |
+| `deploymentSetupConfig`                                                                                                           | [models.DeploymentSetupConfigInput](../models/deploymentsetupconfiginput.md)                                                      | :heavy_minus_sign:                                                                                                                | N/A                                                                                                                               |
+| `setupItems`                                                                                                                      | *models.CreateDeploymentGroupTokenRequestSetupItemsUnion*                                                                         | :heavy_minus_sign:                                                                                                                | Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior. |
+| `entryPoint`                                                                                                                      | [models.SetupLinkEntryPoint](../models/setuplinkentrypoint.md)                                                                    | :heavy_minus_sign:                                                                                                                | Portal destination to open first. This controls navigation, not authorization.                                                    |
+| `inputValues`                                                                                                                     | Record<string, *models.StackInputValueRequest*>                                                                                   | :heavy_minus_sign:                                                                                                                | N/A                                                                                                                               |

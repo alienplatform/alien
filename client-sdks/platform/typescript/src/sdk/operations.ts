@@ -4,15 +4,18 @@
 
 import { operationsCreateAccessRequest } from "../funcs/operationsCreateAccessRequest.js";
 import { operationsCreateBundleUploadUrl } from "../funcs/operationsCreateBundleUploadUrl.js";
+import { operationsGetAccessRequest } from "../funcs/operationsGetAccessRequest.js";
 import { operationsGetAccessRequestCoordinates } from "../funcs/operationsGetAccessRequestCoordinates.js";
 import { operationsGetPolicy } from "../funcs/operationsGetPolicy.js";
 import { operationsInvoke } from "../funcs/operationsInvoke.js";
+import { operationsListAccessRequests } from "../funcs/operationsListAccessRequests.js";
 import { operationsListPlugins } from "../funcs/operationsListPlugins.js";
 import { operationsPublishPlugin } from "../funcs/operationsPublishPlugin.js";
 import { operationsQueueAccessRequest } from "../funcs/operationsQueueAccessRequest.js";
 import { operationsSetBuiltinPlugins } from "../funcs/operationsSetBuiltinPlugins.js";
 import { operationsSetPluginEnabled } from "../funcs/operationsSetPluginEnabled.js";
 import { operationsUpdatePolicy } from "../funcs/operationsUpdatePolicy.js";
+import { operationsVerifyCheck } from "../funcs/operationsVerifyCheck.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
@@ -132,13 +135,41 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+   * One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+   */
+  async verifyCheck(
+    request: operations.VerifyOperationCheckRequest,
+    options?: RequestOptions,
+  ): Promise<models.VerifyOperationCheckResponse> {
+    return unwrapAsync(operationsVerifyCheck(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
    */
   async createAccessRequest(
-    request?: operations.CreateAccessRequestRequest | undefined,
+    request?: models.CreateAccessRequest | undefined,
     options?: RequestOptions,
   ): Promise<operations.CreateAccessRequestResponse> {
     return unwrapAsync(operationsCreateAccessRequest(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * List a project's access requests, newest first.
+   */
+  async listAccessRequests(
+    request: operations.ListAccessRequestsRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ListAccessRequestsResponse> {
+    return unwrapAsync(operationsListAccessRequests(
       this,
       request,
       options,
@@ -167,6 +198,20 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.GetAccessRequestCoordinatesResponse> {
     return unwrapAsync(operationsGetAccessRequestCoordinates(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get an access request by id.
+   */
+  async getAccessRequest(
+    request: operations.GetAccessRequestRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetAccessRequestResponse> {
+    return unwrapAsync(operationsGetAccessRequest(
       this,
       request,
       options,

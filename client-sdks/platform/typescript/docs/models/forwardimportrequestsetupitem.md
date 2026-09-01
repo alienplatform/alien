@@ -7,11 +7,11 @@ Exact item selected from a tailored customer setup link.
 ```typescript
 import { ForwardImportRequestSetupItem } from "@alienplatform/platform-api/models";
 
-let value: ForwardImportRequestSetupItem = "deployment";
+let value: ForwardImportRequestSetupItem = "models";
 ```
 
 ## Values
 
 ```typescript
-"deployment" | "models" | "keys" | "bucket" | "registry"
+"deployment" | "models" | "keys" | "bucket" | "registry" | "sandbox"
 ```

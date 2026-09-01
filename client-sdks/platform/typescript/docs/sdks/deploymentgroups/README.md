@@ -4,14 +4,14 @@
 
 ### Available Operations
 
-* [listDeploymentGroups](#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](#createdeploymentgroup) - Create a new deployment group
+* [listDeploymentGroups](#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
-* [getDeploymentGroupByExternalId](#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [ensureDeploymentGroupByExternalId](#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+* [getDeploymentGroupByExternalId](#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [getDeploymentGroup](#getdeploymentgroup) - Get deployment group details
-* [deleteDeploymentGroup](#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](#updatedeploymentgroup) - Update deployment group
+* [deleteDeploymentGroup](#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](#createfirstpartydeploymentsession) - Create first-party deployment session
@@ -20,6 +20,87 @@
 * [deleteExternalAIBinding](#deleteexternalaibinding) - Revoke the external AI connection
 * [createExternalAIModelCheck](#createexternalaimodelcheck) - Queue an explicit external model access check
 * [getExternalAIModelCheck](#getexternalaimodelcheck) - Get an external model access check
+
+## createDeploymentGroup
+
+Create a new deployment group
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createDeploymentGroup" method="post" path="/v1/deployment-groups" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.createDeploymentGroup({
+    name: "prod-us-east-1",
+    externalId: "ext_example_01",
+    project: "<value>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsCreateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsCreateDeploymentGroup(alien, {
+    name: "prod-us-east-1",
+    externalId: "ext_example_01",
+    project: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsCreateDeploymentGroup failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.CreateDeploymentGroupRequest](../../models/createdeploymentgrouprequest.md)                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## listDeploymentGroups
 
@@ -32,12 +113,12 @@ List deployment groups
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.listDeploymentGroups({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -58,12 +139,12 @@ import { deploymentGroupsListDeploymentGroups } from "@alienplatform/platform-ap
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsListDeploymentGroups(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -97,91 +178,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## createDeploymentGroup
-
-Create a new deployment group
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="createDeploymentGroup" method="post" path="/v1/deployment-groups" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deploymentGroups.createDeploymentGroup({
-    workspace: "my-workspace",
-    createDeploymentGroupRequest: {
-      name: "prod-us-east-1",
-      externalId: "ext_example_01",
-      project: "<value>",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsCreateDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsCreateDeploymentGroup.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsCreateDeploymentGroup(alien, {
-    workspace: "my-workspace",
-    createDeploymentGroupRequest: {
-      name: "prod-us-east-1",
-      externalId: "ext_example_01",
-      project: "<value>",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentGroupsCreateDeploymentGroup failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateDeploymentGroupRequest](../../models/operations/createdeploymentgrouprequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## ensureDeploymentGroupByName
 
 Get or create a deployment group by project and name
@@ -193,16 +189,14 @@ Get or create a deployment group by project and name
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.ensureDeploymentGroupByName({
-    workspace: "my-workspace",
-    ensureDeploymentGroupByNameRequest: {
-      name: "prod-us-east-1",
-      project: "<value>",
-    },
+    name: "prod-us-east-1",
+    project: "<value>",
   });
 
   console.log(result);
@@ -222,16 +216,14 @@ import { deploymentGroupsEnsureDeploymentGroupByName } from "@alienplatform/plat
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsEnsureDeploymentGroupByName(alien, {
-    workspace: "my-workspace",
-    ensureDeploymentGroupByNameRequest: {
-      name: "prod-us-east-1",
-      project: "<value>",
-    },
+    name: "prod-us-east-1",
+    project: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -248,7 +240,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.EnsureDeploymentGroupByNameRequest](../../models/operations/ensuredeploymentgroupbynamerequest.md)                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.EnsureDeploymentGroupByNameRequest](../../models/ensuredeploymentgroupbynamerequest.md)                                                                                | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -265,6 +257,87 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## ensureDeploymentGroupByExternalId
+
+Get or create a deployment group by project and external ID
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="ensureDeploymentGroupByExternalId" method="put" path="/v1/deployment-groups/by-external-id" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deploymentGroups.ensureDeploymentGroupByExternalId({
+    externalId: "ext_example_01",
+    name: "prod-us-east-1",
+    project: "<value>",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsEnsureDeploymentGroupByExternalId } from "@alienplatform/platform-api/funcs/deploymentGroupsEnsureDeploymentGroupByExternalId.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsEnsureDeploymentGroupByExternalId(alien, {
+    externalId: "ext_example_01",
+    name: "prod-us-east-1",
+    project: "<value>",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentGroupsEnsureDeploymentGroupByExternalId failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.EnsureDeploymentGroupByExternalIdRequest](../../models/ensuredeploymentgroupbyexternalidrequest.md)                                                                    | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getDeploymentGroupByExternalId
 
 Get a deployment group by project and external ID
@@ -276,12 +349,12 @@ Get a deployment group by project and external ID
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.getDeploymentGroupByExternalId({
-    workspace: "my-workspace",
     externalId: "ext_example_01",
   });
 
@@ -302,12 +375,12 @@ import { deploymentGroupsGetDeploymentGroupByExternalId } from "@alienplatform/p
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsGetDeploymentGroupByExternalId(alien, {
-    workspace: "my-workspace",
     externalId: "ext_example_01",
   });
   if (res.ok) {
@@ -342,91 +415,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## ensureDeploymentGroupByExternalId
-
-Get or create a deployment group by project and external ID
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="ensureDeploymentGroupByExternalId" method="put" path="/v1/deployment-groups/by-external-id" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.deploymentGroups.ensureDeploymentGroupByExternalId({
-    workspace: "my-workspace",
-    ensureDeploymentGroupByExternalIdRequest: {
-      externalId: "ext_example_01",
-      name: "prod-us-east-1",
-      project: "<value>",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsEnsureDeploymentGroupByExternalId } from "@alienplatform/platform-api/funcs/deploymentGroupsEnsureDeploymentGroupByExternalId.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsEnsureDeploymentGroupByExternalId(alien, {
-    workspace: "my-workspace",
-    ensureDeploymentGroupByExternalIdRequest: {
-      externalId: "ext_example_01",
-      name: "prod-us-east-1",
-      project: "<value>",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("deploymentGroupsEnsureDeploymentGroupByExternalId failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.EnsureDeploymentGroupByExternalIdRequest](../../models/operations/ensuredeploymentgroupbyexternalidrequest.md)                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.DeploymentGroup](../../models/deploymentgroup.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## getDeploymentGroup
 
 Get deployment group details
@@ -438,13 +426,13 @@ Get deployment group details
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.getDeploymentGroup({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -464,13 +452,13 @@ import { deploymentGroupsGetDeploymentGroup } from "@alienplatform/platform-api/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsGetDeploymentGroup(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -504,83 +492,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## deleteDeploymentGroup
-
-Delete deployment group
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="deleteDeploymentGroup" method="delete" path="/v1/deployment-groups/{id}" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  await alien.deploymentGroups.deleteDeploymentGroup({
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
-  });
-
-
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { deploymentGroupsDeleteDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsDeleteDeploymentGroup.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await deploymentGroupsDeleteDeploymentGroup(alien, {
-    id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    
-  } else {
-    console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DeleteDeploymentGroupRequest](../../models/operations/deletedeploymentgrouprequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<void\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## updateDeploymentGroup
 
 Update deployment group
@@ -592,13 +503,13 @@ Update deployment group
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.updateDeploymentGroup({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     updateDeploymentGroupRequest: {
       name: "prod-us-east-1",
     },
@@ -621,13 +532,13 @@ import { deploymentGroupsUpdateDeploymentGroup } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsUpdateDeploymentGroup(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     updateDeploymentGroupRequest: {
       name: "prod-us-east-1",
     },
@@ -664,6 +575,83 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## deleteDeploymentGroup
+
+Delete deployment group
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="deleteDeploymentGroup" method="delete" path="/v1/deployment-groups/{id}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  await alien.deploymentGroups.deleteDeploymentGroup({
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  });
+
+
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentGroupsDeleteDeploymentGroup } from "@alienplatform/platform-api/funcs/deploymentGroupsDeleteDeploymentGroup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentGroupsDeleteDeploymentGroup(alien, {
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    
+  } else {
+    console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.DeleteDeploymentGroupRequest](../../models/operations/deletedeploymentgrouprequest.md)                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<void\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## setDeploymentGroupExternalId
 
 Set or clear a deployment group's external ID
@@ -675,13 +663,13 @@ Set or clear a deployment group's external ID
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.setDeploymentGroupExternalId({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     setDeploymentGroupExternalIdRequest: {
       externalId: "ext_example_01",
     },
@@ -704,13 +692,13 @@ import { deploymentGroupsSetDeploymentGroupExternalId } from "@alienplatform/pla
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsSetDeploymentGroupExternalId(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     setDeploymentGroupExternalIdRequest: {
       externalId: "ext_example_01",
     },
@@ -758,13 +746,13 @@ Creates a deployment-group scoped API key and returns both the token and formatt
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.createDeploymentGroupToken({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     createDeploymentGroupTokenRequest: {
       deploymentSetupConfig: {
         metadata: {
@@ -802,13 +790,13 @@ import { deploymentGroupsCreateDeploymentGroupToken } from "@alienplatform/platf
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsCreateDeploymentGroupToken(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     createDeploymentGroupTokenRequest: {
       deploymentSetupConfig: {
         metadata: {
@@ -871,13 +859,13 @@ Mints a short-lived deployment-group token with the recommended self-deploy poli
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.createFirstPartyDeploymentSession({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -897,13 +885,13 @@ import { deploymentGroupsCreateFirstPartyDeploymentSession } from "@alienplatfor
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsCreateFirstPartyDeploymentSession(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -948,13 +936,13 @@ Get external AI connection state
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.getExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -974,13 +962,13 @@ import { deploymentGroupsGetExternalAIBinding } from "@alienplatform/platform-ap
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsGetExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1025,13 +1013,13 @@ Connect or rotate an external AI provider key
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.deploymentGroups.putExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     putExternalAIBindingRequest: {
       provider: "anthropic",
       apiKey: "<value>",
@@ -1056,13 +1044,13 @@ import { deploymentGroupsPutExternalAIBinding } from "@alienplatform/platform-ap
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsPutExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     putExternalAIBindingRequest: {
       provider: "anthropic",
       apiKey: "<value>",
@@ -1112,13 +1100,13 @@ Revoke the external AI connection
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   await alien.deploymentGroups.deleteExternalAIBinding({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
 
@@ -1138,13 +1126,13 @@ import { deploymentGroupsDeleteExternalAIBinding } from "@alienplatform/platform
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await deploymentGroupsDeleteExternalAIBinding(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1189,6 +1177,7 @@ Queue an explicit external model access check
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -1196,7 +1185,6 @@ async function run() {
   const result = await alien.deploymentGroups.createExternalAIModelCheck({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     publicModelId: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1216,6 +1204,7 @@ import { deploymentGroupsCreateExternalAIModelCheck } from "@alienplatform/platf
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -1223,7 +1212,6 @@ async function run() {
   const res = await deploymentGroupsCreateExternalAIModelCheck(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     publicModelId: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1267,6 +1255,7 @@ Get an external model access check
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -1274,7 +1263,6 @@ async function run() {
   const result = await alien.deploymentGroups.getExternalAIModelCheck({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     checkId: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1294,6 +1282,7 @@ import { deploymentGroupsGetExternalAIModelCheck } from "@alienplatform/platform
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -1301,7 +1290,6 @@ async function run() {
   const res = await deploymentGroupsGetExternalAIModelCheck(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     checkId: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

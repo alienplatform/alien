@@ -101,7 +101,7 @@ async function $do(
     "deploymentGroup": payload.deploymentGroup,
     "limit": payload.limit,
     "state": payload.state,
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

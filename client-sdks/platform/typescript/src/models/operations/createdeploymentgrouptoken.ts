@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type CreateDeploymentGroupTokenGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CreateDeploymentGroupTokenRequest = {
   /**
    * Unique identifier for the deployment group.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   createDeploymentGroupTokenRequest?:
     | models.CreateDeploymentGroupTokenRequest
     | undefined;
@@ -23,7 +26,6 @@ export type CreateDeploymentGroupTokenRequest = {
 /** @internal */
 export type CreateDeploymentGroupTokenRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   CreateDeploymentGroupTokenRequest?:
     | models.CreateDeploymentGroupTokenRequest$Outbound
     | undefined;
@@ -35,7 +37,6 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
   CreateDeploymentGroupTokenRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   createDeploymentGroupTokenRequest: models
     .CreateDeploymentGroupTokenRequest$outboundSchema.optional(),
 }).transform((v) => {

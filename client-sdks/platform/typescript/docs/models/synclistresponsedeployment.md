@@ -13,7 +13,7 @@ let value: SyncListResponseDeployment = {
   platform: "azure",
   deploymentProtocolVersion: 562146,
   deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-  purpose: "container-registry",
+  purpose: "sandbox",
   stackSettings: {},
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
