@@ -28,8 +28,9 @@ const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
 const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
     "AcrPull",
     "AcrPush",
-    // Carries the whole sandbox data plane, session contents included, so it belongs to
-    // sandbox/execute alone. Lifecycle-only callers use the granular actions instead.
+    // Carries the whole sandbox data plane, session contents included, so it belongs only to the
+    // sets that are meant to reach inside a session — `sandbox/execute` and
+    // `sandbox/remote-execute`. Lifecycle-only callers use the granular actions instead.
     "Container Apps SandboxGroup Data Owner",
     "Azure Service Bus Data Receiver",
     "Key Vault Secrets User",

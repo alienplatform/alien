@@ -253,7 +253,7 @@ fn global_permission_refs<'a>(
 fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
     permission_ref
         .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-        .is_some_and(|set| alien_permissions::permission_set_reaches_a_microvm_session(&set))
+        .is_some_and(|set| alien_permissions::permission_set_reaches_a_sandbox_session(&set))
 }
 
 fn resource_scoped_permission_refs(

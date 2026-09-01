@@ -1,21 +1,37 @@
-//! Azure Sandbox — a named group, and nothing built at setup.
+//! Azure Sandbox — the group setup creates, and the remote grant scoped to it.
 //!
-//! No sandbox controller is registered for Azure, and `create_or_update_sandbox_group` has no
-//! caller, so nothing here creates the group a session lives in — it has to exist already. Setup
-//! emits no Azure resource for the same reason it would not be useful to: a group is cheap to
-//! create by name and pointless to hold open while no session wants one.
+//! Setup emits the group because a role assignment cannot name a resource that does not exist:
+//! Azure answers `ResourceNotFound` for a scope whose resource is absent, so a remote grant is
+//! only placeable if the same template that grants also creates. `Microsoft.App/sandboxGroups`
+//! gained an ARM representation at `2026-02-01-preview`, which is what makes that possible; it is
+//! reached through `azapi_resource` because the AzureRM provider has no typed resource for it.
 //!
-//! What this emitter contributes is the three names the data plane is addressed by, which the
-//! Azure client config does not carry: the group, the region that selects the per-region endpoint,
-//! and the resource group the data-plane path is scoped by.
+//! Beside the group this emitter contributes the three names the data plane is addressed by,
+//! which the Azure client config does not carry: the group, the region that selects the
+//! per-region endpoint, and the resource group the data-plane path is scoped by.
 
 use crate::{
+    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
+    emitters::azure::helpers::{
+        downcast, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, required_label, resource_prefix_template, tags,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, Result, Sandbox, SandboxEgress};
+use alien_core::{
+    import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress,
+};
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
+
+/// The preview API version the sandbox group is created at. Pinned rather than floating: it is the
+/// only version the provider manifest lists, and a preview type's shape moves between them.
+const SANDBOX_GROUP_TYPE: &str = "Microsoft.App/sandboxGroups@2026-02-01-preview";
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
 #[derive(Debug, Clone, Copy, Default)]
@@ -56,10 +72,43 @@ fn egress(sandbox: &Sandbox) -> Expression {
 }
 
 impl TfEmitter for AzureSandboxEmitter {
-    fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // Deliberately empty: see the module note. A group emitted here would sit idle until a
-        // session asked for one, and it is addressed by name rather than by reference.
-        Ok(TfFragment::default())
+    fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let mut fragment = TfFragment::default();
+
+        fragment.resource_blocks.push(resource_block(
+            "azapi_resource",
+            label,
+            [
+                attr("type", Expression::String(SANDBOX_GROUP_TYPE.to_string())),
+                attr("name", sandbox_group(ctx)),
+                attr(
+                    "parent_id",
+                    expr::template(
+                        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+                    ),
+                ),
+                attr("location", expr::raw("var.azure_location")),
+                // The group takes no configuration Alien expresses — sizing, egress and image are
+                // all per-session and travel in the create body — so the body is the empty object
+                // the API requires rather than a field this would have to keep in step.
+                attr(
+                    "body",
+                    expr::object(Vec::<(&str, Expression)>::new()),
+                ),
+                attr("tags", tags(ctx, "sandbox")),
+                // The azapi provider ships a bundled schema index and refuses a type it does not
+                // carry — `Microsoft.App/sandboxGroups can't be found` at validate. The type is
+                // real: it is in the live ARM provider manifest at this version and ARM creates
+                // one. So the index lags the service, and the check being disabled here is a
+                // client-side pre-check, not ARM's — which still validates the request at apply.
+                attr("schema_validation_enabled", Expression::Bool(false)),
+            ],
+        ));
+
+        emit_remote_access(ctx, label, &mut fragment)?;
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -111,6 +160,100 @@ impl TfEmitter for AzureSandboxEmitter {
     }
 }
 
+/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
+///
+/// Scoped to the group this emitter just created, and nothing wider. The role is a data-plane one
+/// covering `sandboxGroups/*` on whatever it is scoped to, so a resource-group scope would hand a
+/// remote caller every sibling sandbox in the deployment — the assignment names the group by
+/// reference so the scope cannot drift from the resource.
+fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
+    let (Some(definition), Some(access_label)) = (
+        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
+            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
+            .flatten(),
+        remote_bindings_label(ctx),
+    ) else {
+        return Ok(());
+    };
+    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "{} permission set is not registered",
+                    definition.permission_set
+                ),
+            })
+        })?;
+
+    let context = permission_context(label).with_resource_name(ctx.resource_id.to_string());
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate Azure remote Sandbox permissions".to_string(),
+        })?;
+
+    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    for (index, binding) in plan.bindings.iter().enumerate() {
+        let role_definition_id = match &binding.role_definition {
+            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                expr::template(role_definition_id.clone())
+            }
+            AzureRoleDefinitionRef::Custom { key } => {
+                let custom_index = plan
+                    .custom_roles
+                    .iter()
+                    .position(|role| &role.key == key)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("missing generated Azure role '{key}'"),
+                        })
+                    })?;
+                let role_label = remote_bindings_role_label(&binding.role_name, custom_index);
+                expr::traversal([
+                    "azurerm_role_definition",
+                    role_label.as_str(),
+                    "role_definition_resource_id",
+                ])
+            }
+        };
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_access_{index}"),
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"oid\", \"deployment:azure:sandbox-access:${{local.resource_prefix}}:{label}:{index}\")"
+                    )),
+                ),
+                // The created group rather than the rendered scope string: both spell the same
+                // name, and referencing it is what orders the assignment after the group Azure
+                // refuses to grant on before it exists.
+                attr("scope", expr::traversal(["azapi_resource", label, "id"])),
+                attr("role_definition_id", role_definition_id),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "azurerm_user_assigned_identity",
+                        access_label,
+                        "principal_id",
+                    ]),
+                ),
+            ],
+        ));
+    }
+
+    Ok(())
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -129,6 +272,15 @@ mod tests {
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                    })
+                    // Declared, so the ceilings are in the rendered binding: Azure takes them at
+                    // create and nowhere else, and the key-coverage assertion below is what pins
+                    // that they travel under the names the binding deserializes.
+                    .limits(alien_core::SandboxLimits {
+                        cpu: "1000m".to_string(),
+                        memory: "2048Mi".to_string(),
+                        disk: "20480Mi".to_string(),
+                        max_processes: None,
                     })
                     .egress(egress)
                     .session(SandboxSessionPolicy {

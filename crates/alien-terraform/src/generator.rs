@@ -344,8 +344,12 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
     let include_helm_provider =
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
+    // All three azapi resource kinds, not only the two that happened to exist first: the sandbox
+    // group is a plain `azapi_resource`, and a missing provider block fails at `terraform init`
+    // rather than at plan, which reads as a broken package rather than a missing declaration.
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
-        || has_resource_type(&per_resource, "azapi_resource_action");
+        || has_resource_type(&per_resource, "azapi_resource_action")
+        || has_resource_type(&per_resource, "azapi_resource");
     // Cloud Control, for AWS APIs the main provider has not caught up with. Keyed off what was
     // actually emitted, so a stack without one of those resources is unchanged.
     // Keyed off the connector, not the image: the image is a Cloud Control resource from the

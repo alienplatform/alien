@@ -234,6 +234,26 @@ fn open_sandbox_binding() -> SandboxBinding {
     SandboxBinding::Aws(binding)
 }
 
+/// The binding a deployment on `platform` would actually carry.
+///
+/// Per-platform rather than one AWS binding reused: a resolve refusing an AWS binding on an Azure
+/// deployment proves only that the two disagree, which every platform would pass. The question is
+/// whether resolve accepts that platform's own binding exactly when the permission set covers it.
+fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
+    match platform {
+        Platform::Azure => SandboxBinding::azure(
+            "stack-agents",
+            "https://management.westus2.azuredevcompute.io",
+            "westus2",
+            "rg",
+            "ubuntu",
+            alien_core::SandboxEgress::Allow,
+            None,
+        ),
+        _ => open_sandbox_binding(),
+    }
+}
+
 #[test]
 fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
     let deployment = deployment(sandbox_stack_state(open_sandbox_binding(), Platform::Aws));
@@ -316,7 +336,7 @@ fn remote_sandbox_validation_refuses_a_sandbox_that_restricts_egress() {
 fn remote_sandbox_resolve_agrees_with_the_permission_set_platform_coverage() {
     for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
         let deployment = deployment_on_platform(
-            sandbox_stack_state(open_sandbox_binding(), platform),
+            sandbox_stack_state(open_sandbox_binding_for(platform), platform),
             platform,
         );
 
@@ -328,22 +348,38 @@ fn remote_sandbox_resolve_agrees_with_the_permission_set_platform_coverage() {
     }
 }
 
+/// Two distinct refusals: a platform carrying no remote-execute grant, and a platform that
+/// carries one but is handed a binding belonging to another cloud.
 #[test]
 fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
-    for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+    for platform in [Platform::Gcp, Platform::Local] {
         let deployment = deployment_on_platform(
             sandbox_stack_state(open_sandbox_binding(), platform),
             platform,
         );
         let Err(error) = remote_sandbox_binding(&deployment, "agents") else {
-            panic!("only AWS provisions a sandbox parent a setup identity can be scoped to")
+            panic!("{platform} provisions no sandbox parent a setup identity can be scoped to")
         };
         assert_eq!(error.code, "BAD_REQUEST");
-        assert!(
-            error.message.contains("only supported on AWS"),
-            "{platform}"
-        );
+        assert!(error.message.contains("not supported"), "{platform}");
     }
+
+    // Azure carries the grant, so it clears the platform gate, and is still refused an AWS
+    // binding: without the pairing check that resolves into an AWS credential lease for a sandbox
+    // which is not on AWS.
+    let mismatched = deployment_on_platform(
+        sandbox_stack_state(open_sandbox_binding(), Platform::Azure),
+        Platform::Azure,
+    );
+    let Err(error) = remote_sandbox_binding(&mismatched, "agents") else {
+        panic!("an AWS binding on an Azure deployment must not resolve")
+    };
+    assert_eq!(error.code, "BAD_REQUEST");
+    assert!(
+        error.message.contains("does not match deployment platform"),
+        "{}",
+        error.message
+    );
 }
 
 /// The wire contract remote clients decode. `service` selects the variant, so a rename is a silent

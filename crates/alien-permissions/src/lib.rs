@@ -9,7 +9,7 @@ use alien_core::{ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_T
 pub use error::*;
 pub use registry::{
     get_permission_set, has_permission_set, list_permission_set_ids, permission_set_covers_platform,
-    permission_set_reaches_a_microvm_session, MICROVM_SESSION_LIFECYCLE_ACTIONS,
+    permission_set_reaches_a_sandbox_session, MICROVM_SESSION_LIFECYCLE_ACTIONS,
     SENSITIVE_MICROVM_ACTIONS,
 };
 pub use variables::VariableInterpolator;

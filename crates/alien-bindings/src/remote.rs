@@ -564,6 +564,14 @@ enum ResolvedRemoteBinding {
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
+    #[serde(rename = "sandbox-azure")]
+    SandboxAzure {
+        binding: Box<alien_core::AzureSandboxBinding>,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
     #[cfg(test)]
     #[serde(rename = "local-storage")]
     Local {
@@ -734,6 +742,18 @@ impl ResolvedRemoteBinding {
                 (
                     alien_core::ClientConfig::Aws(client_config),
                     serialize_remote_binding(alien_core::SandboxBinding::Aws(*binding))?,
+                    expires_at,
+                )
+            }
+            Self::SandboxAzure {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Azure(client_config),
+                    serialize_remote_binding(alien_core::SandboxBinding::Azure(*binding))?,
                     expires_at,
                 )
             }

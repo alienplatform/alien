@@ -2,14 +2,14 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS alone, for a different reason on each of the other two. GCP scopes every sandbox
-    // permission at `projects/${projectName}` and offers nothing narrower, so a remote grant
-    // would reach every sandbox in the project rather than this one. On Azure the name is
-    // knowable (`${stackPrefix}-${resourceName}`) but not grantable: `Microsoft.App/sandboxGroups`
-    // has no ARM template representation, so setup neither creates the group nor can scope a role
-    // assignment to one that does not exist, and the sandbox emitter attaches nothing to the
-    // `-access` identity — see the fuller note in `sandbox/management`.
-    // A remote binding declared on either is refused by the remote-bindings preflight.
+    // AWS and Azure: the two clouds whose sandbox parent setup creates, and can therefore scope
+    // a grant to. Both refuse an assignment naming a resource that does not exist, so the parent
+    // and the grant have to come from the same template — an AWS MicroVM image, and an Azure
+    // `Microsoft.App/sandboxGroups` at `2026-02-01-preview`.
+    //
+    // GCP is absent because the reasoning engine a resource-level grant would be scoped to is
+    // created by a Live controller after apply rather than by setup, so there is nothing for the
+    // assignment to name. A GCP remote binding is refused by the remote-bindings preflight.
     "aws": [
       {
         "label": "session-lifecycle",
@@ -78,6 +78,35 @@
             "resources": [
               "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
             ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "session-lifecycle-and-exec",
+        "description": "Create, drive and tear down sessions of the selected sandbox group.",
+        "grant": {
+          // The one role Microsoft documents as sufficient for the sandbox data plane, and the
+          // same one `sandbox/execute` uses. It carries session lifecycle and exec together, so
+          // this set cannot hand out exec without lifecycle — and it is a data-plane role, which
+          // is why subscription-level management rights do not substitute for it.
+          //
+          // Its `actions` array is empty and every entry is a `dataAction`
+          // (`Microsoft.App/sandboxGroups/*/{read,write,delete,action}`). So the holder drives
+          // sessions inside the group and has no control-plane right over the group itself: it
+          // cannot delete, move or reconfigure the resource setup created, and its `delete`
+          // reaches sandboxes rather than their parent.
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+        },
+        // Resource-scoped only, and this is the whole boundary — the same one the AWS block
+        // draws around a single `microvm-image`. The group is created by setup under this exact
+        // name, so the assignment names a resource the same template built. A resource-group
+        // scope would reach every sibling sandbox in the deployment, which is what makes the
+        // stack scope deliberately absent rather than merely unset.
+        "binding": {
+          "resource": {
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
           }
         }
       }

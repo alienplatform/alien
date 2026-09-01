@@ -7,7 +7,7 @@ use alien_core::{
     Stack, StackState,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, permission_set_reaches_a_microvm_session};
+use alien_permissions::{get_permission_set, permission_set_reaches_a_sandbox_session};
 use async_trait::async_trait;
 
 pub const REMOTE_BINDINGS_ID: &str = "access";
@@ -198,9 +198,12 @@ fn validate_remote_sandboxes_are_deliverable(stack: &Stack, mutation_name: &str)
 
 /// Refuses a remotely published sandbox that the deployment's own workloads can also reach.
 ///
-/// One MicroVM image serves every session of a sandbox and AWS scopes a token mint no finer than
-/// the image, so a remote caller holding raw credentials can read, suspend, terminate or mint into
-/// sessions the customer's own compute started. Single tenancy is the only containment available.
+/// Neither cloud that publishes a sandbox remotely can scope the grant to a subset of its
+/// sessions, so the grant reaches every session of the sandbox whoever started it. On AWS one
+/// MicroVM image serves them all and a token mint scopes no finer than the image; on Azure the
+/// `SandboxGroup Data Owner` role covers `sandboxGroups/*` on the one group the sandbox is. Either
+/// way a remote caller holding raw credentials can read, suspend, terminate or reach into sessions
+/// the customer's own compute started, and single tenancy is the only containment available.
 fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &str) -> Result<()> {
     for (resource_id, entry) in &stack.resources {
         if !entry.has_remote_bindings() || entry.config.resource_type() != Sandbox::RESOURCE_TYPE {
@@ -226,9 +229,14 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// Three routes, none of which the vendor's own `-access` grant travels: a compute link, a
 /// permission profile, and a stack permission set on a user-declared ServiceAccount. Reach is
 /// decided by the resolved set's session-reaching verbs, never by a set id — an inline set an
-/// author names anything defeats a prefix test. This scan is shaped for the AWS routes; what
-/// keeps it honest for GCP is the platform gate refusing a GCP remote sandbox before this answer
-/// is used, not anything this function checks.
+/// author names anything defeats a prefix test.
+///
+/// The three routes are declaration-level — a link, a profile or a stack set is the same edge
+/// whichever cloud renders it — but the verb test two of them reach is not, so
+/// `permission_set_reaches_a_sandbox_session` inspects every cloud a set declares. A set carrying
+/// an Azure block alone would otherwise answer "reaches nothing" while granting the whole sandbox
+/// data plane. What keeps this honest for GCP is the platform gate refusing a GCP remote sandbox
+/// before this answer is used, not anything this function checks.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
@@ -265,7 +273,7 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
                 account
                     .stack_permission_sets
                     .iter()
-                    .any(permission_set_reaches_a_microvm_session)
+                    .any(permission_set_reaches_a_sandbox_session)
             })
             .map(|_| format!("service account '{id}' can start sessions in it"))
     })
@@ -278,9 +286,9 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
 /// rejects an unknown set before it grants anything.
 fn reference_reaches_a_session(reference: &PermissionSetReference) -> bool {
     match reference {
-        PermissionSetReference::Inline(set) => permission_set_reaches_a_microvm_session(set),
+        PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox_session(set),
         PermissionSetReference::Name(name) => {
-            get_permission_set(name).is_some_and(permission_set_reaches_a_microvm_session)
+            get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
         }
     }
 }
@@ -801,6 +809,71 @@ mod tests {
                 .contains("service account 'runner' can start sessions in it"),
             "the refusal must name the service account, got: {error}"
         );
+    }
+
+    /// The same escape, written in Azure's vocabulary instead of AWS's.
+    ///
+    /// A `ServiceAccount`'s `stack_permission_sets` are always inline and always author-written,
+    /// so the reach scan is the only thing standing between the deployment's own compute and a
+    /// sandbox published to a remote caller. A scan that reads AWS actions alone answers "reaches
+    /// nothing" for a set that grants Azure's entire sandbox data plane at resource-group scope,
+    /// and the stack deploys with the customer's compute and the remote caller both holding it —
+    /// which is the single condition `sandbox/remote-execute` says is the only containment
+    /// available.
+    ///
+    /// Two shapes, because Azure spells the same reach two ways: the predefined role, and the
+    /// `dataActions` underneath it.
+    #[tokio::test]
+    async fn a_remote_sandbox_reached_by_an_azure_only_service_account_set_is_refused() {
+        let azure_set = |id: &str, grant: serde_json::Value| -> alien_core::permissions::PermissionSet {
+            serde_json::from_value(serde_json::json!({
+                "id": id,
+                "description": "custom",
+                "platforms": { "azure": [{
+                    "grant": grant,
+                    "binding": { "stack": { "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}" } }
+                }]}
+            }))
+            .expect("valid inline permission set")
+        };
+
+        for (label, grant) in [
+            (
+                "the predefined role",
+                serde_json::json!({ "predefinedRoles": ["Container Apps SandboxGroup Data Owner"] }),
+            ),
+            (
+                "the dataActions underneath it",
+                serde_json::json!({
+                    "dataActions": [
+                        "Microsoft.App/sandboxGroups/sandboxes/executeShellCommand/action"
+                    ]
+                }),
+            ),
+        ] {
+            let account = ServiceAccount::new("runner".to_string())
+                .stack_permission_set(azure_set("custom/telemetry", grant))
+                .build();
+            let stack = Stack::new("application".to_string())
+                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .add(account, ResourceLifecycle::Live)
+                .build();
+
+            let Err(error) = RemoteBindingsMutation
+                .mutate(stack, &StackState::new(Platform::Azure), &config())
+                .await
+            else {
+                panic!("{label} reaches the session and must be refused")
+            };
+
+            assert_eq!(error.code, "STACK_MUTATION_FAILED", "{label}");
+            assert!(
+                error
+                    .to_string()
+                    .contains("service account 'runner' can start sessions in it"),
+                "{label}: the refusal must name the service account, got: {error}"
+            );
+        }
     }
 
     #[tokio::test]

@@ -388,6 +388,26 @@ mod tests {
     use std::collections::HashMap;
     use tempfile::TempDir;
 
+    /// Waits for a build to leave `Running`, or fails saying what it was still doing.
+    ///
+    /// Polled rather than slept: a fixed wait is a bet on how long a process takes to spawn and
+    /// exit, and it is lost under load or alongside the other tests in this module rather than
+    /// when the code is wrong. The deadline is generous because it only bounds a hang.
+    async fn settled_status(local_build: &LocalBuild, id: &str) -> BuildExecution {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        loop {
+            let status = local_build.get_build_status(id).await.unwrap();
+            if status.status != BuildStatus::Running {
+                return status;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "build '{id}' was still Running after 30s"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+    }
+
     #[tokio::test]
     async fn test_local_build_success() {
         let temp_dir = TempDir::new().unwrap();
@@ -410,10 +430,7 @@ mod tests {
         assert!(!execution.id.is_empty());
         assert_eq!(execution.status, BuildStatus::Running);
 
-        // Wait a bit for the build to complete
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        let status = local_build.get_build_status(&execution.id).await.unwrap();
+        let status = settled_status(&local_build, &execution.id).await;
         assert_eq!(status.status, BuildStatus::Succeeded);
         assert!(status.end_time.is_some());
     }
@@ -437,11 +454,10 @@ mod tests {
         assert!(!execution.id.is_empty());
         assert_eq!(execution.status, BuildStatus::Running);
 
-        // Wait a bit for the build to complete
-        tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
-        let status = local_build.get_build_status(&execution.id).await.unwrap();
-        assert_eq!(status.status, BuildStatus::Succeeded); // Note: We assume success if process exits cleanly
+        // Succeeded because the local backend reports a clean exit as success; the script's own
+        // failure is not what this pins.
+        let status = settled_status(&local_build, &execution.id).await;
+        assert_eq!(status.status, BuildStatus::Succeeded);
         assert!(status.end_time.is_some());
     }
 

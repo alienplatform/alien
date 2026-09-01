@@ -134,25 +134,70 @@ pub const MICROVM_SESSION_LIFECYCLE_ACTIONS: &[&str] = &[
     "lambda:GetMicrovm",
 ];
 
-/// Whether `permission_set` grants anything that addresses a MicroVM session.
+/// Whether `permission_set` grants anything that addresses a sandbox session, on any cloud that
+/// publishes one.
 ///
 /// Bindings are deliberately not consulted. `${stackPrefix}` is uninterpolated this early and an
 /// inline set's ARNs are free-form user strings, so any ARN comparison is either unsound or
 /// widened past by writing `*`. Carrying the verb at all is the answer.
 ///
-/// AWS only: it scans for the verbs that reach an AWS MicroVM session. The other clouds do not
-/// expose a session through the stack grants this inspects.
-pub fn permission_set_reaches_a_microvm_session(
+/// Per-cloud rather than per-verb-list, because the verbs are not comparable: AWS names actions,
+/// Azure grants the same reach through a predefined role or through `dataActions`. A set is
+/// inspected on every cloud it declares — a caller asking "can anything else here reach this
+/// sandbox" is asking about the deployment, and a set carrying an Azure block alone would
+/// otherwise answer no while granting the whole data plane.
+pub fn permission_set_reaches_a_sandbox_session(
     permission_set: &alien_core::permissions::PermissionSet,
 ) -> bool {
-    permission_set
+    let reaches_on_aws = permission_set
         .platforms
         .aws
         .iter()
         .flatten()
         .filter(|entry| entry.effect.is_allow())
         .flat_map(|entry| entry.grant.actions.iter().flatten())
-        .any(|action| action_reaches_a_microvm_session(action))
+        .any(|action| action_reaches_a_microvm_session(action));
+
+    let reaches_on_azure = permission_set
+        .platforms
+        .azure
+        .iter()
+        .flatten()
+        .any(|entry| {
+            entry
+                .grant
+                .predefined_roles
+                .iter()
+                .flatten()
+                .any(|role| role == AZURE_SANDBOX_DATA_PLANE_ROLE)
+                || entry
+                    .grant
+                    .data_actions
+                    .iter()
+                    .flatten()
+                    .any(|action| data_action_reaches_a_sandbox_session(action))
+        });
+
+    reaches_on_aws || reaches_on_azure
+}
+
+/// The predefined role carrying Azure's whole sandbox data plane, session contents included.
+const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Data Owner";
+
+/// Whether one Azure `dataAction`, possibly carrying a `*`, addresses a sandbox session.
+///
+/// Lifecycle counts as reach for the same reason `RunMicrovm` does on AWS: whoever starts a
+/// session can put whatever it likes inside the one it started. A wildcard under the sandbox
+/// namespace is cleared rather than matched literally, so `…/sandboxes/*` fails closed.
+fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
+    const SANDBOX_NAMESPACE: &str = "microsoft.app/sandboxgroups/sandboxes";
+    let action = action.to_ascii_lowercase();
+    action.starts_with(SANDBOX_NAMESPACE)
+        && (action.contains('*')
+            || action.ends_with("/write")
+            || action.ends_with("/delete")
+            || action.ends_with("/action")
+            || action.ends_with("/read"))
 }
 
 /// Whether one IAM action, possibly carrying a `*`, can authorize an operation on a session.
@@ -264,8 +309,9 @@ mod tests {
     }
 
     /// The Remote Bindings platform gate refuses a kind whose set does not cover the deployment's
-    /// platform, so this data is what decides where each kind may be published. `sandbox/remote-execute`
-    /// is AWS-only, and `alien-manager`'s resolve route hardcodes the same answer.
+    /// platform, so this data is what decides where each kind may be published.
+    /// `sandbox/remote-execute` covers AWS and Azure; `alien-manager`'s resolve route carries the
+    /// matching pair of arms.
     #[test]
     fn remote_binding_permission_sets_cover_the_platforms_that_support_them() {
         use alien_core::Platform;
@@ -283,11 +329,16 @@ mod tests {
             }
         }
 
-        assert!(permission_set_covers_platform(
-            "sandbox/remote-execute",
-            Platform::Aws
-        ));
-        for platform in [Platform::Gcp, Platform::Azure, Platform::Local] {
+        // Both clouds whose sandbox parent setup can create and then scope a grant to: an AWS
+        // MicroVM image, and an Azure sandbox group.
+        for platform in [Platform::Aws, Platform::Azure] {
+            assert!(permission_set_covers_platform(
+                "sandbox/remote-execute",
+                platform
+            ));
+        }
+
+        for platform in [Platform::Gcp, Platform::Local] {
             assert!(
                 !permission_set_covers_platform("sandbox/remote-execute", platform),
                 "widening sandbox/remote-execute to {platform} must be done together with \

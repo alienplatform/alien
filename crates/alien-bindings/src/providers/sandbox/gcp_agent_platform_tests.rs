@@ -1126,8 +1126,8 @@ fn the_engine_is_reduced_to_a_bare_segment() {
 // ---- capabilities, session fields and terminate idempotency ------------------------------------
 
 /// The client-shaped access denial: what a delete of a sandbox under an engine this deployment was
-/// not granted returns. Measured against the live API, which answers a cross-engine `:execute` with
-/// `PERMISSION_DENIED` naming the sandbox environment.
+/// not granted returns. The API answers a cross-engine call with `PERMISSION_DENIED` naming the
+/// sandbox environment, so the denial arrives as a refusal rather than as a not-found.
 fn access_denied() -> AlienError<AgentPlatformErrorData> {
     AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
         resource_type: "SandboxEnvironment".to_string(),

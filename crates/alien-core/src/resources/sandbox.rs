@@ -285,10 +285,10 @@ impl SandboxCapabilities {
                 snapshot: false,
                 domain_egress_rules: true,
                 egress_deny: true,
-                // Measured on the wire, twice: the data plane takes a continuous cpu/memory/disk
-                // surface and states its own rule in the refusal — `CPU must be n×250m for
-                // n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. A declared
-                // `250m`/`512Mi` gives `nproc=1` and a 727 MB `MemTotal` inside, and an
+                // The data plane takes a continuous cpu/memory/disk surface and refuses anything
+                // outside its own rule: `CPU must be n×250m for n=1..64 (0.25–16 cores);
+                // Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. The ceilings hold inside the
+                // session — `250m`/`512Mi` gives `nproc=1` and a 727 MB `MemTotal`, and an
                 // over-allocation raises `MemoryError` while the sandbox stays running. There is
                 // no tier enum; `azure_session_limits` checks the rule above at plan time.
                 enforced_limits: true,
@@ -1265,8 +1265,8 @@ mod tests {
         // one where `deny` and a hostname list are the same object.
         assert!(azure.domain_egress_rules);
         assert!(azure.egress_deny);
-        // Measured, not assumed: the data plane honours a continuous cpu/memory/disk surface and
-        // refuses anything outside `n×250m` with the rule in the message.
+        // The data plane honours a continuous cpu/memory/disk surface and refuses anything
+        // outside `n×250m`, with the rule in the message.
         assert!(azure.enforced_limits);
         assert!(azure.suspend_resume);
         // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
@@ -1493,14 +1493,9 @@ mod tests {
             .expect("Azure creates the sandbox under a Deny policy with full inspection");
     }
 
-    /// A sandbox naming no ceilings is valid everywhere, and still resolves to a concrete set.
-    ///
-    /// This used to assert the other half too — that Azure refused *declared* ceilings, because
-    /// it was the one platform with `enforcedLimits: false`. It no longer is: the data plane was
-    /// measured honouring cpu, memory and disk, so there is no platform left that takes a sandbox
-    /// and ignores its ceilings, and that half of the assertion has no subject. What replaces it
-    /// is `azure_sizes_follow_the_rule_the_data_plane_states`, which checks the rule Azure
-    /// actually applies rather than that it applies none.
+    /// A sandbox naming no ceilings is valid on every platform and still resolves to a concrete
+    /// set. The rule Azure applies to ceilings that *are* declared is pinned separately, by
+    /// `azure_sizes_follow_the_rule_the_data_plane_states`.
     #[test]
     fn a_sandbox_declaring_no_ceilings_takes_the_platforms_own() {
         sandbox_with(SandboxEgress::Deny, Vec::new())
@@ -1528,10 +1523,10 @@ mod tests {
 
     /// Azure states its own sizing rule when it refuses, and this is that rule.
     ///
-    /// Measured on the live data plane rather than taken from the docs page, which still shows a
-    /// five-value XS-XL tier table that does not exist: `250m`, `1500m` and `4000m` are all
-    /// accepted and honoured, `32000m` and `333m` are both refused. Checked at plan time because
-    /// the alternative is a package that renders cleanly and dies at the customer's first session.
+    /// The wire disagrees with the vendor docs page, which shows a five-value XS-XL tier table
+    /// the API does not implement: `250m`, `1500m` and `4000m` are all accepted and honoured,
+    /// while `32000m` and `333m` are refused. Checked at plan time because the alternative is a
+    /// package that renders cleanly and dies at the first session.
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
