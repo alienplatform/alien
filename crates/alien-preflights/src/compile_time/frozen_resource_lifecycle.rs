@@ -74,8 +74,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             }
 
             // A linked sandbox's binding carries `imageArn` and `imageVersion`, both required
-            // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller has
-            // built, so the setup artifact would emit a binding that fails to deserialize at startup.
+            // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller
+            // has built, so the emitted binding would fail to deserialize at startup.
             for link in alien_core::links_of(&resource_entry.config) {
                 let Some(target) = stack.resources.get(link.id()) else {
                     continue;

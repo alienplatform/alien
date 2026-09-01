@@ -428,7 +428,8 @@ fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
     (stack, settings)
 }
 
-/// The same stack with the sandbox declared Live, which is what moves the build to runtime.
+/// The same stack with the sandbox declared Live, so its image is built at runtime instead of
+/// `terraform apply`.
 fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
@@ -454,7 +455,8 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
 /// remain, since `sandbox/provision` grants `iam:PassRole` but no `iam:CreateRole`.
 ///
 /// Validated with real `terraform validate`, not text matching: the failure this guards against
-/// is a plan-time one — reading `LatestActiveImageVersion` off a resource the module no longer declares.
+/// is a plan-time one — reading `LatestActiveImageVersion` off a resource the module no longer
+/// declares.
 #[test]
 fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
     let (stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);

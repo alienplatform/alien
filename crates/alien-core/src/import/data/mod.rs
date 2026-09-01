@@ -279,9 +279,9 @@ mod tests {
         assert_eq!(native.preview_ports, vec![3000]);
     }
 
-    /// A runtime-provisioned sandbox registers without an image; the build role and bundle take
-    /// its place. A contract that rejects this payload fails only after `terraform apply` or
-    /// stack creation has already succeeded, in the customer's own account.
+    /// A runtime-provisioned sandbox registers without an image; the build role and bundle take its
+    /// place. A contract that silently drops those fields as unknown fails only after `terraform
+    /// apply` or stack creation has already succeeded, in the customer's own account.
     #[test]
     fn a_runtime_provisioned_sandbox_registers_without_an_image() {
         let runtime: AwsSandboxImportData = serde_json::from_value(json!({

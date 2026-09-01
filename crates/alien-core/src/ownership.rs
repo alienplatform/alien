@@ -4,7 +4,7 @@ use crate::ResourceLifecycle;
 ///
 /// Most types answer with the lifecycle alone. A sandbox does not: a Live one still needs the
 /// setup stack to create its build role, since the runtime controller may only *pass* it —
-/// `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`. Only the image moves to runtime.
+/// `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`. Only the image moves.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetupEmission {
     /// Never part of the setup artifact; a runtime controller owns the whole resource.

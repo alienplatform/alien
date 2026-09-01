@@ -422,16 +422,16 @@ impl TfEmitter for AwsSandboxEmitter {
                 "allowEgress",
                 Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
+            ("imageArn", image_property(label, "ImageArn")),
+            (
+                "imageVersion",
+                image_property(label, "LatestActiveImageVersion"),
+            ),
             (
                 "region",
                 expr::traversal(["data", "aws_region", "current", "region"]),
             ),
         ];
-        fields.push(("imageArn", image_property(label, "ImageArn")));
-        fields.push((
-            "imageVersion",
-            image_property(label, "LatestActiveImageVersion"),
-        ));
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds",

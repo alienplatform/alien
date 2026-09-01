@@ -236,9 +236,9 @@ impl CfEmitter for AwsSandboxEmitter {
 
         let mut resources = vec![role];
         resources.append(&mut egress_resources);
-        // A Live sandbox's image is built by the runtime controller once the deployment
-        // registers — only then is the customer account a principal Alien's registry can open
-        // to. The build role and connector still come from here; the controller may pass them.
+        // A Live sandbox's image is built by the runtime controller once the deployment registers —
+        // only then is a customer account a principal Alien's registry can open to. The build role
+        // and connector still come from here; the controller may pass but not create them.
         if !provisioned_at_runtime(ctx) {
             resources.push(image);
         }
@@ -303,16 +303,16 @@ impl CfEmitter for AwsSandboxEmitter {
                 "allowEgress".to_string(),
                 CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
             ),
+            (
+                "imageArn".to_string(),
+                CfExpression::get_att(image_id, "ImageArn"),
+            ),
+            (
+                "imageVersion".to_string(),
+                CfExpression::get_att(image_id, "LatestActiveImageVersion"),
+            ),
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
-        fields.push((
-            "imageArn".to_string(),
-            CfExpression::get_att(image_id, "ImageArn"),
-        ));
-        fields.push((
-            "imageVersion".to_string(),
-            CfExpression::get_att(image_id, "LatestActiveImageVersion"),
-        ));
         if let Some(seconds) = sandbox.session.idle_suspend_seconds {
             fields.push((
                 "idleSuspendSeconds".to_string(),
@@ -403,6 +403,8 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 /// controller cannot derive — the build role it passes and the bundle it builds from — plus the
 /// egress facts the setup stack still owns.
 fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
+    // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
+    // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
     let role_id = format!("{image_id}BuildRole");
     Ok(CfExpression::object([
         ("previewPorts", preview_ports(sandbox)),
