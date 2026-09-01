@@ -6,15 +6,17 @@
 import * as z from "zod";
 
 /**
- * @description AWS Sandbox ImportData.\n\nCarries the Frozen parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsession identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every session started on the previous one.
+ * @description AWS Sandbox ImportData.\n\nCarries the sandbox\'s parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsession identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every session started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by\nstack creation and names its image; a Live one is built by the controller after the deployment\nregisters, so it names the build role and bundle instead, leaving the image fields empty.
  */
 export const AwsSandboxImportDataSchema = z.object({
     "allowEgress": z.optional(z.boolean().describe("Whether the declaration asked for open egress.\n\nThe controller builds the binding from this, and an empty connector list cannot be read\nwithout it: a stripped `deny` import would otherwise look exactly like an open sandbox.")),
+"buildRoleArn": z.string().describe("Role the controller passes to `CreateMicrovmImage`. Setup owns it because\n`sandbox/provision` grants the controller `iam:PassRole` and no `iam:CreateRole`.").nullish(),
+"bundleUri": z.string().describe("Bundle the controller builds the image from. Only a runtime-provisioned sandbox carries it.").nullish(),
 "egressConnectorArns": z.optional(z.array(z.string()).describe("Egress network connectors. Deleting one while MicroVMs still reference it breaks their\nnetworking, so teardown needs them named rather than rediscovered.")),
-"imageArn": z.string().describe("MicroVM image ARN."),
-"imageIdentifier": z.string().describe("MicroVM image identifier."),
-"imageVersion": z.string().describe("Image version the sessions are scoped to. Re-imported on every image roll."),
+"imageArn": z.string().describe("MicroVM image ARN. Absent until a runtime-provisioned image has been built.").nullish(),
+"imageIdentifier": z.string().describe("MicroVM image identifier. Absent until a runtime-provisioned image has been built.").nullish(),
+"imageVersion": z.string().describe("Image version the sessions are scoped to. Re-imported on every image roll, and absent\nuntil a runtime-provisioned image has been built.").nullish(),
 "previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports a preview capability may be minted for; empty means preview is not offered."))
-    }).describe("AWS Sandbox ImportData.\n\nCarries the Frozen parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsession identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every session started on the previous one.")
+    }).describe("AWS Sandbox ImportData.\n\nCarries the sandbox's parent from the setup emitter to the runtime controller. The image\n**version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only\nsession identity there is, and a controller holding a stale version would enumerate the wrong\nset and orphan every session started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by\nstack creation and names its image; a Live one is built by the controller after the deployment\nregisters, so it names the build role and bundle instead, leaving the image fields empty.")
 
 export type AwsSandboxImportData = z.infer<typeof AwsSandboxImportDataSchema>

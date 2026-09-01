@@ -12,8 +12,9 @@ use alien_core::{
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
-    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -239,14 +240,28 @@ pub fn generate_cloudformation_template(
     }
 
     let names = logical_names(stack)?;
+    // CREATE_COMPLETE reads as "the package is installed". For a runtime-provisioned sandbox the
+    // image does not exist yet, and the stack description is the one line every console shows.
+    let runtime_sandbox = stack.resources().any(|(_, entry)| {
+        entry.config.resource_type().0.as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
+            && entry.lifecycle == ResourceLifecycle::Live
+    });
     let mut template = CfTemplate {
         aws_template_format_version: TEMPLATE_VERSION.to_string(),
-        description: Some(
-            options
+        description: Some({
+            let base = options
                 .description
                 .clone()
-                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id())),
-        ),
+                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id()));
+            if runtime_sandbox {
+                format!(
+                    "{base}. The sandbox image is built after the deployment registers, so a \
+                     completed stack does not mean the sandbox can accept sessions yet."
+                )
+            } else {
+                base
+            }
+        }),
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
