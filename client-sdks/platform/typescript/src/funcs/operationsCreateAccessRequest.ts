@@ -21,16 +21,17 @@ import {
 import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
+import * as models from "../models/index.js";
 import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+ * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
  */
 export function operationsCreateAccessRequest(
   client: AlienCore,
-  request?: operations.CreateAccessRequestRequest | undefined,
+  request?: models.CreateAccessRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -55,7 +56,7 @@ export function operationsCreateAccessRequest(
 
 async function $do(
   client: AlienCore,
-  request?: operations.CreateAccessRequestRequest | undefined,
+  request?: models.CreateAccessRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -77,9 +78,7 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.CreateAccessRequestRequest$outboundSchema.optional().parse(
-        value,
-      ),
+      models.CreateAccessRequest$outboundSchema.optional().parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {

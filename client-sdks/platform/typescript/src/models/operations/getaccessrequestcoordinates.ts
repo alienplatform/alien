@@ -4,9 +4,9 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 export type GetAccessRequestCoordinatesGlobals = {
   /**
@@ -19,22 +19,11 @@ export type GetAccessRequestCoordinatesRequest = {
   id: string;
 };
 
-export const GetAccessRequestCoordinatesStatus = {
-  PendingApproval: "pending-approval",
-  Queued: "queued",
-  CustomerApproved: "customer-approved",
-  Expired: "expired",
-  Rejected: "rejected",
-} as const;
-export type GetAccessRequestCoordinatesStatus = ClosedEnum<
-  typeof GetAccessRequestCoordinatesStatus
->;
-
 /**
  * The approve command (or null) and current status.
  */
 export type GetAccessRequestCoordinatesResponse = {
-  status: GetAccessRequestCoordinatesStatus;
+  status: models.AccessRequestStatus;
   kubectlApprove: string | null;
 };
 
@@ -62,16 +51,11 @@ export function getAccessRequestCoordinatesRequestToJSON(
 }
 
 /** @internal */
-export const GetAccessRequestCoordinatesStatus$inboundSchema: z.ZodEnum<
-  typeof GetAccessRequestCoordinatesStatus
-> = z.enum(GetAccessRequestCoordinatesStatus);
-
-/** @internal */
 export const GetAccessRequestCoordinatesResponse$inboundSchema: z.ZodType<
   GetAccessRequestCoordinatesResponse,
   unknown
 > = z.object({
-  status: GetAccessRequestCoordinatesStatus$inboundSchema,
+  status: models.AccessRequestStatus$inboundSchema,
   kubectlApprove: z.nullable(z.string()),
 });
 

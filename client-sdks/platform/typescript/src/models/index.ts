@@ -3,6 +3,7 @@
  */
 
 export * from "./acceptworkspaceinvitationresponse.js";
+export * from "./accessrequeststatus.js";
 export * from "./agentsessionapprovalgrantedevent.js";
 export * from "./agentsessionapprovalrequestedevent.js";
 export * from "./agentsessionapproveresponse.js";
@@ -49,6 +50,7 @@ export * from "./configuremodelsrequest.js";
 export * from "./configureremotesandboxrequest.js";
 export * from "./containerregistrymanagersnapshot.js";
 export * from "./containerregistrystate.js";
+export * from "./createaccessrequest.js";
 export * from "./createapikeyrequest.js";
 export * from "./createapikeyresponse.js";
 export * from "./createcommandrequest.js";
@@ -288,6 +290,8 @@ export * from "./userprofile.js";
 export * from "./userprofilesetuprequest.js";
 export * from "./userrole.js";
 export * from "./usersubject.js";
+export * from "./verifyoperationcheckrequest.js";
+export * from "./verifyoperationcheckresponse.js";
 export * from "./workspace.js";
 export * from "./workspacebillingentitlements.js";
 export * from "./workspacegatewayoverview.js";

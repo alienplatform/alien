@@ -7,6 +7,7 @@ import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
 export type QueueAccessRequestGlobals = {
   /**
@@ -19,21 +20,48 @@ export type QueueAccessRequestRequest = {
   id: string;
 };
 
+export type QueueAccessRequestDeployment = {
+  id: string;
+  name: string;
+  deploymentGroup?: models.DeploymentGroupInfo | undefined;
+};
+
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export const QueueAccessRequestTier = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export type QueueAccessRequestTier = ClosedEnum<typeof QueueAccessRequestTier>;
+
 export type QueueAccessRequestCommand = {
   command: string;
   summary: string;
   params?: any | null | undefined;
+  /**
+   * How risky an operation is (declared by the plugin metadata).
+   */
+  tier?: QueueAccessRequestTier | undefined;
 };
 
-export const QueueAccessRequestStatus = {
-  PendingApproval: "pending-approval",
-  Queued: "queued",
-  CustomerApproved: "customer-approved",
-  Expired: "expired",
-  Rejected: "rejected",
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export const QueueAccessRequestMaxRisk = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
 } as const;
-export type QueueAccessRequestStatus = ClosedEnum<
-  typeof QueueAccessRequestStatus
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export type QueueAccessRequestMaxRisk = ClosedEnum<
+  typeof QueueAccessRequestMaxRisk
 >;
 
 /**
@@ -42,11 +70,17 @@ export type QueueAccessRequestStatus = ClosedEnum<
 export type QueueAccessRequestResponse = {
   id: string;
   deploymentId: string;
-  remediationPlanId: string;
+  deployment?: QueueAccessRequestDeployment | undefined;
+  remediationPlanId: string | null;
   title: string;
   reason: string | null;
   commands: Array<QueueAccessRequestCommand>;
-  status: QueueAccessRequestStatus;
+  operationPattern: string | null;
+  /**
+   * How risky an operation is (declared by the plugin metadata).
+   */
+  maxRisk: QueueAccessRequestMaxRisk | null;
+  status: models.AccessRequestStatus;
   approvedUntil: string | null;
   kubectlApprove: string | null;
 };
@@ -73,6 +107,31 @@ export function queueAccessRequestRequestToJSON(
 }
 
 /** @internal */
+export const QueueAccessRequestDeployment$inboundSchema: z.ZodType<
+  QueueAccessRequestDeployment,
+  unknown
+> = z.object({
+  id: z.string(),
+  name: z.string(),
+  deploymentGroup: models.DeploymentGroupInfo$inboundSchema.optional(),
+});
+
+export function queueAccessRequestDeploymentFromJSON(
+  jsonString: string,
+): SafeParseResult<QueueAccessRequestDeployment, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => QueueAccessRequestDeployment$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'QueueAccessRequestDeployment' from JSON`,
+  );
+}
+
+/** @internal */
+export const QueueAccessRequestTier$inboundSchema: z.ZodEnum<
+  typeof QueueAccessRequestTier
+> = z.enum(QueueAccessRequestTier);
+
+/** @internal */
 export const QueueAccessRequestCommand$inboundSchema: z.ZodType<
   QueueAccessRequestCommand,
   unknown
@@ -80,6 +139,7 @@ export const QueueAccessRequestCommand$inboundSchema: z.ZodType<
   command: z.string(),
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
+  tier: QueueAccessRequestTier$inboundSchema.optional(),
 });
 
 export function queueAccessRequestCommandFromJSON(
@@ -93,9 +153,9 @@ export function queueAccessRequestCommandFromJSON(
 }
 
 /** @internal */
-export const QueueAccessRequestStatus$inboundSchema: z.ZodEnum<
-  typeof QueueAccessRequestStatus
-> = z.enum(QueueAccessRequestStatus);
+export const QueueAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
+  typeof QueueAccessRequestMaxRisk
+> = z.enum(QueueAccessRequestMaxRisk);
 
 /** @internal */
 export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
@@ -104,11 +164,15 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   deploymentId: z.string(),
-  remediationPlanId: z.string(),
+  deployment: z.lazy(() => QueueAccessRequestDeployment$inboundSchema)
+    .optional(),
+  remediationPlanId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
   commands: z.array(z.lazy(() => QueueAccessRequestCommand$inboundSchema)),
-  status: QueueAccessRequestStatus$inboundSchema,
+  operationPattern: z.nullable(z.string()),
+  maxRisk: z.nullable(QueueAccessRequestMaxRisk$inboundSchema),
+  status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
   kubectlApprove: z.nullable(z.string()),
 });

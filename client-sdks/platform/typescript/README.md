@@ -342,9 +342,12 @@ run();
 * [getPolicy](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
-* [createAccessRequest](docs/sdks/operations/README.md#createaccessrequest) - Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+* [verifyCheck](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+* [createAccessRequest](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+* [listAccessRequests](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
 * [getAccessRequestCoordinates](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
+* [getAccessRequest](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 
 ### [OperatorManifests](docs/sdks/operatormanifests/README.md)
 
@@ -608,17 +611,20 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-- [`operationsCreateAccessRequest`](docs/sdks/operations/README.md#createaccessrequest) - Create a pending access request covering a remediation plan's commands. Awaits the engineer gate before it is queued for the operator.
+- [`operationsCreateAccessRequest`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
+- [`operationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 - [`operationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 - [`operationsGetPolicy`](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 - [`operationsInvoke`](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
+- [`operationsListAccessRequests`](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 - [`operationsListPlugins`](docs/sdks/operations/README.md#listplugins) - List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 - [`operationsPublishPlugin`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 - [`operationsQueueAccessRequest`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
 - [`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
 - [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
+- [`operationsVerifyCheck`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 - [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
