@@ -109,6 +109,15 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         !rendered.contains("LatestActiveImageVersion"),
         "no attribute of an image that is not created may be read: {rendered}"
     );
+
+    // Setup registration builds its expected set from `should_emit_in_setup` and refuses a
+    // registration missing any of them (`alien-manager/src/routes/stack.rs`). A Live sandbox is
+    // emitted in setup, so it owes an entry — which is why the emitter returns a runtime import
+    // ref rather than nothing. Dropping that would fail every install at registration.
+    assert!(
+        rendered.contains("\"agents\""),
+        "the sandbox must still register under its own id: {rendered}"
+    );
 }
 
 /// The Frozen path is the one every installed stack is on, and it does not move.
