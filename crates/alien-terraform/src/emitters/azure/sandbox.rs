@@ -32,7 +32,7 @@ use hcl::expr::Expression;
 /// The preview API version the sandbox group is created at.
 ///
 /// Pinned rather than floating, and the same version the ARM and data-plane clients use: ARM still
-/// answers older previews, so a version that drifts here fails as a shape difference rather than
+/// answers older previews, so a version that drifts here fails as a response mismatch rather than
 /// as a rejected request.
 const SANDBOX_GROUP_TYPE: &str = "Microsoft.App/sandboxGroups@2026-02-01-preview";
 

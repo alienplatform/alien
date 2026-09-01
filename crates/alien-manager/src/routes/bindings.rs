@@ -1344,19 +1344,15 @@ fn remote_sandbox_binding(
                 reason: format!("Sandbox resource '{resource_id}' has an invalid remote binding"),
             })?;
 
-    // A restricted egress is refused on both clouds, for mechanisms worth telling apart. On AWS
-    // starting a session on a connector is a third authorization, `lambda:PassNetworkConnector`,
-    // scoped to no resource and no condition key, so `sandbox/remote-execute` withholds it and a
-    // restricted sandbox could not start at all. On Azure the grant is a data-plane role whose
-    // holder creates sandboxes directly, so a declared policy would simply not apply to them —
-    // handing out the lease would report a restriction that is not one. Refused here rather than
-    // reaching the caller as an AccessDenied from inside its own `create()`, and behind the
-    // preflight that already refuses the declaration at deploy.
     // The stored binding must be the deployment's own cloud. The platform gate above only says
     // the grant exists there; without this, an AWS binding recorded on an Azure deployment would
     // resolve into an AWS credential lease for a sandbox that is not on AWS.
     match (deployment.platform, binding) {
         (Platform::Aws, SandboxBinding::Aws(binding)) => {
+            // The connector is unreachable rather than merely ungranted: starting a session on
+            // one is authorized as `lambda:PassNetworkConnector`, which `sandbox/remote-execute`
+            // withholds. Refused here rather than as an AccessDenied inside the caller's own
+            // `create()`; see `alien_core::remote_bindings::remote_binding_undeliverable_reason`.
             if !binding.egress_connector_arns.is_empty() {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
@@ -1377,6 +1373,9 @@ fn remote_sandbox_binding(
             }))
         }
         (Platform::Azure, SandboxBinding::Azure(binding)) => {
+            // Bypassable rather than unreachable: the grant is a data-plane role whose holder
+            // creates sandboxes directly, so handing out the lease would report a restriction
+            // that is not one. Same reference as the AWS arm for the full contrast.
             if !matches!(binding.egress, alien_core::SandboxEgress::Allow) {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"

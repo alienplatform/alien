@@ -655,8 +655,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                         .iter()
                         .flatten()
                         // The annotation sits outside the code span: a reader has to be able to
-                        // tell the role's real name from a note about it, and this is the
-                        // strongest grant in the package.
+                        // tell the role's real name from a note about it.
                         .map(|role| format!("`{role}` (built-in role)"))
                         .collect();
                     granted.extend(
@@ -1213,7 +1212,7 @@ fn versions_body(
         ));
         if include_azapi_provider {
             // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
-            // preview type whose `body` shape a major bump is free to move.
+            // preview type, and a major bump is free to change what `body` accepts.
             provider_attrs.push(attr(
                 "azapi",
                 provider_decl_attr("Azure/azapi", ">= 2.6, < 3.0"),

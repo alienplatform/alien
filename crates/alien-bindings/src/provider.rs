@@ -2102,11 +2102,10 @@ mod tests {
     use super::*;
     use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
 
-    /// `azure_session_limits` refuses a declaration outside Azure's sizing rule at plan time, and
-    /// waves through a sandbox that declares nothing — because the values substituted here take
-    /// its place. Nothing else couples the two, so changing either constant to something the rule
-    /// refuses would put the failure back at create, where the customer reads it as a runtime
-    /// fault rather than a declaration they can fix.
+    /// `azure_session_limits` waves through a sandbox that declares nothing because the values
+    /// substituted here take its place. Nothing else couples the two, so changing either constant
+    /// to something the rule refuses would silently move the failure back to create (see
+    /// `azure_session_limits`'s doc for why that matters).
     #[test]
     fn the_substituted_azure_defaults_satisfy_the_plan_time_sizing_rule() {
         let declared_as_default = alien_core::Sandbox::new("agent-sbx".to_string())

@@ -4059,18 +4059,13 @@ mod tests {
         assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
     }
 
-    /// The row a caller reads describes the backend, not this sandbox's declaration.
-    ///
-    /// `domainEgressRules` answers "can Azure restrict egress to a hostname allowlist". A sandbox
-    /// declared `allow` does not use one, and reporting `false` there would tell a caller the
-    /// backend cannot do it at all — which is what a portable app branches on. Asserted on the
-    /// `allow` instance specifically, because that is the one a narrowing gets wrong.
+    /// Pins `capabilities()`'s doc: `domainEgressRules` must describe the backend even for a
+    /// sandbox declared `allow`, the case a narrowing would get wrong.
     #[test]
     fn capabilities_describe_the_backend_not_this_declaration() {
         let platform =
             SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a backend");
 
-        // Declared `allow`, and still reports the backend's full row.
         assert_eq!(
             sandbox_with(MockSandboxDataPlaneApi::new()).capabilities(),
             platform

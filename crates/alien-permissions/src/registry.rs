@@ -382,9 +382,8 @@ mod tests {
     }
 
     /// The wildcard branch decides whether a grant is claimed by the remote caller instead of the
-    /// deployment's management identity, so a shape it answers no to stays on an identity a second
-    /// tenant holds. Reading only the run before the first `*` answered no to a pattern naming the
-    /// namespace after it.
+    /// deployment's management identity, so a pattern it misses leaves reach on an identity a
+    /// second tenant holds.
     #[test]
     fn a_wildcard_naming_microvm_anywhere_reaches_a_session() {
         for action in [

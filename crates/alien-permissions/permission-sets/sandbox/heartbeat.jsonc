@@ -38,14 +38,9 @@
         // The stack binding is the resource group, wider than the one group this heartbeat reports
         // on: it can read the state of every sandbox group there, including one the deployment
         // did not create — a deployment can be pointed at a resource group its owner already uses,
-        // as `provision` notes. Azure expresses no scope between a group and its resource group.
-        //
-        // The resource binding is the narrower grant and is not deliverable for a sandbox today.
-        // The group is nameable — setup creates it, so an assignment can be scoped to it — so
-        // what blocks delivery is the setup path, which compiles resource-scoped management only
-        // for `worker/dispatch-command`, and the runtime path, which compiles it only for a
-        // Kubernetes cluster -- so no assignment is created from it. What the stack grant reaches
-        // is provisioning state, and no session contents.
+        // as `provision` notes. The resource binding is the narrower grant and is not deliverable
+        // for a sandbox today; see the fuller note in `sandbox/management`. What the stack grant
+        // reaches here is provisioning state, and no session contents.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"

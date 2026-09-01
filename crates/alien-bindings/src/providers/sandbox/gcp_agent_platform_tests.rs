@@ -189,8 +189,7 @@ async fn create_refuses_a_per_session_environment() {
         })
         .await
         .expect_err("a session environment must be refused");
-    // The same code AWS answers the identical condition with: the value is fine, the backend has
-    // nowhere to put it. A portable caller branching on the code must not get two answers.
+    // Same code AWS answers the identical condition with (see the reasoning above create's check).
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     assert!(error.to_string().contains("env"), "{error}");
     assert!(error.to_string().contains("per command"), "{error}");
@@ -1142,13 +1141,8 @@ fn access_denied() -> AlienError<AgentPlatformErrorData> {
     })
 }
 
-/// The row a caller reads describes the backend, not this sandbox's declaration.
-///
-/// `sessionLifetime` holds whether or not a ttl was declared. The API states `expireTime` is
-/// *always* provided on output regardless of what was sent on input, so a session created without
-/// a ttl still carries a deadline the platform terminates at — reporting `false` would tell a
-/// caller no lifetime is enforced while one is. Asserted on the no-ttl instance, which is the one
-/// a narrowing gets wrong.
+/// Pins `capabilities()`'s doc: `sessionLifetime` must stay true even for a session with no
+/// declared ttl, the case a narrowing would get wrong (Agent Platform always sets `expireTime`).
 #[test]
 fn capabilities_describe_the_backend_not_this_declaration() {
     let platform = SandboxCapabilities::gcp_agent_platform();

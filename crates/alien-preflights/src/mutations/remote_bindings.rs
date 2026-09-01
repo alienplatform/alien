@@ -238,11 +238,10 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// nothing asserts, so it is tracked separately rather than fixed in a sandbox-parity change.
 ///
 /// The three routes are declaration-level — a link, a profile or a stack set is the same edge
-/// whichever cloud renders it — but the verb test two of them reach is not, so
-/// `permission_set_reaches_a_sandbox_session` inspects every cloud a set declares. A set carrying
-/// an Azure block alone would otherwise answer "reaches nothing" while granting the whole sandbox
-/// data plane. What keeps this honest for GCP is the platform gate refusing a GCP remote sandbox
-/// before this answer is used, not anything this function checks.
+/// whichever cloud renders it — but the verb test two of them reach is not, so this calls
+/// `permission_set_reaches_a_sandbox_session`, which inspects every cloud a set declares (see its
+/// doc). What keeps this honest for GCP is the platform gate refusing a GCP remote sandbox before
+/// this answer is used, not anything this function checks.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
@@ -844,17 +843,10 @@ mod tests {
         );
     }
 
-    /// The same escape, written in Azure's vocabulary instead of AWS's.
-    ///
-    /// A `ServiceAccount`'s `stack_permission_sets` are always inline and always author-written,
-    /// so the reach scan is the only thing standing between the deployment's own compute and a
-    /// sandbox published to a remote caller. A scan that reads AWS actions alone answers "reaches
-    /// nothing" for a set that grants Azure's entire sandbox data plane at resource-group scope,
-    /// and the stack deploys with the customer's compute and the remote caller both holding it —
-    /// which is the single condition `sandbox/remote-execute` says is the only containment
-    /// available.
-    ///
-    /// Two shapes, because Azure spells the same reach two ways: the predefined role, and the
+    /// The same single-tenancy escape as the AWS case above, in Azure's vocabulary: the reach scan
+    /// has to catch a set granting Azure's whole sandbox data plane the same way it catches an AWS
+    /// one, or the stack deploys with the remote caller and the deployment's own compute both
+    /// holding it. Two shapes, because Azure spells reach two ways — the predefined role and the
     /// `dataActions` underneath it.
     #[tokio::test]
     async fn a_remote_sandbox_reached_by_an_azure_only_service_account_set_is_refused() {
@@ -925,13 +917,9 @@ mod tests {
         }
     }
 
-    /// An inline set does not have to be filed under the sandbox to reach it.
-    ///
-    /// The profile key scopes a *named* set, because `${resourceName}` interpolates to it. An
-    /// inline set carries its own scope string and `${stackPrefix}` interpolates for the author,
-    /// so one filed under an unrelated worker can name this sandbox's group and be granted on it —
-    /// a second tenant on a sandbox published to a remote caller, arriving through a key the gate
-    /// was not looking at.
+    /// An inline set does not have to be filed under the sandbox to reach it (see
+    /// `reaches_this_sandbox`'s doc for why). A second tenant on a sandbox published to a remote
+    /// caller, arriving through a key the gate was not looking at.
     #[tokio::test]
     async fn a_remote_sandbox_reached_by_an_inline_set_under_another_resource_is_refused() {
         let reaching_set: alien_core::permissions::PermissionSet = serde_json::from_value(

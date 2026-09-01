@@ -285,12 +285,10 @@ impl SandboxCapabilities {
                 snapshot: false,
                 domain_egress_rules: true,
                 egress_deny: true,
-                // The data plane takes a continuous cpu/memory/disk surface and refuses anything
-                // outside its own rule: `CPU must be n×250m for n=1..64 (0.25–16 cores);
-                // Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. The ceilings are enforced inside the
-                // session: an over-allocation raises `MemoryError` while the sandbox keeps
-                // running. There is no tier enum; `azure_session_limits` checks the rule at plan
-                // time.
+                // Enforced inside the session, not at create: an over-allocation raises
+                // `MemoryError` while the sandbox keeps running. There is no tier enum;
+                // `azure_session_limits` checks the sizing rule (see the `AZURE_*` constants)
+                // at plan time instead.
                 enforced_limits: true,
                 process_limit: false,
                 // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
@@ -668,16 +666,13 @@ impl Sandbox {
         Ok(image)
     }
 
-    /// Checks the declared ceilings against the rule Azure states in its own refusal.
+    /// Checks the declared ceilings against Azure's sizing rule, quoted at the `AZURE_*` constants
+    /// above.
     ///
-    /// Quoted from the data plane, which is where this rule is authoritative: *CPU must be n×250m
-    /// for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*. The surface is
-    /// continuous, not a size enum, so the values Alien already exposes map straight through and
-    /// there is nothing to snap to.
-    ///
-    /// Refused here rather than at the first session, for the same reason [`Self::microvm_tier`]
-    /// is: a value outside the rule renders into the package and fails at create, where the
-    /// customer reads it as a runtime fault rather than a declaration they can fix.
+    /// The surface is continuous, not a tier enum, so Alien's own units map straight through with
+    /// nothing to snap to. Refused here rather than at the first session, for the same reason
+    /// [`Self::microvm_tier`] is: a bad value would otherwise render into the package and fail
+    /// only at create, where it reads as a runtime fault instead of a declaration to fix.
     pub fn azure_session_limits(&self) -> Result<()> {
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared means the binding substitutes Alien's own default sizing, which is
@@ -1526,7 +1521,7 @@ mod tests {
     ///
     /// Azure's published tier table does not match what the API accepts: `250m`, `1500m` and
     /// `4000m` are valid sizes, `32000m` and `333m` are refused. Checked at plan time because the
-    /// alternative is a package that renders cleanly and dies at the first session.
+    /// alternative is a package that renders without error and dies at the first session.
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
@@ -1542,8 +1537,7 @@ mod tests {
         sized("4000m", "8192Mi", "40960Mi").expect("cpu, memory and disk are all honoured");
         sized("16000m", "32Gi", "320Gi").expect("the top of the range");
 
-        // A multiple, not just a range: `333m` sits inside 0.25-16 cores and is still refused, so
-        // a bounds-only check would pass a declaration that fails at create.
+        // Same off-step case `azure_session_limits` checks the multiple for, not just the range.
         let off_step = sized("333m", "512Mi", "5120Mi").expect_err("333m is not a step of 250m");
         assert_eq!(off_step.code, "SANDBOX_LIMIT_INVALID", "{off_step}");
         assert!(off_step.to_string().contains("cpu"), "{off_step}");

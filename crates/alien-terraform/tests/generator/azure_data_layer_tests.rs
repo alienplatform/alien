@@ -688,12 +688,6 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
 }
 
 
-/// A remote sandbox renders on its own, with no other resource declared.
-///
-/// The shape worth checking is a bindings-only stack: the sandbox group's `parent_id` names a
-/// resource group, and this pins that it resolves to the deployer-supplied
-/// `var.azure_resource_group_name` rather than to a resource the module would have had to
-/// declare. `terraform validate` is as far as this reaches — it does not prove apply.
 /// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
 /// would tell that installer to register a provider for a resource their package does not contain.
 #[test]
@@ -737,6 +731,11 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
     }
 }
 
+/// A remote sandbox renders on its own, with no other resource declared.
+///
+/// A bindings-only stack is what makes `parent_id` worth pinning: it must resolve to the
+/// deployer-supplied `var.azure_resource_group_name` rather than to a resource group the module
+/// would have had to declare. `terraform validate` is as far as this reaches — not apply.
 #[test]
 fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
     let sandbox = Sandbox::new("agents".to_string())
@@ -759,7 +758,7 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
 
-    // The claim this shape is here to pin: with no other resource declared there is no resource
+    // The claim this test is here to pin: with no other resource declared there is no resource
     // group of Alien's own to parent to, so the group must hang off the one the deployer names.
     // A reference to a resource this stack does not create would fail `terraform validate` below,
     // but a *wrong variable* would not — so the attribute is read rather than searched for.
