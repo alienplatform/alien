@@ -3,8 +3,9 @@
 //! The durable parent is a Lambda MicroVM image. A Live sandbox's image is built here, after
 //! the deployment registers: setup installs the build role and egress connector and registers
 //! the bundle, and only at runtime does a customer account exist as a principal Alien's
-//! registry can open to. A Frozen sandbox arrives through the importer with its image already
-//! built by stack creation, and this controller only watches it.
+//! registry can open to. A release that changes the bundle re-enters that flow against an image
+//! that already exists and rolls a new version onto it. A Frozen sandbox arrives through the
+//! importer with its image already built by stack creation, and this controller only watches it.
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
@@ -21,7 +22,7 @@ use crate::error::{ErrorData, Result};
 use alien_aws_clients::lambda_microvms::{
     CreateMicrovmImageRequest, MicrovmCodeArtifact, MicrovmCpuConfiguration, MicrovmImageBuild,
     MicrovmImageBuildHooks, MicrovmImageHooks, MicrovmImageLogging, MicrovmImageResources,
-    MicrovmLifecycleHooks,
+    MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
@@ -142,57 +143,85 @@ impl AwsSandboxController {
         // a registry the build role can reach; the only image this call names is AWS's managed
         // base, and the build's connector is AWS's own — it must reach a registry, which the
         // session-time deny connector cannot.
-        let client_token = build_client_token(&image_name, &bundle_uri);
-        let request = CreateMicrovmImageRequest::builder()
-            .name(image_name.clone())
-            .description(format!("Sandbox {}", config.id))
-            .base_image_arn(managed_base_image_arn(&aws_config.region))
-            .base_image_version("1")
-            .build_role_arn(build_role_arn)
-            .code_artifact(MicrovmCodeArtifact { uri: bundle_uri })
-            // The switch behind "control plane never sees sandbox contents".
-            .logging(MicrovmImageLogging::Disabled {})
-            .egress_network_connectors(vec![internet_egress_connector_arn(&aws_config.region)])
-            .cpu_configurations(vec![MicrovmCpuConfiguration {
-                architecture: ARCHITECTURE.to_string(),
-            }])
-            .resources(vec![MicrovmImageResources {
+        let inputs = ImageBuildInputs {
+            description: format!("Sandbox {}", config.id),
+            base_image_arn: managed_base_image_arn(&aws_config.region),
+            build_role_arn,
+            code_artifact: MicrovmCodeArtifact {
+                uri: bundle_uri.clone(),
+            },
+            egress_network_connectors: vec![internet_egress_connector_arn(&aws_config.region)],
+            resources: vec![MicrovmImageResources {
                 minimum_memory_in_mib: tier.baseline_memory_mib,
-            }])
-            .hooks(agent_hooks())
-            .environment_variables(agent_environment())
-            // The deployed `sandbox/provision` grant conditions `CreateMicrovmImage` on the
-            // stack tag and `managed-by: runtime` arriving as request tags; without them the
-            // call is denied by a policy that is already installed.
-            .tags(
-                standard_resource_tags(ctx.resource_prefix, &config.id)
-                    .into_iter()
-                    .collect::<BTreeMap<_, _>>(),
-            )
+            }],
             // Keyed on the bundle, not just the resource: a retry of the same release replays
-            // the prior success, while a new release's changed bundle gets a fresh identity
+            // the prior success, while a new release's changed bundle asks for a real build
             // rather than replaying the image built from the previous one.
-            .client_token(client_token)
-            .build();
+            client_token: build_client_token(&image_name, &bundle_uri),
+        };
 
-        let created =
-            client
-                .create_microvm_image(request)
-                .await
-                .context(ErrorData::CloudPlatformError {
-                    message: format!("Failed to create MicroVM image '{image_name}'"),
+        // The image name is unique per account, so a release that changed the bundle re-enters
+        // this handler against an image that already exists and a create would collide. Read
+        // first, then either create or roll a version onto what is there — one mutation either
+        // way.
+        let existing = match client.get_microvm_image(&image_name).await {
+            Ok(image) => Some(image),
+            Err(error) if is_remote_resource_absent(&error) => None,
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to read MicroVM image '{image_name}' before building it"
+                    ),
                     resource_id: Some(config.id.clone()),
-                })?;
+                });
+            }
+        };
 
-        let image_arn = created.image_arn.ok_or_else(|| {
+        let (operation, image_arn, image_version) = match existing {
+            None => {
+                let created = client
+                    .create_microvm_image(
+                        inputs.create_request(
+                            image_name.clone(),
+                            standard_resource_tags(ctx.resource_prefix, &config.id)
+                                .into_iter()
+                                .collect(),
+                        ),
+                    )
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to create MicroVM image '{image_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                (
+                    "CreateMicrovmImage",
+                    created.image_arn,
+                    created.image_version,
+                )
+            }
+            // The previous version keeps serving until its own sessions drain; deletion is the
+            // delete flow's job, and it already sweeps every version.
+            Some(_) => {
+                let rolled = client
+                    .update_microvm_image(&image_name, inputs.update_request())
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to roll MicroVM image '{image_name}'"),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+                ("UpdateMicrovmImage", rolled.image_arn, rolled.image_version)
+            }
+        };
+
+        let image_arn = image_arn.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("CreateMicrovmImage for '{image_name}' returned no image ARN"),
+                message: format!("{operation} for '{image_name}' returned no image ARN"),
                 resource_id: Some(config.id.clone()),
             })
         })?;
-        let image_version = created.image_version.ok_or_else(|| {
+        let image_version = image_version.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("CreateMicrovmImage for '{image_name}' returned no version"),
+                message: format!("{operation} for '{image_name}' returned no version"),
                 resource_id: Some(config.id.clone()),
             })
         })?;
@@ -646,11 +675,75 @@ impl AwsSandboxController {
     }
 }
 
-/// The Lambda-managed base image the build runs on. The vendor's own base is inside the
-/// bundle's Dockerfile, not here.
-/// A create idempotency token that changes with the bundle. `CreateMicrovmImage` replays a
+/// The build inputs a create and a roll must state identically.
+///
+/// `UpdateMicrovmImage` has PUT semantics — a field left out of the roll is dropped from the
+/// new version — so the two requests are built from one value rather than assembled twice.
+struct ImageBuildInputs {
+    description: String,
+    base_image_arn: String,
+    build_role_arn: String,
+    code_artifact: MicrovmCodeArtifact,
+    egress_network_connectors: Vec<String>,
+    resources: Vec<MicrovmImageResources>,
+    client_token: String,
+}
+
+impl ImageBuildInputs {
+    fn create_request(
+        self,
+        name: String,
+        tags: BTreeMap<String, String>,
+    ) -> CreateMicrovmImageRequest {
+        CreateMicrovmImageRequest::builder()
+            .name(name)
+            .description(self.description)
+            .base_image_arn(self.base_image_arn)
+            .base_image_version("1")
+            .build_role_arn(self.build_role_arn)
+            .code_artifact(self.code_artifact)
+            // The switch behind "control plane never sees sandbox contents".
+            .logging(MicrovmImageLogging::Disabled {})
+            .egress_network_connectors(self.egress_network_connectors)
+            .cpu_configurations(vec![MicrovmCpuConfiguration {
+                architecture: ARCHITECTURE.to_string(),
+            }])
+            .resources(self.resources)
+            .hooks(agent_hooks())
+            .environment_variables(agent_environment())
+            // The deployed `sandbox/provision` grant conditions `CreateMicrovmImage` on the
+            // stack tag and `managed-by: runtime` arriving as request tags; without them the
+            // call is denied by a policy that is already installed.
+            .tags(tags)
+            .client_token(self.client_token)
+            .build()
+    }
+
+    /// The roll carries no tags: the API rejects them here, and the image keeps the ones its
+    /// create set — which is what every other sandbox statement scopes against.
+    fn update_request(self) -> UpdateMicrovmImageRequest {
+        UpdateMicrovmImageRequest::builder()
+            .description(self.description)
+            .base_image_arn(self.base_image_arn)
+            .base_image_version("1")
+            .build_role_arn(self.build_role_arn)
+            .code_artifact(self.code_artifact)
+            .logging(MicrovmImageLogging::Disabled {})
+            .egress_network_connectors(self.egress_network_connectors)
+            .cpu_configurations(vec![MicrovmCpuConfiguration {
+                architecture: ARCHITECTURE.to_string(),
+            }])
+            .resources(self.resources)
+            .hooks(agent_hooks())
+            .environment_variables(agent_environment())
+            .client_token(self.client_token)
+            .build()
+    }
+}
+
+/// A build idempotency token that changes with the bundle. Both the create and the roll replay a
 /// prior success for a repeated token, so folding the content-addressed bundle in keeps a retry
-/// idempotent while a genuinely new build asks for a new image rather than the old one.
+/// idempotent while a genuinely new release asks for a real build.
 fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
     let digest = Sha256::digest(bundle_uri.as_bytes());
     // Sixteen hex chars of the bundle digest is plenty to separate one release from the next,
@@ -661,6 +754,8 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .collect()
 }
 
+/// The Lambda-managed base image the build runs on. The vendor's own base is inside the
+/// bundle's Dockerfile, not here.
 fn managed_base_image_arn(region: &str) -> String {
     format!(
         "arn:{}:lambda:{region}:aws:microvm-image:al2023-1",
@@ -799,6 +894,7 @@ mod tests {
     };
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
+        UpdateMicrovmImageResponse,
     };
     use alien_core::{Platform, SandboxCode, SandboxEgress, SandboxSessionPolicy};
     use std::sync::Arc;
@@ -919,6 +1015,12 @@ mod tests {
     #[tokio::test]
     async fn a_live_sandbox_builds_its_image_and_reaches_running() {
         let mut client = MockLambdaMicrovmsApi::new();
+        // The pre-create probe: nothing under the derived name, so this is a real create.
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == "test-agents")
+            .times(1)
+            .returning(|_| Err(not_found()));
         client
             .expect_create_microvm_image()
             .withf(|request| {
@@ -1006,12 +1108,180 @@ mod tests {
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
     }
 
+    /// A re-imported release lands here with fresh state while the image from the previous
+    /// release still exists under the account-unique name. The probe must adopt that image and
+    /// roll the new bundle onto it as a new version — a second create under the same name is
+    /// the collision this pins, and the mock panics on any `create_microvm_image` call.
+    #[tokio::test]
+    async fn an_existing_image_is_adopted_and_the_new_bundle_becomes_a_new_version() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == "test-agents")
+            .times(1)
+            .returning(|_| {
+                Ok(MicrovmImage {
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == "test-agents"
+                    && request.code_artifact.uri == BUNDLE_URI
+                    && request.build_role_arn == BUILD_ROLE_ARN
+                    && request.base_image_arn
+                        == "arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1"
+                    && request.base_image_version.as_deref() == Some("1")
+                    // The same bundle-keyed token as a create, so a retried roll replays.
+                    && request.client_token == build_client_token("test-agents", BUNDLE_URI)
+                    && request.logging == Some(MicrovmImageLogging::Disabled {})
+                    && request
+                        .hooks
+                        .as_ref()
+                        .is_some_and(|hooks| hooks.port == AGENT_PORT)
+                    && request
+                        .environment_variables
+                        .get("ALIEN_SANDBOX_PORT")
+                        .map(String::as_str)
+                        == Some("8971")
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+        // The poll must target the minted version, not the previous release's `1.0`.
+        client
+            .expect_get_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_version: Some("2.0".to_string()),
+                    ..active_version()
+                })
+            });
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .returning(|_| {
+                Ok(MicrovmImage {
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("2.0".to_string()),
+                    state: Some("UPDATED".to_string()),
+                })
+            });
+
+        let mut executor = executor(runtime_seeded_controller(), client).await;
+        executor
+            .run_until_terminal()
+            .await
+            .expect("the roll flow should succeed");
+
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.image_arn.as_deref(), Some(IMAGE_ARN));
+        assert!(controller.image_active);
+
+        let binding = controller
+            .get_binding_params()
+            .expect("binding params")
+            .expect("an active image publishes a binding");
+        assert_eq!(binding["imageArn"], IMAGE_ARN);
+        assert_eq!(
+            binding["imageVersion"], "2.0",
+            "the binding must carry the rolled version, not the previous release's"
+        );
+    }
+
+    /// A failed roll build reports the same way a failed create build does: the version's own
+    /// reason plus each failed build's, read for the minted version.
+    #[tokio::test]
+    async fn a_failed_roll_surfaces_the_services_own_reason() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().times(1).returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        client
+            .expect_update_microvm_image()
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+        client
+            .expect_get_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_version: Some("2.0".to_string()),
+                    state: Some("FAILED".to_string()),
+                    status: Some("INACTIVE".to_string()),
+                    state_reason: Some("One or more builds failed".to_string()),
+                    ..active_version()
+                })
+            });
+        client
+            .expect_list_microvm_image_builds()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .returning(|_, _| {
+                Ok(vec![MicrovmImageBuild {
+                    build_id: Some("build-2".to_string()),
+                    build_state: Some("FAILED".to_string()),
+                    state_reason: Some("bundle setup command exited non-zero".to_string()),
+                }])
+            });
+
+        let mut executor = executor(runtime_seeded_controller(), client).await;
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a failed roll build must fail the create flow");
+
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("One or more builds failed"),
+            "the version's own reason must survive into the error: {rendered}"
+        );
+        assert!(
+            rendered.contains("bundle setup command exited non-zero"),
+            "the failed build's own reason must survive into the error: {rendered}"
+        );
+    }
+
     /// The failure error must carry AWS's own reasons — the version's and each failed
     /// build's. A generic error at the end of a ~160s build is the worst debugging
     /// experience this resource can produce.
     #[tokio::test]
     async fn a_failed_build_surfaces_the_services_own_reason() {
         let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .times(1)
+            .returning(|_| Err(not_found()));
         client
             .expect_create_microvm_image()
             .times(1)
@@ -1064,6 +1334,10 @@ mod tests {
     #[tokio::test]
     async fn a_still_building_image_is_not_reported_running() {
         let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .times(1)
+            .returning(|_| Err(not_found()));
         client
             .expect_create_microvm_image()
             .times(1)

@@ -8,7 +8,12 @@
           // The Frozen parent on AWS is a MicroVM image and its versions. run-microvm rejects
           // the AWS-managed base image, so every AWS sandbox builds one — provision therefore
           // covers the build and its status reads, not just create and delete.
+          //
+          // UpdateMicrovmImage is the roll a new release's bundle takes onto an image that
+          // already exists. It accepts no request tags, so unlike the create below it can only
+          // be authorized here, against the image ARN.
           "actions": [
+            "lambda:UpdateMicrovmImage",
             "lambda:DeleteMicrovmImage",
             "lambda:DeleteMicrovmImageVersion",
             "lambda:GetMicrovmImage",
