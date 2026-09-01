@@ -71,8 +71,10 @@ impl CfEmitter for AwsSandboxEmitter {
             "AssumeRolePolicyDocument".to_string(),
             service_trust_policy(["lambda.amazonaws.com"]),
         );
-        role.properties
-            .insert("Policies".to_string(), build_policies(artifact_uri));
+        role.properties.insert(
+            "Policies".to_string(),
+            build_policies(artifact_uri, provisioned_at_runtime(ctx)),
+        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         // An open sandbox routes nothing through a VPC, so none of this exists for it: no
@@ -435,51 +437,72 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
     )
 }
 
-/// What the build role may do: read the bundle, and write its own build logs.
+/// What the build role may do: read the bundle, write its own build logs, and — only when the
+/// image is built at runtime — authenticate to ECR for its base image.
 ///
 /// Scoped to the one object it reads. The bundle URI is known when the template is generated, so
 /// there is no reason for the role a customer installs to carry account-wide object read.
-fn build_policies(artifact_uri: BundleUri<'_>) -> CfExpression {
+///
+/// A setup-baked image builds from a public base and pulls it anonymously, so the Frozen role
+/// carries no ECR grant; a runtime-built image's base is a private registry image.
+fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpression {
+    let mut statements = vec![
+        CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([CfExpression::from("s3:GetObject")]),
+            ),
+            (
+                "Resource",
+                // Partition-qualified like every other ARN here: a hardcoded
+                // `aws` never matches in GovCloud or China, and the build fails
+                // on the bundle it was granted.
+                artifact_object_arn(artifact_uri),
+            ),
+        ]),
+        CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([
+                    // CreateLogGroup as well as the writes: the build creates no
+                    // group of its own, so without it the first build's logs go
+                    // nowhere. The house build role grants all three.
+                    CfExpression::from("logs:CreateLogGroup"),
+                    CfExpression::from("logs:CreateLogStream"),
+                    CfExpression::from("logs:PutLogEvents"),
+                ]),
+            ),
+            ("Resource", CfExpression::from("*")),
+        ]),
+    ];
+    if runtime_built {
+        statements.push(CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                // The token call plus the two pull actions a live build was observed to be
+                // denied without — the registry's repository policy alone did not authorize it.
+                CfExpression::list([
+                    CfExpression::from("ecr:GetAuthorizationToken"),
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
+            // base image is unknown when the template is generated, so the pull pair cannot be
+            // narrowed either; a cross-account pull is still bounded by that repository's policy.
+            ("Resource", CfExpression::from("*")),
+        ]));
+    }
     CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-image-build")),
         (
             "PolicyDocument",
             CfExpression::object([
                 ("Version", CfExpression::from("2012-10-17")),
-                (
-                    "Statement",
-                    CfExpression::list([
-                        CfExpression::object([
-                            ("Effect", CfExpression::from("Allow")),
-                            (
-                                "Action",
-                                CfExpression::list([CfExpression::from("s3:GetObject")]),
-                            ),
-                            (
-                                "Resource",
-                                // Partition-qualified like every other ARN here: a hardcoded
-                                // `aws` never matches in GovCloud or China, and the build fails
-                                // on the bundle it was granted.
-                                artifact_object_arn(artifact_uri),
-                            ),
-                        ]),
-                        CfExpression::object([
-                            ("Effect", CfExpression::from("Allow")),
-                            (
-                                "Action",
-                                CfExpression::list([
-                                    // CreateLogGroup as well as the writes: the build creates no
-                                    // group of its own, so without it the first build's logs go
-                                    // nowhere. The house build role grants all three.
-                                    CfExpression::from("logs:CreateLogGroup"),
-                                    CfExpression::from("logs:CreateLogStream"),
-                                    CfExpression::from("logs:PutLogEvents"),
-                                ]),
-                            ),
-                            ("Resource", CfExpression::from("*")),
-                        ]),
-                    ]),
-                ),
+                ("Statement", CfExpression::list(statements)),
             ]),
         ),
     ])])

@@ -8,7 +8,7 @@ use crate::{
     emitters::gcp::helpers::{downcast, required_label},
     expr,
 };
-use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
+use alien_core::{import::EmitContext, ErrorData, Result, Sandbox};
 use alien_error::AlienError;
 use hcl::expr::Expression;
 
@@ -107,7 +107,8 @@ mod tests {
         use super::super::*;
         use alien_core::bindings::SandboxBinding;
         use alien_core::{
-            ResourceLifecycle, SandboxCode, SandboxSessionPolicy, Stack, StackSettings,
+            ResourceLifecycle, SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack,
+            StackSettings,
         };
         use indexmap::IndexMap;
         use std::collections::BTreeSet;

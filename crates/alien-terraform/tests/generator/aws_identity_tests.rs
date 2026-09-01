@@ -299,6 +299,12 @@ fn aws_sandbox_build_policy_is_a_well_formed_scoped_document() {
             && !policy.contains(r#"s3:GetObject"] Resource = "*""#),
         "account-wide object read must not be emitted: {policy}"
     );
+    // A setup-baked image pulls its public base anonymously; an ECR grant here would hand the
+    // role running a customer-authored Dockerfile pull access it never needs.
+    assert!(
+        !rendered.contains("ecr:"),
+        "a Frozen build role must carry no ECR action:\n{rendered}"
+    );
 }
 
 /// A module that declares `awscc` must configure it, or the customer cannot plan.
@@ -479,6 +485,20 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
     assert!(
         rendered.contains("awscc_lambda_network_connector"),
         "the connector the build and the session are passed must still be installed:\n{rendered}"
+    );
+
+    // The runtime build's base image comes from a private registry, and the identity itself
+    // needs all three actions — a repository policy on the registry side is not enough.
+    let policy = rendered
+        .lines()
+        .find(|line| line.contains("Statement") && line.contains("s3:GetObject"))
+        .unwrap_or_else(|| panic!("the build policy must render:\n{rendered}"));
+    assert!(
+        policy.contains(
+            r#""ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer""#
+        ),
+        "a Live build role must authenticate to ECR with exactly the token call and the two \
+         pull actions: {policy}"
     );
 }
 

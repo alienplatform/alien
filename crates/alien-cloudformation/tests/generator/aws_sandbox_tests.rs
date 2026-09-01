@@ -52,6 +52,32 @@ fn sandbox_stack_with_lifecycle(
     (stack, settings)
 }
 
+/// The `sandbox-image-build` policy statements of the emitted build role, parsed as IAM sees
+/// them — asserting on the serialized document catches an expression that renders wrong, not
+/// just a missing string.
+fn build_role_statements(template: &alien_cloudformation::CfTemplate) -> Vec<serde_json::Value> {
+    let role = serde_json::to_value(
+        template
+            .resources
+            .get("AgentsBuildRole")
+            .expect("the build role must render"),
+    )
+    .expect("serializes");
+    role["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the build policy statements must be a list: {role:#}"))
+        .clone()
+}
+
+/// Whether a parsed IAM statement carries any `ecr:` action.
+fn grants_ecr(statement: &serde_json::Value) -> bool {
+    statement["Action"].as_array().is_some_and(|actions| {
+        actions
+            .iter()
+            .any(|action| action.as_str().is_some_and(|a| a.starts_with("ecr:")))
+    })
+}
+
 /// Every resource type the rendered template declares.
 fn resource_types(template: &alien_cloudformation::CfTemplate) -> Vec<String> {
     template
@@ -187,6 +213,29 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         parsed.bundle_uri.is_some(),
         "the controller is handed the bundle it builds from: {import_data:#}"
     );
+
+    // The runtime build's base image comes from a private registry, and the identity itself
+    // needs all three actions — a repository policy on the registry side is not enough.
+    let statements = build_role_statements(&template);
+    let ecr = statements
+        .iter()
+        .find(|statement| grants_ecr(statement))
+        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
+    assert_eq!(
+        ecr["Action"],
+        serde_json::json!([
+            "ecr:GetAuthorizationToken",
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer"
+        ]),
+        "exactly the token call and the two pull actions, nothing wider"
+    );
+    assert_eq!(
+        ecr["Resource"],
+        serde_json::json!("*"),
+        "GetAuthorizationToken is only accepted against `*`"
+    );
+    assert_eq!(ecr["Effect"], serde_json::json!("Allow"));
 }
 
 /// The Frozen path is the one every installed stack is on, and it does not move.
@@ -225,6 +274,14 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
         "a setup-built sandbox registers the image it created: {import_data:#}"
     );
     assert_eq!(parsed.build_role_arn, None);
+
+    // A setup-baked image pulls its public base anonymously; an ECR grant here would hand the
+    // role running a customer-authored Dockerfile pull access it never needs.
+    let statements = build_role_statements(&template);
+    assert!(
+        !statements.iter().any(grants_ecr),
+        "a Frozen build role must carry no ECR action: {statements:#?}"
+    );
 }
 
 /// `egress: deny` has to be built, not assumed.

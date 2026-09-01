@@ -95,46 +95,65 @@ impl TfEmitter for AwsSandboxEmitter {
             tags(ctx, "sandbox"),
         );
 
-        let build_policy = iam_role_policy_block(
-            label,
-            label,
-            "sandbox-image-build",
-            // Statements are raw objects: `iam_role_policy_block` already jsonencodes the whole
-            // document, and encoding them again renders each one as a JSON *string*, which IAM
-            // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
-            // and the string are both well-formed — so it only shows up at apply.
-            vec![
-                Expression::from_iter([
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
-                    ),
-                    (
-                        "Resource",
-                        // A template for the same reason the operator policy's ARNs are: a plain
-                        // string literal has its `${` escaped, so the partition would reach IAM as
-                        // literal text and the grant would match nothing.
-                        expr::template(artifact_object_arn(artifact_uri)),
-                    ),
-                ]),
-                Expression::from_iter([
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::from(vec![
-                            // CreateLogGroup as well as the writes: the build creates no group of
-                            // its own, so without it the first build's logs go nowhere. The house
-                            // build role grants all three.
-                            Expression::String("logs:CreateLogGroup".to_string()),
-                            Expression::String("logs:CreateLogStream".to_string()),
-                            Expression::String("logs:PutLogEvents".to_string()),
-                        ]),
-                    ),
-                    ("Resource", Expression::String("*".to_string())),
-                ]),
-            ],
-        );
+        // Statements are raw objects: `iam_role_policy_block` already jsonencodes the whole
+        // document, and encoding them again renders each one as a JSON *string*, which IAM
+        // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
+        // and the string are both well-formed — so it only shows up at apply.
+        let mut build_statements = vec![
+            Expression::from_iter([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+                ),
+                (
+                    "Resource",
+                    // A template for the same reason the operator policy's ARNs are: a plain
+                    // string literal has its `${` escaped, so the partition would reach IAM as
+                    // literal text and the grant would match nothing.
+                    expr::template(artifact_object_arn(artifact_uri)),
+                ),
+            ]),
+            Expression::from_iter([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![
+                        // CreateLogGroup as well as the writes: the build creates no group of
+                        // its own, so without it the first build's logs go nowhere. The house
+                        // build role grants all three.
+                        Expression::String("logs:CreateLogGroup".to_string()),
+                        Expression::String("logs:CreateLogStream".to_string()),
+                        Expression::String("logs:PutLogEvents".to_string()),
+                    ]),
+                ),
+                ("Resource", Expression::String("*".to_string())),
+            ]),
+        ];
+        // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
+        // role carries no ECR grant; a runtime-built image's base is a private registry image.
+        if provisioned_at_runtime(ctx) {
+            build_statements.push(Expression::from_iter([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    // The token call plus the two pull actions a live build was observed to be
+                    // denied without — the registry's repository policy alone did not authorize it.
+                    Expression::from(vec![
+                        Expression::String("ecr:GetAuthorizationToken".to_string()),
+                        Expression::String("ecr:BatchGetImage".to_string()),
+                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    ]),
+                ),
+                // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
+                // the base image is unknown when the module is rendered, so the pull pair cannot
+                // be narrowed either; a cross-account pull is still bounded by that repository's
+                // policy.
+                ("Resource", Expression::String("*".to_string())),
+            ]));
+        }
+        let build_policy =
+            iam_role_policy_block(label, label, "sandbox-image-build", build_statements);
 
         // Lambda assumes this to manage the connector's ENIs in the customer's VPC. The API
         // documents the permissions it must hold; the field being optional is not a promise
