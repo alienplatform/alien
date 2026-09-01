@@ -978,6 +978,64 @@ mod tests {
             .expect("a named set is scoped by its profile key and cannot name this sandbox");
     }
 
+    /// A wildcard over a MicroVM verb AWS has not shipped yet still reaches a session.
+    ///
+    /// The un-wildcarded form is caught by the namespace test, so clearing a wildcard against
+    /// today's verb names alone would let the broader grant through and refuse the narrower one.
+    #[tokio::test]
+    async fn a_wildcard_over_an_unknown_microvm_verb_still_reaches_a_session() {
+        let future_verb: alien_core::permissions::PermissionSet = serde_json::from_value(
+            serde_json::json!({
+                "id": "custom/telemetry",
+                "description": "custom",
+                "platforms": { "aws": [{
+                    "grant": { "actions": ["lambda:SomeFutureMicrovmVerb*"] },
+                    "binding": { "stack": { "resources": ["*"] } }
+                }]}
+            }),
+        )
+        .expect("valid inline permission set");
+
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission("execution", PermissionProfile::new().global([future_verb]))
+            .build();
+
+        let Err(error) = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+        else {
+            panic!("a wildcard reaching the MicroVM namespace is reach, known verb or not")
+        };
+        assert_eq!(error.code, "STACK_MUTATION_FAILED", "{error}");
+    }
+
+    /// And the image family stays out, since `provision` and `heartbeat` legitimately hold it.
+    #[tokio::test]
+    async fn a_wildcard_over_the_microvm_image_family_is_not_session_reach() {
+        let image_only: alien_core::permissions::PermissionSet = serde_json::from_value(
+            serde_json::json!({
+                "id": "custom/images",
+                "description": "custom",
+                "platforms": { "aws": [{
+                    "grant": { "actions": ["lambda:GetMicrovmImage*"] },
+                    "binding": { "stack": { "resources": ["*"] } }
+                }]}
+            }),
+        )
+        .expect("valid inline permission set");
+
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission("execution", PermissionProfile::new().global([image_only]))
+            .build();
+
+        RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect("the image a session launches from is not the session");
+    }
+
     #[tokio::test]
     async fn reserved_access_id_is_never_overwritten() {
         let stack = Stack::new("byo-bucket".to_string())

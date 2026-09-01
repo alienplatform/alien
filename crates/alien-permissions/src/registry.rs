@@ -210,10 +210,14 @@ fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
 
 /// Whether one IAM action, possibly carrying a `*`, can authorize an operation on a session.
 ///
-/// Three cases sit together here: a wildcard is cleared only against the known verbs, an exact
-/// action is matched on the `Microvm` namespace so a verb AWS adds later fails closed, and the
-/// `MicrovmImage` family is excluded because it addresses the image a session launches from —
-/// `sandbox/provision` and `sandbox/heartbeat` legitimately hold those.
+/// Three cases sit together here: a wildcard is cleared against the known verbs *and* the MicroVM
+/// namespace, an exact action is matched on that namespace so a verb AWS adds later fails closed,
+/// and the `MicrovmImage` family is excluded because it addresses the image a session launches
+/// from — `sandbox/provision` and `sandbox/heartbeat` legitimately hold those.
+///
+/// The namespace half of the wildcard case is what keeps the two branches agreeing: clearing a
+/// wildcard against today's names alone would answer no for `lambda:SomeFutureMicrovmVerb*` while
+/// the un-wildcarded form answers yes, so the broader grant would be the one that slipped through.
 ///
 /// Compared lowercased throughout, because AWS matches action names case-insensitively — a set
 /// granting `lambda:runmicrovm` reaches a session exactly as `lambda:RunMicrovm` does.
@@ -221,14 +225,21 @@ fn action_reaches_a_microvm_session(action: &str) -> bool {
     let action = action.to_ascii_lowercase();
     if action.contains('*') {
         let literal = action.split('*').next().unwrap_or_default();
-        return SENSITIVE_MICROVM_ACTIONS
+        let covers_a_known_verb = SENSITIVE_MICROVM_ACTIONS
             .iter()
             .chain(MICROVM_SESSION_LIFECYCLE_ACTIONS)
             .any(|known| known.to_ascii_lowercase().starts_with(literal));
+        return covers_a_known_verb || reaches_the_microvm_namespace(literal);
     }
     action
         .strip_prefix("lambda:")
-        .is_some_and(|verb| verb.contains("microvm") && !verb.contains("microvmimage"))
+        .is_some_and(reaches_the_microvm_namespace)
+}
+
+/// Whether a `lambda:`-stripped verb addresses a MicroVM rather than its image.
+fn reaches_the_microvm_namespace(verb: &str) -> bool {
+    let verb = verb.strip_prefix("lambda:").unwrap_or(verb);
+    verb.contains("microvm") && !verb.contains("microvmimage")
 }
 
 /// Whether `permission_set_id` grants anything at all on `platform`.
