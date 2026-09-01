@@ -1,7 +1,6 @@
 //! Live verification of Claude on Azure Foundry. Ignored by default because it
 //! makes a real inference call and needs a Foundry endpoint plus a short-lived
-//! Entra token in the environment. Verified green against the alien-test-target
-//! resource alien-ai-foundry-e2e1 (RG alien-ai-e2e).
+//! Entra token in the environment.
 //!
 //! Run it with:
 //!   export AZURE_AI_ENDPOINT="https://<resource>.cognitiveservices.azure.com/"
@@ -13,7 +12,7 @@
 //! Foundry accepts that host with an `ai.azure.com`-audience token on the first
 //! request, with no host derivation or audience swap needed.
 
-use std::net::Ipv4Addr;
+use std::{net::Ipv4Addr, time::Duration};
 
 use alien_ai_gateway::{build_router, AmbientCred, BearerTokenCred, GatewayRoute, GatewayTarget};
 use alien_core::Platform;
@@ -28,6 +27,30 @@ async fn serve(router: axum::Router) -> String {
         axum::serve(listener, router).await.unwrap();
     });
     url
+}
+
+async fn post_with_quota_backoff(
+    client: &reqwest::Client,
+    url: &str,
+    body: &Value,
+) -> reqwest::Response {
+    for attempt in 1..=4 {
+        let response = client
+            .post(url)
+            .json(body)
+            .send()
+            .await
+            .expect("request to Foundry through Alien");
+        if response.status() != reqwest::StatusCode::TOO_MANY_REQUESTS || attempt == 4 {
+            return response;
+        }
+        eprintln!(
+            "Foundry quota window active; retrying attempt {}",
+            attempt + 1
+        );
+        tokio::time::sleep(Duration::from_secs(31)).await;
+    }
+    unreachable!("bounded retry loop always returns")
 }
 
 fn foundry_route() -> GatewayRoute {
@@ -48,20 +71,18 @@ fn foundry_route() -> GatewayRoute {
 }
 
 #[tokio::test]
-#[ignore = "hits real Foundry Claude; verified green against alien-ai-foundry-e2e1. Needs a minted (short-lived) AZURE_ACCESS_TOKEN, so it can't run in static-cred CI; see the module docstring to run it"]
-async fn live_foundry_claude_messages() {
+#[ignore = "hits real Foundry Claude across public APIs; needs a short-lived AZURE_ACCESS_TOKEN; see the module docstring"]
+async fn live_foundry_claude_across_public_apis_and_streaming() {
     let base = serve(build_router(vec![foundry_route()])).await;
+    let client = reqwest::Client::new();
 
-    let resp = reqwest::Client::new()
-        .post(format!("{base}/llm/v1/messages"))
-        .json(&json!({
-            "model": "claude-haiku-4.5",
-            "max_tokens": 64,
-            "messages": [{ "role": "user", "content": "Reply with exactly: pong" }]
-        }))
-        .send()
-        .await
-        .expect("request to the gateway");
+    let messages_url = format!("{base}/llm/v1/messages");
+    let messages_body = json!({
+        "model": "claude-haiku-4.5",
+        "max_tokens": 64,
+        "messages": [{ "role": "user", "content": "Reply with exactly: pong" }]
+    });
+    let resp = post_with_quota_backoff(&client, &messages_url, &messages_body).await;
 
     let status = resp.status();
     let text = resp.text().await.expect("gateway response body");
@@ -77,26 +98,50 @@ async fn live_foundry_claude_messages() {
         content.to_lowercase().contains("pong"),
         "expected a 'pong' reply, got: {content:?}"
     );
-}
 
-#[tokio::test]
-#[ignore = "hits real Foundry Claude streaming; verified green against alien-ai-foundry-e2e1. Needs a minted (short-lived) AZURE_ACCESS_TOKEN, so it can't run in static-cred CI; see the module docstring to run it"]
-async fn live_foundry_claude_streaming() {
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    for (scenario, path, body) in [
+        (
+            "Chat",
+            "chat/completions",
+            json!({
+                "model": "claude-haiku-4.5",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": "Reply with exactly pong"}]
+            }),
+        ),
+        (
+            "Responses",
+            "responses",
+            json!({
+                "model": "claude-haiku-4.5",
+                "max_output_tokens": 64,
+                "input": "Reply with exactly pong"
+            }),
+        ),
+    ] {
+        let url = format!("{base}/llm/v1/{path}");
+        let response = post_with_quota_backoff(&client, &url, &body).await;
+        let status = response.status();
+        let text = response.text().await.expect("gateway response body");
+        eprintln!("Foundry {scenario}: status={status} body={text}");
+        assert!(
+            status.is_success(),
+            "Foundry {scenario} failed: {status}: {text}"
+        );
+        assert!(text.to_ascii_lowercase().contains("pong"));
+        tokio::time::sleep(Duration::from_secs(1)).await;
+    }
+
     // Standard Anthropic streaming on the body's `stream` flag; the reply must be
     // native Anthropic SSE passed through untouched.
-    let base = serve(build_router(vec![foundry_route()])).await;
-
-    let resp = reqwest::Client::new()
-        .post(format!("{base}/llm/v1/messages"))
-        .json(&json!({
-            "model": "claude-haiku-4.5",
-            "max_tokens": 64,
-            "stream": true,
-            "messages": [{ "role": "user", "content": "Reply with exactly: pong" }]
-        }))
-        .send()
-        .await
-        .expect("request to the gateway");
+    let stream_body = json!({
+        "model": "claude-haiku-4.5",
+        "max_tokens": 64,
+        "stream": true,
+        "messages": [{ "role": "user", "content": "Reply with exactly: pong" }]
+    });
+    let resp = post_with_quota_backoff(&client, &messages_url, &stream_body).await;
 
     let status = resp.status();
     assert!(

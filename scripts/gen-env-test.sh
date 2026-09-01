@@ -6,6 +6,11 @@
 # Environment variables required:
 #   AXIOM_TOKEN         - Axiom API token
 #   NGROK_AUTHTOKEN     - Ngrok auth token (for push-mode E2E tests)
+#   OPENAI_TEST_API_KEY - OpenAI credential for ignored live gateway tests
+#   ANTHROPIC_TEST_API_KEY - Anthropic credential for ignored live gateway tests
+#   DATABRICKS_TEST_WORKSPACE_URL - Databricks workspace base URL
+#   DATABRICKS_TEST_CLIENT_ID - Databricks OAuth service-principal client ID
+#   DATABRICKS_TEST_CLIENT_SECRET - Databricks OAuth service-principal secret
 # Environment variables optional:
 #   AXIOM_OTLP_ENDPOINT - (default: https://api.axiom.co/v1/logs)
 #   AXIOM_DATASET       - (default: dev)
@@ -330,6 +335,13 @@ NGROK_AUTHTOKEN='${NGROK_AUTHTOKEN:-}'
 AXIOM_OTLP_ENDPOINT='${AXIOM_OTLP_ENDPOINT:-https://api.axiom.co/v1/logs}'
 AXIOM_TOKEN='${AXIOM_TOKEN:?AXIOM_TOKEN environment variable must be set}'
 AXIOM_DATASET='${AXIOM_DATASET:-dev}'
+
+# Live AI provider tests
+OPENAI_TEST_API_KEY='${OPENAI_TEST_API_KEY:-}'
+ANTHROPIC_TEST_API_KEY='${ANTHROPIC_TEST_API_KEY:-}'
+DATABRICKS_TEST_WORKSPACE_URL='${DATABRICKS_TEST_WORKSPACE_URL:-}'
+DATABRICKS_TEST_CLIENT_ID='${DATABRICKS_TEST_CLIENT_ID:-}'
+DATABRICKS_TEST_CLIENT_SECRET='${DATABRICKS_TEST_CLIENT_SECRET:-}'
 EOF
 
 {
