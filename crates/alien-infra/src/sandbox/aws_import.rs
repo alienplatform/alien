@@ -64,14 +64,21 @@ impl ResourceImporter for AwsSandboxImporter {
                     .split(':')
                     .nth(3)
                     .filter(|region| !region.is_empty())
-                    .map(str::to_string);
+                    .map(str::to_string)
+                    .ok_or_else(|| {
+                        AlienError::new(CoreErrorData::ImportDataInvalid {
+                            resource_id: ctx.resource_id.to_string(),
+                            resource_type: Sandbox::RESOURCE_TYPE,
+                            platform: Platform::Aws,
+                        })
+                    })?;
                 let controller = AwsSandboxController {
                     state: AwsSandboxState::Ready,
                     image_identifier: Some(image_identifier),
                     image_arn: Some(image_arn),
                     image_version: Some(image_version),
                     image_active: true,
-                    region,
+                    region: Some(region),
                     ..base
                 };
                 make_imported_state_with_status(controller, ctx, ResourceStatus::Running)

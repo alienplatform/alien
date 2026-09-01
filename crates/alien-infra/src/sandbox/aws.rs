@@ -405,14 +405,28 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let Some(image_identifier) = self.image_identifier.clone() else {
-            // Nothing was ever built — the create failed before the image existed, or this is
-            // a runtime sandbox deleted before its first build.
+        // The binding is a promise sessions can be created now; withdraw it before the first
+        // delete rather than after the last one.
+        self.image_active = false;
+
+        // A setup-baked image belongs to the setup stack and is removed by stack teardown;
+        // deleting it here would act with credentials that were never granted it — and would
+        // destroy a resource this controller does not own if they ever were.
+        if !self.owns_image_deletion(ctx, &config.id) {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
             });
-        };
+        }
+
+        // Deterministic fallback: a create can succeed without its ARN ever being recorded
+        // (a crash between the call and the state write), and walking past it here would leak
+        // a live image nothing ever removes. The name is derived, so sweep by it; an image
+        // that never existed answers NotFound, which the loop below already treats as done.
+        let image_identifier = self
+            .image_identifier
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
 
         let aws_config = ctx.get_aws_config()?;
         let client = ctx
@@ -434,8 +448,16 @@ impl AwsSandboxController {
         };
 
         for version in versions {
+            // A versionless entry cannot be deleted, and skipping it would let the image
+            // delete below no-op while a version survives — Deleted without deleting.
             let Some(image_version) = version.image_version else {
-                continue;
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "MicroVM image '{image_identifier}' listed a version record with no \
+                         version identifier; refusing to delete around it"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
             };
             match client
                 .delete_microvm_image_version(&image_identifier, &image_version)
@@ -472,12 +494,16 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let Some(image_identifier) = self.image_identifier.clone() else {
+        if !self.owns_image_deletion(ctx, &config.id) {
             return Ok(HandlerAction::Continue {
                 state: Deleted,
                 suggested_delay: None,
             });
-        };
+        }
+        let image_identifier = self
+            .image_identifier
+            .clone()
+            .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
 
         let aws_config = ctx.get_aws_config()?;
         let client = ctx
@@ -583,6 +609,25 @@ impl AwsSandboxController {
 }
 
 impl AwsSandboxController {
+    /// Whether this controller built the image and therefore owns its deletion.
+    ///
+    /// The lifecycle in stack state is the honest source. A state that carries none falls
+    /// back to the registration's build inputs, which only a runtime-provisioned sandbox has
+    /// — and errs toward not deleting, because destroying a setup-owned image is the failure
+    /// that cannot be retried.
+    fn owns_image_deletion(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+        match ctx
+            .state
+            .resources
+            .get(resource_id)
+            .and_then(|resource| resource.lifecycle)
+        {
+            Some(alien_core::ResourceLifecycle::Live) => true,
+            Some(alien_core::ResourceLifecycle::Frozen) => false,
+            None => self.build_role_arn.is_some(),
+        }
+    }
+
     fn require_image(&self, resource_id: &str) -> Result<(String, String)> {
         match (self.image_identifier.clone(), self.image_version.clone()) {
             (Some(identifier), Some(version)) => Ok((identifier, version)),
@@ -1112,6 +1157,36 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 
+    /// A version record with no identifier cannot be deleted around: the image delete
+    /// no-ops while versions survive, which would report Deleted without deleting.
+    #[tokio::test]
+    async fn a_versionless_record_fails_the_delete_instead_of_being_skipped() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_list_microvm_image_versions()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![MicrovmImage {
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: None,
+                    state: Some("SUCCESSFUL".to_string()),
+                }])
+            });
+        // No version delete and no image delete may run: refusing loudly is the point.
+
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("the refusal must surface, not be retried");
+        assert!(
+            error.to_string().contains("no version identifier"),
+            "the refusal names its cause: {error}"
+        );
+    }
+
     /// Deletion is best-effort: an image someone already removed is the goal state, not a
     /// failure.
     #[tokio::test]
@@ -1138,18 +1213,98 @@ mod tests {
     /// A sandbox whose create failed before the image existed has nothing to delete, and
     /// must not call the API at all — the mock has no expectations, so any call panics.
     #[tokio::test]
-    async fn a_sandbox_that_never_built_deletes_without_touching_the_api() {
+    async fn a_sandbox_that_never_recorded_its_image_still_sweeps_by_name() {
+        // A create can succeed without its ARN reaching state; walking past it would leak a
+        // live image forever, so the delete sweeps the deterministic name instead.
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_list_microvm_image_versions()
+            .withf(|identifier| identifier.ends_with("-agents"))
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_delete_microvm_image()
+            .withf(|identifier| identifier.ends_with("-agents"))
+            .times(1)
+            .returning(|_| Err(not_found()));
         let controller = AwsSandboxController {
             state: AwsSandboxState::Ready,
             ..runtime_seeded_controller()
         };
-        let mut executor = executor(controller, MockLambdaMicrovmsApi::new()).await;
+        let mut executor = executor(controller, client).await;
         executor.delete().expect("transition to delete");
         executor
             .run_until_terminal()
             .await
             .expect("nothing to delete");
         assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// The image of a setup-baked sandbox belongs to the setup stack; the runtime credentials
+    /// were never granted its deletion, and issuing one anyway is the ownership violation this
+    /// pins. An expectation-free mock panics on any call.
+    #[tokio::test]
+    async fn a_setup_baked_sandbox_deletes_without_touching_its_image() {
+        let controller = AwsSandboxController {
+            state: AwsSandboxState::Ready,
+            image_identifier: Some(IMAGE_ARN.to_string()),
+            image_arn: Some(IMAGE_ARN.to_string()),
+            image_version: Some("1.0".to_string()),
+            image_active: true,
+            region: Some("us-east-1".to_string()),
+            // The importer's Frozen arm leaves the build inputs empty, and that absence is
+            // what says setup owns the image.
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .build()
+            .await
+            .expect("executor should build");
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete must complete without cloud calls");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// The binding promises sessions can start now; it must be withdrawn before the first
+    /// delete, not after the last one.
+    #[tokio::test]
+    async fn the_binding_is_withdrawn_the_moment_deletion_begins() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_list_microvm_image_versions()
+            .times(1)
+            .returning(|_| {
+                Ok(vec![MicrovmImage {
+                    image_identifier: None,
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: None,
+                    state: Some("SUCCESSFUL".to_string()),
+                }])
+            });
+        let mut executor = executor(ready_controller(), client).await;
+        executor.delete().expect("transition to delete");
+        executor
+            .run_until_terminal()
+            .await
+            .expect_err("the refusal must surface, not be retried");
+        let controller: &AwsSandboxController = executor
+            .internal_state()
+            .expect("the sandbox controller is inspectable");
+        assert!(
+            controller
+                .get_binding_params()
+                .expect("binding params readable")
+                .is_none(),
+            "a sandbox being deleted must not keep publishing a binding"
+        );
     }
 
     // ─────────────── WIRING ───────────────────────────────────────────────

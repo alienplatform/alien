@@ -1322,6 +1322,41 @@ fn aws_sandbox_runtime_shape_imports_provisioning_with_the_build_inputs() {
 /// A payload with neither a complete image nor complete build inputs is a contract violation:
 /// guessing through it either enumerates the wrong sessions or builds nothing.
 #[test]
+fn aws_sandbox_import_refuses_an_arn_with_no_region() {
+    let entry = sandbox_entry(ResourceLifecycle::Frozen, false);
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let mgmt = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: Some(&mgmt),
+        resource: &entry,
+    };
+
+    // Sessions are addressed through the binding, and the binding needs the region the ARN
+    // names; an ARN this malformed is an unexpected registration, not a wait-for-next-tick.
+    let err = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({
+                "imageIdentifier": "stack-agents",
+                "imageArn": "not-an-arn",
+                "imageVersion": "1.0"
+            }),
+            &ctx,
+        )
+        .expect_err("an image ARN naming no region must be refused");
+    assert!(
+        err.to_string().contains("agents"),
+        "the refusal must name the resource, got: {err}"
+    );
+}
+
+#[test]
 fn aws_sandbox_partial_shape_is_refused() {
     let entry = sandbox_entry(ResourceLifecycle::Live, false);
     let registry = ImporterRegistry::built_in();
