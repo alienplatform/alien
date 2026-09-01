@@ -500,6 +500,16 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         "a Live build role must authenticate to ECR with exactly the token call and the two \
          pull actions: {policy}"
     );
+    // Same-account pulls are authorized by identity policy alone, so without this Deny the
+    // Allow above makes a customer-authored Dockerfile a reader of every private repository
+    // in the customer's own account. The token call must stay out of the deny.
+    assert!(
+        policy.contains(
+            r#""Effect" = "Deny", "Action" = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource" = "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*""#
+        ),
+        "a Live build role must deny same-account pulls, account-scoped through data sources: \
+         {policy}"
+    );
 }
 
 /// `egress: deny` has to be built, not assumed.

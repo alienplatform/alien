@@ -146,10 +146,28 @@ impl TfEmitter for AwsSandboxEmitter {
                     ]),
                 ),
                 // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
-                // the base image is unknown when the module is rendered, so the pull pair cannot
-                // be narrowed either; a cross-account pull is still bounded by that repository's
-                // policy.
+                // the base image is unknown when the module is rendered, so the pull pair is `*`
+                // too; the Deny below stops it reading this account's own private repositories.
                 ("Resource", Expression::String("*".to_string())),
+            ]));
+            // Same-account pulls are authorized by identity policy alone — no repository policy
+            // participates — and this role runs a customer-authored Dockerfile. The base image
+            // is cross-account by construction, so a same-account pull is never legitimate.
+            build_statements.push(Expression::from_iter([
+                ("Effect", Expression::String("Deny".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![
+                        Expression::String("ecr:BatchGetImage".to_string()),
+                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    ]),
+                ),
+                (
+                    "Resource",
+                    expr::template(
+                        "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
+                    ),
+                ),
             ]));
         }
         let build_policy =

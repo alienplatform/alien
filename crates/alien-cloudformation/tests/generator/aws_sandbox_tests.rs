@@ -219,7 +219,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
     let statements = build_role_statements(&template);
     let ecr = statements
         .iter()
-        .find(|statement| grants_ecr(statement))
+        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
         .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
     assert_eq!(
         ecr["Action"],
@@ -235,7 +235,29 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         serde_json::json!("*"),
         "GetAuthorizationToken is only accepted against `*`"
     );
-    assert_eq!(ecr["Effect"], serde_json::json!("Allow"));
+
+    // Same-account pulls are authorized by identity policy alone, so without this Deny the
+    // Allow above makes a customer-authored Dockerfile a reader of every private repository
+    // in the customer's own account.
+    let deny = statements
+        .iter()
+        .find(|statement| statement["Effect"] == "Deny")
+        .unwrap_or_else(|| {
+            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
+        });
+    assert_eq!(
+        deny["Action"],
+        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        "the deny covers exactly the two pull actions — never the token call, which the \
+         cross-account login needs"
+    );
+    assert_eq!(
+        deny["Resource"],
+        serde_json::json!({
+            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+        }),
+        "the deny must name this account's repositories through pseudo parameters, not literals"
+    );
 }
 
 /// The Frozen path is the one every installed stack is on, and it does not move.

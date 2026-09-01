@@ -491,9 +491,26 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
                 ]),
             ),
             // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
-            // base image is unknown when the template is generated, so the pull pair cannot be
-            // narrowed either; a cross-account pull is still bounded by that repository's policy.
+            // base image is unknown when the template is generated, so the pull pair is `*` too;
+            // the Deny below is what stops it reading this account's own private repositories.
             ("Resource", CfExpression::from("*")),
+        ]));
+        // Same-account pulls are authorized by identity policy alone — no repository policy
+        // participates — and this role runs a customer-authored Dockerfile. The base image is
+        // cross-account by construction, so a same-account pull is never legitimate.
+        statements.push(CfExpression::object([
+            ("Effect", CfExpression::from("Deny")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            (
+                "Resource",
+                CfExpression::sub("arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"),
+            ),
         ]));
     }
     CfExpression::list([CfExpression::object([
