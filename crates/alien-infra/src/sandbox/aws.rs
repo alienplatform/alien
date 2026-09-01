@@ -421,6 +421,17 @@ impl AwsSandboxController {
         self.idle_suspend_seconds = config.session.idle_suspend_seconds;
         self.max_lifetime_seconds = config.session.max_lifetime_seconds;
 
+        // Ownership decides before the bundle is even read. A Frozen sandbox's image belongs to
+        // the setup stack, which owns its bundle too and hands none over — so there is nothing
+        // here to compare against, and rebuilding would use credentials never granted it.
+        if !self.owns_image_builds(ctx, &config.id) {
+            info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
 
@@ -430,20 +441,6 @@ impl AwsSandboxController {
                 state: Ready,
                 suggested_delay: None,
             });
-        }
-
-        // A Frozen sandbox's image is built and owned by stack creation. Rebuilding it here
-        // would act with credentials that were never granted it, so the mismatch is surfaced
-        // rather than acted on.
-        if !self.owns_image_builds(ctx, &config.id) {
-            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: format!(
-                    "sandbox '{}' declares bundle '{desired_bundle}' but its image is owned by \
-                     stack creation; redeploy the setup package to change it",
-                    config.id
-                ),
-                resource_id: Some(config.id.clone()),
-            }));
         }
 
         info!(sandbox_id = %config.id, bundle = %desired_bundle, "rolling MicroVM image onto a new bundle");
@@ -1604,9 +1601,10 @@ mod tests {
     }
 
     /// A Frozen sandbox's image belongs to the setup stack. Rebuilding it at runtime would use
-    /// credentials that were never granted it, so a changed bundle is refused rather than built.
+    /// credentials that were never granted it, so no declaration reaches the build API — the
+    /// expectation-free mock panics on any call.
     #[tokio::test]
-    async fn a_frozen_sandbox_refuses_to_rebuild_its_image() {
+    async fn a_frozen_sandbox_never_rebuilds_its_image() {
         let controller = AwsSandboxController {
             state: AwsSandboxState::Ready,
             image_identifier: Some(IMAGE_ARN.to_string()),
@@ -1633,13 +1631,62 @@ mod tests {
                 "s3://alien-bundles-test/sandbox/bundle-v2.zip",
             ))
             .expect("transition to update");
-        let error = executor
-            .run_until_terminal()
+        executor
+            .step()
             .await
-            .expect_err("a Frozen sandbox must refuse the rebuild");
+            .expect("a Frozen sandbox settles without touching its image");
+
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller.active_version.as_deref(),
+            Some("1.0"),
+            "the setup-built version keeps serving"
+        );
+        assert!(controller.pending_version.is_none(), "nothing was rolled");
+    }
+
+    /// A Frozen sandbox carries no bundle of its own — setup owns the image and never hands
+    /// one over — so an ordinary update must still settle back to Ready rather than reading
+    /// that absence as a changed declaration.
+    #[tokio::test]
+    async fn a_frozen_sandbox_updates_without_a_recorded_bundle() {
+        let controller = AwsSandboxController {
+            state: AwsSandboxState::Ready,
+            image_identifier: Some(IMAGE_ARN.to_string()),
+            image_arn: Some(IMAGE_ARN.to_string()),
+            active_version: Some("1.0".to_string()),
+            region: Some("us-east-1".to_string()),
+            // Exactly what the importer's Frozen arm produces: no bundle, no build role.
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor.update(sandbox()).expect("transition to update");
+        executor
+            .step()
+            .await
+            .expect("a Frozen sandbox must settle, not fail, on an ordinary update");
+
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
         assert!(
-            error.to_string().contains("owned by stack creation"),
-            "the refusal names its cause: {error}"
+            controller
+                .get_binding_params()
+                .expect("binding params")
+                .is_some(),
+            "an ordinary update must not withdraw a Frozen sandbox's binding"
         );
     }
 
@@ -1710,6 +1757,10 @@ mod tests {
     /// State written before a sandbox's image could be rebuilt carried one version field and no
     /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
     /// active version" would withdraw the binding of a deployment that never changed.
+    ///
+    /// Only settled `Ready` state carries across. The transient states such a record could also
+    /// hold name a build or a delete that was already in flight, and resuming one from a
+    /// different controller's notion of progress is not something this can honour.
     #[test]
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({

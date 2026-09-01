@@ -6,6 +6,7 @@ use alien_core::{
 };
 use alien_error::AlienError;
 
+use crate::core::{serialize_controller, ResourceController};
 use crate::import::ResourceImporter;
 use crate::import_helpers::make_imported_state_with_status;
 use crate::sandbox::{AwsSandboxController, AwsSandboxState};
@@ -103,5 +104,92 @@ impl ResourceImporter for AwsSandboxImporter {
                 platform: Platform::Aws,
             })),
         }
+    }
+
+    /// A Live sandbox's image is runtime-owned, so a re-import must not replace the state that
+    /// tracks it: the default would drop the built version — withdrawing the binding of a
+    /// sandbox that is serving — and re-run the create flow against an image that exists.
+    ///
+    /// Only the setup-owned facts cross over. The bundle deliberately does not: a new release's
+    /// bundle is a desired-config change and reaches the image through the update flow.
+    fn merge_reimport(
+        &self,
+        existing: StackResourceState,
+        imported: StackResourceState,
+        ctx: &ImportContext<'_>,
+    ) -> Result<StackResourceState> {
+        let (Some(existing_state), Some(imported_state)) = (
+            existing.internal_state.clone(),
+            imported.internal_state.clone(),
+        ) else {
+            return Ok(imported);
+        };
+
+        let existing_controller: AwsSandboxController = serde_json::from_value(existing_state)
+            .map_err(|error| {
+                AlienError::new(CoreErrorData::GenericError {
+                    message: format!(
+                        "sandbox '{}' has unreadable controller state: {error}",
+                        ctx.resource_id
+                    ),
+                })
+            })?;
+        let imported_controller: AwsSandboxController = serde_json::from_value(imported_state)
+            .map_err(|error| {
+                AlienError::new(CoreErrorData::GenericError {
+                    message: format!(
+                        "sandbox '{}' was re-imported with unreadable state: {error}",
+                        ctx.resource_id
+                    ),
+                })
+            })?;
+
+        // A Frozen registration names no build role. Its image is setup-owned and stack creation
+        // is authoritative about it, so replacement is right there.
+        if imported_controller.build_role_arn.is_none() {
+            return Ok(imported);
+        }
+
+        let merged = AwsSandboxController {
+            build_role_arn: imported_controller.build_role_arn,
+            egress_connector_arns: imported_controller.egress_connector_arns,
+            allow_egress: imported_controller.allow_egress,
+            preview_ports: imported_controller.preview_ports,
+            region: imported_controller
+                .region
+                .or(existing_controller.region.clone()),
+            ..existing_controller
+        };
+
+        // The connectors decide what a session can reach, so the binding is recomputed rather
+        // than carried: a changed connector must reach the application.
+        let remote_binding_params = if ctx.resource.publishes_binding_params() {
+            merged.get_binding_params().map_err(|error| {
+                AlienError::new(CoreErrorData::GenericError {
+                    message: format!(
+                        "binding params extraction failed for resource '{}': {error}",
+                        ctx.resource_id
+                    ),
+                })
+            })?
+        } else {
+            None
+        };
+        let outputs = merged.get_outputs();
+        let internal_state = serialize_controller(&merged).map_err(|error| {
+            AlienError::new(CoreErrorData::JsonSerializationFailed {
+                reason: format!(
+                    "controller serialization failed for resource '{}': {error}",
+                    ctx.resource_id
+                ),
+            })
+        })?;
+
+        Ok(StackResourceState {
+            internal_state: Some(internal_state),
+            outputs,
+            remote_binding_params,
+            ..existing
+        })
     }
 }
