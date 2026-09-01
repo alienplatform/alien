@@ -36,14 +36,6 @@ export type OperationsPluginOperation = {
    * Human-readable description.
    */
   description: string | null;
-  /**
-   * JSON Schema for operation parameters when the plugin publishes one.
-   */
-  inputSchema: { [k: string]: any | null } | null;
-  /**
-   * JSON Schema for a successful result when the plugin publishes one.
-   */
-  outputSchema: { [k: string]: any | null } | null;
 };
 
 /** @internal */
@@ -59,8 +51,6 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   name: z.string(),
   tier: OperationsPluginOperationTier$inboundSchema,
   description: z.nullable(z.string()),
-  inputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
-  outputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
 });
 
 export function operationsPluginOperationFromJSON(
