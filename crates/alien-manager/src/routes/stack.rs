@@ -1423,8 +1423,7 @@ mod setup_update_authorization_tests {
             .expect_err("a payload missing the sandbox's scaffolding must be refused");
         assert!(
             error.message.contains("agents"),
-            "the refusal must name the missing resource: {}",
-            error.message
+            "the refusal must name the missing resource"
         );
 
         // The Worker is the control: nothing in setup renders it, so delivering one is still the
@@ -1439,8 +1438,7 @@ mod setup_update_authorization_tests {
             .expect_err("a resource setup never renders must not be importable");
         assert!(
             error.message.contains("api") && !error.message.contains("agents"),
-            "only the worker is unowned: {}",
-            error.message
+            "only the worker is unowned"
         );
     }
 
