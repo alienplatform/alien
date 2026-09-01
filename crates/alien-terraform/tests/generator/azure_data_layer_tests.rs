@@ -706,16 +706,30 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
         .build();
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
-    let rendered = module
-        .files
-        .values()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join("\n");
 
-    assert!(
-        rendered.contains(r#"resource "azapi_resource" "agents""#),
-        "the sandbox group must render:\n{rendered}"
+    // The claim this shape is here to pin: with no other resource declared there is no resource
+    // group of Alien's own to parent to, so the group must hang off the one the deployer names.
+    // A reference to a resource this stack does not create would fail `terraform validate` below,
+    // but a *wrong variable* would not — so the attribute is read rather than searched for.
+    let parent_id = module
+        .files
+        .get("agents.tf")
+        .expect("the sandbox group renders into its own file")
+        .lines()
+        .find_map(|line| {
+            let normalized = line.split_whitespace().collect::<Vec<_>>();
+            match normalized.split_first() {
+                Some((first, rest)) if *first == "parent_id" && rest.first() == Some(&"=") => {
+                    Some(rest[1..].join(" "))
+                }
+                _ => None,
+            }
+        })
+        .expect("the group carries a parent_id");
+    assert_eq!(
+        parent_id,
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\""
     );
+
     assert_terraform_valid(&module, "azure remote sandbox alone");
 }
