@@ -206,6 +206,11 @@ pub struct RemoteAzureSandboxBinding {
     /// Idle seconds after which a session suspends, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_suspend_seconds: Option<u32>,
+    /// Whether the declaration asked for open egress. Always true here, and sent rather than
+    /// implied for the same reason the AWS binding sends it: the remote grant lets its holder
+    /// create sessions the declared policy never reaches, so a client reconstructing the policy
+    /// needs the answer on the wire rather than inferring it from an absent field.
+    pub allow_egress: bool,
     /// Declared session ceilings, where the declaration named them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<String>,
@@ -1401,6 +1406,8 @@ fn remote_sandbox_binding(
                     "Azure sandbox resourceGroup",
                 )?,
                 disk_image: concrete_binding_value(&binding.disk_image, "Azure sandbox diskImage")?,
+                // Checked immediately above, so this is the checked value rather than a literal.
+                allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Allow),
                 idle_suspend_seconds: binding.idle_suspend_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,

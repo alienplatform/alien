@@ -609,3 +609,136 @@ async fn remote_sandbox_lease_is_refused_when_a_preview_port_does_not_fit() {
         "the refusal should name the field and the value it read: {rendered}"
     );
 }
+
+fn azure_sandbox_lease_body(expires_at: DateTime<Utc>, allow_egress: bool) -> serde_json::Value {
+    json!({
+        "service": "sandbox-azure",
+        "binding": {
+            "sandboxGroup": "acme-agent",
+            "dataPlaneEndpoint": "https://management.westus2.azuredevcompute.io",
+            "region": "westus2",
+            "resourceGroup": "acme-rg",
+            "diskImage": "ubuntu",
+            "allowEgress": allow_egress,
+            "idleSuspendSeconds": 300,
+            "cpu": "1000m",
+            "memory": "2048Mi",
+            "disk": "20480Mi",
+        },
+        "clientConfig": {
+            "subscriptionId": "00000000-0000-0000-0000-000000000000",
+            "tenantId": "11111111-1111-1111-1111-111111111111",
+            "region": "westus2",
+            "credentials": { "type": "accessToken", "token": "SENTINEL_AZURE_TOKEN" },
+        },
+        "expiresAt": expires_at.to_rfc3339(),
+    })
+}
+
+/// The Azure sandbox lease decodes through the **generated** client, which is the only path a real
+/// deployment takes.
+///
+/// This is the test that fails when the manager grows a response variant and the OpenAPI spec is
+/// not regenerated: the hand-written types compile, the crate's own tests pass, and the generated
+/// client has no arm to decode into — so the feature is dead for every real consumer while looking
+/// finished from inside the crate.
+#[tokio::test]
+async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provider() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        azure_sandbox_lease_body(expires_at, true),
+    )));
+    let requests = Arc::new(StdMutex::new(Vec::new()));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: requests.clone(),
+    })
+    .await;
+
+    let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
+        url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),
+        http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
+            .expect("build generated contract client"),
+        refresh_at: expires_at,
+        generation: 0,
+    };
+    let lease = GeneratedManagerBindingResolver
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("agent"),
+        )
+        .await
+        .expect("generated client should decode an Azure sandbox lease");
+
+    let ResolvedRemoteBinding::SandboxAzure {
+        binding,
+        client_config,
+        expires_at: lease_expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for an Azure sandbox");
+    };
+    let value = |raw: &str| alien_core::BindingValue::Value(raw.to_string());
+    assert_eq!(binding.sandbox_group, value("acme-agent"));
+    assert_eq!(
+        binding.data_plane_endpoint,
+        value("https://management.westus2.azuredevcompute.io")
+    );
+    assert_eq!(binding.region, value("westus2"));
+    assert_eq!(binding.resource_group, value("acme-rg"));
+    assert_eq!(binding.disk_image, value("ubuntu"));
+    assert_eq!(binding.egress, alien_core::SandboxEgress::Allow);
+    assert_eq!(binding.idle_suspend_seconds, Some(300));
+    assert_eq!(binding.cpu, Some(value("1000m")));
+    assert_eq!(binding.memory, Some(value("2048Mi")));
+    assert_eq!(binding.disk, Some(value("20480Mi")));
+    assert_eq!(client_config.region.as_deref(), Some("westus2"));
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::AzureCredentials::AccessToken { token } = client_config.credentials else {
+        panic!("an Azure sandbox lease carries an access token");
+    };
+    assert_eq!(token, "SENTINEL_AZURE_TOKEN");
+    assert_eq!(lease_expires_at.timestamp(), expires_at.timestamp());
+}
+
+/// A lease claiming restricted egress is refused rather than quietly downgraded.
+///
+/// The manager will not mint one, so this pins the client's own half of that contract: the field
+/// is read from the wire rather than assumed, so the day the manager's rule changes the client
+/// refuses instead of silently reporting a restriction that does not exist.
+#[tokio::test]
+async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        azure_sandbox_lease_body(expires_at, false),
+    )));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: Arc::new(StdMutex::new(Vec::new())),
+    })
+    .await;
+
+    let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
+        url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),
+        http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
+            .expect("build generated contract client"),
+        refresh_at: expires_at,
+        generation: 0,
+    };
+    let Err(error) = GeneratedManagerBindingResolver
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("agent"),
+        )
+        .await
+    else {
+        panic!("a restricted-egress sandbox lease is not usable remotely")
+    };
+    assert_eq!(error.code, "REMOTE_ACCESS_FAILED", "{error}");
+}

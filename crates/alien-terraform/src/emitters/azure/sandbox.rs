@@ -29,8 +29,11 @@ use alien_permissions::{
 };
 use hcl::expr::Expression;
 
-/// The preview API version the sandbox group is created at. Pinned rather than floating: it is the
-/// only version the provider manifest lists, and a preview type's shape moves between them.
+/// The preview API version the sandbox group is created at.
+///
+/// Pinned rather than floating, and the same version the ARM and data-plane clients use: ARM still
+/// answers older previews, so a version that drifts here fails as a shape difference rather than
+/// as a rejected request.
 const SANDBOX_GROUP_TYPE: &str = "Microsoft.App/sandboxGroups@2026-02-01-preview";
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
@@ -100,9 +103,10 @@ impl TfEmitter for AzureSandboxEmitter {
                 attr("tags", tags(ctx, "sandbox")),
                 // The azapi provider ships a bundled schema index and refuses a type it does not
                 // carry — `Microsoft.App/sandboxGroups can't be found` at validate. The type is
-                // real: it is in the live ARM provider manifest at this version and ARM creates
-                // one. So the index lags the service, and the check being disabled here is a
-                // client-side pre-check, not ARM's — which still validates the request at apply.
+                // real: the ARM provider manifest lists it at this version and ARM creates one, so
+                // the index lags the service. What is disabled is a client-side pre-check, not
+                // ARM's, which still validates the request at apply. Remove this once the azapi
+                // provider carries the type.
                 attr("schema_validation_enabled", Expression::Bool(false)),
             ],
         ));

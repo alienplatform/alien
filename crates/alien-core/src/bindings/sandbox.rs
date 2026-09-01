@@ -112,7 +112,7 @@ pub struct AzureSandboxBinding {
     pub disk_image: BindingValue<String>,
     /// Session ceilings in the data plane's own units, from the declaration.
     ///
-    /// Optional as a set: a binding rendered before Azure carried ceilings has none of them, and a
+    /// Optional as a set: a binding rendered by an earlier release carries none of them, and a
     /// required field would fail to deserialize on a deployment that is already running. Absent
     /// takes the data plane's own default rather than asserting a size nobody declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]

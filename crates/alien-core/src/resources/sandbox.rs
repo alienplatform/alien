@@ -272,11 +272,11 @@ impl SandboxCapabilities {
                 // preview capability is. Returning the anonymous URL would publish the port.
                 preview: false,
                 suspend_resume: true,
-                // False for a client reason, not a cloud one, and measured rather than assumed:
-                // the data plane completes the round trip today — `POST …/snapshot` returns a
-                // document, and a sandbox created from `sourcesRef.snapshot.id` carries the
-                // pre-snapshot filesystem and drops the post-snapshot one. What is missing is
-                // ours on both ends: this client has no snapshot call at all, and
+                // False for a client reason, not a cloud one: the data plane completes the round
+                // trip — `POST …/snapshot` returns a document, and a sandbox created from
+                // `sourcesRef.snapshot.id` carries the pre-snapshot filesystem and drops the
+                // post-snapshot one. What is missing is on the client side, at both ends: this
+                // client has no snapshot call at all, and
                 // `CreateSessionRequest` has no field to consume an id with. Closing it also
                 // needs an owner for the artifact — Microsoft does not garbage collect snapshots
                 // and `stop` mints one on every suspend, so an id with no owner is a bill that
@@ -287,10 +287,10 @@ impl SandboxCapabilities {
                 egress_deny: true,
                 // The data plane takes a continuous cpu/memory/disk surface and refuses anything
                 // outside its own rule: `CPU must be n×250m for n=1..64 (0.25–16 cores);
-                // Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. The ceilings hold inside the
-                // session — `250m`/`512Mi` gives `nproc=1` and a 727 MB `MemTotal`, and an
-                // over-allocation raises `MemoryError` while the sandbox stays running. There is
-                // no tier enum; `azure_session_limits` checks the rule above at plan time.
+                // Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi`. The ceilings are enforced inside the
+                // session: an over-allocation raises `MemoryError` while the sandbox keeps
+                // running. There is no tier enum; `azure_session_limits` checks the rule at plan
+                // time.
                 enforced_limits: true,
                 process_limit: false,
                 // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
@@ -1523,10 +1523,9 @@ mod tests {
 
     /// Azure states its own sizing rule when it refuses, and this is that rule.
     ///
-    /// The wire disagrees with the vendor docs page, which shows a five-value XS-XL tier table
-    /// the API does not implement: `250m`, `1500m` and `4000m` are all accepted and honoured,
-    /// while `32000m` and `333m` are refused. Checked at plan time because the alternative is a
-    /// package that renders cleanly and dies at the first session.
+    /// Azure's published tier table does not match what the API accepts: `250m`, `1500m` and
+    /// `4000m` are valid sizes, `32000m` and `333m` are refused. Checked at plan time because the
+    /// alternative is a package that renders cleanly and dies at the first session.
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
@@ -1539,11 +1538,11 @@ mod tests {
         };
 
         sized("250m", "512Mi", "5120Mi").expect("the smallest step the data plane accepts");
-        sized("4000m", "8192Mi", "40960Mi").expect("all three honoured on the wire");
+        sized("4000m", "8192Mi", "40960Mi").expect("cpu, memory and disk are all honoured");
         sized("16000m", "32Gi", "320Gi").expect("the top of the range");
 
-        // A multiple, not just a range: `333m` sits inside 0.25-16 cores and the data plane still
-        // refuses it, so a bounds-only check would pass a declaration that fails at create.
+        // A multiple, not just a range: `333m` sits inside 0.25-16 cores and is still refused, so
+        // a bounds-only check would pass a declaration that fails at create.
         let off_step = sized("333m", "512Mi", "5120Mi").expect_err("333m is not a step of 250m");
         assert_eq!(off_step.code, "SANDBOX_LIMIT_INVALID", "{off_step}");
         assert!(off_step.to_string().contains("cpu"), "{off_step}");

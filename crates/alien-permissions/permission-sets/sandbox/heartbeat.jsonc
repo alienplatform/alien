@@ -45,8 +45,7 @@
         // what blocks delivery is the setup path, which compiles resource-scoped management only
         // for `worker/dispatch-command`, and the runtime path, which compiles it only for a
         // Kubernetes cluster. It stays declared for the day one of
-        // those learns to deliver it, and narrowing the stack binding is worth revisiting now
-        // that the target exists. What the stack grant reaches is provisioning state, and no
+        // those learns to deliver it. What the stack grant reaches is provisioning state, and no
         // session contents.
         "binding": {
           "stack": {

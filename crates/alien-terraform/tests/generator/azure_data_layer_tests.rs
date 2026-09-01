@@ -633,15 +633,18 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
     // `terraform init` is what proves the azapi provider block was emitted: an `azapi_resource`
     // without one fails at init, not at plan.
     assert_terraform_valid(&module, "azure remote sandbox");
+    // The module as a whole, so the artifact an approver reads is the thing CI compares — the
+    // group's body and tags, the provider block, and the rendered PERMISSIONS.md.
+    snapshot_module("azure_remote_sandbox", &module);
 }
 
 
-/// A remote sandbox is deployable on its own, with no other resource declared.
+/// A remote sandbox renders on its own, with no other resource declared.
 ///
-/// The failing shape is a bindings-only stack: the sandbox group's `parent_id` names a resource
-/// group, so if nothing pulls that resource group into the module the package renders and then
-/// fails at apply against a resource group that does not exist. Asserted by rendering the stack a
-/// vendor publishing only a sandbox would actually get.
+/// The shape worth checking is a bindings-only stack: the sandbox group's `parent_id` names a
+/// resource group, and this pins that it resolves to the deployer-supplied
+/// `var.azure_resource_group_name` rather than to a resource the module would have had to
+/// declare. `terraform validate` is as far as this reaches — it does not prove apply.
 #[test]
 fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
     let sandbox = Sandbox::new("agents".to_string())

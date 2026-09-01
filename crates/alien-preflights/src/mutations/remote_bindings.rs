@@ -444,12 +444,25 @@ mod tests {
         assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
     }
 
-    /// `sandbox/remote-execute` has an AWS block alone. Without this gate the deployment installs
-    /// a GCP or Azure identity with no sandbox role binding, and the customer's security team
-    /// approves a PERMISSIONS.md heading promising arbitrary code execution and listing nothing.
+    /// `sandbox/remote-execute` grants on AWS and Azure and nothing on GCP. Without this gate a
+    /// GCP deployment installs an identity with no sandbox role binding, and the customer's
+    /// security team approves a PERMISSIONS.md heading promising arbitrary code execution and
+    /// listing nothing.
+    ///
+    /// Both directions, because the gate is derived from the permission set rather than a list
+    /// kept here: a covered platform must pass it, or a set gaining a cloud silently stops
+    /// deploying there.
     #[tokio::test]
     async fn a_remote_sandbox_is_refused_where_its_permission_set_grants_nothing() {
-        for platform in [Platform::Gcp, Platform::Azure] {
+        let covered = Stack::new("byo-sandbox".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .build();
+        RemoteBindingsMutation
+            .mutate(covered, &StackState::new(Platform::Azure), &config())
+            .await
+            .expect("Azure carries a remote-execute grant, so the gate must let it through");
+
+        for platform in [Platform::Gcp] {
             let stack = Stack::new("byo-sandbox".to_string())
                 .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
                 .build();
@@ -849,6 +862,22 @@ mod tests {
                         "Microsoft.App/sandboxGroups/sandboxes/executeShellCommand/action"
                     ]
                 }),
+            ),
+            // Wildcards above the sandbox namespace reach into it, so they have to fail closed.
+            // A predicate that only matches downwards clears exactly the two broadest grants an
+            // author can write, which is the wrong way round.
+            ("a bare wildcard", serde_json::json!({ "dataActions": ["*"] })),
+            (
+                "a wildcard on the provider",
+                serde_json::json!({ "dataActions": ["Microsoft.App/*"] }),
+            ),
+            (
+                "a wildcard on the group, in the shape the role itself carries",
+                serde_json::json!({ "dataActions": ["Microsoft.App/sandboxGroups/*/action"] }),
+            ),
+            (
+                "a wildcard below the namespace",
+                serde_json::json!({ "dataActions": ["Microsoft.App/sandboxGroups/sandboxes/*"] }),
             ),
         ] {
             let account = ServiceAccount::new("runner".to_string())

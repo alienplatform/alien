@@ -1942,9 +1942,9 @@ impl BindingsProviderApi for BindingsProvider {
                     .into_value(binding_name, "diskImage")
                     .map_err(|_| invalid("diskImage"))?;
 
-                // A binding rendered before Azure carried ceilings has none, and those deployments
-                // keep running — so an absent value falls back to the same default it has always
-                // had rather than failing to resolve.
+                // A binding rendered by an earlier release carries no ceilings, and those
+                // deployments keep running, so an absent value falls back to the platform default
+                // rather than failing to resolve.
                 let declared = |value: Option<alien_core::bindings::BindingValue<String>>,
                                 field: &'static str| {
                     value

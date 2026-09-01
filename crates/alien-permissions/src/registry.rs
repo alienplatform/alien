@@ -182,22 +182,30 @@ pub fn permission_set_reaches_a_sandbox_session(
 }
 
 /// The predefined role carrying Azure's whole sandbox data plane, session contents included.
-const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Data Owner";
+///
+/// Public because three places have to agree on it — this predicate, the invariant test that keeps
+/// it out of the implicit-management sets, and the allowlist of roles an author may name. A second
+/// sandbox data-plane role added to that allowlist and not here drops silently out of both checks.
+pub const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Data Owner";
 
 /// Whether one Azure `dataAction`, possibly carrying a `*`, addresses a sandbox session.
 ///
 /// Lifecycle counts as reach for the same reason `RunMicrovm` does on AWS: whoever starts a
-/// session can put whatever it likes inside the one it started. A wildcard under the sandbox
-/// namespace is cleared rather than matched literally, so `…/sandboxes/*` fails closed.
-fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
+/// session can put whatever it likes inside the one it started.
+///
+/// A wildcard is compared as a prefix in **both** directions, which is what makes it fail closed:
+/// `*` and `Microsoft.App/*` sit above the sandbox namespace and still reach into it, while
+/// `…/sandboxes/*` sits below. Matching only downwards would clear the two that matter most. Every
+/// verb under the namespace counts rather than a suffix allowlist, so a verb Azure adds later is
+/// reach until someone decides otherwise.
+pub fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
     const SANDBOX_NAMESPACE: &str = "microsoft.app/sandboxgroups/sandboxes";
     let action = action.to_ascii_lowercase();
+    if action.contains('*') {
+        let literal = action.split('*').next().unwrap_or_default();
+        return SANDBOX_NAMESPACE.starts_with(literal) || literal.starts_with(SANDBOX_NAMESPACE);
+    }
     action.starts_with(SANDBOX_NAMESPACE)
-        && (action.contains('*')
-            || action.ends_with("/write")
-            || action.ends_with("/delete")
-            || action.ends_with("/action")
-            || action.ends_with("/read"))
 }
 
 /// Whether one IAM action, possibly carrying a `*`, can authorize an operation on a session.

@@ -344,9 +344,9 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
     let include_helm_provider =
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
-    // All three azapi resource kinds, not only the two that happened to exist first: the sandbox
-    // group is a plain `azapi_resource`, and a missing provider block fails at `terraform init`
-    // rather than at plan, which reads as a broken package rather than a missing declaration.
+    // All three azapi resource kinds: the sandbox group is a plain `azapi_resource`, and a
+    // missing provider block fails at `terraform init` rather than at plan, which reads as a
+    // broken package rather than a missing declaration.
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action")
         || has_resource_type(&per_resource, "azapi_resource");
@@ -593,7 +593,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
     let mut lines = vec![
         "# Application access permissions".to_string(),
         String::new(),
-        "The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.".to_string(),
+        "The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive the setup's management permissions.".to_string(),
     ];
     for (resource_id, definition) in resources {
         lines.extend([
@@ -643,10 +643,22 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     .as_deref()
                     .unwrap_or_default()
                 {
+                    // Roles and data actions together: an Azure grant may carry either, and a
+                    // set granting only a predefined role would otherwise render as a heading
+                    // with nothing under it — the strongest grant in the package documented as
+                    // if it were empty.
+                    let mut granted: Vec<String> = entry
+                        .grant
+                        .predefined_roles
+                        .iter()
+                        .flatten()
+                        .map(|role| format!("{role} (role)"))
+                        .collect();
+                    granted.extend(entry.grant.data_actions.iter().flatten().cloned());
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.data_actions.as_deref(),
+                        Some(&granted),
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.scope, target, resource_id)
                         }),
@@ -1177,7 +1189,12 @@ fn versions_body(
             provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
         ));
         if include_azapi_provider {
-            provider_attrs.push(attr("azapi", provider_decl_attr("Azure/azapi", ">= 2.6")));
+            // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
+            // preview type whose `body` shape a major bump is free to move.
+            provider_attrs.push(attr(
+                "azapi",
+                provider_decl_attr("Azure/azapi", ">= 2.6, < 3.0"),
+            ));
         }
     }
     if include_time_provider {

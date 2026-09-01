@@ -386,8 +386,9 @@ fn azure_network_byo_vnet_emits_data_lookups() {
 
 /// The sandbox management grants have to reach the module.
 ///
-/// Both are compiled at stack scope, because an Azure sandbox group is created at runtime and
-/// `Microsoft.App/sandboxGroups` has no ARM representation for setup to scope against. Generation
+/// Both are compiled at stack scope: Azure expresses no scope between a sandbox group and its
+/// resource group, and the setup path compiles resource-scoped management only for
+/// `worker/dispatch-command`. Generation
 /// hard-errors if a platform doesn't declare the binding target, so success alone doesn't prove
 /// the actions rendered — a grant compiled to a scope no emitter renders leaves the module valid
 /// and the manager unable to read the sandbox it owns.

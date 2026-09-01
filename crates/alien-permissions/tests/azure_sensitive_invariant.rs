@@ -1,4 +1,6 @@
-use alien_permissions::list_permission_set_ids;
+use alien_permissions::{
+    data_action_reaches_a_sandbox_session, list_permission_set_ids, AZURE_SANDBOX_DATA_PLANE_ROLE,
+};
 
 const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "Microsoft.Storage/storageAccounts/listKeys/action",
@@ -30,8 +32,9 @@ const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
     "AcrPush",
     // Carries the whole sandbox data plane, session contents included, so it belongs only to the
     // sets that are meant to reach inside a session — `sandbox/execute` and
-    // `sandbox/remote-execute`. Lifecycle-only callers use the granular actions instead.
-    "Container Apps SandboxGroup Data Owner",
+    // `sandbox/remote-execute`. Lifecycle-only callers use the granular actions instead. Named
+    // from the shared constant so this list and the reach predicate cannot disagree.
+    AZURE_SANDBOX_DATA_PLANE_ROLE,
     "Azure Service Bus Data Receiver",
     "Key Vault Secrets User",
     "Storage Blob Data Contributor",
@@ -77,6 +80,13 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
                     assert!(
                         !SENSITIVE_IMPLICIT_DATA_ACTIONS.contains(&data_action.as_str()),
                         "{permission_set_id} Azure entry {index} grants sensitive data action {data_action}"
+                    );
+                    // By reach rather than by equality, so a wildcard cannot pass a list of exact
+                    // strings: `Microsoft.App/sandboxGroups/*` grants every one of them and
+                    // matches none of them.
+                    assert!(
+                        !data_action_reaches_a_sandbox_session(data_action),
+                        "{permission_set_id} Azure entry {index} reaches a sandbox session through {data_action}"
                     );
                 }
             }

@@ -7,9 +7,13 @@ terraform {
   required_version = ">= 1.5.0"
 
   required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = ">= 5.0"
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = ">= 3.100, < 5.0"
+    }
+    azapi = {
+      source  = "Azure/azapi"
+      version = ">= 2.6, < 3.0"
     }
     random = {
       source  = "hashicorp/random"
@@ -47,27 +51,45 @@ variable "management_url" {
   default     = ""
 }
 
-variable "aws_region" {
+variable "azure_location" {
   type        = string
-  description = "AWS region used by the AWS provider."
-  default     = "us-east-1"
+  description = "Azure location."
+  default     = "eastus"
 }
 
-variable "managing_role_arn" {
+variable "azure_subscription_id" {
   type        = string
-  description = "ARN of the management identity allowed to assume setup-created roles."
+  description = "Azure subscription ID hosting the stack."
+}
+
+variable "azure_resource_group_name" {
+  type        = string
+  description = "Azure resource group name."
+}
+
+variable "azure_managing_tenant_id" {
+  type        = string
+  description = "Azure tenant ID that hosts the management identity for cross-tenant access."
+}
+
+variable "azure_oidc_issuer" {
+  type        = string
+  description = "OIDC issuer URL for Azure Federated Identity Credential."
+}
+
+variable "azure_oidc_subject" {
+  type        = string
+  description = "OIDC subject claim for Azure Federated Identity Credential."
 }
 
 === providers.tf ===
-provider "aws" {
-  region = var.aws_region
+provider "azurerm" {
+  resource_provider_registrations = "none"
+
+  features {}
 }
 
-data "aws_caller_identity" "current" {}
-
-data "aws_region" "current" {}
-
-data "aws_partition" "current" {}
+provider "azapi" {}
 
 === resource_prefix.tf ===
 resource "random_id" "resource_prefix" {
@@ -78,9 +100,9 @@ resource "random_id" "resource_prefix" {
 locals {
   resource_prefix              = var.resource_prefix == "" ? format("a%s", random_id.resource_prefix.hex) : var.resource_prefix
   deployment_name              = var.name
-  deployment_platform          = "aws"
-  deployment_target            = "aws"
-  deployment_region            = data.aws_region.current.region
+  deployment_platform          = "azure"
+  deployment_target            = "azure"
+  deployment_region            = var.azure_location
   deployment_management_config = null
   deployment_settings = {
     deploymentModel = "push"
@@ -90,83 +112,108 @@ locals {
   }
   deployment_resources = [
     {
-      id   = "files"
-      type = "storage"
+      id   = "default-resource-group"
+      type = "azure_resource_group"
       importData = {
-        bucketName = aws_s3_bucket.files.bucket
-        bucketArn  = aws_s3_bucket.files.arn
+        subscriptionId = var.azure_subscription_id
+        resourceGroup  = azurerm_resource_group.default_resource_group.name
+        location       = azurerm_resource_group.default_resource_group.location
+      }
+    },
+    {
+      id   = "agents"
+      type = "sandbox"
+      importData = {
+        sandboxGroup  = "${local.resource_prefix}-agents"
+        region        = var.azure_location
+        resourceGroup = var.azure_resource_group_name
       }
     },
     {
       id   = "access"
       type = "resource-access"
       importData = {
-        roleName = aws_iam_role.access.name
-        roleArn  = aws_iam_role.access.arn
+        tenantId    = data.azurerm_client_config.access_current.tenant_id
+        identityId  = azurerm_user_assigned_identity.access.id
+        principalId = azurerm_user_assigned_identity.access.principal_id
+        clientId    = azurerm_user_assigned_identity.access.client_id
       }
     }
   ]
 }
 
-=== files.tf ===
-resource "aws_s3_bucket" "files" {
-  bucket        = "${local.resource_prefix}-files"
-  force_destroy = false
+=== default_resource_group.tf ===
+resource "azurerm_resource_group" "default_resource_group" {
+  name     = var.azure_resource_group_name
+  location = var.azure_location
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix
-    resource        = "files"
-    "resource-type" = "storage"
+    resource        = "default-resource-group"
+    "resource-type" = "resource-group"
   }
 }
 
-resource "aws_s3_bucket_server_side_encryption_configuration" "files" {
-  bucket = aws_s3_bucket.files.id
-
-  rule {
-    apply_server_side_encryption_by_default {
-      sse_algorithm = "AES256"
-    }
+=== agents.tf ===
+resource "azapi_resource" "agents" {
+  type      = "Microsoft.App/sandboxGroups@2026-02-01-preview"
+  name      = "${local.resource_prefix}-agents"
+  parent_id = "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}"
+  location  = var.azure_location
+  body      = {}
+  tags = {
+    "managed-by"    = "setup"
+    deployment      = local.resource_prefix
+    resource        = "agents"
+    "resource-type" = "sandbox"
   }
+  schema_validation_enabled = false
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
-resource "aws_s3_bucket_ownership_controls" "files" {
-  bucket = aws_s3_bucket.files.id
-
-  rule {
-    object_ownership = "BucketOwnerEnforced"
-  }
-}
-
-resource "aws_s3_bucket_public_access_block" "files" {
-  bucket                  = aws_s3_bucket.files.id
-  block_public_acls       = true
-  block_public_policy     = true
-  ignore_public_acls      = true
-  restrict_public_buckets = true
-}
-
-resource "aws_s3_bucket_policy" "files" {
-  bucket = aws_s3_bucket.files.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "DenyInsecureTransport", Effect = "Deny", Principal = "*", Action = "s3:*", Resource = [aws_s3_bucket.files.arn, "${aws_s3_bucket.files.arn}/*"], Condition = { Bool = { "aws:SecureTransport" = "false" } } }] })
-}
-
-resource "aws_iam_role_policy" "files_access_storage-remote-data-write_0" {
-  name   = "files-storage-remote-data-write-0"
-  role   = aws_iam_role.access.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "ListBucketAndUploads", Effect = "Allow", Action = ["s3:ListBucket", "s3:GetBucketLocation", "s3:ListBucketMultipartUploads"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}"] }, { Sid = "ReadWriteBucketObjects", Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload", "s3:ListMultipartUploadParts"], Resource = ["arn:aws:s3:::${aws_s3_bucket.files.bucket}/*"] }] })
+resource "azurerm_role_assignment" "agents_access_0" {
+  name               = uuidv5("oid", "deployment:azure:sandbox-access:${local.resource_prefix}:agents:0")
+  scope              = azapi_resource.agents.id
+  role_definition_id = "/subscriptions/${var.azure_subscription_id}/providers/Microsoft.Authorization/roleDefinitions/c24cf47c-5077-412d-a19c-45202126392c"
+  principal_id       = azurerm_user_assigned_identity.access.principal_id
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
 === access.tf ===
-resource "aws_iam_role" "access" {
-  name               = length(format("%s-%s", local.resource_prefix, "access")) <= 64 ? format("%s-%s", local.resource_prefix, "access") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "access"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "access")), 0, 8))
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Sid = "AllowManagingRole", Effect = "Allow", Principal = { AWS = var.managing_role_arn }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:PrincipalArn" = var.managing_role_arn } } }] })
+data "azurerm_client_config" "access_current" {}
+
+resource "azurerm_user_assigned_identity" "access" {
+  name                = "${local.resource_prefix}-access-identity"
+  resource_group_name = var.azure_resource_group_name
+  location            = var.azure_location
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix
     resource        = "access"
     "resource-type" = "resource-access"
   }
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
+}
+
+resource "azurerm_federated_identity_credential" "access_fic" {
+  count               = var.azure_oidc_issuer != "" && var.azure_oidc_subject != "" ? 1 : 0
+  name                = "${local.resource_prefix}-access-federated-credential"
+  resource_group_name = var.azure_resource_group_name
+  parent_id           = azurerm_user_assigned_identity.access.id
+  audience = [
+    "api://AzureADTokenExchange"
+  ]
+  issuer  = var.azure_oidc_issuer
+  subject = var.azure_oidc_subject
+  depends_on = [
+    azurerm_resource_group.default_resource_group
+  ]
 }
 
 === registration.tf ===
@@ -187,19 +234,17 @@ resource "terraform_data" "deployment_registration" {
     inputValues                 = {}
   }
   depends_on = [
-    aws_s3_bucket.files,
-    aws_s3_bucket_server_side_encryption_configuration.files,
-    aws_s3_bucket_ownership_controls.files,
-    aws_s3_bucket_public_access_block.files,
-    aws_s3_bucket_policy.files,
-    aws_iam_role_policy.files_access_storage-remote-data-write_0,
-    aws_iam_role.access
+    azurerm_resource_group.default_resource_group,
+    azapi_resource.agents,
+    azurerm_role_assignment.agents_access_0,
+    azurerm_user_assigned_identity.access,
+    azurerm_federated_identity_credential.access_fic
   ]
 }
 
 === outputs.tf ===
 output "deployment_target" {
-  value       = "aws"
+  value       = "azure"
   description = "Terraform module target."
 }
 
@@ -259,30 +304,20 @@ output "deployment_resources" {
 
 The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive the setup's management permissions.
 
-## `files` (storage)
+## `agents` (sandbox)
 
-Read and write objects in this storage resource.
+Create and terminate sessions in this sandbox, and run arbitrary code inside them.
 
-Permission set: `storage/remote-data-write` (revision 1).
+Permission set: `sandbox/remote-execute` (revision 1).
 
-- List the selected S3 bucket and its in-progress multipart uploads.
-  Scope: `arn:aws:s3:::${local.resource_prefix}-files`
-  - `s3:ListBucket`
-  - `s3:GetBucketLocation`
-  - `s3:ListBucketMultipartUploads`
-
-- Read, write, delete, and complete multipart uploads for objects in the selected S3 bucket.
-  Scope: `arn:aws:s3:::${local.resource_prefix}-files/*`
-  - `s3:GetObject`
-  - `s3:PutObject`
-  - `s3:DeleteObject`
-  - `s3:AbortMultipartUpload`
-  - `s3:ListMultipartUploadParts`
+- Create, drive and tear down sessions of the selected sandbox group.
+  Scope: `/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${replace(lower("${local.resource_prefix}-agents"), "_", "-")}`
+  - `Container Apps SandboxGroup Data Owner (role)`
 
 === README.md ===
-# Deployment setup - acme-remote-storage
+# Deployment setup - byo-sandbox
 
-Target: `aws`.
+Target: `azure`.
 
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.
 
@@ -298,18 +333,19 @@ Common optional settings:
 - `resource_prefix`: stable physical-name prefix. Leave empty to generate one.
 - `management_url`: management endpoint used to register this deployment. The generated installation snippet supplies the endpoint selected for the deployment target.
 
-AWS settings:
+Azure settings:
 
-- `aws_region`: AWS region used by the provider.
-- `managing_role_arn`: management identity allowed to assume setup-created roles.
-- `managing_account_id`: account that hosts application container images. Empty disables scoped cross-account image-pull grants.
+- `azure_subscription_id`: target subscription ID.
+- `azure_location`: Azure location.
+- `azure_resource_group_name`: target resource group name.
+- `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access.
 
 ## Run
 
 Use your organization's normal backend and approval workflow. A typical local review looks like:
 
 ```bash
-export TF_VAR_name="acme-remote-storage"
+export TF_VAR_name="byo-sandbox"
 export TF_VAR_token="..."
 terraform init
 terraform validate

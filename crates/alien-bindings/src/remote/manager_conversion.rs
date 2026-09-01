@@ -298,6 +298,56 @@ impl ResolvedRemoteBinding {
                     expires_at: parse_manager_expiry(expires_at, resource_id)?,
                 }
             }
+            manager_types::ResolveBindingResponse::SandboxAzure {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteAzureCredentials::AccessToken(token) =
+                    client_config.credentials;
+                // Read from the wire rather than assumed: the manager refuses to lease a sandbox
+                // declared with anything else, and a client that inferred `Allow` from an absent
+                // field would keep inferring it if that ever changed. Checked before the binding
+                // is consumed so the refusal can still name the group.
+                if !binding.allow_egress {
+                    return Err(AlienError::new(ErrorData::RemoteAccessFailed {
+                        operation: format!(
+                            "read remote sandbox binding '{}': a remote sandbox must be declared \
+                             with open egress",
+                            binding.sandbox_group
+                        ),
+                    }));
+                }
+                Self::SandboxAzure {
+                    binding: Box::new(alien_core::AzureSandboxBinding {
+                        sandbox_group: alien_core::BindingValue::Value(binding.sandbox_group),
+                        data_plane_endpoint: alien_core::BindingValue::Value(
+                            binding.data_plane_endpoint,
+                        ),
+                        region: alien_core::BindingValue::Value(binding.region),
+                        resource_group: alien_core::BindingValue::Value(binding.resource_group),
+                        disk_image: alien_core::BindingValue::Value(binding.disk_image),
+                        egress: alien_core::SandboxEgress::Allow,
+                        idle_suspend_seconds: binding
+                            .idle_suspend_seconds
+                            .map(|seconds| {
+                                narrow_manager_number(seconds, "idleSuspendSeconds", resource_id)
+                            })
+                            .transpose()?,
+                        cpu: binding.cpu.map(alien_core::BindingValue::Value),
+                        memory: binding.memory.map(alien_core::BindingValue::Value),
+                        disk: binding.disk.map(alien_core::BindingValue::Value),
+                    }),
+                    client_config: Box::new(alien_core::AzureClientConfig {
+                        subscription_id: client_config.subscription_id,
+                        tenant_id: client_config.tenant_id,
+                        region: client_config.region,
+                        credentials: alien_core::AzureCredentials::AccessToken { token },
+                        service_overrides: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
         };
         Ok(lease)
     }

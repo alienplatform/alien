@@ -45,14 +45,17 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
     }
 }
 
-/// Azure applies no per-sandbox ceiling. Declaring one has to fail before anything is provisioned,
-/// or the stack reads as bounded while the sandbox is not.
+/// A ceiling the platform will not allocate has to fail before anything is provisioned, or the
+/// stack reads as bounded while the sandbox is not.
+///
+/// Azure sizes cpu in steps of 250m, so `333m` is a size it refuses to create. The failure has to
+/// arrive at preflight rather than at the first session.
 #[tokio::test]
-async fn declared_ceilings_fail_preflight_on_a_platform_that_ignores_them() {
+async fn declared_ceilings_fail_preflight_when_the_platform_will_not_allocate_them() {
     let stack = stack_with(sandbox(Some(SandboxLimits {
-        cpu: "1".to_string(),
-        memory: "2Gi".to_string(),
-        disk: "20Gi".to_string(),
+        cpu: "333m".to_string(),
+        memory: "512Mi".to_string(),
+        disk: "5120Mi".to_string(),
         max_processes: None,
     })));
 
@@ -71,8 +74,8 @@ async fn declared_ceilings_fail_preflight_on_a_platform_that_ignores_them() {
         "the failure must name the sandbox to change: {rendered}"
     );
     assert!(
-        rendered.contains("enforcedLimits"),
-        "and the capability that is missing: {rendered}"
+        rendered.contains("cpu"),
+        "and the field to change: {rendered}"
     );
 }
 
