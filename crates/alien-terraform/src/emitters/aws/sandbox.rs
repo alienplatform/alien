@@ -134,6 +134,10 @@ impl TfEmitter for AwsSandboxEmitter {
         // role carries no ECR grant; a runtime-built image's base is a private registry image.
         if provisioned_at_runtime(ctx) {
             build_statements.push(Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String("PullSandboxBaseImage".to_string()),
+                ),
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
@@ -154,6 +158,10 @@ impl TfEmitter for AwsSandboxEmitter {
             // participates — and this role runs a customer-authored Dockerfile. The base image
             // is cross-account by construction, so a same-account pull is never legitimate.
             build_statements.push(Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String("DenySameAccountImagePull".to_string()),
+                ),
                 ("Effect", Expression::String("Deny".to_string())),
                 (
                     "Action",

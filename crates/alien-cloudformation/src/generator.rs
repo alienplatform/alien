@@ -242,10 +242,12 @@ pub fn generate_cloudformation_template(
     let names = logical_names(stack)?;
     // CREATE_COMPLETE reads as "the package is installed". For a runtime-provisioned sandbox the
     // image does not exist yet, and the stack description is the one line every console shows.
-    let runtime_sandbox = stack.resources().any(|(_, entry)| {
-        entry.config.resource_type().0.as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
-            && entry.lifecycle == ResourceLifecycle::Live
-    });
+    // Not on a Kubernetes target: the sandbox is skipped there, so no build follows registration.
+    let runtime_sandbox = !options.target.is_kubernetes()
+        && stack.resources().any(|(_, entry)| {
+            entry.config.resource_type().0.as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
+                && entry.lifecycle == ResourceLifecycle::Live
+        });
     let mut template = CfTemplate {
         aws_template_format_version: TEMPLATE_VERSION.to_string(),
         description: Some({

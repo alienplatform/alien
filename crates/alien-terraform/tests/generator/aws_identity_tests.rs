@@ -489,26 +489,129 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
 
     // The runtime build's base image comes from a private registry, and the identity itself
     // needs all three actions — a repository policy on the registry side is not enough.
-    let policy = rendered
-        .lines()
-        .find(|line| line.contains("Statement") && line.contains("s3:GetObject"))
-        .unwrap_or_else(|| panic!("the build policy must render:\n{rendered}"));
-    assert!(
-        policy.contains(
-            r#""ecr:GetAuthorizationToken", "ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer""#
-        ),
-        "a Live build role must authenticate to ECR with exactly the token call and the two \
-         pull actions: {policy}"
+    let statements = build_policy_statements(&rendered);
+    let allow = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "PullSandboxBaseImage")
+        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
+    assert_eq!(allow["Effect"], "Allow");
+    assert_eq!(
+        allow["Action"],
+        serde_json::json!([
+            "ecr:GetAuthorizationToken",
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer"
+        ]),
+        "exactly the token call and the two pull actions, nothing wider"
+    );
+    assert_eq!(
+        allow["Resource"],
+        serde_json::json!("*"),
+        "GetAuthorizationToken is only accepted against `*`"
     );
     // Same-account pulls are authorized by identity policy alone, so without this Deny the
     // Allow above makes a customer-authored Dockerfile a reader of every private repository
     // in the customer's own account. The token call must stay out of the deny.
-    assert!(
-        policy.contains(
-            r#""Effect" = "Deny", "Action" = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"], "Resource" = "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*""#
+    let deny = statements
+        .iter()
+        .find(|statement| statement["Effect"] == "Deny")
+        .unwrap_or_else(|| {
+            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
+        });
+    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
+    assert_eq!(
+        deny["Action"],
+        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        "the deny covers exactly the two pull actions — never the token call, which the \
+         cross-account login needs"
+    );
+    assert_eq!(
+        deny["Resource"],
+        serde_json::json!(
+            "arn:${data.aws_partition.current.partition}:ecr:*:\
+             ${data.aws_caller_identity.current.account_id}:repository/*"
         ),
-        "a Live build role must deny same-account pulls, account-scoped through data sources: \
-         {policy}"
+        "the deny must name this account's repositories through data sources, not literals"
+    );
+}
+
+/// The `sandbox-image-build` policy's statements, parsed as IAM will read them.
+///
+/// The renderer prints a `jsonencode` argument in HCL object syntax — JSON up to the key
+/// separators (quoted statement keys, bare top-level ones) — so rewriting those parses the
+/// document structurally instead of pinning the formatter's exact output. Drift in the syntax
+/// fails the parse loudly rather than passing on a stale literal.
+fn build_policy_statements(rendered: &str) -> Vec<serde_json::Value> {
+    let line = rendered
+        .lines()
+        .find(|line| line.contains("Statement") && line.contains("s3:GetObject"))
+        .unwrap_or_else(|| panic!("the build policy must render:\n{rendered}"));
+    let start = line
+        .find("jsonencode(")
+        .unwrap_or_else(|| panic!("the policy must be a jsonencode call: {line}"))
+        + "jsonencode(".len();
+    let end = line
+        .rfind(')')
+        .unwrap_or_else(|| panic!("the jsonencode call must close: {line}"));
+    let json_text = line[start..end]
+        .replace("\" = ", "\": ")
+        .replace("Version = ", "\"Version\": ")
+        .replace("Statement = ", "\"Statement\": ");
+    let document: serde_json::Value = serde_json::from_str(&json_text)
+        .unwrap_or_else(|error| panic!("the policy document must parse: {error}\n{line}"));
+    document["Statement"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the policy statements must be a list: {document:#}"))
+        .clone()
+}
+
+/// Open + Live drops every consumer of the propagation barrier: no image is baked at apply, and
+/// no connector exists whose operator role must propagate. Keeping the `time_sleep` would ship a
+/// customer a thirty-second wait that gates nothing.
+///
+/// Validated with real `terraform validate` because this is the one emitted combination no other
+/// test renders.
+#[test]
+fn an_open_live_sandbox_module_keeps_only_the_build_role_and_no_barrier() {
+    let (stack, settings) = live_sandbox_stack("acme-sandbox-open-live", SandboxEgress::Allow);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    assert_terraform_valid(&module, "open live sandbox module");
+
+    let rendered: String = module.iter().map(|(_, contents)| contents).collect();
+    assert!(
+        !rendered.contains("resource \"time_sleep\""),
+        "nothing here waits on IAM propagation, so no barrier may render:\n{rendered}"
+    );
+    for absent in [
+        "AWS::Lambda::MicrovmImage",
+        "awscc_lambda_network_connector",
+    ] {
+        assert!(
+            !rendered.contains(absent),
+            "an open Live sandbox must not render {absent}:\n{rendered}"
+        );
+    }
+    assert!(
+        rendered.contains("resource \"aws_iam_role\" \"agents\""),
+        "the build role the controller passes must still be installed:\n{rendered}"
+    );
+    assert!(
+        rendered.contains("A completed apply installs the sandbox's build role but not"),
+        "the README must caveat the runtime build without naming an absent connector:\n{rendered}"
+    );
+}
+
+/// A Kubernetes target skips the sandbox emitter, so its README must not caveat a runtime image
+/// build that never happens.
+#[test]
+fn a_kubernetes_target_readme_makes_no_runtime_build_promise() {
+    let (stack, settings) = live_sandbox_stack("acme-sandbox-eks-live", SandboxEgress::Deny);
+    let module = render(&stack, TerraformTarget::Eks, settings);
+    let rendered: String = module.iter().map(|(_, contents)| contents).collect();
+    assert!(
+        !rendered.contains("built after the deployment registers"),
+        "no sandbox is emitted on a Kubernetes target, so no build step may be described:\n\
+         {rendered}"
     );
 }
 

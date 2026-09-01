@@ -479,6 +479,7 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
     ];
     if runtime_built {
         statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("PullSandboxBaseImage")),
             ("Effect", CfExpression::from("Allow")),
             (
                 "Action",
@@ -499,6 +500,7 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
         // participates — and this role runs a customer-authored Dockerfile. The base image is
         // cross-account by construction, so a same-account pull is never legitimate.
         statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("DenySameAccountImagePull")),
             ("Effect", CfExpression::from("Deny")),
             (
                 "Action",

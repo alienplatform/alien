@@ -27,8 +27,8 @@ use alien_core::{
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
-    Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    SandboxEgress, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -3209,21 +3209,38 @@ fn readme_md(
         });
 
     // An installer reads "apply succeeded" as "the package is installed". For a runtime-built
-    // sandbox that is not true, and the gap is minutes long, so the artifact says so itself.
-    let registration_note = if stack.resources.values().any(|entry| {
-        entry.config.resource_type().0.as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
-            && entry.lifecycle == ResourceLifecycle::Live
-    }) {
-        // Names only what every runtime-provisioned sandbox installs. An open one emits no
-        // connector, so naming it would send an approver looking for a resource that is not there.
-        format!(
-            "{registration_note}\nThis module installs the sandbox's build role and the \
-             permissions its image build uses, but not the sandbox image itself. The image is \
-             built after the deployment registers, so a completed apply does not mean the sandbox \
-             can accept sessions yet.\n"
-        )
+    // sandbox that is not true, and the gap is minutes long, so the note sits right under the
+    // apply step. Not on a Kubernetes target: the sandbox is skipped there, so no build follows.
+    let live_sandboxes: Vec<&Sandbox> = if target.is_kubernetes() {
+        Vec::new()
     } else {
-        registration_note
+        stack
+            .resources
+            .values()
+            .filter(|entry| entry.lifecycle == ResourceLifecycle::Live)
+            .filter_map(|entry| entry.config.downcast_ref::<Sandbox>())
+            .collect()
+    };
+    let runtime_sandbox_note = if live_sandboxes.is_empty() {
+        String::new()
+    } else {
+        // The inventory matches the emitter: a restricted sandbox installs its egress apparatus
+        // at setup, an open one emits none of it, and naming an absent resource sends an
+        // approver looking for it.
+        let scaffolding = if live_sandboxes
+            .iter()
+            .any(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+        {
+            "build scaffolding — the build role, egress connector, operator role, and security \
+             group —"
+        } else {
+            "build role"
+        };
+        format!(
+            "\nA completed apply installs the sandbox's {scaffolding} but not the sandbox image \
+             itself. The image is built after the deployment registers; the deployment's status \
+             in Alien reports when the sandbox can accept sessions.\n"
+        )
     };
 
     let display_name = display_name.unwrap_or_else(|| stack.id());
@@ -3285,7 +3302,7 @@ This module creates setup-owned infrastructure, grants the management access nee
 {inputs}\n\n\
 ## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
-```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n\n\
+```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
 {registration_note}\n\
 ## Outputs\n\n\
@@ -3299,6 +3316,7 @@ Use your organization's normal backend and approval workflow. A typical local re
         target = target.name(),
         inputs = inputs,
         required_env = required_env,
+        runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
         retained_key_operations = retained_key_operations

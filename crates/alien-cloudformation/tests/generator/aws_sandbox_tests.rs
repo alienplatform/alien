@@ -222,6 +222,10 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
         .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
     assert_eq!(
+        ecr["Sid"], "PullSandboxBaseImage",
+        "the statement a security reviewer reads must say what it is for"
+    );
+    assert_eq!(
         ecr["Action"],
         serde_json::json!([
             "ecr:GetAuthorizationToken",
@@ -245,6 +249,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         .unwrap_or_else(|| {
             panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
         });
+    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
     assert_eq!(
         deny["Action"],
         serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
@@ -303,6 +308,78 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
     assert!(
         !statements.iter().any(grants_ecr),
         "a Frozen build role must carry no ECR action: {statements:#?}"
+    );
+}
+
+/// Open + Live is the leanest emitted combination — no image (built at runtime) and no egress
+/// apparatus (an open session starts without a connector) — and no other test renders it.
+#[test]
+fn an_open_live_sandbox_ships_only_the_build_role() {
+    let stack = Stack::new("acme-sandbox-open-live".to_string())
+        .add(
+            sandbox_fixture(SandboxEgress::Allow),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    // No network in the stack at all: an open sandbox must not need one.
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "open live sandbox",
+    );
+
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "the build role the controller passes must still be installed"
+    );
+    let types = resource_types(&template);
+    assert!(
+        !types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Live sandbox must not bake its image into stack creation: {types:?}"
+    );
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    for absent in [
+        "EgressConnector",
+        "EgressSecurityGroup",
+        "EgressOperatorRole",
+    ] {
+        assert!(
+            !rendered.contains(absent),
+            "an open sandbox must not render {absent}:\n{rendered}"
+        );
+    }
+    let description = template.description.as_deref().expect("a description");
+    assert!(
+        description.contains("built after the deployment registers"),
+        "the one line every console shows must caveat the runtime build: {description}"
+    );
+}
+
+/// A Kubernetes target skips the sandbox emitter, so the stack description must not caveat a
+/// runtime image build that never happens.
+#[test]
+fn a_kubernetes_target_description_makes_no_runtime_build_promise() {
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-eks-live",
+        SandboxEgress::Deny,
+        ResourceLifecycle::Live,
+    );
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Eks,
+        "eks",
+        "live sandbox on a kubernetes target",
+    );
+    let description = template.description.as_deref().expect("a description");
+    assert!(
+        !description.contains("built after the deployment registers"),
+        "no sandbox is emitted on a Kubernetes target, so no build step may be described: \
+         {description}"
     );
 }
 
