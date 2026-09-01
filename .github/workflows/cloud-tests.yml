@@ -202,6 +202,11 @@ jobs:
         env:
           TF_TOKEN_app_terraform_io: ${{ secrets.TF_API_TOKEN }}
           AXIOM_TOKEN: ${{ secrets.AXIOM_CI_API_KEY }}
+          OPENAI_TEST_API_KEY: ${{ secrets.OPENAI_TEST_API_KEY }}
+          ANTHROPIC_TEST_API_KEY: ${{ secrets.ANTHROPIC_TEST_API_KEY }}
+          DATABRICKS_TEST_WORKSPACE_URL: ${{ secrets.DATABRICKS_TEST_WORKSPACE_URL }}
+          DATABRICKS_TEST_CLIENT_ID: ${{ secrets.DATABRICKS_TEST_CLIENT_ID }}
+          DATABRICKS_TEST_CLIENT_SECRET: ${{ secrets.DATABRICKS_TEST_CLIENT_SECRET }}
 
       - name: Mask all .env.test values
         run: |

@@ -44,6 +44,77 @@ fn vertex_route() -> GatewayRoute {
     }
 }
 
+fn vertex_gemini_route() -> GatewayRoute {
+    let mut route = vertex_route();
+    route.region =
+        Some(std::env::var("GCP_LOCATION").expect("GCP_LOCATION must name the Vertex location"));
+    route
+}
+
+async fn assert_json_contains_pong(response: reqwest::Response, scenario: &str) {
+    let status = response.status();
+    let text = response.text().await.expect("gateway response body");
+    eprintln!("{scenario}: status={status} body={text}");
+    assert!(status.is_success(), "{scenario} failed: {status}: {text}");
+    assert!(
+        text.to_ascii_lowercase().contains("pong"),
+        "{scenario} returned no pong: {text}"
+    );
+}
+
+#[tokio::test]
+#[ignore = "hits real Vertex Gemini; needs GCP_PROJECT, GCP_LOCATION, and GCP_ACCESS_TOKEN"]
+async fn live_vertex_gemini_across_public_apis() {
+    let base = serve(build_router(vec![vertex_gemini_route()])).await;
+    let client = reqwest::Client::new();
+
+    assert_json_contains_pong(
+        client
+            .post(format!("{base}/llm/v1/chat/completions"))
+            .json(&json!({
+                "model": "gemini-2.5-flash",
+                "messages": [{"role": "user", "content": "Reply with exactly pong"}],
+                "max_tokens": 32
+            }))
+            .send()
+            .await
+            .expect("Vertex Chat request"),
+        "Vertex Gemini Chat",
+    )
+    .await;
+
+    assert_json_contains_pong(
+        client
+            .post(format!("{base}/llm/v1/responses"))
+            .json(&json!({
+                "model": "gemini-2.5-flash",
+                "input": "Reply with exactly pong",
+                "max_output_tokens": 32
+            }))
+            .send()
+            .await
+            .expect("Vertex Responses request"),
+        "Vertex Gemini Responses",
+    )
+    .await;
+
+    assert_json_contains_pong(
+        client
+            .post(format!("{base}/llm/v1/messages"))
+            .header("anthropic-version", "2023-06-01")
+            .json(&json!({
+                "model": "gemini-2.5-flash",
+                "messages": [{"role": "user", "content": "Reply with exactly pong"}],
+                "max_tokens": 32
+            }))
+            .send()
+            .await
+            .expect("Vertex Messages request"),
+        "Vertex Gemini Messages",
+    )
+    .await;
+}
+
 #[tokio::test]
 #[ignore = "hits real Vertex Claude; needs GCP_PROJECT + GCP_ACCESS_TOKEN and a Model Garden grant"]
 async fn live_vertex_claude_messages() {

@@ -570,7 +570,30 @@ fn responses_request_to_chat(payload: Value) -> Result<Value> {
             *tool = json!({ "type": "function", "function": function });
         }
     }
+    if let Some(choice) = obj.remove("tool_choice") {
+        obj.insert(
+            "tool_choice".to_string(),
+            responses_tool_choice_to_chat(choice)?,
+        );
+    }
     Ok(Value::Object(obj))
+}
+
+fn responses_tool_choice_to_chat(choice: Value) -> Result<Value> {
+    if choice.is_string() {
+        return Ok(choice);
+    }
+    let obj = object(choice, "Responses tool_choice")?;
+    match obj.get("type").and_then(Value::as_str) {
+        Some("function") => Ok(json!({
+            "type": "function",
+            "function": { "name": obj.get("name").cloned().unwrap_or_else(|| json!("")) }
+        })),
+        Some(kind) => Err(invalid(format!(
+            "Responses tool choice `{kind}` is not portable"
+        ))),
+        None => Err(invalid("Responses tool_choice has no `type`")),
+    }
 }
 
 fn responses_input_item_to_chat(item: Value) -> Result<Value> {
@@ -913,20 +936,27 @@ fn chat_content_to_anthropic(content: Value) -> Result<Vec<Value>> {
     match content {
         Value::Null => Ok(Vec::new()),
         Value::String(text) => Ok(vec![json!({ "type": "text", "text": text })]),
-        Value::Array(parts) => parts.into_iter().map(|part| {
-            let obj = object(part, "Chat Completions content part")?;
-            match obj.get("type").and_then(Value::as_str) {
-                Some("text") => Ok(json!({ "type": "text", "text": obj.get("text").cloned().unwrap_or_else(|| json!("")) })),
+        Value::Array(parts) => {
+            let mut converted = Vec::new();
+            for part in parts {
+                let obj = object(part, "Chat Completions content part")?;
+                match obj.get("type").and_then(Value::as_str) {
+                Some("text") => converted.push(json!({ "type": "text", "text": obj.get("text").cloned().unwrap_or_else(|| json!("")) })),
                 Some("image_url") => {
                     let url = obj.get("image_url").and_then(|v| v.get("url")).and_then(Value::as_str).ok_or_else(|| invalid("image_url has no URL"))?;
                     let (metadata, data) = url.split_once(",").ok_or_else(|| invalid("Messages translation supports only base64 data image URLs"))?;
                     let media_type = metadata.strip_prefix("data:").and_then(|v| v.strip_suffix(";base64")).ok_or_else(|| invalid("image URL is not base64 data"))?;
-                    Ok(json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }))
+                    converted.push(json!({ "type": "image", "source": { "type": "base64", "media_type": media_type, "data": data } }));
                 }
-                Some(kind) => Err(invalid(format!("Chat content type `{kind}` is not portable"))),
-                None => Err(invalid("Chat content part has no `type`")),
+                // Anthropic thinking blocks require a provider signature. An
+                // unsigned Chat reasoning summary cannot be forwarded as one.
+                Some("reasoning") => {}
+                Some(kind) => return Err(invalid(format!("Chat content type `{kind}` is not portable"))),
+                None => return Err(invalid("Chat content part has no `type`")),
+                }
             }
-        }).collect(),
+            Ok(converted)
+        }
         _ => Err(invalid("Chat message content must be a string or array")),
     }
 }
@@ -1007,7 +1037,24 @@ fn chat_request_to_responses(payload: Value) -> Result<Value> {
             });
         }
     }
+    if let Some(choice) = obj.remove("tool_choice") {
+        obj.insert(
+            "tool_choice".to_string(),
+            chat_tool_choice_to_responses(choice)?,
+        );
+    }
     Ok(Value::Object(obj))
+}
+
+fn chat_tool_choice_to_responses(choice: Value) -> Result<Value> {
+    if choice.is_string() {
+        return Ok(choice);
+    }
+    let name = choice
+        .pointer("/function/name")
+        .cloned()
+        .ok_or_else(|| invalid("Chat tool choice has no function name"))?;
+    Ok(json!({ "type": "function", "name": name }))
 }
 
 fn chat_messages_to_responses(messages: Value) -> Result<Value> {
@@ -1056,15 +1103,21 @@ fn chat_content_to_responses(content: Value, role: &str) -> Result<Value> {
     match content {
         Value::Null => Ok(Value::Array(Vec::new())),
         Value::String(text) => Ok(json!([{ "type": format!("{prefix}_text"), "text": text }])),
-        Value::Array(parts) => Ok(Value::Array(parts.into_iter().map(|part| {
-            let obj = object(part, "Chat content part")?;
-            match obj.get("type").and_then(Value::as_str) {
-                Some("text") => Ok(json!({ "type": format!("{prefix}_text"), "text": obj.get("text").cloned().unwrap_or_else(|| json!("")) })),
-                Some("image_url") if prefix == "input" => Ok(json!({ "type": "input_image", "image_url": obj.get("image_url").and_then(|v| v.get("url")).cloned().unwrap_or_else(|| json!("")) })),
-                Some(kind) => Err(invalid(format!("Chat content type `{kind}` is not portable to Responses"))),
-                None => Err(invalid("Chat content part has no type")),
+        Value::Array(parts) => {
+            let mut converted = Vec::new();
+            for part in parts {
+                let obj = object(part, "Chat content part")?;
+                match obj.get("type").and_then(Value::as_str) {
+                    Some("text") => converted.push(json!({ "type": format!("{prefix}_text"), "text": obj.get("text").cloned().unwrap_or_else(|| json!("")) })),
+                    Some("image_url") if prefix == "input" => converted.push(json!({ "type": "input_image", "image_url": obj.get("image_url").and_then(|v| v.get("url")).cloned().unwrap_or_else(|| json!("")) })),
+                    // Provider reasoning becomes a top-level Responses output item.
+                    Some("reasoning") if prefix == "output" => {}
+                    Some(kind) => return Err(invalid(format!("Chat content type `{kind}` is not portable to Responses"))),
+                    None => return Err(invalid("Chat content part has no type")),
+                }
             }
-        }).collect::<Result<Vec<_>>>()?)),
+            Ok(Value::Array(converted))
+        }
         _ => Err(invalid("Chat message content must be a string or array")),
     }
 }
@@ -1217,9 +1270,24 @@ fn chat_response_to_responses(payload: Value, requested_model: &str) -> Result<V
         message.get("content").cloned().unwrap_or(Value::Null),
         "assistant",
     )?;
-    let mut output = vec![
+    let mut output = message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|part| part.get("type").and_then(Value::as_str) == Some("reasoning"))
+        .map(|part| {
+            json!({
+                "type": "reasoning",
+                "id": "rs_translated",
+                "status": "completed",
+                "summary": part.get("summary").cloned().unwrap_or_else(|| json!([]))
+            })
+        })
+        .collect::<Vec<_>>();
+    output.push(
         json!({ "type": "message", "id": "msg_translated", "status": "completed", "role": "assistant", "content": content }),
-    ];
+    );
     if let Some(calls) = message.get("tool_calls").and_then(Value::as_array) {
         output.extend(calls.iter().map(|call| json!({ "type": "function_call", "id": call.get("id").cloned().unwrap_or_else(|| json!("call")), "call_id": call.get("id").cloned().unwrap_or_else(|| json!("call")), "name": call.pointer("/function/name").cloned().unwrap_or_else(|| json!("")), "arguments": call.pointer("/function/arguments").cloned().unwrap_or_else(|| json!("{}")), "status": "completed" })));
     }
@@ -1295,6 +1363,100 @@ mod tests {
             json!({ "role": "user", "content": "hello" })
         );
         assert_eq!(translated["max_completion_tokens"], 42);
+    }
+
+    #[test]
+    fn named_tool_choice_translates_between_responses_and_chat() {
+        let chat = translate_request(
+            json!({
+                "model": "model",
+                "input": "use the tool",
+                "tool_choice": {"type": "function", "name": "get_code"}
+            }),
+            WireProtocol::Responses,
+            WireProtocol::ChatCompletions,
+        )
+        .unwrap();
+        assert_eq!(
+            chat["tool_choice"],
+            json!({"type": "function", "function": {"name": "get_code"}})
+        );
+
+        let responses = translate_request(
+            json!({
+                "model": "model",
+                "messages": [],
+                "tool_choice": {"type": "function", "function": {"name": "get_code"}}
+            }),
+            WireProtocol::ChatCompletions,
+            WireProtocol::Responses,
+        )
+        .unwrap();
+        assert_eq!(
+            responses["tool_choice"],
+            json!({"type": "function", "name": "get_code"})
+        );
+    }
+
+    #[test]
+    fn chat_reasoning_and_text_become_responses_output_items() {
+        let translated = translate_response(
+            json!({
+                "id": "chatcmpl_1",
+                "created": 1,
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "brief rationale"}]},
+                            {"type": "text", "text": "ALIEN_OK"}
+                        ]
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+            }),
+            WireProtocol::ChatCompletions,
+            WireProtocol::Responses,
+            "gpt-oss-120b",
+        )
+        .unwrap();
+
+        assert_eq!(translated["output"][0]["type"], "reasoning");
+        assert_eq!(
+            translated["output"][0]["summary"][0]["text"],
+            "brief rationale"
+        );
+        assert_eq!(translated["output"][1]["content"][0]["text"], "ALIEN_OK");
+    }
+
+    #[test]
+    fn unsigned_chat_reasoning_is_omitted_from_messages_but_text_is_preserved() {
+        let translated = translate_response(
+            json!({
+                "id": "chatcmpl_1",
+                "choices": [{
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "brief rationale"}]},
+                            {"type": "text", "text": "ALIEN_OK"}
+                        ]
+                    },
+                    "finish_reason": "stop"
+                }],
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3}
+            }),
+            WireProtocol::ChatCompletions,
+            WireProtocol::Messages,
+            "gpt-oss-120b",
+        )
+        .unwrap();
+
+        assert_eq!(
+            translated["content"],
+            json!([{"type": "text", "text": "ALIEN_OK"}])
+        );
     }
 
     #[test]

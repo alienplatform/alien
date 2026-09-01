@@ -1,5 +1,5 @@
-//! Live verification against real AWS Bedrock. Reads the shared alien-test-target
-//! credentials from the workspace-root `.env.test`, so it runs in the credentialed
+//! Live verification against real AWS Bedrock. Reads test credentials from the
+//! repository-root `.env.test`, so it runs in the credentialed
 //! e2e job (and locally whenever that file is present).
 //!
 //! This is the end-to-end proof that the Rust SigV4 signer produces a signature
@@ -13,20 +13,20 @@ use alien_ai_gateway::{build_router, AmbientCred, AwsSigV4Cred, GatewayRoute, Ga
 use alien_core::Platform;
 use serde_json::{json, Value};
 
-/// Load the shared alien-test-target credentials from the workspace-root
+/// Load test credentials from the repository-root
 /// `.env.test` and expose the AWS target account under the SDK default-chain
 /// variable names, so the SigV4 signer resolves them exactly as a deployed
 /// workload's ambient identity would.
 fn load_test_env() {
     let root = workspace_root::get_workspace_root();
-    dotenvy::from_path(root.join(".env.test")).expect("load .env.test from the workspace root");
+    dotenvy::from_path(root.join(".env.test")).expect("load .env.test from the repository root");
     for (from, to) in [
         ("AWS_TARGET_ACCESS_KEY_ID", "AWS_ACCESS_KEY_ID"),
         ("AWS_TARGET_SECRET_ACCESS_KEY", "AWS_SECRET_ACCESS_KEY"),
     ] {
         // Fail loud rather than fall through to whatever AWS creds are already
         // ambient (e.g. a developer's own profile): this test must sign as the
-        // alien-test-target account, so a missing var is a setup error.
+        // configured test account, so a missing var is a setup error.
         let value =
             std::env::var(from).unwrap_or_else(|_| panic!("{from} must be set in .env.test"));
         std::env::set_var(to, value);
@@ -45,6 +45,7 @@ async fn serve(router: axum::Router) -> String {
 }
 
 #[tokio::test]
+#[ignore = "hits real Bedrock GPT-OSS across public APIs; reads credentials from .env.test"]
 async fn live_bedrock_openai_chat() {
     load_test_env();
     let cred = AmbientCred::Aws(
@@ -97,6 +98,49 @@ async fn live_bedrock_openai_chat() {
             content.to_lowercase().contains("pong"),
             "expected a 'pong' completion, got: {content:?}"
         );
+    }
+
+    for (scenario, path, request) in [
+        (
+            "Responses",
+            "responses",
+            json!({
+                "model": "gpt-oss-20b",
+                "input": "Reply with exactly pong",
+                "max_output_tokens": 1024,
+                "reasoning": {"effort": "low"}
+            }),
+        ),
+        (
+            "Messages",
+            "messages",
+            json!({
+                "model": "gpt-oss-20b",
+                "messages": [{"role": "user", "content": "Reply with exactly pong"}],
+                "max_tokens": 1024
+            }),
+        ),
+    ] {
+        let response = reqwest::Client::new()
+            .post(format!("{base}/llm/v1/{path}"))
+            .header("anthropic-version", "2023-06-01")
+            .json(&request)
+            .send()
+            .await
+            .expect("request to Bedrock through Alien");
+        let status = response.status();
+        let text = response.text().await.expect("gateway response body");
+        eprintln!("live Bedrock {scenario} status={status} body={text}");
+        assert!(
+            status.is_success() || status == reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "Bedrock {scenario} must authenticate and route; got {status}: {text}"
+        );
+        if status.is_success() {
+            assert!(
+                text.to_ascii_lowercase().contains("pong"),
+                "Bedrock {scenario} returned no pong: {text}"
+            );
+        }
     }
 }
 

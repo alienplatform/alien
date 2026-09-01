@@ -641,6 +641,17 @@ fn translate_for_provider(
     translate_request(payload, client_protocol, provider_api)
 }
 
+/// Databricks' serving-endpoint and MLflow Chat APIs reject OpenAI's newer
+/// `max_completion_tokens` field and still require `max_tokens`.
+fn normalize_databricks_chat_payload(payload: &mut Value) {
+    let Some(obj) = payload.as_object_mut() else {
+        return;
+    };
+    if let Some(limit) = obj.remove("max_completion_tokens") {
+        obj.entry("max_tokens".to_string()).or_insert(limit);
+    }
+}
+
 fn usage_client_api(client_api: ClientApi) -> AiUsageClientApi {
     match client_api {
         ClientApi::OpenAiChatCompletions => AiUsageClientApi::OpenAiChatCompletions,
@@ -892,8 +903,8 @@ async fn proxy(
                     binding: binding.clone(),
                 })
             })?;
-            let provider_model = direct.upstream_id;
-            let provider_protocol = provider_protocol(direct.client_apis, client_api);
+            let provider_model = direct.upstream.model_id();
+            let provider_protocol = WireProtocol::from(direct.upstream.client_api());
             let descriptor = usage_context(
                 &binding,
                 AiUsageProvider::Databricks,
@@ -908,13 +919,29 @@ async fn proxy(
             let client_protocol = WireProtocol::from(client_api);
             let response = async {
                 payload = translate_for_provider(payload, client_api, provider_protocol)?;
-                let response = match provider_protocol {
-                    WireProtocol::ChatCompletions => {
+                if provider_protocol == WireProtocol::ChatCompletions {
+                    normalize_databricks_chat_payload(&mut payload);
+                }
+                let response = match direct.upstream {
+                    ai_catalog::DirectDatabricksUpstream::ServingEndpointChat { endpoint } => {
+                        debug_assert_eq!(endpoint, provider_model);
                         let path = format!("/serving-endpoints/{provider_model}/invocations");
                         proxy_direct_openai(&state.client, route, payload, provider_model, &path)
                             .await
                     }
-                    WireProtocol::Messages => {
+                    ai_catalog::DirectDatabricksUpstream::ModelServiceChat { service } => {
+                        debug_assert_eq!(service, provider_model);
+                        proxy_direct_openai(
+                            &state.client,
+                            route,
+                            payload,
+                            provider_model,
+                            "/ai-gateway/mlflow/v1/chat/completions",
+                        )
+                        .await
+                    }
+                    ai_catalog::DirectDatabricksUpstream::ModelServiceMessages { service } => {
+                        debug_assert_eq!(service, provider_model);
                         proxy_direct_anthropic_at(
                             &state.client,
                             route,
@@ -922,16 +949,6 @@ async fn proxy(
                             provider_model,
                             &headers,
                             "/ai-gateway/anthropic/v1/messages",
-                        )
-                        .await
-                    }
-                    WireProtocol::Responses => {
-                        proxy_direct_openai(
-                            &state.client,
-                            route,
-                            payload,
-                            provider_model,
-                            "/ai-gateway/openai/v1/responses",
                         )
                         .await
                     }
@@ -1681,17 +1698,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn databricks_responses_rewrites_the_public_model_id() {
+    async fn databricks_responses_use_the_models_canonical_serving_endpoint_route() {
         let server = MockServer::start_async().await;
         let upstream = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/ai-gateway/openai/v1/responses")
+                    .path("/serving-endpoints/databricks-gpt-5-6-sol/invocations")
                     .header("authorization", "Bearer temporary-oauth-token")
-                    .body_contains("databricks-gpt-5-6-sol");
+                    .body_contains("databricks-gpt-5-6-sol")
+                    .body_contains("messages")
+                    .body_contains("max_tokens");
                 then.status(200)
                     .header("content-type", "application/json")
-                    .json_body(json!({"id": "response", "output": []}));
+                    .json_body(json!({
+                        "id": "completion",
+                        "model": "databricks-gpt-5-6-sol",
+                        "choices": [{
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "pong"},
+                            "finish_reason": "stop"
+                        }],
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                    }));
             })
             .await;
         let url = serve(build_router_with_availability(
@@ -1705,12 +1733,19 @@ mod tests {
 
         let response = reqwest::Client::new()
             .post(format!("{url}/llm/v1/responses"))
-            .json(&json!({"model": "gpt-5.6-sol", "input": "ping"}))
+            .json(&json!({
+                "model": "gpt-5.6-sol",
+                "input": "ping",
+                "max_output_tokens": 32
+            }))
             .send()
             .await
             .expect("proxy response");
 
         assert_eq!(response.status(), 200);
+        let body: Value = response.json().await.expect("Responses body");
+        assert_eq!(body["model"], "gpt-5.6-sol");
+        assert_eq!(body["output"][0]["content"][0]["text"], "pong");
         upstream.assert_async().await;
     }
 
@@ -1720,9 +1755,9 @@ mod tests {
         let upstream = server
             .mock_async(|when, then| {
                 when.method(POST)
-                    .path("/serving-endpoints/databricks-gemma-3-12b/invocations")
+                    .path("/ai-gateway/mlflow/v1/chat/completions")
                     .header("authorization", "Bearer temporary-oauth-token")
-                    .body_contains("databricks-gemma-3-12b");
+                    .body_contains("system.ai.gemma-3-12b");
                 then.status(200)
                     .header("content-type", "application/json")
                     .json_body(json!({"id": "completion", "choices": []}));
@@ -1757,7 +1792,7 @@ mod tests {
                     .path("/ai-gateway/anthropic/v1/messages")
                     .header("authorization", "Bearer temporary-oauth-token")
                     .header("anthropic-version", "2023-06-01")
-                    .body_contains("databricks-claude-sonnet-5");
+                    .body_contains("system.ai.claude-sonnet-5");
                 then.status(200)
                     .header("content-type", "application/json")
                     .json_body(json!({"id": "message", "content": []}));
