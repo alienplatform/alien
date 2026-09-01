@@ -447,6 +447,8 @@ impl AwsSandboxController {
             }
         };
 
+        // Deleting a version that is still building fails and rides the executor's retry budget
+        // (~17 min ceiling against a ~160s build) rather than a dedicated wait state.
         for version in versions {
             // A versionless entry cannot be deleted, and skipping it would let the image
             // delete below no-op while a version survives — Deleted without deleting.
