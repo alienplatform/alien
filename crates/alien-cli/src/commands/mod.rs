@@ -1,4 +1,6 @@
 #[cfg(feature = "platform")]
+pub mod access_requests;
+#[cfg(feature = "platform")]
 pub mod api_keys;
 pub mod build;
 pub mod commands;
@@ -43,6 +45,8 @@ pub mod manager;
 #[cfg(feature = "platform")]
 pub mod operations;
 
+#[cfg(feature = "platform")]
+pub use access_requests::{access_requests_task, AccessRequestsArgs};
 #[cfg(feature = "platform")]
 pub use api_keys::{api_keys_task, ApiKeysArgs};
 pub use build::{build_command, BuildArgs, BuildSubcommand};

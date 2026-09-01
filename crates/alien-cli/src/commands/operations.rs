@@ -14,13 +14,19 @@ use std::time::Duration;
 
 use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::types::{
+    InvokeOperationRequest, InvokeOperationResponseStatus, VerifyOperationCheckRequest,
+    VerifyOperationCheckResponseOutcome,
+};
+use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json, Value};
 
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
+use crate::output::print_json;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -83,6 +89,15 @@ pub enum OperationsAction {
         /// Timeout in seconds.
         #[arg(long, default_value = "60")]
         timeout: u64,
+
+        /// If the operation requires approval, automatically create an access
+        /// request instead of printing instructions.
+        #[arg(long = "request-access")]
+        request_access: bool,
+
+        /// Approval duration to request with --request-access, e.g. 1h, 30m.
+        #[arg(long = "access-duration", default_value = "1h")]
+        access_duration: String,
     },
 }
 
@@ -124,33 +139,14 @@ struct PublishRequest {
     metadata: Value,
 }
 
-#[derive(Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InvokeRequest {
-    deployment_id: String,
-    plugin: String,
-    operation: String,
-    params: Value,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct InvokeResponse {
-    plugin: String,
-    operation: String,
-    tier: String,
-    decision: String,
-    status: String,
-    #[serde(default)]
-    command_id: Option<String>,
-}
-
 struct InvokeTaskOptions<'a> {
     deployment: &'a str,
     operation: &'a str,
     params: &'a str,
     timeout_secs: u64,
     json: bool,
+    request_access: bool,
+    access_duration: &'a str,
 }
 
 pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
@@ -174,10 +170,11 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
             operation,
             params,
             timeout,
+            request_access,
+            access_duration,
         } => {
             invoke_task(
                 &ctx,
-                &auth,
                 &workspace,
                 &project,
                 InvokeTaskOptions {
@@ -186,6 +183,8 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
                     params: &params,
                     timeout_secs: timeout,
                     json: args.json,
+                    request_access,
+                    access_duration: &access_duration,
                 },
             )
             .await
@@ -195,7 +194,6 @@ pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result
 
 async fn invoke_task(
     ctx: &ExecutionMode,
-    auth: &crate::auth::AuthHttp,
     workspace: &str,
     project: &str,
     options: InvokeTaskOptions<'_>,
@@ -221,65 +219,66 @@ async fn invoke_task(
     )
     .await?;
     let deployment_id = String::from(resolved.detail.id.clone());
-    let url = api_url(&auth.base_url, "/v1/operations/invoke", workspace, project)?;
-    let response = auth
-        .reqwest_client()
-        .request(Method::POST, url.clone())
-        .json(&InvokeRequest {
+
+    let sdk_client = ctx.sdk_client().await?;
+    let invocation = sdk_client
+        .invoke_operation()
+        .workspace(workspace)
+        .project(project)
+        .body(InvokeOperationRequest {
             deployment_id: deployment_id.clone(),
             plugin: plugin.to_string(),
             operation: operation.to_string(),
-            params,
+            params: Some(params),
+            remediation_plan_id: None,
+            access_request_id: None,
         })
         .send()
         .await
-        .into_alien_error()
+        .into_sdk_error()
         .context(ErrorData::ApiRequestFailed {
             message: format!("invoking operation '{operation_ref}'"),
-            url: Some(url.to_string()),
-        })?;
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!("operation invocation failed ({status}): {body}"),
-            url: Some(url.to_string()),
-        }));
-    }
+            url: None,
+        })?
+        .into_inner();
 
-    let invocation: InvokeResponse =
-        response
-            .json()
-            .await
-            .into_alien_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: "parsing the operation invocation response".to_string(),
-                url: Some(url.to_string()),
-            })?;
-
-    if invocation.status == "pending-approval" {
-        if options.json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&invocation).unwrap_or_default()
-            );
-        } else {
-            println!(
-                "Operation '{operation_ref}' requires approval (policy: {}). No command was dispatched.",
-                invocation.decision
-            );
+    let (invocation, access_request_id) = if invocation.status
+        == InvokeOperationResponseStatus::PendingApproval
+    {
+        if !options.request_access {
+            if options.json {
+                print_json(&invocation)?;
+            } else {
+                println!(
+                    "Access is required to run {operation_ref}.\n\n\
+                     Request access:\n\
+                     \x20\x20alien access-requests create \\\n\
+                     \x20\x20\x20\x20--deployment {} \\\n\
+                     \x20\x20\x20\x20--operation {operation_ref} \\\n\
+                     \x20\x20\x20\x20--params '{}' \\\n\
+                     \x20\x20\x20\x20--duration 1h\n\n\
+                     Or rerun this command with --request-access.",
+                    options.deployment, options.params,
+                );
+            }
+            return Ok(());
         }
-        return Ok(());
-    }
-    if invocation.status != "dispatched" {
-        return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!(
-                "operation '{operation_ref}' returned unknown status '{}'",
-                invocation.status
-            ),
-            url: Some(url.to_string()),
-        }));
-    }
+
+        let (invocation, access_request_id) = request_access_then_reinvoke(
+            &sdk_client,
+            workspace,
+            project,
+            &deployment_id,
+            plugin,
+            operation,
+            options.params,
+            options.access_duration,
+        )
+        .await?;
+        (invocation, Some(access_request_id))
+    } else {
+        (invocation, None)
+    };
 
     let command_id = invocation.command_id.ok_or_else(|| {
         AlienError::new(ErrorData::ApiRequestFailed {
@@ -287,7 +286,7 @@ async fn invoke_task(
                 "operation '{operation_ref}' reported '{}' without a command ID",
                 invocation.status
             ),
-            url: Some(url.to_string()),
+            url: None,
         })
     })?;
     let commands_url = format!("{}/v1", resolved.manager.manager_url.trim_end_matches('/'));
@@ -308,11 +307,411 @@ async fn invoke_task(
             message: format!("operation '{operation_ref}' failed"),
             url: Some(commands_url),
         })?;
-    println!(
-        "{}",
-        serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{result:?}"))
-    );
+
+    // The write already ran and `result` is its real outcome — a failure to
+    // even check verification (network blip, API error) must not be reported
+    // as the operation itself failing, or a caller could retry an
+    // already-applied write. Degrade to Unverified instead of propagating.
+    let verification = match verify_operation(
+        &sdk_client,
+        workspace,
+        project,
+        &deployment_id,
+        plugin,
+        operation,
+        access_request_id.as_deref(),
+        &result,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(err) => VerificationOutcome::Unverified {
+            reason: format!("could not check verification: {err}"),
+        },
+    };
+
+    if options.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json!({
+                "result": result,
+                "verification": verification,
+            }))
+            .unwrap_or_else(|_| format!("{result:?}"))
+        );
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_else(|_| format!("{result:?}"))
+        );
+        match &verification {
+            VerificationOutcome::Verified => {
+                println!("\nVerified: the change took effect.");
+            }
+            VerificationOutcome::Unverified { reason } => {
+                println!(
+                    "\nDispatched, but could not confirm the change took effect: {reason}\n\
+                     The write ran; this only means Alien couldn't verify its result. Check manually."
+                );
+            }
+            VerificationOutcome::Skipped { .. } => {
+                // No verification declared, or the caller didn't opt in — say
+                // nothing; this is the same as every operation before
+                // verification existed, not a new failure mode to announce.
+            }
+        }
+    }
     Ok(())
+}
+
+#[derive(Debug, Serialize)]
+#[serde(tag = "status", rename_all = "kebab-case")]
+enum VerificationOutcome {
+    Verified,
+    Unverified { reason: String },
+    Skipped { reason: String },
+}
+
+/// `--request-access`: create an exact access request for the denied
+/// operation, wait for it to be approved, then re-invoke with the resulting
+/// `access_request_id` so it dispatches under that approval instead of the
+/// project's default policy. Blocks until approved or the wait times out —
+/// same 1-hour default as `access-requests wait`, since there is no
+/// separate timeout flag for this shortcut path.
+#[allow(clippy::too_many_arguments)]
+async fn request_access_then_reinvoke(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    project: &str,
+    deployment_id: &str,
+    plugin: &str,
+    operation: &str,
+    params_json: &str,
+    access_duration: &str,
+) -> Result<(alien_platform_api::types::InvokeOperationResponse, String)> {
+    let params: Option<Value> = Some(
+        serde_json::from_str(params_json)
+            .into_alien_error()
+            .context(ErrorData::ValidationError {
+                field: "params".to_string(),
+                message: "Invalid JSON".to_string(),
+            })?,
+    );
+    // Requested duration is informational on create (the approver sets the
+    // real grant window on approve) — reuse the same parser only to fail
+    // fast on an obviously malformed --access-duration before creating
+    // anything.
+    let _ = crate::commands::access_requests::parse_duration_minutes(access_duration)?;
+
+    let created = sdk_client
+        .create_access_request()
+        .workspace(workspace)
+        .body(alien_platform_api::types::CreateAccessRequest {
+            deployment_id: deployment_id.to_string(),
+            operation: Some(format!("{plugin}/{operation}")),
+            params,
+            operation_pattern: None,
+            max_risk: None,
+            title: None,
+            reason: None,
+            remediation_plan_id: None,
+            commands: Vec::new(),
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "creating access request".to_string(),
+            url: None,
+        })?
+        .into_inner();
+
+    // Progress (this message, the approve command once available) always
+    // goes to stderr. In --json mode, stdout is reserved for exactly one
+    // JSON document — the final result — so a caller can pipe it straight
+    // into a parser; printing progress there too (even as separate JSON
+    // objects) would make stdout unparseable as a single value. Same idea
+    // as `docker pull` writing progress to stderr and the final digest to
+    // stdout.
+    eprintln!(
+        "Access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        created.id
+    );
+
+    let deadline = std::time::Instant::now() + Duration::from_secs(3600);
+    let mut printed_kubectl_approve = false;
+    loop {
+        let request = sdk_client
+            .get_access_request()
+            .id(created.id.as_str())
+            .workspace(workspace)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("waiting for access request '{}'", created.id),
+                url: None,
+            })?
+            .into_inner();
+
+        if !printed_kubectl_approve {
+            let kubectl_approve = crate::commands::access_requests::fetch_kubectl_approve(
+                sdk_client,
+                workspace,
+                created.id.as_str(),
+            )
+            .await?;
+            if let Some(command) = &kubectl_approve {
+                eprintln!("Run this in-cluster to approve:\n  {command}\n");
+                printed_kubectl_approve = true;
+            }
+        }
+
+        match request.status {
+            alien_platform_api::types::AccessRequestStatus::CustomerApproved => break,
+            alien_platform_api::types::AccessRequestStatus::Rejected
+            | alien_platform_api::types::AccessRequestStatus::Expired => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "access request '{}' is '{}', not approved",
+                        created.id, request.status
+                    ),
+                    url: None,
+                }));
+            }
+            _ => {}
+        }
+        if std::time::Instant::now() >= deadline {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "timed out waiting for access request '{}' to be approved",
+                    created.id
+                ),
+                url: None,
+            }));
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+
+    let reinvoke_params: Value = serde_json::from_str(params_json)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "params".to_string(),
+            message: "Invalid JSON".to_string(),
+        })?;
+    let response = sdk_client
+        .invoke_operation()
+        .workspace(workspace)
+        .project(project)
+        .body(InvokeOperationRequest {
+            deployment_id: deployment_id.to_string(),
+            plugin: plugin.to_string(),
+            operation: operation.to_string(),
+            params: Some(reinvoke_params),
+            remediation_plan_id: None,
+            access_request_id: Some(created.id.to_string()),
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("invoking operation '{plugin}/{operation}' after approval"),
+            url: None,
+        })?
+        .into_inner();
+    Ok((response, created.id.to_string()))
+}
+
+/// Poll `POST /v1/operations/verify-check` per the operation's own declared
+/// retry policy (echoed back on each response) until verified, the poll
+/// operation itself fails, or the declared timeout elapses. Alert-only: on
+/// timeout or poll failure this returns `Unverified`, never attempts a
+/// rollback — the underlying write already ran; verification only confirms
+/// whether Alien could tell it worked.
+///
+/// Testing note: this function's only real behavior is HTTP calls against
+/// the platform API's verify-check endpoint plus a sleep/timeout loop around
+/// them — mocking `alien_platform_api::Client` here would mean asserting our
+/// own mock's scripted responses, not real behavior. The outcome-mapping
+/// logic (`Skipped`/`Verified`/`Failed`/`NotYet` → `VerificationOutcome`) is
+/// exercised for real in `apps/api/src/routes/operations.test.ts`'s
+/// verify-check tests, against a real Postgres via Testcontainers. To
+/// validate this loop end to end: deploy a kind cluster with the kubernetes
+/// operations plugin, run `alien operations invoke kubernetes/restart-pod
+/// --params '{"pod":"...","verifyWorkload":"deployment/..."}'`, and confirm
+/// it prints "Verified: the change took effect." once the replacement pod is
+/// ready — then repeat against a Deployment that cannot schedule its
+/// replacement and confirm it reports the timeout message instead of a false
+/// "Verified".
+async fn verify_operation(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    project: &str,
+    deployment_id: &str,
+    plugin: &str,
+    operation: &str,
+    access_request_id: Option<&str>,
+    write_result: &Value,
+) -> Result<VerificationOutcome> {
+    // The declared verification timeout covers this whole function, not just
+    // the retry loop below — start the clock before the FIRST verify-check
+    // call, not after it returns. Starting it later would let a slow (but
+    // still within-bound) initial call add its own latency on top of the
+    // declared timeout instead of counting against it.
+    let start = std::time::Instant::now();
+
+    // This first call is the one that DECLARES the timeout/retry policy — we
+    // can't bound it by "what's left of the timeout" since that isn't known
+    // yet. Bound it by a fixed ceiling instead, generous enough to allow for
+    // real network latency over the API's own ~9s request watchdog, so a
+    // slow or stalled response can't block the CLI indefinitely after the
+    // write already completed.
+    //
+    // KNOWN LIMITATION: an operation whose declared timeoutSeconds is itself
+    // under this ceiling can still see the total call exceed its own
+    // declared timeout, if this first response lands late (but still within
+    // the ceiling) — there is no way to bound this call by a timeout it is
+    // the one discovering. Every call after this one strictly respects the
+    // remaining declared budget (see the retry loop below); only this first
+    // response's own latency is outside that accounting.
+    const INITIAL_VERIFY_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+    let deadline_check = tokio::time::timeout(
+        INITIAL_VERIFY_CHECK_TIMEOUT,
+        sdk_client
+            .verify_operation_check()
+            .workspace(workspace)
+            .project(project)
+            .body(VerifyOperationCheckRequest {
+                deployment_id: deployment_id.to_string(),
+                plugin: plugin.to_string(),
+                operation: operation.to_string(),
+                access_request_id: access_request_id.map(str::to_string),
+                remediation_plan_id: None,
+                write_result: Some(write_result.clone()),
+            })
+            .send(),
+    )
+    .await
+    .map_err(|_| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "checking verification for '{plugin}/{operation}' timed out after {}s",
+                INITIAL_VERIFY_CHECK_TIMEOUT.as_secs()
+            ),
+            url: None,
+        })
+    })?
+    .into_sdk_error()
+    .context(ErrorData::ApiRequestFailed {
+        message: format!("checking verification for '{plugin}/{operation}'"),
+        url: None,
+    })?
+    .into_inner();
+
+    match deadline_check.outcome {
+        VerifyOperationCheckResponseOutcome::Skipped => {
+            return Ok(VerificationOutcome::Skipped {
+                reason: deadline_check
+                    .reason
+                    .unwrap_or_else(|| "no verification declared".to_string()),
+            });
+        }
+        VerifyOperationCheckResponseOutcome::Verified => return Ok(VerificationOutcome::Verified),
+        VerifyOperationCheckResponseOutcome::Failed => {
+            return Ok(VerificationOutcome::Unverified {
+                reason: deadline_check
+                    .reason
+                    .unwrap_or_else(|| "verification check failed".to_string()),
+            });
+        }
+        VerifyOperationCheckResponseOutcome::NotYet => {}
+    }
+
+    let Some(retry) = deadline_check.retry else {
+        return Ok(VerificationOutcome::Unverified {
+            reason: "not yet verified and the operation declares no retry policy".to_string(),
+        });
+    };
+    let timeout = deadline_check
+        .timeout_seconds
+        .map(|secs| Duration::from_secs(secs.max(0) as u64))
+        .unwrap_or(Duration::from_secs(60));
+    let interval = Duration::from_secs(retry.interval_seconds.max(0) as u64);
+
+    for _attempt in 1..retry.max_attempts.max(1) {
+        let elapsed = start.elapsed();
+        if elapsed >= timeout {
+            break;
+        }
+        // Cap the sleep to what's left of the declared timeout — sleeping the
+        // full interval unconditionally can overrun the timeout by up to
+        // interval + request latency while still reporting only the
+        // configured duration.
+        let remaining = timeout - elapsed;
+        tokio::time::sleep(interval.min(remaining)).await;
+
+        // Bound the request itself by what's left of the timeout too — a
+        // slow or stalled response must not keep this running past the
+        // declared duration. A timeout here is treated the same as
+        // "not yet verified", not an error: the write already succeeded.
+        let remaining_after_sleep = timeout.saturating_sub(start.elapsed());
+        if remaining_after_sleep.is_zero() {
+            break;
+        }
+        let check_result = tokio::time::timeout(
+            remaining_after_sleep,
+            sdk_client
+                .verify_operation_check()
+                .workspace(workspace)
+                .project(project)
+                .body(VerifyOperationCheckRequest {
+                    deployment_id: deployment_id.to_string(),
+                    plugin: plugin.to_string(),
+                    operation: operation.to_string(),
+                    access_request_id: access_request_id.map(str::to_string),
+                    remediation_plan_id: None,
+                    write_result: Some(write_result.clone()),
+                })
+                .send(),
+        )
+        .await;
+        let Ok(send_result) = check_result else {
+            break;
+        };
+        let check = send_result
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("checking verification for '{plugin}/{operation}'"),
+                url: None,
+            })?
+            .into_inner();
+
+        match check.outcome {
+            VerifyOperationCheckResponseOutcome::Verified => return Ok(VerificationOutcome::Verified),
+            VerifyOperationCheckResponseOutcome::Failed => {
+                return Ok(VerificationOutcome::Unverified {
+                    reason: check
+                        .reason
+                        .unwrap_or_else(|| "verification check failed".to_string()),
+                });
+            }
+            VerifyOperationCheckResponseOutcome::Skipped => {
+                return Ok(VerificationOutcome::Skipped {
+                    reason: check
+                        .reason
+                        .unwrap_or_else(|| "no verification declared".to_string()),
+                });
+            }
+            VerifyOperationCheckResponseOutcome::NotYet => {}
+        }
+    }
+
+    Ok(VerificationOutcome::Unverified {
+        reason: format!(
+            "timed out after {}s waiting for the change to be confirmed",
+            timeout.as_secs()
+        ),
+    })
 }
 
 fn parse_operation_reference(reference: &str) -> Option<(&str, &str)> {
