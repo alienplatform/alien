@@ -1284,7 +1284,10 @@ mod tests {
         .expect("setup config should be valid");
 
         assert_eq!(
-            config.metadata.0.get("customerName"),
+            config
+                .metadata
+                .as_ref()
+                .and_then(|metadata| metadata.0.get("customerName")),
             Some(&serde_json::Value::String("Acme Corp".to_string()))
         );
     }
