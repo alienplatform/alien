@@ -772,6 +772,17 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Register the AWS Sandbox controller, which builds the MicroVM image at runtime for
+        // a Live sandbox and watches an imported one for a Frozen sandbox.
+        #[cfg(feature = "aws")]
+        registry.register_controller_factory(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::AwsSandboxController,
+            >::new()),
+        );
+
         // Register the GCP Agent Platform reasoning-engine controller.
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(

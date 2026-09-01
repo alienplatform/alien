@@ -25,9 +25,9 @@
 use alien_core::import::{
     data::{
         AwsAiImportData, AwsKeyImportData, AwsKvImportData, AwsRemoteBindingsImportData,
-        AwsRemoteStackManagementImportData, AwsServiceAccountImportData, AwsStorageImportData,
-        AzureAiImportData, AzureContainerAppsEnvironmentImportData, AzureKeyImportData,
-        AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
+        AwsRemoteStackManagementImportData, AwsSandboxImportData, AwsServiceAccountImportData,
+        AwsStorageImportData, AzureAiImportData, AzureContainerAppsEnvironmentImportData,
+        AzureKeyImportData, AzureRemoteBindingsImportData, AzureRemoteStackManagementImportData,
         AzureResourceGroupImportData, AzureServiceAccountImportData, AzureStorageAccountImportData,
         AzureStorageImportData, GcpAiImportData, GcpBuildImportData, GcpKeyImportData,
         GcpKvImportData, GcpNetworkImportData, GcpRemoteBindingsImportData,
@@ -46,7 +46,8 @@ use alien_core::{
     ManagementConfig, Network, NetworkSettings, Platform, Queue, RemoteBindings,
     RemoteBindingsOutputs, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
     ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
-    ResourceType, ServiceAccount, ServiceActivation, StackSettings, Storage, Vault, Worker,
+    ResourceType, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount,
+    ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::{ImporterRegistry, StackResourceStateExt};
 use serde_json::json;
@@ -1190,5 +1191,164 @@ fn missing_importer_returns_typed_error() {
         msg.contains("ImportRegistration") || msg.contains("import"),
         "expected ImportRegistrationMissing, got: {}",
         msg
+    );
+}
+
+fn sandbox_resource() -> Sandbox {
+    Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+        })
+        .egress(SandboxEgress::Deny)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: Some(1800),
+            idle_suspend_seconds: None,
+        })
+        .build()
+}
+
+fn sandbox_entry(lifecycle: ResourceLifecycle, remote_access: bool) -> ResourceEntry {
+    ResourceEntry {
+        config: Resource::new(sandbox_resource()),
+        lifecycle,
+        dependencies: vec![],
+        remote_access,
+        enabled_when: None,
+    }
+}
+
+/// A Frozen sandbox registers the image its stack built and imports Running at the
+/// controller's Ready state, with a binding an application can start sessions from
+/// immediately.
+#[test]
+fn aws_sandbox_frozen_shape_imports_running_with_a_binding() {
+    let entry = sandbox_entry(ResourceLifecycle::Frozen, true);
+    // Built through the typed struct so a renamed field breaks here, not at a customer's
+    // registration.
+    let payload = serde_json::to_value(AwsSandboxImportData {
+        image_identifier: Some(
+            "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+        ),
+        image_arn: Some(
+            "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+        ),
+        image_version: Some("1.0".to_string()),
+        build_role_arn: None,
+        bundle_uri: None,
+        egress_connector_arns: vec![
+            "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1".to_string(),
+        ],
+        allow_egress: false,
+        preview_ports: vec![8080],
+    })
+    .unwrap();
+
+    let state = run_through_registry(
+        &Sandbox::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-2",
+        &aws_management_config(),
+    );
+
+    assert_running_with_internal_state(&state);
+    let internal = internal_state(&state);
+    assert_eq!(internal["type"], "AwsSandboxController");
+    assert_eq!(internal["state"], "ready");
+
+    let binding = controller_binding_params(&state);
+    assert_eq!(binding["imageVersion"], "1.0");
+    // The region is parsed out of the ARN, not defaulted: a binding naming the wrong region
+    // addresses no MicroVM at all.
+    assert_eq!(binding["region"], "us-east-2");
+    assert_eq!(
+        binding["egressConnectorArns"][0],
+        "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1"
+    );
+}
+
+/// A Live sandbox registers its build inputs instead of an image, and imports Provisioning at
+/// the create entry state so the deployment loop builds the image — with no binding, because
+/// there is nothing to start a session from yet.
+#[test]
+fn aws_sandbox_runtime_shape_imports_provisioning_with_the_build_inputs() {
+    let entry = sandbox_entry(ResourceLifecycle::Live, true);
+    let payload = serde_json::to_value(AwsSandboxImportData {
+        image_identifier: None,
+        image_arn: None,
+        image_version: None,
+        build_role_arn: Some("arn:aws:iam::123456789012:role/stack-agents-build".to_string()),
+        bundle_uri: Some("s3://alien-bundles/sandbox/bundle.zip".to_string()),
+        egress_connector_arns: vec![
+            "arn:aws:lambda:us-east-2:123456789012:network-connector:nc-1".to_string(),
+        ],
+        allow_egress: false,
+        preview_ports: vec![8080],
+    })
+    .unwrap();
+
+    let state = run_through_registry(
+        &Sandbox::RESOURCE_TYPE,
+        Platform::Aws,
+        payload,
+        &entry,
+        "us-east-2",
+        &aws_management_config(),
+    );
+
+    assert_eq!(
+        state.status,
+        ResourceStatus::Provisioning,
+        "a runtime-provisioned sandbox still owes its image build"
+    );
+    let internal = internal_state(&state);
+    assert_eq!(internal["type"], "AwsSandboxController");
+    assert_eq!(internal["state"], "creatingImage");
+    assert_eq!(
+        internal["buildRoleArn"],
+        "arn:aws:iam::123456789012:role/stack-agents-build"
+    );
+    assert_eq!(
+        internal["bundleUri"],
+        "s3://alien-bundles/sandbox/bundle.zip"
+    );
+    assert_eq!(
+        state.remote_binding_params, None,
+        "no binding may be published before the image exists"
+    );
+}
+
+/// A payload with neither a complete image nor complete build inputs is a contract violation:
+/// guessing through it either enumerates the wrong sessions or builds nothing.
+#[test]
+fn aws_sandbox_partial_shape_is_refused() {
+    let entry = sandbox_entry(ResourceLifecycle::Live, false);
+    let registry = ImporterRegistry::built_in();
+    let settings = settings();
+    let mgmt = aws_management_config();
+    let ctx = ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: Some(&mgmt),
+        resource: &entry,
+    };
+
+    let err = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            json!({
+                "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents"
+            }),
+            &ctx,
+        )
+        .expect_err("an image ARN with no identifier, version, or build inputs must be refused");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("agents"),
+        "the refusal must name the resource, got: {msg}"
     );
 }
