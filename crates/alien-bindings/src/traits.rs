@@ -971,10 +971,14 @@ pub trait Container: Binding {
 pub struct CreateSessionRequest {
     /// Session id to reconnect to, for the verbs that take one.
     ///
-    /// Not a name for a new session: `create` always allocates, on every backend, and returns the
-    /// id it allocated. `get_or_create` and `reconnect` read this as the id to look for. A caller
-    /// that sets it on `create` is answered with a different id in the response rather than
-    /// silently — the allocated one is the truth, and it is returned.
+    /// `get_or_create` and `reconnect` read this as the id to look for. On the cloud backends it
+    /// is not a name for a new session: AWS, Azure and GCP all allocate on `create` and answer
+    /// with the id they allocated, so a caller that sets it here is answered with a different one
+    /// rather than silently. Local and Kubernetes do honour it as the new session's id, because
+    /// they own their own namespace and nothing upstream assigns one.
+    ///
+    /// Either way the response carries the truth; a caller must read the id back rather than
+    /// assume the one it sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a

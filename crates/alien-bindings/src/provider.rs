@@ -2102,6 +2102,36 @@ mod tests {
     use super::*;
     use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
 
+    /// `azure_session_limits` refuses a declaration outside Azure's sizing rule at plan time, and
+    /// waves through a sandbox that declares nothing — because the values substituted here take
+    /// its place. Nothing else couples the two, so changing either constant to something the rule
+    /// refuses would put the failure back at create, where the customer reads it as a runtime
+    /// fault rather than a declaration they can fix.
+    #[test]
+    fn the_substituted_azure_defaults_satisfy_the_plan_time_sizing_rule() {
+        let declared_as_default = alien_core::Sandbox::new("agent-sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: DEFAULT_AZURE_CPU.to_string(),
+                memory: DEFAULT_AZURE_MEMORY.to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+
+        declared_as_default.azure_session_limits().expect(
+            "a sandbox declaring nothing is created with these values, so the rule that would \
+             have refused them at plan time must accept them",
+        );
+    }
+
     fn kubernetes_aws_env() -> HashMap<String, String> {
         HashMap::from([
             (

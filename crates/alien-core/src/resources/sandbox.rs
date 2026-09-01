@@ -680,7 +680,8 @@ impl Sandbox {
     /// customer reads it as a runtime fault rather than a declaration they can fix.
     pub fn azure_session_limits(&self) -> Result<()> {
         let Some(limits) = self.limits.as_ref() else {
-            // Nothing declared takes the data plane's own default, which is inside the rule.
+            // Nothing declared means the binding substitutes Alien's own default sizing, which is
+            // inside the rule — asserted where those constants live, since this cannot see them.
             return Ok(());
         };
 
