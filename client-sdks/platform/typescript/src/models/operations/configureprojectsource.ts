@@ -10,6 +10,13 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ConfigureProjectSourceGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Template root directory inside alienplatform/alien
  */
@@ -83,10 +90,6 @@ export type ConfigureProjectSourceRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: ConfigureProjectSourceRepository | TemplateRequest | undefined;
 };
 
@@ -668,7 +671,6 @@ export function configureProjectSourceRequestBodyToJSON(
 /** @internal */
 export type ConfigureProjectSourceRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   RequestBody?:
     | ConfigureProjectSourceRepository$Outbound
     | TemplateRequest$Outbound
@@ -681,7 +683,6 @@ export const ConfigureProjectSourceRequest$outboundSchema: z.ZodType<
   ConfigureProjectSourceRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.union([
     z.lazy(() => ConfigureProjectSourceRepository$outboundSchema),
     z.lazy(() => TemplateRequest$outboundSchema),

@@ -59,9 +59,7 @@ export class SlackIntegration extends ClientSDK {
    * Configure which Slack channel receives ai-agent monitor reports.
    */
   async setNotificationChannel(
-    request?:
-      | operations.SlackIntegrationSetNotificationChannelRequest
-      | undefined,
+    request?: models.SlackNotificationChannelRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.SlackNotificationChannelResponse> {
     return unwrapAsync(slackIntegrationSetNotificationChannel(

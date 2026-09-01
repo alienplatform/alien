@@ -17,13 +17,12 @@ Get the current authenticated principal (user or service account). Works with bo
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.auth.whoami({
-    workspace: "my-workspace",
-  });
+  const result = await alien.auth.whoami();
 
   console.log(result);
 }
@@ -42,13 +41,12 @@ import { authWhoami } from "@alienplatform/platform-api/funcs/authWhoami.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await authWhoami(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await authWhoami(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);

@@ -4,8 +4,8 @@
 
 ### Available Operations
 
-* [list](#list) - Retrieve all managers.
 * [create](#create) - Create a new manager.
+* [list](#list) - Retrieve all managers.
 * [retrySetup](#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -23,6 +23,79 @@
 * [reportHeartbeat](#reportheartbeat) - Report Manager health status and metrics.
 * [getDeployment](#getdeployment) - Get deployment details for a private manager (internal deployment platform, status, resources).
 
+## create
+
+Create a new manager.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="createManager" method="post" path="/v1/managers" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.managers.create();
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { managersCreate } from "@alienplatform/platform-api/funcs/managersCreate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await managersCreate(alien);
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("managersCreate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [models.NewManagerRequest](../../models/newmanagerrequest.md)                                                                                                                  | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.CreateManagerResponse](../../models/createmanagerresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## list
 
 Retrieve all managers.
@@ -34,13 +107,12 @@ Retrieve all managers.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.managers.list({
-    workspace: "my-workspace",
-  });
+  const result = await alien.managers.list();
 
   console.log(result);
 }
@@ -59,13 +131,12 @@ import { managersList } from "@alienplatform/platform-api/funcs/managersList.js"
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await managersList(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await managersList(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -97,81 +168,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## create
-
-Create a new manager.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="createManager" method="post" path="/v1/managers" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.managers.create({
-    workspace: "my-workspace",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { managersCreate } from "@alienplatform/platform-api/funcs/managersCreate.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await managersCreate(alien, {
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("managersCreate failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateManagerRequest](../../models/operations/createmanagerrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.CreateManagerResponse](../../models/createmanagerresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## retrySetup
 
 Revoke previous private-manager setup tokens and issue a fresh setup token/config.
@@ -183,13 +179,13 @@ Revoke previous private-manager setup tokens and issue a fresh setup token/confi
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.retrySetup({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -209,13 +205,13 @@ import { managersRetrySetup } from "@alienplatform/platform-api/funcs/managersRe
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersRetrySetup(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -260,13 +256,13 @@ Retry private-manager setup. Returns a fresh setup action before the internal de
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.retry({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -286,13 +282,13 @@ import { managersRetry } from "@alienplatform/platform-api/funcs/managersRetry.j
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersRetry(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -337,13 +333,13 @@ Cancel pending private-manager setup, revoke setup/runtime tokens, and remove th
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.cancelSetup({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -363,13 +359,13 @@ import { managersCancelSetup } from "@alienplatform/platform-api/funcs/managersC
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersCancelSetup(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -414,13 +410,13 @@ Retrieve a manager by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.get({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -440,13 +436,13 @@ import { managersGet } from "@alienplatform/platform-api/funcs/managersGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGet(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -491,13 +487,13 @@ Delete a manager by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.delete({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -517,13 +513,13 @@ import { managersDelete } from "@alienplatform/platform-api/funcs/managersDelete
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersDelete(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -568,13 +564,13 @@ Get the custom domain binding for a private manager.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.getDomainBinding({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -594,13 +590,13 @@ import { managersGetDomainBinding } from "@alienplatform/platform-api/funcs/mana
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGetDomainBinding(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -645,13 +641,13 @@ Create, update, or remove the custom domain binding for a private manager.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.updateDomainBinding({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     updateManagerDomainBinding: {
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
@@ -674,13 +670,13 @@ import { managersUpdateDomainBinding } from "@alienplatform/platform-api/funcs/m
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersUpdateDomainBinding(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     updateManagerDomainBinding: {
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
     },
@@ -728,13 +724,13 @@ Get the management configuration for a manager.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.getManagementConfig({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     platform: "azure",
   });
 
@@ -755,13 +751,13 @@ import { managersGetManagementConfig } from "@alienplatform/platform-api/funcs/m
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGetManagementConfig(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     platform: "azure",
   });
   if (res.ok) {
@@ -807,13 +803,13 @@ Enqueue provisioning for a manager by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.provision({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -833,13 +829,13 @@ import { managersProvision } from "@alienplatform/platform-api/funcs/managersPro
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersProvision(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -884,13 +880,13 @@ Update a manager to a specific release ID or active release.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.update({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     updateManagerRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     },
@@ -913,13 +909,13 @@ import { managersUpdate } from "@alienplatform/platform-api/funcs/managersUpdate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersUpdate(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     updateManagerRequest: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     },
@@ -967,13 +963,13 @@ Retrieve all events of a manager.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.listEvents({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -993,13 +989,13 @@ import { managersListEvents } from "@alienplatform/platform-api/funcs/managersLi
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersListEvents(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1044,13 +1040,13 @@ Generate a short-lived JWT for direct browser → manager communication. Used fo
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.generateManagerToken({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1070,13 +1066,13 @@ import { managersGenerateManagerToken } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGenerateManagerToken(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1121,13 +1117,13 @@ Generate a short-lived deployment-scoped token for resolving opted-in remote bin
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.generateManagerBindingToken({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     generateManagerBindingTokenRequest: {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     },
@@ -1150,13 +1146,13 @@ import { managersGenerateManagerBindingToken } from "@alienplatform/platform-api
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGenerateManagerBindingToken(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
     generateManagerBindingTokenRequest: {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     },
@@ -1204,13 +1200,13 @@ Resolve decrypted project-level Google Cloud OAuth provider settings for a manag
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.resolveGcpOAuthProvider({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1230,13 +1226,13 @@ import { managersResolveGcpOAuthProvider } from "@alienplatform/platform-api/fun
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersResolveGcpOAuthProvider(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1281,13 +1277,13 @@ Report Manager health status and metrics.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.reportHeartbeat({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1307,13 +1303,13 @@ import { managersReportHeartbeat } from "@alienplatform/platform-api/funcs/manag
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersReportHeartbeat(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1358,13 +1354,13 @@ Get deployment details for a private manager (internal deployment platform, stat
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.managers.getDeployment({
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1384,13 +1380,13 @@ import { managersGetDeployment } from "@alienplatform/platform-api/funcs/manager
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await managersGetDeployment(alien, {
     id: "mgr_enxscjrqiiu2lrc672hwwuc5",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

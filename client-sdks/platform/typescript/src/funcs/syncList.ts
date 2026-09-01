@@ -22,7 +22,6 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
@@ -31,7 +30,7 @@ import { Result } from "../types/fp.js";
  */
 export function syncList(
   client: AlienCore,
-  request?: operations.SyncListRequest | undefined,
+  request?: models.SyncListRequest | undefined,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,7 +55,7 @@ export function syncList(
 
 async function $do(
   client: AlienCore,
-  request?: operations.SyncListRequest | undefined,
+  request?: models.SyncListRequest | undefined,
   options?: RequestOptions,
 ): Promise<
   [
@@ -77,20 +76,21 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) =>
-      operations.SyncListRequest$outboundSchema.optional().parse(value),
+    (value) => models.SyncListRequest$outboundSchema.optional().parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.SyncListRequest, { explode: true });
+  const body = payload === undefined
+    ? null
+    : encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/sync/list")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

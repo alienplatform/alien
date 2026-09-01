@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type ConfigureProjectRegistryGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const ConfigureProjectRegistryCredentialPolicy = {
   PullOnly: "pull-only",
   PushAndPull: "push-and-pull",
@@ -24,10 +31,6 @@ export type ConfigureProjectRegistryRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: ConfigureProjectRegistryRequestBody | undefined;
 };
 
@@ -64,7 +67,6 @@ export function configureProjectRegistryRequestBodyToJSON(
 /** @internal */
 export type ConfigureProjectRegistryRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   RequestBody?: ConfigureProjectRegistryRequestBody$Outbound | undefined;
 };
 
@@ -74,7 +76,6 @@ export const ConfigureProjectRegistryRequest$outboundSchema: z.ZodType<
   ConfigureProjectRegistryRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => ConfigureProjectRegistryRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

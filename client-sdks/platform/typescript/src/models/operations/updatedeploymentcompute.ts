@@ -10,15 +10,18 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type UpdateDeploymentComputeGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type UpdateDeploymentComputeRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   updateDeploymentComputeRequest?:
     | models.UpdateDeploymentComputeRequest
     | undefined;
@@ -41,7 +44,6 @@ export type UpdateDeploymentComputeResponse = {
 /** @internal */
 export type UpdateDeploymentComputeRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   UpdateDeploymentComputeRequest?:
     | models.UpdateDeploymentComputeRequest$Outbound
     | undefined;
@@ -53,7 +55,6 @@ export const UpdateDeploymentComputeRequest$outboundSchema: z.ZodType<
   UpdateDeploymentComputeRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   updateDeploymentComputeRequest: models
     .UpdateDeploymentComputeRequest$outboundSchema.optional(),
 }).transform((v) => {

@@ -3,24 +3,22 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
-export type RebuildPackagesRequestBody = {
+export type RebuildPackagesGlobals = {
   /**
-   * Project ID or name to rebuild packages for
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
-  project: string;
+  workspace?: string | undefined;
 };
 
 export type RebuildPackagesRequest = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Project ID or name to rebuild packages for
    */
-  workspace?: string | undefined;
-  requestBody?: RebuildPackagesRequestBody | undefined;
+  project: string;
 };
 
 /**
@@ -34,30 +32,8 @@ export type RebuildPackagesResponse = {
 };
 
 /** @internal */
-export type RebuildPackagesRequestBody$Outbound = {
-  project: string;
-};
-
-/** @internal */
-export const RebuildPackagesRequestBody$outboundSchema: z.ZodType<
-  RebuildPackagesRequestBody$Outbound,
-  RebuildPackagesRequestBody
-> = z.object({
-  project: z.string(),
-});
-
-export function rebuildPackagesRequestBodyToJSON(
-  rebuildPackagesRequestBody: RebuildPackagesRequestBody,
-): string {
-  return JSON.stringify(
-    RebuildPackagesRequestBody$outboundSchema.parse(rebuildPackagesRequestBody),
-  );
-}
-
-/** @internal */
 export type RebuildPackagesRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: RebuildPackagesRequestBody$Outbound | undefined;
+  project: string;
 };
 
 /** @internal */
@@ -65,13 +41,7 @@ export const RebuildPackagesRequest$outboundSchema: z.ZodType<
   RebuildPackagesRequest$Outbound,
   RebuildPackagesRequest
 > = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => RebuildPackagesRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
+  project: z.string(),
 });
 
 export function rebuildPackagesRequestToJSON(

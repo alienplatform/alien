@@ -3,12 +3,18 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
+
+export type CreateProjectFromTemplateGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
 
 /**
  * Template root directory inside alienplatform/alien
@@ -191,7 +197,7 @@ export type CreateProjectFromTemplatePackagesConfigRequest = {
   terraform?: CreateProjectFromTemplateTerraformRequest | null | undefined;
 };
 
-export type CreateProjectFromTemplateRequestBody = {
+export type CreateProjectFromTemplateRequest = {
   /**
    * Project name.
    */
@@ -215,14 +221,6 @@ export type CreateProjectFromTemplateRequestBody = {
     | CreateProjectFromTemplatePackagesConfigRequest
     | null
     | undefined;
-};
-
-export type CreateProjectFromTemplateRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: CreateProjectFromTemplateRequestBody | undefined;
 };
 
 /**
@@ -908,7 +906,7 @@ export function createProjectFromTemplatePackagesConfigRequestToJSON(
 }
 
 /** @internal */
-export type CreateProjectFromTemplateRequestBody$Outbound = {
+export type CreateProjectFromTemplateRequest$Outbound = {
   name: string;
   targetNamespace: string;
   templatePath: string;
@@ -920,9 +918,9 @@ export type CreateProjectFromTemplateRequestBody$Outbound = {
 };
 
 /** @internal */
-export const CreateProjectFromTemplateRequestBody$outboundSchema: z.ZodType<
-  CreateProjectFromTemplateRequestBody$Outbound,
-  CreateProjectFromTemplateRequestBody
+export const CreateProjectFromTemplateRequest$outboundSchema: z.ZodType<
+  CreateProjectFromTemplateRequest$Outbound,
+  CreateProjectFromTemplateRequest
 > = z.object({
   name: z.string(),
   targetNamespace: z.string(),
@@ -931,36 +929,6 @@ export const CreateProjectFromTemplateRequestBody$outboundSchema: z.ZodType<
   packagesConfig: z.nullable(
     z.lazy(() => CreateProjectFromTemplatePackagesConfigRequest$outboundSchema),
   ).optional(),
-});
-
-export function createProjectFromTemplateRequestBodyToJSON(
-  createProjectFromTemplateRequestBody: CreateProjectFromTemplateRequestBody,
-): string {
-  return JSON.stringify(
-    CreateProjectFromTemplateRequestBody$outboundSchema.parse(
-      createProjectFromTemplateRequestBody,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateProjectFromTemplateRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: CreateProjectFromTemplateRequestBody$Outbound | undefined;
-};
-
-/** @internal */
-export const CreateProjectFromTemplateRequest$outboundSchema: z.ZodType<
-  CreateProjectFromTemplateRequest$Outbound,
-  CreateProjectFromTemplateRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => CreateProjectFromTemplateRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
 });
 
 export function createProjectFromTemplateRequestToJSON(

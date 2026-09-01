@@ -8,11 +8,14 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
-export type ListBillingAuditLogRequest = {
+export type ListBillingAuditLogGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListBillingAuditLogRequest = {
   limit?: number | undefined;
   /**
    * Cursor: id from the previous page.
@@ -30,7 +33,6 @@ export type ListBillingAuditLogResponse = {
 
 /** @internal */
 export type ListBillingAuditLogRequest$Outbound = {
-  workspace?: string | undefined;
   limit: number;
   before?: string | undefined;
 };
@@ -40,7 +42,6 @@ export const ListBillingAuditLogRequest$outboundSchema: z.ZodType<
   ListBillingAuditLogRequest$Outbound,
   ListBillingAuditLogRequest
 > = z.object({
-  workspace: z.string().optional(),
   limit: z.number().default(50),
   before: z.string().optional(),
 });

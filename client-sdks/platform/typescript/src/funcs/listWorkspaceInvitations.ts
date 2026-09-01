@@ -93,7 +93,7 @@ async function $do(
   const path = pathToFunc("/v1/workspaces/{id}/invitations")(pathParams);
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

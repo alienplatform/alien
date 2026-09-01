@@ -4,21 +4,23 @@
 
 import * as z from "zod/v4";
 
+export type GetProjectGcpOAuthProviderGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type GetProjectGcpOAuthProviderRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /** @internal */
 export type GetProjectGcpOAuthProviderRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -27,7 +29,6 @@ export const GetProjectGcpOAuthProviderRequest$outboundSchema: z.ZodType<
   GetProjectGcpOAuthProviderRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function getProjectGcpOAuthProviderRequestToJSON(

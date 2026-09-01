@@ -24,13 +24,13 @@
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.getContainerRegistry({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -50,13 +50,13 @@ import { containerRegistryGetContainerRegistry } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryGetContainerRegistry(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -99,13 +99,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.putContainerRegistry({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     requestBody: {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       resourceId: "<id>",
@@ -129,13 +129,13 @@ import { containerRegistryPutContainerRegistry } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryPutContainerRegistry(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
     requestBody: {
       deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
       resourceId: "<id>",
@@ -182,13 +182,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.createContainerRegistryRepository({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -208,13 +208,13 @@ import { containerRegistryCreateContainerRegistryRepository } from "@alienplatfo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryCreateContainerRegistryRepository(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -257,13 +257,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.createContainerRegistryCredential({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -283,13 +283,13 @@ import { containerRegistryCreateContainerRegistryCredential } from "@alienplatfo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryCreateContainerRegistryCredential(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -332,6 +332,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -339,7 +340,6 @@ async function run() {
   await alien.containerRegistry.revokeContainerRegistryCredential({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     credentialId: "crcred_oz1xjr82f37j17g4gtmyu",
-    workspace: "my-workspace",
   });
 
 
@@ -359,6 +359,7 @@ import { containerRegistryRevokeContainerRegistryCredential } from "@alienplatfo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -366,7 +367,6 @@ async function run() {
   const res = await containerRegistryRevokeContainerRegistryCredential(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     credentialId: "crcred_oz1xjr82f37j17g4gtmyu",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -409,6 +409,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -416,7 +417,6 @@ async function run() {
   const result = await alien.containerRegistry.deleteContainerRegistryRepository({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     repositoryId: "crrepo_625temdq3bnu25jw9rcux",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -436,6 +436,7 @@ import { containerRegistryDeleteContainerRegistryRepository } from "@alienplatfo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -443,7 +444,6 @@ async function run() {
   const res = await containerRegistryDeleteContainerRegistryRepository(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
     repositoryId: "crrepo_625temdq3bnu25jw9rcux",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -486,13 +486,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.verifyContainerRegistry({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -512,13 +512,13 @@ import { containerRegistryVerifyContainerRegistry } from "@alienplatform/platfor
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryVerifyContainerRegistry(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -561,13 +561,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.containerRegistry.revokeContainerRegistry({
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -587,13 +587,13 @@ import { containerRegistryRevokeContainerRegistry } from "@alienplatform/platfor
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await containerRegistryRevokeContainerRegistry(alien, {
     id: "dg_r27ict8c7vcgsumpj90ackf7b",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

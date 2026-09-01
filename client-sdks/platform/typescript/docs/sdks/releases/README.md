@@ -23,13 +23,13 @@ Retrieve all releases.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.list({
     project: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -49,13 +49,13 @@ import { releasesList } from "@alienplatform/platform-api/funcs/releasesList.js"
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesList(alien, {
     project: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -99,26 +99,24 @@ Create a new release.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.create({
-    workspace: "my-workspace",
-    createReleaseRequest: {
-      project: "<value>",
-      gitMetadata: {
-        commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
-        commitMessage: "add method to measure Interaction to Next Paint (INP) (#36490)",
-        commitRef: "main",
-        commitDate: new Date("2026-03-16T12:00:00Z"),
-        dirty: true,
-        remoteUrl: "https://github.com/alienplatform/alien",
-        commitAuthorName: "John Doe",
-        commitAuthorEmail: "john@example.com",
-        commitAuthorLogin: "johndoe",
-        commitAuthorAvatarUrl: "https://github.com/johndoe.png",
-      },
+    project: "<value>",
+    gitMetadata: {
+      commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
+      commitMessage: "add method to measure Interaction to Next Paint (INP) (#36490)",
+      commitRef: "main",
+      commitDate: new Date("2026-03-16T12:00:00Z"),
+      dirty: true,
+      remoteUrl: "https://github.com/alienplatform/alien",
+      commitAuthorName: "John Doe",
+      commitAuthorEmail: "john@example.com",
+      commitAuthorLogin: "johndoe",
+      commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
   });
 
@@ -139,26 +137,24 @@ import { releasesCreate } from "@alienplatform/platform-api/funcs/releasesCreate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesCreate(alien, {
-    workspace: "my-workspace",
-    createReleaseRequest: {
-      project: "<value>",
-      gitMetadata: {
-        commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
-        commitMessage: "add method to measure Interaction to Next Paint (INP) (#36490)",
-        commitRef: "main",
-        commitDate: new Date("2026-03-16T12:00:00Z"),
-        dirty: true,
-        remoteUrl: "https://github.com/alienplatform/alien",
-        commitAuthorName: "John Doe",
-        commitAuthorEmail: "john@example.com",
-        commitAuthorLogin: "johndoe",
-        commitAuthorAvatarUrl: "https://github.com/johndoe.png",
-      },
+    project: "<value>",
+    gitMetadata: {
+      commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
+      commitMessage: "add method to measure Interaction to Next Paint (INP) (#36490)",
+      commitRef: "main",
+      commitDate: new Date("2026-03-16T12:00:00Z"),
+      dirty: true,
+      remoteUrl: "https://github.com/alienplatform/alien",
+      commitAuthorName: "John Doe",
+      commitAuthorEmail: "john@example.com",
+      commitAuthorLogin: "johndoe",
+      commitAuthorAvatarUrl: "https://github.com/johndoe.png",
     },
   });
   if (res.ok) {
@@ -176,7 +172,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.CreateReleaseRequest](../../models/operations/createreleaserequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.CreateReleaseRequest](../../models/createreleaserequest.md)                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -204,12 +200,12 @@ List distinct git branches across releases. Used for filter dropdowns.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.listBranches({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -230,12 +226,12 @@ import { releasesListBranches } from "@alienplatform/platform-api/funcs/releases
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesListBranches(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -280,12 +276,12 @@ List distinct commit authors across releases. Used for filter dropdowns.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.listAuthors({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -306,12 +302,12 @@ import { releasesListAuthors } from "@alienplatform/platform-api/funcs/releasesL
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesListAuthors(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -356,13 +352,13 @@ Retrieve a release by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.get({
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -382,13 +378,13 @@ import { releasesGet } from "@alienplatform/platform-api/funcs/releasesGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesGet(alien, {
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -433,13 +429,13 @@ List the project's deployments with their rollout state relative to this release
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.listDeployments({
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -459,13 +455,13 @@ import { releasesListDeployments } from "@alienplatform/platform-api/funcs/relea
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesListDeployments(alien, {
     id: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -508,13 +504,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releases.promote({
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
     requestBody: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
@@ -539,13 +535,13 @@ import { releasesPromote } from "@alienplatform/platform-api/funcs/releasesPromo
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releasesPromote(alien, {
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
     requestBody: {
       releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

@@ -3,18 +3,15 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
-import * as models from "../index.js";
 
-export type SyncReleaseRequest = {
+export type SyncReleaseGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
-  syncReleaseRequest: models.SyncReleaseRequest;
 };
 
 /**
@@ -23,33 +20,6 @@ export type SyncReleaseRequest = {
 export type SyncReleaseResponse = {
   success: boolean;
 };
-
-/** @internal */
-export type SyncReleaseRequest$Outbound = {
-  workspace?: string | undefined;
-  SyncReleaseRequest: models.SyncReleaseRequest$Outbound;
-};
-
-/** @internal */
-export const SyncReleaseRequest$outboundSchema: z.ZodType<
-  SyncReleaseRequest$Outbound,
-  SyncReleaseRequest
-> = z.object({
-  workspace: z.string().optional(),
-  syncReleaseRequest: models.SyncReleaseRequest$outboundSchema,
-}).transform((v) => {
-  return remap$(v, {
-    syncReleaseRequest: "SyncReleaseRequest",
-  });
-});
-
-export function syncReleaseRequestToJSON(
-  syncReleaseRequest: SyncReleaseRequest,
-): string {
-  return JSON.stringify(
-    SyncReleaseRequest$outboundSchema.parse(syncReleaseRequest),
-  );
-}
 
 /** @internal */
 export const SyncReleaseResponse$inboundSchema: z.ZodType<

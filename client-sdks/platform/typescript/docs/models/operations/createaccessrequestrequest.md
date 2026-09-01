@@ -6,13 +6,27 @@
 import { CreateAccessRequestRequest } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateAccessRequestRequest = {
-  workspace: "my-workspace",
+  deploymentId: "<id>",
+  remediationPlanId: "<id>",
+  title: "<value>",
+  commands: [
+    {
+      command: "kubernetes/get-pods",
+      summary: "List pods in the ingestion namespace",
+      params: {
+        "pod": "ingester-p4kwm",
+      },
+    },
+  ],
 };
 ```
 
 ## Fields
 
-| Field                                                                                                                                                                                  | Type                                                                                                                                                                                   | Required                                                                                                                                                                               | Description                                                                                                                                                                            | Example                                                                                                                                                                                |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `workspace`                                                                                                                                                                            | *string*                                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                                     | Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace. | my-workspace                                                                                                                                                                           |
-| `requestBody`                                                                                                                                                                          | [operations.CreateAccessRequestRequestBody](../../models/operations/createaccessrequestrequestbody.md)                                                                                 | :heavy_minus_sign:                                                                                                                                                                     | N/A                                                                                                                                                                                    |                                                                                                                                                                                        |
+| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `deploymentId`                                                           | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `remediationPlanId`                                                      | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `title`                                                                  | *string*                                                                 | :heavy_check_mark:                                                       | N/A                                                                      |
+| `reason`                                                                 | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `commands`                                                               | [operations.CommandRequest](../../models/operations/commandrequest.md)[] | :heavy_check_mark:                                                       | N/A                                                                      |

@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type UpdateProjectGcpOAuthProviderGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type UpdateProjectGcpOAuthProviderRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   updateProjectGcpOAuthProvider?:
     | models.UpdateProjectGcpOAuthProvider
     | undefined;
@@ -23,7 +26,6 @@ export type UpdateProjectGcpOAuthProviderRequest = {
 /** @internal */
 export type UpdateProjectGcpOAuthProviderRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   UpdateProjectGcpOAuthProvider?:
     | models.UpdateProjectGcpOAuthProvider$Outbound
     | undefined;
@@ -35,7 +37,6 @@ export const UpdateProjectGcpOAuthProviderRequest$outboundSchema: z.ZodType<
   UpdateProjectGcpOAuthProviderRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   updateProjectGcpOAuthProvider: models
     .UpdateProjectGcpOAuthProvider$outboundSchema.optional(),
 }).transform((v) => {

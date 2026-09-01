@@ -6,11 +6,14 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
-export type CreateOperationsBundleUploadUrlRequest = {
+export type CreateOperationsBundleUploadUrlGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type CreateOperationsBundleUploadUrlRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -22,7 +25,6 @@ export type CreateOperationsBundleUploadUrlRequest = {
 
 /** @internal */
 export type CreateOperationsBundleUploadUrlRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
   OperationsBundleUploadUrlRequest?:
     | models.OperationsBundleUploadUrlRequest$Outbound
@@ -34,7 +36,6 @@ export const CreateOperationsBundleUploadUrlRequest$outboundSchema: z.ZodType<
   CreateOperationsBundleUploadUrlRequest$Outbound,
   CreateOperationsBundleUploadUrlRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
   operationsBundleUploadUrlRequest: models
     .OperationsBundleUploadUrlRequest$outboundSchema.optional(),

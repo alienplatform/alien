@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type SetOperationsPluginEnabledGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type SetOperationsPluginEnabledRequest = {
   /**
    * Plugin name.
    */
   name: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -27,7 +30,6 @@ export type SetOperationsPluginEnabledRequest = {
 /** @internal */
 export type SetOperationsPluginEnabledRequest$Outbound = {
   name: string;
-  workspace?: string | undefined;
   project: string;
   SetOperationsPluginEnabledRequest?:
     | models.SetOperationsPluginEnabledRequest$Outbound
@@ -40,7 +42,6 @@ export const SetOperationsPluginEnabledRequest$outboundSchema: z.ZodType<
   SetOperationsPluginEnabledRequest
 > = z.object({
   name: z.string(),
-  workspace: z.string().optional(),
   project: z.string(),
   setOperationsPluginEnabledRequest: models
     .SetOperationsPluginEnabledRequest$outboundSchema.optional(),

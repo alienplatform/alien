@@ -3,7 +3,13 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
+
+export type CreateDomainGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
 
 export type CreateDomainSetup = {
   deploymentPortal?: boolean | undefined;
@@ -15,17 +21,9 @@ export type CreateDomainSetup = {
   managerIds?: Array<string> | undefined;
 };
 
-export type CreateDomainRequestBody = {
+export type CreateDomainRequest = {
   domain: string;
   setup?: CreateDomainSetup | undefined;
-};
-
-export type CreateDomainRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: CreateDomainRequestBody | undefined;
 };
 
 /** @internal */
@@ -56,32 +54,9 @@ export function createDomainSetupToJSON(
 }
 
 /** @internal */
-export type CreateDomainRequestBody$Outbound = {
+export type CreateDomainRequest$Outbound = {
   domain: string;
   setup?: CreateDomainSetup$Outbound | undefined;
-};
-
-/** @internal */
-export const CreateDomainRequestBody$outboundSchema: z.ZodType<
-  CreateDomainRequestBody$Outbound,
-  CreateDomainRequestBody
-> = z.object({
-  domain: z.string(),
-  setup: z.lazy(() => CreateDomainSetup$outboundSchema).optional(),
-});
-
-export function createDomainRequestBodyToJSON(
-  createDomainRequestBody: CreateDomainRequestBody,
-): string {
-  return JSON.stringify(
-    CreateDomainRequestBody$outboundSchema.parse(createDomainRequestBody),
-  );
-}
-
-/** @internal */
-export type CreateDomainRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: CreateDomainRequestBody$Outbound | undefined;
 };
 
 /** @internal */
@@ -89,12 +64,8 @@ export const CreateDomainRequest$outboundSchema: z.ZodType<
   CreateDomainRequest$Outbound,
   CreateDomainRequest
 > = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => CreateDomainRequestBody$outboundSchema).optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
+  domain: z.string(),
+  setup: z.lazy(() => CreateDomainSetup$outboundSchema).optional(),
 });
 
 export function createDomainRequestToJSON(

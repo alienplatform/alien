@@ -7,11 +7,14 @@ import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
-export type ListDeploymentFilterDeploymentGroupsRequest = {
+export type ListDeploymentFilterDeploymentGroupsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListDeploymentFilterDeploymentGroupsRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -56,7 +59,6 @@ export type ListDeploymentFilterDeploymentGroupsResponse = {
 
 /** @internal */
 export type ListDeploymentFilterDeploymentGroupsRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   search?: string | null | undefined;
   limit: number;
@@ -68,7 +70,6 @@ export const ListDeploymentFilterDeploymentGroupsRequest$outboundSchema:
     ListDeploymentFilterDeploymentGroupsRequest$Outbound,
     ListDeploymentFilterDeploymentGroupsRequest
   > = z.object({
-    workspace: z.string().optional(),
     project: z.string().optional(),
     search: z.nullable(z.string()).optional(),
     limit: z.int().default(20),

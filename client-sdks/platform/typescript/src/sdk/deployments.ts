@@ -47,7 +47,7 @@ export class Deployments extends ClientSDK {
    * Create a new deployment. Deployment group tokens automatically use their group. Workspace/project tokens must provide deploymentGroupId.
    */
   async create(
-    request?: operations.CreateDeploymentRequest | undefined,
+    request?: models.NewDeploymentRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.CreateDeploymentResponse> {
     return unwrapAsync(deploymentsCreate(
@@ -133,7 +133,7 @@ export class Deployments extends ClientSDK {
    * Import a deployment from resolved setup infrastructure such as CloudFormation, Terraform, or Helm.
    */
   async import(
-    request?: operations.ImportDeploymentRequest | undefined,
+    request?: models.ImportDeploymentRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.Deployment> {
     return unwrapAsync(deploymentsImport(
@@ -161,7 +161,7 @@ export class Deployments extends ClientSDK {
    * Start a durable setup registration operation for CloudFormation, Terraform, or Helm.
    */
   async createSetupRegistrationOperation(
-    request?: operations.CreateSetupRegistrationOperationRequest | undefined,
+    request?: models.CreateSetupRegistrationOperationRequest | undefined,
     options?: RequestOptions,
   ): Promise<models.SetupRegistrationOperationResponse> {
     return unwrapAsync(deploymentsCreateSetupRegistrationOperation(

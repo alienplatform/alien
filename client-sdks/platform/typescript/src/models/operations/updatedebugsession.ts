@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type UpdateDebugSessionGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type UpdateDebugSessionRequest = {
   /**
    * Unique identifier for the debug session.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   updateDebugSessionRequest?: models.UpdateDebugSessionRequest | undefined;
 };
 
 /** @internal */
 export type UpdateDebugSessionRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   UpdateDebugSessionRequest?:
     | models.UpdateDebugSessionRequest$Outbound
     | undefined;
@@ -33,7 +35,6 @@ export const UpdateDebugSessionRequest$outboundSchema: z.ZodType<
   UpdateDebugSessionRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   updateDebugSessionRequest: models.UpdateDebugSessionRequest$outboundSchema
     .optional(),
 }).transform((v) => {

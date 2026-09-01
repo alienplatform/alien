@@ -7,6 +7,13 @@ import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 import * as models from "../index.js";
 
+export type PlanDeploymentComputeGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const PlanDeploymentComputeSetupItem = {
   Deployment: "deployment",
   Models: "models",
@@ -1149,20 +1156,12 @@ export type PlanDeploymentComputeStackSettings = {
   updates?: PlanDeploymentComputeUpdates | undefined;
 };
 
-export type PlanDeploymentComputeRequestBody = {
+export type PlanDeploymentComputeRequest = {
   setupItem?: PlanDeploymentComputeSetupItem | undefined;
   platform: PlanDeploymentComputePlatform;
   setupMethod: models.DeploymentSetupMethod;
   region?: string | undefined;
   stackSettings: PlanDeploymentComputeStackSettings;
-};
-
-export type PlanDeploymentComputeRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: PlanDeploymentComputeRequestBody | undefined;
 };
 
 /** @internal */
@@ -3608,7 +3607,7 @@ export function planDeploymentComputeStackSettingsToJSON(
 }
 
 /** @internal */
-export type PlanDeploymentComputeRequestBody$Outbound = {
+export type PlanDeploymentComputeRequest$Outbound = {
   setupItem?: string | undefined;
   platform: string;
   setupMethod: string;
@@ -3617,9 +3616,9 @@ export type PlanDeploymentComputeRequestBody$Outbound = {
 };
 
 /** @internal */
-export const PlanDeploymentComputeRequestBody$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRequestBody$Outbound,
-  PlanDeploymentComputeRequestBody
+export const PlanDeploymentComputeRequest$outboundSchema: z.ZodType<
+  PlanDeploymentComputeRequest$Outbound,
+  PlanDeploymentComputeRequest
 > = z.object({
   setupItem: PlanDeploymentComputeSetupItem$outboundSchema.optional(),
   platform: PlanDeploymentComputePlatform$outboundSchema,
@@ -3628,36 +3627,6 @@ export const PlanDeploymentComputeRequestBody$outboundSchema: z.ZodType<
   stackSettings: z.lazy(() =>
     PlanDeploymentComputeStackSettings$outboundSchema
   ),
-});
-
-export function planDeploymentComputeRequestBodyToJSON(
-  planDeploymentComputeRequestBody: PlanDeploymentComputeRequestBody,
-): string {
-  return JSON.stringify(
-    PlanDeploymentComputeRequestBody$outboundSchema.parse(
-      planDeploymentComputeRequestBody,
-    ),
-  );
-}
-
-/** @internal */
-export type PlanDeploymentComputeRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: PlanDeploymentComputeRequestBody$Outbound | undefined;
-};
-
-/** @internal */
-export const PlanDeploymentComputeRequest$outboundSchema: z.ZodType<
-  PlanDeploymentComputeRequest$Outbound,
-  PlanDeploymentComputeRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => PlanDeploymentComputeRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
 });
 
 export function planDeploymentComputeRequestToJSON(

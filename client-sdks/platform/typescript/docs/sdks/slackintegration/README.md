@@ -21,13 +21,12 @@ Generate the Slack OAuth consent URL for this workspace.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.slackIntegration.installUrl({
-    workspace: "my-workspace",
-  });
+  const result = await alien.slackIntegration.installUrl();
 
   console.log(result);
 }
@@ -46,13 +45,12 @@ import { slackIntegrationInstallUrl } from "@alienplatform/platform-api/funcs/sl
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await slackIntegrationInstallUrl(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await slackIntegrationInstallUrl(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -95,13 +93,12 @@ Return the Slack install for this workspace (if any).
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.slackIntegration.status({
-    workspace: "my-workspace",
-  });
+  const result = await alien.slackIntegration.status();
 
   console.log(result);
 }
@@ -120,13 +117,12 @@ import { slackIntegrationStatus } from "@alienplatform/platform-api/funcs/slackI
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await slackIntegrationStatus(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await slackIntegrationStatus(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -168,13 +164,12 @@ List public Slack channels for this workspace's install. Used by the dashboard's
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.slackIntegration.listChannels({
-    workspace: "my-workspace",
-  });
+  const result = await alien.slackIntegration.listChannels();
 
   console.log(result);
 }
@@ -193,13 +188,12 @@ import { slackIntegrationListChannels } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await slackIntegrationListChannels(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await slackIntegrationListChannels(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -242,13 +236,12 @@ Configure which Slack channel receives ai-agent monitor reports.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.slackIntegration.setNotificationChannel({
-    workspace: "my-workspace",
-  });
+  const result = await alien.slackIntegration.setNotificationChannel();
 
   console.log(result);
 }
@@ -267,13 +260,12 @@ import { slackIntegrationSetNotificationChannel } from "@alienplatform/platform-
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await slackIntegrationSetNotificationChannel(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await slackIntegrationSetNotificationChannel(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -289,7 +281,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SlackIntegrationSetNotificationChannelRequest](../../models/operations/slackintegrationsetnotificationchannelrequest.md)                                           | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SlackNotificationChannelRequest](../../models/slacknotificationchannelrequest.md)                                                                                      | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -316,13 +308,12 @@ Uninstall the Slack integration for this workspace. Revokes the bot token at Sla
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  await alien.slackIntegration.uninstall({
-    workspace: "my-workspace",
-  });
+  await alien.slackIntegration.uninstall();
 
 
 }
@@ -341,13 +332,12 @@ import { slackIntegrationUninstall } from "@alienplatform/platform-api/funcs/sla
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await slackIntegrationUninstall(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await slackIntegrationUninstall(alien);
   if (res.ok) {
     const { value: result } = res;
     

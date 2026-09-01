@@ -8,11 +8,14 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
-export type ListReleaseChannelsRequest = {
+export type ListReleaseChannelsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListReleaseChannelsRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -28,7 +31,6 @@ export type ListReleaseChannelsResponse = {
 
 /** @internal */
 export type ListReleaseChannelsRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
 };
 
@@ -37,7 +39,6 @@ export const ListReleaseChannelsRequest$outboundSchema: z.ZodType<
   ListReleaseChannelsRequest$Outbound,
   ListReleaseChannelsRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
 });
 

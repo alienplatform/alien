@@ -19,12 +19,12 @@ List the release channels configured for a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releaseChannels.list({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -45,12 +45,12 @@ import { releaseChannelsList } from "@alienplatform/platform-api/funcs/releaseCh
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releaseChannelsList(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -95,12 +95,12 @@ Create a release channel for a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.releaseChannels.create({
-    workspace: "my-workspace",
     project: "my-project",
     requestBody: {
       name: "<value>",
@@ -125,12 +125,12 @@ import { releaseChannelsCreate } from "@alienplatform/platform-api/funcs/release
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releaseChannelsCreate(alien, {
-    workspace: "my-workspace",
     project: "my-project",
     requestBody: {
       name: "<value>",
@@ -179,13 +179,13 @@ Delete a release channel from a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   await alien.releaseChannels.delete({
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -206,13 +206,13 @@ import { releaseChannelsDelete } from "@alienplatform/platform-api/funcs/release
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await releaseChannelsDelete(alien, {
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {

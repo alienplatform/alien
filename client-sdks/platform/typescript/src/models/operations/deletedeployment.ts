@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type DeleteDeploymentGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type DeleteDeploymentRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   deleteDeploymentRequest?: models.DeleteDeploymentRequest | undefined;
 };
 
 /** @internal */
 export type DeleteDeploymentRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   DeleteDeploymentRequest?: models.DeleteDeploymentRequest$Outbound | undefined;
 };
 
@@ -31,7 +33,6 @@ export const DeleteDeploymentRequest$outboundSchema: z.ZodType<
   DeleteDeploymentRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   deleteDeploymentRequest: models.DeleteDeploymentRequest$outboundSchema
     .optional(),
 }).transform((v) => {

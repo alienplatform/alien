@@ -27,12 +27,12 @@ List available operations plugins (builtin + custom) for a project, with their o
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.listPlugins({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -53,12 +53,12 @@ import { operationsListPlugins } from "@alienplatform/platform-api/funcs/operati
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsListPlugins(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -103,12 +103,12 @@ Register a custom operations plugin whose bundle ZIP has already been uploaded t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.publishPlugin({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -129,12 +129,12 @@ import { operationsPublishPlugin } from "@alienplatform/platform-api/funcs/opera
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsPublishPlugin(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -180,12 +180,12 @@ Replace the complete set of enabled built-in operations plugins for a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.setBuiltinPlugins({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -206,12 +206,12 @@ import { operationsSetBuiltinPlugins } from "@alienplatform/platform-api/funcs/o
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsSetBuiltinPlugins(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -257,12 +257,12 @@ Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.createBundleUploadUrl({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -283,12 +283,12 @@ import { operationsCreateBundleUploadUrl } from "@alienplatform/platform-api/fun
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsCreateBundleUploadUrl(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -334,13 +334,13 @@ Enable or disable an operations plugin (builtin or custom) for a project. Only e
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.setPluginEnabled({
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -361,13 +361,13 @@ import { operationsSetPluginEnabled } from "@alienplatform/platform-api/funcs/op
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsSetPluginEnabled(alien, {
     name: "<value>",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -413,12 +413,12 @@ Get a project's per-command approval policy. Mirrors what the operator enforces:
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.getPolicy({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -439,12 +439,12 @@ import { operationsGetPolicy } from "@alienplatform/platform-api/funcs/operation
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsGetPolicy(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -489,12 +489,12 @@ Replace a project's per-command approval policy (full rule set). Patterns are `p
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.updatePolicy({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -515,12 +515,12 @@ import { operationsUpdatePolicy } from "@alienplatform/platform-api/funcs/operat
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsUpdatePolicy(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -566,12 +566,12 @@ Invoke a plugin operation against a deployment. Honors the project's per-command
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.invoke({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -592,12 +592,12 @@ import { operationsInvoke } from "@alienplatform/platform-api/funcs/operationsIn
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsInvoke(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -643,18 +643,16 @@ Create a pending access request covering a remediation plan's commands. Awaits t
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.createAccessRequest({
-    workspace: "my-workspace",
-    requestBody: {
-      deploymentId: "<id>",
-      remediationPlanId: "<id>",
-      title: "<value>",
-      commands: [],
-    },
+    deploymentId: "<id>",
+    remediationPlanId: "<id>",
+    title: "<value>",
+    commands: [],
   });
 
   console.log(result);
@@ -674,18 +672,16 @@ import { operationsCreateAccessRequest } from "@alienplatform/platform-api/funcs
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsCreateAccessRequest(alien, {
-    workspace: "my-workspace",
-    requestBody: {
-      deploymentId: "<id>",
-      remediationPlanId: "<id>",
-      title: "<value>",
-      commands: [],
-    },
+    deploymentId: "<id>",
+    remediationPlanId: "<id>",
+    title: "<value>",
+    commands: [],
   });
   if (res.ok) {
     const { value: result } = res;
@@ -730,13 +726,13 @@ Engineer gate — approve a pending access request, queuing it for the operator 
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.queueAccessRequest({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -756,13 +752,13 @@ import { operationsQueueAccessRequest } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsQueueAccessRequest(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -806,13 +802,13 @@ The customer's kubectl approve command for a queued access request, or null unti
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.operations.getAccessRequestCoordinates({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -832,13 +828,13 @@ import { operationsGetAccessRequestCoordinates } from "@alienplatform/platform-a
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await operationsGetAccessRequestCoordinates(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

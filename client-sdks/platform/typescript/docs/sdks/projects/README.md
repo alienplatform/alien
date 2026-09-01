@@ -7,8 +7,8 @@
 * [list](#list) - Retrieve all projects.
 * [create](#create) - Create a new project.
 * [get](#get) - Retrieve a project by ID or name.
-* [delete](#delete) - Delete a project. The project must have no deployments.
 * [update](#update) - Update a project.
+* [delete](#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [configureSource](#configuresource) - Connect a GitHub repository or Alien template to an existing project.
@@ -42,13 +42,12 @@ Retrieve all projects.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.projects.list({
-    workspace: "my-workspace",
-  });
+  const result = await alien.projects.list({});
 
   console.log(result);
 }
@@ -67,13 +66,12 @@ import { projectsList } from "@alienplatform/platform-api/funcs/projectsList.js"
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await projectsList(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await projectsList(alien, {});
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -116,18 +114,16 @@ Create a new project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.create({
-    workspace: "my-workspace",
-    requestBody: {
-      name: "my-app",
-      gitRepository: {
-        type: "github",
-        repo: "alien/my-agent",
-      },
+    name: "my-app",
+    gitRepository: {
+      type: "github",
+      repo: "alien/my-agent",
     },
   });
 
@@ -148,18 +144,16 @@ import { projectsCreate } from "@alienplatform/platform-api/funcs/projectsCreate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsCreate(alien, {
-    workspace: "my-workspace",
-    requestBody: {
-      name: "my-app",
-      gitRepository: {
-        type: "github",
-        repo: "alien/my-agent",
-      },
+    name: "my-app",
+    gitRepository: {
+      type: "github",
+      repo: "alien/my-agent",
     },
   });
   if (res.ok) {
@@ -205,13 +199,13 @@ Retrieve a project by ID or name.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.get({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -231,13 +225,13 @@ import { projectsGet } from "@alienplatform/platform-api/funcs/projectsGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGet(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -271,83 +265,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## delete
-
-Delete a project. The project must have no deployments.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="deleteProject" method="delete" path="/v1/projects/{idOrName}" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  await alien.projects.delete({
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-
-
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { projectsDelete } from "@alienplatform/platform-api/funcs/projectsDelete.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await projectsDelete(alien, {
-    idOrName: "my-project",
-    workspace: "my-workspace",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    
-  } else {
-    console.log("projectsDelete failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.DeleteProjectRequest](../../models/operations/deleteprojectrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<void\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 404                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## update
 
 Update a project.
@@ -359,13 +276,13 @@ Update a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.update({
     idOrName: "my-project",
-    workspace: "my-workspace",
     updateProject: {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
@@ -390,13 +307,13 @@ import { projectsUpdate } from "@alienplatform/platform-api/funcs/projectsUpdate
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsUpdate(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
     updateProject: {
       gitRepository: null,
       domainId: "dom_469m0agk8luj4s16sakmmpdd",
@@ -435,6 +352,83 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## delete
+
+Delete a project. The project must have no deployments.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="deleteProject" method="delete" path="/v1/projects/{idOrName}" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  await alien.projects.delete({
+    idOrName: "my-project",
+  });
+
+
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsDelete } from "@alienplatform/platform-api/funcs/projectsDelete.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsDelete(alien, {
+    idOrName: "my-project",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    
+  } else {
+    console.log("projectsDelete failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.DeleteProjectRequest](../../models/operations/deleteprojectrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<void\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 404                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getGcpOAuthProvider
 
 Retrieve redacted project-level Google Cloud OAuth provider settings.
@@ -446,13 +440,13 @@ Retrieve redacted project-level Google Cloud OAuth provider settings.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getGcpOAuthProvider({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -472,13 +466,13 @@ import { projectsGetGcpOAuthProvider } from "@alienplatform/platform-api/funcs/p
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetGcpOAuthProvider(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -523,13 +517,13 @@ Update project-level Google Cloud OAuth provider settings.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.updateGcpOAuthProvider({
     idOrName: "my-project",
-    workspace: "my-workspace",
     updateProjectGcpOAuthProvider: {
       mode: "custom",
       clientId: "1234567890-abc123.apps.googleusercontent.com",
@@ -553,13 +547,13 @@ import { projectsUpdateGcpOAuthProvider } from "@alienplatform/platform-api/func
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsUpdateGcpOAuthProvider(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
     updateProjectGcpOAuthProvider: {
       mode: "custom",
       clientId: "1234567890-abc123.apps.googleusercontent.com",
@@ -608,13 +602,13 @@ Connect a GitHub repository or Alien template to an existing project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureSource({
     idOrName: "my-project",
-    workspace: "my-workspace",
     requestBody: {
       mode: "repository",
       gitRepository: {
@@ -641,13 +635,13 @@ import { projectsConfigureSource } from "@alienplatform/platform-api/funcs/proje
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureSource(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
     requestBody: {
       mode: "repository",
       gitRepository: {
@@ -699,13 +693,13 @@ Get the deployment portal domain binding for a project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getDeploymentPortalDomain({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -725,13 +719,13 @@ import { projectsGetDeploymentPortalDomain } from "@alienplatform/platform-api/f
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetDeploymentPortalDomain(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -776,17 +770,15 @@ Create a project by forking alienplatform/alien into your namespace.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.createFromTemplate({
-    workspace: "my-workspace",
-    requestBody: {
-      name: "my-app",
-      targetNamespace: "<value>",
-      templatePath: "examples/remote-worker-ts",
-    },
+    name: "my-app",
+    targetNamespace: "<value>",
+    templatePath: "examples/remote-worker-ts",
   });
 
   console.log(result);
@@ -806,17 +798,15 @@ import { projectsCreateFromTemplate } from "@alienplatform/platform-api/funcs/pr
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsCreateFromTemplate(alien, {
-    workspace: "my-workspace",
-    requestBody: {
-      name: "my-app",
-      targetNamespace: "<value>",
-      templatePath: "examples/remote-worker-ts",
-    },
+    name: "my-app",
+    targetNamespace: "<value>",
+    templatePath: "examples/remote-worker-ts",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -861,13 +851,13 @@ Get template URLs for deploying setup stacks in this project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getTemplateUrls({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -887,13 +877,13 @@ import { projectsGetTemplateUrls } from "@alienplatform/platform-api/funcs/proje
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetTemplateUrls(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -938,13 +928,13 @@ Get the active release stack and portal-visible setup availability for deploymen
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getDeploymentLinkSetup({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -964,13 +954,13 @@ import { projectsGetDeploymentLinkSetup } from "@alienplatform/platform-api/func
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetDeploymentLinkSetup(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1015,13 +1005,13 @@ Get the production channel's current release. When deploymentId is provided, ret
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getActiveRelease({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1041,13 +1031,13 @@ import { projectsGetActiveRelease } from "@alienplatform/platform-api/funcs/proj
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetActiveRelease(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1092,13 +1082,13 @@ Preview which customer model connections a configuration change may affect.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.previewModelsImpact({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1118,13 +1108,13 @@ import { projectsPreviewModelsImpact } from "@alienplatform/platform-api/funcs/p
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsPreviewModelsImpact(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1168,13 +1158,13 @@ Set the capabilities offered by a Project. Removing a capability prevents new se
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.setCapabilities({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1194,13 +1184,13 @@ import { projectsSetCapabilities } from "@alienplatform/platform-api/funcs/proje
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsSetCapabilities(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1245,13 +1235,13 @@ Enable deployments for a Project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureDeployments({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1271,13 +1261,13 @@ import { projectsConfigureDeployments } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureDeployments(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1322,13 +1312,13 @@ Get static headers added to AI requests for each provider.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getAiProviderHeaders({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1348,13 +1338,13 @@ import { projectsGetAiProviderHeaders } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetAiProviderHeaders(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1399,13 +1389,13 @@ Replace the static headers added to AI requests for each provider.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureAiProviderHeaders({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1425,13 +1415,13 @@ import { projectsConfigureAiProviderHeaders } from "@alienplatform/platform-api/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureAiProviderHeaders(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1476,13 +1466,13 @@ Configure customer-owned model providers without requiring an application Releas
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureModels({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1502,13 +1492,13 @@ import { projectsConfigureModels } from "@alienplatform/platform-api/funcs/proje
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureModels(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1553,13 +1543,13 @@ Enable customer-owned application encryption without requiring an application Re
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureKeys({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1579,13 +1569,13 @@ import { projectsConfigureKeys } from "@alienplatform/platform-api/funcs/project
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureKeys(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1630,13 +1620,13 @@ Enable buckets without requiring a project Release.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureBuckets({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1656,13 +1646,13 @@ import { projectsConfigureBuckets } from "@alienplatform/platform-api/funcs/proj
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureBuckets(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1707,13 +1697,13 @@ Enable customer-owned container registries without requiring an application Rele
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureRegistry({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1733,13 +1723,13 @@ import { projectsConfigureRegistry } from "@alienplatform/platform-api/funcs/pro
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureRegistry(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1784,13 +1774,13 @@ Enable a customer-owned sandbox a hosted caller can drive through Remote Binding
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.configureRemoteSandbox({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1810,13 +1800,13 @@ import { projectsConfigureRemoteSandbox } from "@alienplatform/platform-api/func
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsConfigureRemoteSandbox(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1861,13 +1851,13 @@ Get safe, server-derived capability status for a Project.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getCapabilityOverview({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1887,13 +1877,13 @@ import { projectsGetCapabilityOverview } from "@alienplatform/platform-api/funcs
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetCapabilityOverview(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1936,13 +1926,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getAiUsage({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -1962,13 +1952,13 @@ import { projectsGetAiUsage } from "@alienplatform/platform-api/funcs/projectsGe
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetAiUsage(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -2011,13 +2001,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.projects.getEncryptionUsage({
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -2037,13 +2027,13 @@ import { projectsGetEncryptionUsage } from "@alienplatform/platform-api/funcs/pr
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await projectsGetEncryptionUsage(alien, {
     idOrName: "my-project",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

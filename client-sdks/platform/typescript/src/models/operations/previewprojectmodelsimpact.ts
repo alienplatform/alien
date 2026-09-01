@@ -10,15 +10,18 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type PreviewProjectModelsImpactGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type PreviewProjectModelsImpactRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   configureModelsRequest?: models.ConfigureModelsRequest | undefined;
 };
 
@@ -52,7 +55,6 @@ export type PreviewProjectModelsImpactResponse = {
 /** @internal */
 export type PreviewProjectModelsImpactRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   ConfigureModelsRequest?: models.ConfigureModelsRequest$Outbound | undefined;
 };
 
@@ -62,7 +64,6 @@ export const PreviewProjectModelsImpactRequest$outboundSchema: z.ZodType<
   PreviewProjectModelsImpactRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   configureModelsRequest: models.ConfigureModelsRequest$outboundSchema
     .optional(),
 }).transform((v) => {

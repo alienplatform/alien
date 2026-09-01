@@ -7,11 +7,14 @@ import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
-export type ListInventoryRequest = {
+export type ListInventoryGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListInventoryRequest = {
   /**
    * Filter by project ID or name.
    */
@@ -81,7 +84,6 @@ export type ListInventoryResponse = {
 
 /** @internal */
 export type ListInventoryRequest$Outbound = {
-  workspace?: string | undefined;
   project: string;
   deploymentGroupId?: string | undefined;
   deploymentId?: string | undefined;
@@ -92,7 +94,6 @@ export const ListInventoryRequest$outboundSchema: z.ZodType<
   ListInventoryRequest$Outbound,
   ListInventoryRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string(),
   deploymentGroupId: z.string().optional(),
   deploymentId: z.string().optional(),

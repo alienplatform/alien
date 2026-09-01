@@ -3,18 +3,15 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
-import * as models from "../index.js";
 
-export type SyncRenewRequest = {
+export type SyncRenewGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
-  syncRenewRequest: models.SyncRenewRequest;
 };
 
 export type Lease = {
@@ -42,33 +39,6 @@ export type SyncRenewResponse = {
    */
   leases: Array<Lease>;
 };
-
-/** @internal */
-export type SyncRenewRequest$Outbound = {
-  workspace?: string | undefined;
-  SyncRenewRequest: models.SyncRenewRequest$Outbound;
-};
-
-/** @internal */
-export const SyncRenewRequest$outboundSchema: z.ZodType<
-  SyncRenewRequest$Outbound,
-  SyncRenewRequest
-> = z.object({
-  workspace: z.string().optional(),
-  syncRenewRequest: models.SyncRenewRequest$outboundSchema,
-}).transform((v) => {
-  return remap$(v, {
-    syncRenewRequest: "SyncRenewRequest",
-  });
-});
-
-export function syncRenewRequestToJSON(
-  syncRenewRequest: SyncRenewRequest,
-): string {
-  return JSON.stringify(
-    SyncRenewRequest$outboundSchema.parse(syncRenewRequest),
-  );
-}
 
 /** @internal */
 export const Lease$inboundSchema: z.ZodType<Lease, unknown> = z.object({

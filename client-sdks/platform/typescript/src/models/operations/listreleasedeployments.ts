@@ -5,15 +5,18 @@
 import * as z from "zod/v4";
 import * as models from "../index.js";
 
+export type ListReleaseDeploymentsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type ListReleaseDeploymentsRequest = {
   /**
    * Unique identifier for the release.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter deployments by rollout state
    */
@@ -35,7 +38,6 @@ export type ListReleaseDeploymentsRequest = {
 /** @internal */
 export type ListReleaseDeploymentsRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   state?: Array<string> | undefined;
   deploymentGroup?: string | undefined;
   limit: number;
@@ -48,7 +50,6 @@ export const ListReleaseDeploymentsRequest$outboundSchema: z.ZodType<
   ListReleaseDeploymentsRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   state: z.array(models.ReleaseRolloutState$outboundSchema).optional(),
   deploymentGroup: z.string().optional(),
   limit: z.int().default(20),

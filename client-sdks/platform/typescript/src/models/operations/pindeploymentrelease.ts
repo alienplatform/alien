@@ -9,15 +9,18 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type PinDeploymentReleaseGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type PinDeploymentReleaseRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   pinReleaseRequest?: models.PinReleaseRequest | undefined;
 };
 
@@ -31,7 +34,6 @@ export type PinDeploymentReleaseResponse = {
 /** @internal */
 export type PinDeploymentReleaseRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   PinReleaseRequest?: models.PinReleaseRequest$Outbound | undefined;
 };
 
@@ -41,7 +43,6 @@ export const PinDeploymentReleaseRequest$outboundSchema: z.ZodType<
   PinDeploymentReleaseRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   pinReleaseRequest: models.PinReleaseRequest$outboundSchema.optional(),
 }).transform((v) => {
   return remap$(v, {

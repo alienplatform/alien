@@ -5,18 +5,20 @@
 import * as z from "zod/v4";
 import * as models from "../index.js";
 
-export type GetWorkspaceGatewayOverviewRequest = {
-  gateway: models.GatewayKind;
+export type GetWorkspaceGatewayOverviewGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type GetWorkspaceGatewayOverviewRequest = {
+  gateway: models.GatewayKind;
 };
 
 /** @internal */
 export type GetWorkspaceGatewayOverviewRequest$Outbound = {
   gateway: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -25,7 +27,6 @@ export const GetWorkspaceGatewayOverviewRequest$outboundSchema: z.ZodType<
   GetWorkspaceGatewayOverviewRequest
 > = z.object({
   gateway: models.GatewayKind$outboundSchema,
-  workspace: z.string().optional(),
 });
 
 export function getWorkspaceGatewayOverviewRequestToJSON(

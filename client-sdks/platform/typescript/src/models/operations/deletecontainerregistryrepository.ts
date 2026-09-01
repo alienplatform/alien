@@ -9,6 +9,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type DeleteContainerRegistryRepositoryGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const Disposition = {
   Preserve: "preserve",
   DeleteContents: "deleteContents",
@@ -29,10 +36,6 @@ export type DeleteContainerRegistryRepositoryRequest = {
    * Unique identifier for the container registry repository.
    */
   repositoryId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: DeleteContainerRegistryRepositoryRequestBody | undefined;
 };
 
@@ -107,7 +110,6 @@ export function deleteContainerRegistryRepositoryRequestBodyToJSON(
 export type DeleteContainerRegistryRepositoryRequest$Outbound = {
   id: string;
   repositoryId: string;
-  workspace?: string | undefined;
   RequestBody?:
     | DeleteContainerRegistryRepositoryRequestBody$Outbound
     | undefined;
@@ -120,7 +122,6 @@ export const DeleteContainerRegistryRepositoryRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   repositoryId: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() =>
     DeleteContainerRegistryRepositoryRequestBody$outboundSchema
   ).optional(),

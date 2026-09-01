@@ -4,23 +4,25 @@
 
 import * as z from "zod/v4";
 
+export type CreateExternalAIModelCheckGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CreateExternalAIModelCheckRequest = {
   /**
    * Unique identifier for the deployment group.
    */
   id: string;
   publicModelId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /** @internal */
 export type CreateExternalAIModelCheckRequest$Outbound = {
   id: string;
   publicModelId: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -30,7 +32,6 @@ export const CreateExternalAIModelCheckRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   publicModelId: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function createExternalAIModelCheckRequestToJSON(

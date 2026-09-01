@@ -17,12 +17,12 @@ Returns the manager URL for a given project and platform. The project can be pro
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.resolve.resolve({
-    workspace: "my-workspace",
     platform: "test",
   });
 
@@ -43,12 +43,12 @@ import { resolveResolve } from "@alienplatform/platform-api/funcs/resolveResolve
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await resolveResolve(alien, {
-    workspace: "my-workspace",
     platform: "test",
   });
   if (res.ok) {

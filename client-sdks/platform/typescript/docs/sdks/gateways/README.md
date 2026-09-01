@@ -17,13 +17,13 @@ Get compact cross-Project setup and customer status for a workspace Gateway.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.gateways.getWorkspaceOverview({
     gateway: "encryption",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -43,13 +43,13 @@ import { gatewaysGetWorkspaceOverview } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await gatewaysGetWorkspaceOverview(alien, {
     gateway: "encryption",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

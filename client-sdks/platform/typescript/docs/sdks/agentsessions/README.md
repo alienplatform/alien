@@ -21,13 +21,12 @@ List ai-agent monitor sessions for this workspace. Newest first, capped at 50.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.agentSessions.list({
-    workspace: "my-workspace",
-  });
+  const result = await alien.agentSessions.list();
 
   console.log(result);
 }
@@ -46,13 +45,12 @@ import { agentSessionsList } from "@alienplatform/platform-api/funcs/agentSessio
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await agentSessionsList(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await agentSessionsList(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -94,13 +92,13 @@ Retrieve one ai-agent monitor session by id.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.agentSessions.get({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -120,13 +118,13 @@ import { agentSessionsGet } from "@alienplatform/platform-api/funcs/agentSession
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await agentSessionsGet(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -170,13 +168,13 @@ Incrementally read a session's event log (steps, tool calls, report deltas, appr
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.agentSessions.events({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -196,13 +194,13 @@ import { agentSessionsEvents } from "@alienplatform/platform-api/funcs/agentSess
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await agentSessionsEvents(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -246,13 +244,13 @@ Approve a halted ai-agent monitor session. Proxies to the ai-agent service, mint
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.agentSessions.approve({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -272,13 +270,13 @@ import { agentSessionsApprove } from "@alienplatform/platform-api/funcs/agentSes
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await agentSessionsApprove(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -323,13 +321,13 @@ Stop (cancel) a running, queued, or halted ai-agent monitor session. Proxies to 
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.agentSessions.stop({
     id: "<id>",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -349,13 +347,13 @@ import { agentSessionsStop } from "@alienplatform/platform-api/funcs/agentSessio
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await agentSessionsStop(alien, {
     id: "<id>",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

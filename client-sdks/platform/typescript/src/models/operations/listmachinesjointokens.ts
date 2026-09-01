@@ -4,21 +4,23 @@
 
 import * as z from "zod/v4";
 
+export type ListMachinesJoinTokensGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type ListMachinesJoinTokensRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /** @internal */
 export type ListMachinesJoinTokensRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -27,7 +29,6 @@ export const ListMachinesJoinTokensRequest$outboundSchema: z.ZodType<
   ListMachinesJoinTokensRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function listMachinesJoinTokensRequestToJSON(

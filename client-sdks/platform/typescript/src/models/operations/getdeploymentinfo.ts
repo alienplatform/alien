@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type GetDeploymentInfoGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Represents the target cloud platform.
  */
@@ -38,10 +45,6 @@ export type GetDeploymentInfoSetupItem = ClosedEnum<
 
 export type GetDeploymentInfoRequest = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  /**
    * Represents the target cloud platform.
    */
   platform?: GetDeploymentInfoPlatform | undefined;
@@ -60,7 +63,6 @@ export const GetDeploymentInfoSetupItem$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type GetDeploymentInfoRequest$Outbound = {
-  workspace?: string | undefined;
   platform?: string | undefined;
   setupItem?: string | undefined;
 };
@@ -70,7 +72,6 @@ export const GetDeploymentInfoRequest$outboundSchema: z.ZodType<
   GetDeploymentInfoRequest$Outbound,
   GetDeploymentInfoRequest
 > = z.object({
-  workspace: z.string().optional(),
   platform: GetDeploymentInfoPlatform$outboundSchema.optional(),
   setupItem: GetDeploymentInfoSetupItem$outboundSchema.optional(),
 });

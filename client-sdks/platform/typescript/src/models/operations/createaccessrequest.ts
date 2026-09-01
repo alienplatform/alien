@@ -3,11 +3,17 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+
+export type CreateAccessRequestGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
 
 export type CommandRequest = {
   command: string;
@@ -15,20 +21,12 @@ export type CommandRequest = {
   params?: any | null | undefined;
 };
 
-export type CreateAccessRequestRequestBody = {
+export type CreateAccessRequestRequest = {
   deploymentId: string;
   remediationPlanId: string;
   title: string;
   reason?: string | undefined;
   commands: Array<CommandRequest>;
-};
-
-export type CreateAccessRequestRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: CreateAccessRequestRequestBody | undefined;
 };
 
 export type CreateAccessRequestCommandResponse = {
@@ -84,7 +82,7 @@ export function commandRequestToJSON(commandRequest: CommandRequest): string {
 }
 
 /** @internal */
-export type CreateAccessRequestRequestBody$Outbound = {
+export type CreateAccessRequestRequest$Outbound = {
   deploymentId: string;
   remediationPlanId: string;
   title: string;
@@ -93,45 +91,15 @@ export type CreateAccessRequestRequestBody$Outbound = {
 };
 
 /** @internal */
-export const CreateAccessRequestRequestBody$outboundSchema: z.ZodType<
-  CreateAccessRequestRequestBody$Outbound,
-  CreateAccessRequestRequestBody
+export const CreateAccessRequestRequest$outboundSchema: z.ZodType<
+  CreateAccessRequestRequest$Outbound,
+  CreateAccessRequestRequest
 > = z.object({
   deploymentId: z.string(),
   remediationPlanId: z.string(),
   title: z.string(),
   reason: z.string().optional(),
   commands: z.array(z.lazy(() => CommandRequest$outboundSchema)),
-});
-
-export function createAccessRequestRequestBodyToJSON(
-  createAccessRequestRequestBody: CreateAccessRequestRequestBody,
-): string {
-  return JSON.stringify(
-    CreateAccessRequestRequestBody$outboundSchema.parse(
-      createAccessRequestRequestBody,
-    ),
-  );
-}
-
-/** @internal */
-export type CreateAccessRequestRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: CreateAccessRequestRequestBody$Outbound | undefined;
-};
-
-/** @internal */
-export const CreateAccessRequestRequest$outboundSchema: z.ZodType<
-  CreateAccessRequestRequest$Outbound,
-  CreateAccessRequestRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => CreateAccessRequestRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
 });
 
 export function createAccessRequestRequestToJSON(

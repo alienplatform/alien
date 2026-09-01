@@ -3,12 +3,18 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
+
+export type CreateProjectGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
 
 /**
  * The Git Provider of the repository
@@ -201,7 +207,7 @@ export const EnabledCapability = {
 } as const;
 export type EnabledCapability = ClosedEnum<typeof EnabledCapability>;
 
-export type CreateProjectRequestBody = {
+export type CreateProjectRequest = {
   /**
    * Project name.
    */
@@ -219,14 +225,6 @@ export type CreateProjectRequestBody = {
    */
   packagesConfig?: CreateProjectPackagesConfigRequest | null | undefined;
   enabledCapabilities?: Array<EnabledCapability> | undefined;
-};
-
-export type CreateProjectRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  requestBody?: CreateProjectRequestBody | undefined;
 };
 
 /**
@@ -856,7 +854,7 @@ export const EnabledCapability$outboundSchema: z.ZodEnum<
 > = z.enum(EnabledCapability);
 
 /** @internal */
-export type CreateProjectRequestBody$Outbound = {
+export type CreateProjectRequest$Outbound = {
   name: string;
   gitRepository?: CreateProjectGitRepositoryRequest$Outbound | null | undefined;
   rootDirectory?: string | null | undefined;
@@ -868,9 +866,9 @@ export type CreateProjectRequestBody$Outbound = {
 };
 
 /** @internal */
-export const CreateProjectRequestBody$outboundSchema: z.ZodType<
-  CreateProjectRequestBody$Outbound,
-  CreateProjectRequestBody
+export const CreateProjectRequest$outboundSchema: z.ZodType<
+  CreateProjectRequest$Outbound,
+  CreateProjectRequest
 > = z.object({
   name: z.string(),
   gitRepository: z.nullable(
@@ -881,33 +879,6 @@ export const CreateProjectRequestBody$outboundSchema: z.ZodType<
     z.lazy(() => CreateProjectPackagesConfigRequest$outboundSchema),
   ).optional(),
   enabledCapabilities: z.array(EnabledCapability$outboundSchema).optional(),
-});
-
-export function createProjectRequestBodyToJSON(
-  createProjectRequestBody: CreateProjectRequestBody,
-): string {
-  return JSON.stringify(
-    CreateProjectRequestBody$outboundSchema.parse(createProjectRequestBody),
-  );
-}
-
-/** @internal */
-export type CreateProjectRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: CreateProjectRequestBody$Outbound | undefined;
-};
-
-/** @internal */
-export const CreateProjectRequest$outboundSchema: z.ZodType<
-  CreateProjectRequest$Outbound,
-  CreateProjectRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => CreateProjectRequestBody$outboundSchema).optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
 });
 
 export function createProjectRequestToJSON(

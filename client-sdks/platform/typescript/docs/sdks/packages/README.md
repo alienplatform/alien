@@ -20,12 +20,12 @@ List packages with optional filters. Returns packages ordered by creation date (
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.packages.list({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -46,12 +46,12 @@ import { packagesList } from "@alienplatform/platform-api/funcs/packagesList.js"
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await packagesList(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -97,13 +97,13 @@ Get details of a specific package.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.packages.get({
     id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -123,13 +123,13 @@ import { packagesGet } from "@alienplatform/platform-api/funcs/packagesGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await packagesGet(alien, {
     id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -174,13 +174,12 @@ Rebuild packages for a project. This will cancel any pending packages and create
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.packages.rebuild({
-    workspace: "my-workspace",
-  });
+  const result = await alien.packages.rebuild();
 
   console.log(result);
 }
@@ -199,13 +198,12 @@ import { packagesRebuild } from "@alienplatform/platform-api/funcs/packagesRebui
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await packagesRebuild(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await packagesRebuild(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -249,13 +247,13 @@ Cancel a pending or building package.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.packages.cancel({
     id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -275,13 +273,13 @@ import { packagesCancel } from "@alienplatform/platform-api/funcs/packagesCancel
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await packagesCancel(alien, {
     id: "pkg_jebo2o5jmm7raefl2m1pe3cz",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

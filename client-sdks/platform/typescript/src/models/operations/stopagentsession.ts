@@ -4,18 +4,20 @@
 
 import * as z from "zod/v4";
 
-export type StopAgentSessionRequest = {
-  id: string;
+export type StopAgentSessionGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type StopAgentSessionRequest = {
+  id: string;
 };
 
 /** @internal */
 export type StopAgentSessionRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -24,7 +26,6 @@ export const StopAgentSessionRequest$outboundSchema: z.ZodType<
   StopAgentSessionRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function stopAgentSessionRequestToJSON(

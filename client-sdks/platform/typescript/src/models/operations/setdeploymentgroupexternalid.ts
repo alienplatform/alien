@@ -6,15 +6,18 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type SetDeploymentGroupExternalIdGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type SetDeploymentGroupExternalIdRequest = {
   /**
    * Unique identifier for the deployment group.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   setDeploymentGroupExternalIdRequest:
     models.SetDeploymentGroupExternalIdRequest;
 };
@@ -22,7 +25,6 @@ export type SetDeploymentGroupExternalIdRequest = {
 /** @internal */
 export type SetDeploymentGroupExternalIdRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   SetDeploymentGroupExternalIdRequest:
     models.SetDeploymentGroupExternalIdRequest$Outbound;
 };
@@ -33,7 +35,6 @@ export const SetDeploymentGroupExternalIdRequest$outboundSchema: z.ZodType<
   SetDeploymentGroupExternalIdRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   setDeploymentGroupExternalIdRequest:
     models.SetDeploymentGroupExternalIdRequest$outboundSchema,
 }).transform((v) => {

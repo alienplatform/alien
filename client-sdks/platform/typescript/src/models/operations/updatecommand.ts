@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type UpdateCommandGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type UpdateCommandRequest = {
   /**
    * Unique identifier for the command.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   updateCommandRequest?: models.UpdateCommandRequest | undefined;
 };
 
 /** @internal */
 export type UpdateCommandRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   UpdateCommandRequest?: models.UpdateCommandRequest$Outbound | undefined;
 };
 
@@ -31,7 +33,6 @@ export const UpdateCommandRequest$outboundSchema: z.ZodType<
   UpdateCommandRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   updateCommandRequest: models.UpdateCommandRequest$outboundSchema.optional(),
 }).transform((v) => {
   return remap$(v, {

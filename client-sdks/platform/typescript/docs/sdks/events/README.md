@@ -18,12 +18,12 @@ Retrieve all events.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.events.list({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -44,12 +44,12 @@ import { eventsList } from "@alienplatform/platform-api/funcs/eventsList.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await eventsList(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -94,13 +94,13 @@ Retrieve an event by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.events.get({
     id: "event_MtSA24M3pWuAkQYxgZxuRI",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -120,13 +120,13 @@ import { eventsGet } from "@alienplatform/platform-api/funcs/eventsGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await eventsGet(alien, {
     id: "event_MtSA24M3pWuAkQYxgZxuRI",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
