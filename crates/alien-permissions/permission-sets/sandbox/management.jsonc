@@ -93,7 +93,7 @@
         // The group is nameable — setup creates it, so an assignment can be scoped to it — so
         // what blocks delivery is the setup path, which compiles resource-scoped management only
         // for `worker/dispatch-command`, and the runtime path, which compiles it only for a
-        // Kubernetes cluster.
+        // Kubernetes cluster -- so no assignment is created from it.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"

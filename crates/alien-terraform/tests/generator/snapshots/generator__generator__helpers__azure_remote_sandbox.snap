@@ -340,6 +340,20 @@ Azure settings:
 - `azure_resource_group_name`: target resource group name.
 - `azure_managing_tenant_id`, `azure_oidc_issuer`, `azure_oidc_subject`: management identity trust settings when this setup grants Azure management access.
 
+## The sandbox group
+
+The sandbox group is created through the `azapi` provider at `Microsoft.App/sandboxGroups@2026-02-01-preview`, because the AzureRM provider has no typed resource for it. Being a preview API, its shape and regional availability can change.
+
+That resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.
+
+The subscription must have the `Microsoft.App` resource provider registered before you apply:
+
+```bash
+az provider register --namespace Microsoft.App
+```
+
+At teardown the deployment runtime deletes the sandbox group before you run `terraform destroy`, so this resource leaves your state without Terraform removing it.
+
 ## Run
 
 Use your organization's normal backend and approval workflow. A typical local review looks like:
@@ -364,9 +378,3 @@ This module exposes `deployment_management_config`, `deployment_stack_settings`,
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.
-
-## The sandbox group
-
-The sandbox group is created through the `azapi` provider at a pinned preview API version, because the AzureRM provider has no typed resource for `Microsoft.App/sandboxGroups`. That resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.
-
-The subscription must have the `Microsoft.App` resource provider registered.

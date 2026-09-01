@@ -347,9 +347,10 @@ pub fn generate_terraform_module(
     // All three azapi resource kinds: the sandbox group is a plain `azapi_resource`, and a
     // missing provider block fails at `terraform init` rather than at plan, which reads as a
     // broken package rather than a missing declaration.
+    let emits_azapi_resource = has_resource_type(&per_resource, "azapi_resource");
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
         || has_resource_type(&per_resource, "azapi_resource_action")
-        || has_resource_type(&per_resource, "azapi_resource");
+        || emits_azapi_resource;
     // Cloud Control, for AWS APIs the main provider has not caught up with. Keyed off what was
     // actually emitted, so a stack without one of those resources is unchanged.
     // Keyed off the connector, not the image: the image is a Cloud Control resource from the
@@ -502,6 +503,7 @@ pub fn generate_terraform_module(
             options.helm_install.as_ref(),
             &stack_inputs,
             retained_key_detach.is_some(),
+            emits_azapi_resource,
         ),
     );
 
@@ -3233,6 +3235,7 @@ fn readme_md(
     helm_install: Option<&TerraformHelmInstall>,
     stack_inputs: &[StackInputDefinition],
     has_retained_keys: bool,
+    emits_azapi_resource: bool,
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -3337,11 +3340,14 @@ fn readme_md(
     };
     // The two things an Azure platform approver stops on -- a preview API version and a provider
     // check turned off -- with the reason in the artifact rather than only in Alien's source.
-    let azure_sandbox_note = if target.cloud_platform() == alien_core::Platform::Azure
+    // Keyed off what was actually emitted, not off the platform: an AKS target is
+    // `Platform::Azure` but skips sandbox emission entirely, so a platform test would document
+    // an `azapi` resource, a preview API and a provider prerequisite that package does not have.
+    let azure_sandbox_note = if emits_azapi_resource
         && stack.resources().any(|(_, entry)| {
             entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE
         }) {
-        "\n\n## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at a pinned preview API version, because the AzureRM provider has no typed resource for `Microsoft.App/sandboxGroups`. That resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered."
+        "## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at `Microsoft.App/sandboxGroups@2026-02-01-preview`, because the AzureRM provider has no typed resource for it. Being a preview API, its shape and regional availability can change.\n\nThat resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered before you apply:\n\n```bash\naz provider register --namespace Microsoft.App\n```\n\nAt teardown the deployment runtime deletes the sandbox group before you run `terraform destroy`, so this resource leaves your state without Terraform removing it.\n\n"
     } else {
         ""
     };
@@ -3352,7 +3358,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 ## Inputs\n\n\
 {inputs}\n\n\
-## Run\n\n\
+{azure_sandbox_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -3363,7 +3369,7 @@ Use your organization's normal backend and approval workflow. A typical local re
 - `deployment_resources`: setup-owned resource metadata handed to the deployment runtime.\n\
 - `deployment_input_values`: deployer input values JSON, emitted only when the stack declares deployer inputs.\n\
 - `deployment_id` and `deployment_token`: emitted only when Terraform performs registration.\
-{kubernetes_operations}{retained_key_operations}{azure_sandbox_note}",
+{kubernetes_operations}{retained_key_operations}",
         display_name = display_name,
         target = target.name(),
         inputs = inputs,

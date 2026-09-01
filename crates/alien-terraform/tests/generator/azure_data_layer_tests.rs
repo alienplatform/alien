@@ -665,9 +665,18 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         scope, "azapi_resource.agents.id",
         "the grant must be scoped to the created group by reference, and nothing wider"
     );
-    assert!(
-        assignment.contains("azurerm_user_assigned_identity.access.principal_id"),
-        "the grant belongs to the Remote Bindings identity, not the deployment's own:\n{assignment}"
+    // Extracted like the scope rather than searched for: a `contains` would also pass on an
+    // identity whose name merely starts with this one.
+    let principal_id = assignment
+        .split("principal_id = ")
+        .nth(1)
+        .expect("the assignment names a principal")
+        .split(' ')
+        .next()
+        .expect("the principal is one token");
+    assert_eq!(
+        principal_id, "azurerm_user_assigned_identity.access.principal_id",
+        "the grant belongs to the Remote Bindings identity, not the deployment's own"
     );
 
     // `terraform init` is what proves the azapi provider block was emitted: an `azapi_resource`
@@ -685,6 +694,49 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
 /// resource group, and this pins that it resolves to the deployer-supplied
 /// `var.azure_resource_group_name` rather than to a resource the module would have had to
 /// declare. `terraform validate` is as far as this reaches — it does not prove apply.
+/// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
+/// would tell that installer to register a provider for a resource their package does not contain.
+#[test]
+fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    for (target, expects_group) in [
+        (TerraformTarget::Aks, false),
+        (TerraformTarget::Azure, true),
+    ] {
+        let module = render(&stack, target, StackSettings::default());
+        let emitted_group = module
+            .iter()
+            .any(|(_, contents)| contents.contains("azapi_resource\" \"agents\""));
+        let readme = module.get("README.md").expect("every package has a README");
+        assert_eq!(
+            emitted_group, expects_group,
+            "{target:?} emits the sandbox group"
+        );
+        assert_eq!(
+            readme.contains("## The sandbox group"),
+            expects_group,
+            "the README documents the group exactly when the package contains one:\n{readme}"
+        );
+    }
+}
+
 #[test]
 fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
     let sandbox = Sandbox::new("agents".to_string())

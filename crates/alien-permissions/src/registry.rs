@@ -222,7 +222,10 @@ fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
 /// Compared lowercased throughout, because AWS matches action names case-insensitively — a set
 /// granting `lambda:runmicrovm` reaches a session exactly as `lambda:RunMicrovm` does.
 fn action_reaches_a_microvm_session(action: &str) -> bool {
-    let action = action.to_ascii_lowercase();
+    // IAM matches an action name with two wildcards, `*` for many characters and `?` for one.
+    // Reading only `*` sends `lambda:CreateMicrov?AuthToken` down the exact branch, where it
+    // matches no verb and is answered no while authorizing the real one.
+    let action = action.to_ascii_lowercase().replace('?', "*");
     if action.contains('*') {
         let literal = action.split('*').next().unwrap_or_default();
         let covers_a_known_verb = SENSITIVE_MICROVM_ACTIONS
@@ -396,6 +399,10 @@ mod tests {
             // so it is claimed anyway. Over-approximating here withholds a grant; under-
             // approximating leaves one on an identity a second tenant holds.
             "lambda:*MicrovmImage",
+            // IAM's single-character wildcard. Read as a literal these match no verb at all,
+            // while the grants authorize `CreateMicrovmAuthToken` and `RunMicrovm`.
+            "lambda:CreateMicrov?AuthToken",
+            "lambda:Run?icrovm",
         ] {
             assert!(
                 action_reaches_a_microvm_session(action),

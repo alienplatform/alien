@@ -231,6 +231,12 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// decided by the resolved set's session-reaching verbs, never by a set id — an inline set an
 /// author names anything defeats a prefix test.
 ///
+/// Three routes, not every route. The management profile is a fourth and is not scanned, so an
+/// author-written `management: extend` naming this sandbox passes and then compiles onto the
+/// deployment's own management identity — the second tenant this gate exists to refuse. Left open
+/// deliberately: closing it changes production AWS behaviour and depends on a mutation phase order
+/// nothing asserts, so it is tracked separately rather than fixed in a sandbox-parity change.
+///
 /// The three routes are declaration-level — a link, a profile or a stack set is the same edge
 /// whichever cloud renders it — but the verb test two of them reach is not, so
 /// `permission_set_reaches_a_sandbox_session` inspects every cloud a set declares. A set carrying

@@ -112,7 +112,9 @@
         //
         // No `${stackPrefix}`: on Azure the emitter already resolves `${resourceName}` to the
         // prefixed group name, so naming the prefix again renders a scope matching nothing in
-        // the document a security team approves this grant from.
+        // the document a security team approves this grant from. The rendered string reaches
+        // only that document while this entry stays predefined-role-only -- adding actions here
+        // would also render it as a custom role's assignable scope, from a different context.
         "binding": {
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"

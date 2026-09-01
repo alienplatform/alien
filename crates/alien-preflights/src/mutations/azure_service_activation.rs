@@ -247,9 +247,12 @@ mod tests {
     }
 
     /// A sandbox published through a Remote Binding is the whole stack — no worker, no build —
-    /// so nothing else asks for `Microsoft.App`. Without this the module creates a
-    /// `Microsoft.App/sandboxGroups` on a subscription that may never have registered the
-    /// provider, and `terraform apply` fails where nothing warned at plan.
+    /// so nothing else asks for `Microsoft.App`, and the registration payload named no provider
+    /// for a module that creates a `Microsoft.App/sandboxGroups`.
+    ///
+    /// What this pins is the payload entry, not an apply-time outcome: the activation emitter
+    /// renders no Terraform resource, so the provider still has to be registered out of band.
+    /// The generated README states that as a prerequisite.
     #[test]
     fn an_azure_sandbox_alone_still_registers_the_app_provider() {
         let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())
