@@ -66,7 +66,8 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 && platform != Platform::Aws
             {
                 errors.push(format!(
-                    "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not support;                      only AWS provisions a sandbox at runtime",
+                    "Sandbox '{}' uses the Live lifecycle, which platform '{}' does not \
+                     support; only AWS provisions a sandbox at runtime",
                     resource_id,
                     platform.as_str()
                 ));
@@ -339,6 +340,98 @@ mod tests {
             let result = check.check(&stack, Platform::Aws).await.unwrap();
             assert!(result.success);
         }
+    }
+
+    fn sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "agents".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(sandbox),
+                lifecycle,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        }
+    }
+
+    /// Only AWS has a runtime controller that builds a sandbox image, so only AWS may declare one
+    /// Live. Elsewhere the resource would pass the ownership policy, emit no image, and wait on a
+    /// controller that does not exist — a deployment that hangs rather than one that fails.
+    #[tokio::test]
+    async fn a_live_sandbox_is_refused_on_every_platform_but_aws() {
+        for platform in [Platform::Gcp, Platform::Azure, Platform::Kubernetes, Platform::Local] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&sandbox_stack(ResourceLifecycle::Live), platform)
+                .await
+                .expect("the check runs");
+
+            assert!(
+                !result.success,
+                "a Live sandbox must be refused on {platform:?}"
+            );
+            let message = result
+                .errors
+                .iter()
+                .find(|error| error.contains("only AWS provisions a sandbox at runtime"))
+                .unwrap_or_else(|| panic!("the refusal must name why, on {platform:?}: {:?}", result.errors));
+            assert!(
+                message.contains(platform.as_str()),
+                "the refusal must name the platform it applies to: {message}"
+            );
+            // The message reaches a user, and a Rust line continuation that loses its backslash
+            // silently pads it with the source file's indentation.
+            assert!(
+                !message.contains("  "),
+                "the refusal must not carry collapsed indentation: {message}"
+            );
+        }
+    }
+
+    /// AWS accepts both, and every other platform keeps the Frozen sandbox it has today.
+    #[tokio::test]
+    async fn a_sandbox_is_accepted_frozen_everywhere_and_live_on_aws() {
+        for platform in [
+            Platform::Aws,
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let result = FrozenResourceLifecycleCheck
+                .check(&sandbox_stack(ResourceLifecycle::Frozen), platform)
+                .await
+                .expect("the check runs");
+            assert!(result.success, "a Frozen sandbox must stay valid on {platform:?}: {:?}", result.errors);
+        }
+
+        let result = FrozenResourceLifecycleCheck
+            .check(&sandbox_stack(ResourceLifecycle::Live), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(
+            result.success,
+            "AWS is the platform that provisions a sandbox at runtime: {:?}",
+            result.errors
+        );
     }
 
     fn stack_with_encrypted_storage(storage_lifecycle: ResourceLifecycle) -> Stack {
