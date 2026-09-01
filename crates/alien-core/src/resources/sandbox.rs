@@ -280,8 +280,8 @@ impl SandboxCapabilities {
                 // `CreateSessionRequest` has no field to consume an id with. Closing it also
                 // needs an owner for the artifact — Microsoft does not garbage collect snapshots
                 // and `stop` mints one on every suspend, so an id with no owner is a bill that
-                // grows. Declared false until all three are settled, because a capability that
-                // cannot be reached through the trait is a claim a caller cannot act on.
+                // grows. Declared false because a capability that cannot be reached through the
+                // trait is a claim a caller cannot act on.
                 snapshot: false,
                 domain_egress_rules: true,
                 egress_deny: true,
