@@ -245,6 +245,15 @@ impl AwsSandboxController {
                         ),
                         resource_id: Some(config.id.clone()),
                     })?;
+                // The version this roll replaces starts its retention window now. It never
+                // passes through `active_version` — it was never observed ACTIVE here — so
+                // promotion would not retire it, and nothing would ever reap it.
+                if let Some(replaced) = image.image_version.clone() {
+                    self.retired_versions.push(RetiredVersion {
+                        version: replaced,
+                        retired_at: chrono::Utc::now(),
+                    });
+                }
                 (
                     "UpdateMicrovmImage",
                     rolled.image_arn.or(Some(identifier)),
@@ -1518,6 +1527,15 @@ mod tests {
             controller.bundle_uri.as_deref(),
             Some(BUNDLE_URI),
             "recorded only after its build"
+        );
+        assert_eq!(
+            controller
+                .retired_versions
+                .iter()
+                .map(|r| r.version.as_str())
+                .collect::<Vec<_>>(),
+            vec!["1.0"],
+            "the version the roll replaced must be reaped, not left attached forever"
         );
     }
 
