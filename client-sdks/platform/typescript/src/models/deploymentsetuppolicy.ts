@@ -27,7 +27,7 @@ import {
 /**
  * Represents the target cloud platform.
  */
-export const AllowedPlatform = {
+export const DeploymentSetupPolicyAllowedPlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
@@ -39,25 +39,45 @@ export const AllowedPlatform = {
 /**
  * Represents the target cloud platform.
  */
-export type AllowedPlatform = ClosedEnum<typeof AllowedPlatform>;
+export type DeploymentSetupPolicyAllowedPlatform = ClosedEnum<
+  typeof DeploymentSetupPolicyAllowedPlatform
+>;
 
-export const AllowedKubernetesBasePlatform = {
+export const DeploymentSetupPolicyAllowedAIProvider = {
+  AwsBedrock: "aws-bedrock",
+  GcpVertex: "gcp-vertex",
+  AzureFoundry: "azure-foundry",
+  Anthropic: "anthropic",
+  Databricks: "databricks",
+  Openai: "openai",
+} as const;
+export type DeploymentSetupPolicyAllowedAIProvider = ClosedEnum<
+  typeof DeploymentSetupPolicyAllowedAIProvider
+>;
+
+export const DeploymentSetupPolicyAllowedKubernetesBasePlatform = {
   Aws: "aws",
   Gcp: "gcp",
   Azure: "azure",
   OnPrem: "on-prem",
 } as const;
-export type AllowedKubernetesBasePlatform = ClosedEnum<
-  typeof AllowedKubernetesBasePlatform
+export type DeploymentSetupPolicyAllowedKubernetesBasePlatform = ClosedEnum<
+  typeof DeploymentSetupPolicyAllowedKubernetesBasePlatform
 >;
 
 export type DeploymentSetupPolicy = {
-  allowedPlatforms: Array<AllowedPlatform>;
+  allowedPlatforms: Array<DeploymentSetupPolicyAllowedPlatform>;
+  /**
+   * AI providers the recipient may connect. Omit to allow every provider supported by the Project.
+   */
+  allowedAIProviders?:
+    | Array<DeploymentSetupPolicyAllowedAIProvider>
+    | undefined;
   /**
    * Kubernetes base environments the recipient may target.
    */
   allowedKubernetesBasePlatforms?:
-    | Array<AllowedKubernetesBasePlatform>
+    | Array<DeploymentSetupPolicyAllowedKubernetesBasePlatform>
     | undefined;
   /**
    * Whether recipients may create a cluster, use an existing cluster, or both.
@@ -69,29 +89,44 @@ export type DeploymentSetupPolicy = {
 };
 
 /** @internal */
-export const AllowedPlatform$inboundSchema: z.ZodEnum<typeof AllowedPlatform> =
-  z.enum(AllowedPlatform);
+export const DeploymentSetupPolicyAllowedPlatform$inboundSchema: z.ZodEnum<
+  typeof DeploymentSetupPolicyAllowedPlatform
+> = z.enum(DeploymentSetupPolicyAllowedPlatform);
 /** @internal */
-export const AllowedPlatform$outboundSchema: z.ZodEnum<typeof AllowedPlatform> =
-  AllowedPlatform$inboundSchema;
+export const DeploymentSetupPolicyAllowedPlatform$outboundSchema: z.ZodEnum<
+  typeof DeploymentSetupPolicyAllowedPlatform
+> = DeploymentSetupPolicyAllowedPlatform$inboundSchema;
 
 /** @internal */
-export const AllowedKubernetesBasePlatform$inboundSchema: z.ZodEnum<
-  typeof AllowedKubernetesBasePlatform
-> = z.enum(AllowedKubernetesBasePlatform);
+export const DeploymentSetupPolicyAllowedAIProvider$inboundSchema: z.ZodEnum<
+  typeof DeploymentSetupPolicyAllowedAIProvider
+> = z.enum(DeploymentSetupPolicyAllowedAIProvider);
 /** @internal */
-export const AllowedKubernetesBasePlatform$outboundSchema: z.ZodEnum<
-  typeof AllowedKubernetesBasePlatform
-> = AllowedKubernetesBasePlatform$inboundSchema;
+export const DeploymentSetupPolicyAllowedAIProvider$outboundSchema: z.ZodEnum<
+  typeof DeploymentSetupPolicyAllowedAIProvider
+> = DeploymentSetupPolicyAllowedAIProvider$inboundSchema;
+
+/** @internal */
+export const DeploymentSetupPolicyAllowedKubernetesBasePlatform$inboundSchema:
+  z.ZodEnum<typeof DeploymentSetupPolicyAllowedKubernetesBasePlatform> = z.enum(
+    DeploymentSetupPolicyAllowedKubernetesBasePlatform,
+  );
+/** @internal */
+export const DeploymentSetupPolicyAllowedKubernetesBasePlatform$outboundSchema:
+  z.ZodEnum<typeof DeploymentSetupPolicyAllowedKubernetesBasePlatform> =
+    DeploymentSetupPolicyAllowedKubernetesBasePlatform$inboundSchema;
 
 /** @internal */
 export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
   DeploymentSetupPolicy,
   unknown
 > = z.object({
-  allowedPlatforms: z.array(AllowedPlatform$inboundSchema),
+  allowedPlatforms: z.array(DeploymentSetupPolicyAllowedPlatform$inboundSchema),
+  allowedAIProviders: z.array(
+    DeploymentSetupPolicyAllowedAIProvider$inboundSchema,
+  ).optional(),
   allowedKubernetesBasePlatforms: z.array(
-    AllowedKubernetesBasePlatform$inboundSchema,
+    DeploymentSetupPolicyAllowedKubernetesBasePlatform$inboundSchema,
   ).optional(),
   allowedKubernetesClusterSources: z.array(
     KubernetesClusterSource$inboundSchema,
@@ -103,6 +138,7 @@ export const DeploymentSetupPolicy$inboundSchema: z.ZodType<
 /** @internal */
 export type DeploymentSetupPolicy$Outbound = {
   allowedPlatforms: Array<string>;
+  allowedAIProviders?: Array<string> | undefined;
   allowedKubernetesBasePlatforms?: Array<string> | undefined;
   allowedKubernetesClusterSources?: Array<string> | undefined;
   allowedSetupMethods: Array<string>;
@@ -115,9 +151,14 @@ export const DeploymentSetupPolicy$outboundSchema: z.ZodType<
   DeploymentSetupPolicy$Outbound,
   DeploymentSetupPolicy
 > = z.object({
-  allowedPlatforms: z.array(AllowedPlatform$outboundSchema),
+  allowedPlatforms: z.array(
+    DeploymentSetupPolicyAllowedPlatform$outboundSchema,
+  ),
+  allowedAIProviders: z.array(
+    DeploymentSetupPolicyAllowedAIProvider$outboundSchema,
+  ).optional(),
   allowedKubernetesBasePlatforms: z.array(
-    AllowedKubernetesBasePlatform$outboundSchema,
+    DeploymentSetupPolicyAllowedKubernetesBasePlatform$outboundSchema,
   ).optional(),
   allowedKubernetesClusterSources: z.array(
     KubernetesClusterSource$outboundSchema,

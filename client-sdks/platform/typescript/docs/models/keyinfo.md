@@ -27,17 +27,15 @@ let value: KeyInfo = {
     },
     policy: {
       allowedPlatforms: [],
-      allowedSetupMethods: [
-        "google-oauth",
-      ],
+      allowedSetupMethods: [],
     },
     environmentVariables: [],
     items: [
       {
-        item: "keys",
+        item: "bucket",
         source: {
           type: "built-in",
-          definitionId: "customer-registry",
+          definitionId: "customer-sandbox",
           version: "<value>",
           sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
         },

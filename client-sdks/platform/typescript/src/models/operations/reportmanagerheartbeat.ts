@@ -6,22 +6,24 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type ReportManagerHeartbeatGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type ReportManagerHeartbeatRequest = {
   /**
    * Unique identifier for a manager.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   managerHeartbeatRequest?: models.ManagerHeartbeatRequest | undefined;
 };
 
 /** @internal */
 export type ReportManagerHeartbeatRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   ManagerHeartbeatRequest?: models.ManagerHeartbeatRequest$Outbound | undefined;
 };
 
@@ -31,7 +33,6 @@ export const ReportManagerHeartbeatRequest$outboundSchema: z.ZodType<
   ReportManagerHeartbeatRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   managerHeartbeatRequest: models.ManagerHeartbeatRequest$outboundSchema
     .optional(),
 }).transform((v) => {

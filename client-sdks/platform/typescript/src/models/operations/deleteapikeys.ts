@@ -3,18 +3,15 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
-import * as models from "../index.js";
 
-export type DeleteAPIKeysRequest = {
+export type DeleteAPIKeysGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
-  deleteAPIKeysRequest?: models.DeleteAPIKeysRequest | undefined;
 };
 
 /**
@@ -23,33 +20,6 @@ export type DeleteAPIKeysRequest = {
 export type DeleteAPIKeysResponse = {
   deletedCount: number;
 };
-
-/** @internal */
-export type DeleteAPIKeysRequest$Outbound = {
-  workspace?: string | undefined;
-  DeleteAPIKeysRequest?: models.DeleteAPIKeysRequest$Outbound | undefined;
-};
-
-/** @internal */
-export const DeleteAPIKeysRequest$outboundSchema: z.ZodType<
-  DeleteAPIKeysRequest$Outbound,
-  DeleteAPIKeysRequest
-> = z.object({
-  workspace: z.string().optional(),
-  deleteAPIKeysRequest: models.DeleteAPIKeysRequest$outboundSchema.optional(),
-}).transform((v) => {
-  return remap$(v, {
-    deleteAPIKeysRequest: "DeleteAPIKeysRequest",
-  });
-});
-
-export function deleteAPIKeysRequestToJSON(
-  deleteAPIKeysRequest: DeleteAPIKeysRequest,
-): string {
-  return JSON.stringify(
-    DeleteAPIKeysRequest$outboundSchema.parse(deleteAPIKeysRequest),
-  );
-}
 
 /** @internal */
 export const DeleteAPIKeysResponse$inboundSchema: z.ZodType<

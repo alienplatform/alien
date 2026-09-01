@@ -22,7 +22,6 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
@@ -30,11 +29,11 @@ import { Result } from "../types/fp.js";
  * Create a customer setup link
  *
  * @remarks
- * Ensures the Deployment Group identified by Project and external ID, then creates a replacement group-scoped setup link with exact captured sources.
+ * Ensures the Deployment Group identified by Project and external ID, then creates a group-scoped setup link with exact captured sources.
  */
 export function setupLinksCreate(
   client: AlienCore,
-  request: operations.CreateSetupLinkRequest,
+  request: models.CreateSetupLinkRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -59,7 +58,7 @@ export function setupLinksCreate(
 
 async function $do(
   client: AlienCore,
-  request: operations.CreateSetupLinkRequest,
+  request: models.CreateSetupLinkRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -80,21 +79,19 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) => operations.CreateSetupLinkRequest$outboundSchema.parse(value),
+    (value) => models.CreateSetupLinkRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload.CreateSetupLinkRequest, {
-    explode: true,
-  });
+  const body = encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/deployment-groups/setup-links")();
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

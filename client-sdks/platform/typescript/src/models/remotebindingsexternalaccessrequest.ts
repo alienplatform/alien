@@ -7,6 +7,7 @@ import { ClosedEnum } from "../types/enums.js";
 
 export const RemoteBindingsExternalAccessRequestCapability = {
   Storage: "storage",
+  Sandbox: "sandbox",
 } as const;
 export type RemoteBindingsExternalAccessRequestCapability = ClosedEnum<
   typeof RemoteBindingsExternalAccessRequestCapability

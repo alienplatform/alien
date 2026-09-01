@@ -9,6 +9,13 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ListReleasesGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const AllChannels = {
   True: "true",
   False: "false",
@@ -32,10 +39,6 @@ export type ListReleasesRequest = {
    */
   channel?: string | null | undefined;
   allChannels?: AllChannels | undefined;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Optional fields to include: project, rollout
    */
@@ -99,7 +102,6 @@ export type ListReleasesRequest$Outbound = {
   project?: string | null | undefined;
   channel?: string | null | undefined;
   allChannels: string;
-  workspace?: string | undefined;
   include?: Array<string> | undefined;
   search?: string | null | undefined;
   branch?: string | null | undefined;
@@ -118,7 +120,6 @@ export const ListReleasesRequest$outboundSchema: z.ZodType<
   project: z.nullable(z.string()).optional(),
   channel: z.nullable(z.string()).optional(),
   allChannels: AllChannels$outboundSchema.default("false"),
-  workspace: z.string().optional(),
   include: z.array(ListReleasesInclude$outboundSchema).optional(),
   search: z.nullable(z.string()).optional(),
   branch: z.nullable(z.string()).optional(),

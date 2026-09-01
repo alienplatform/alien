@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type ResolveGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Target platform to resolve the manager for
  */
@@ -24,10 +31,6 @@ export type ResolvePlatform = ClosedEnum<typeof ResolvePlatform>;
 
 export type ResolveRequest = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
-  /**
    * Target platform to resolve the manager for
    */
   platform: ResolvePlatform;
@@ -43,7 +46,6 @@ export const ResolvePlatform$outboundSchema: z.ZodEnum<typeof ResolvePlatform> =
 
 /** @internal */
 export type ResolveRequest$Outbound = {
-  workspace?: string | undefined;
   platform: string;
   project?: string | undefined;
 };
@@ -53,7 +55,6 @@ export const ResolveRequest$outboundSchema: z.ZodType<
   ResolveRequest$Outbound,
   ResolveRequest
 > = z.object({
-  workspace: z.string().optional(),
   platform: ResolvePlatform$outboundSchema,
   project: z.string().optional(),
 });

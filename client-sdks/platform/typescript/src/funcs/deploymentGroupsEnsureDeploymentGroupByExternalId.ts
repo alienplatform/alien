@@ -22,7 +22,6 @@ import * as errors from "../models/errors/index.js";
 import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
@@ -31,7 +30,7 @@ import { Result } from "../types/fp.js";
  */
 export function deploymentGroupsEnsureDeploymentGroupByExternalId(
   client: AlienCore,
-  request: operations.EnsureDeploymentGroupByExternalIdRequest,
+  request: models.EnsureDeploymentGroupByExternalIdRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -56,7 +55,7 @@ export function deploymentGroupsEnsureDeploymentGroupByExternalId(
 
 async function $do(
   client: AlienCore,
-  request: operations.EnsureDeploymentGroupByExternalIdRequest,
+  request: models.EnsureDeploymentGroupByExternalIdRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -78,7 +77,7 @@ async function $do(
   const parsed = safeParse(
     request,
     (value) =>
-      operations.EnsureDeploymentGroupByExternalIdRequest$outboundSchema.parse(
+      models.EnsureDeploymentGroupByExternalIdRequest$outboundSchema.parse(
         value,
       ),
     "Input validation failed",
@@ -87,16 +86,12 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON(
-    "body",
-    payload.EnsureDeploymentGroupByExternalIdRequest,
-    { explode: true },
-  );
+  const body = encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/deployment-groups/by-external-id")();
 
   const query = encodeFormQuery({
-    "workspace": payload.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({

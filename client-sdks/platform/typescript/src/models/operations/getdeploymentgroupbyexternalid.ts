@@ -4,11 +4,14 @@
 
 import * as z from "zod/v4";
 
-export type GetDeploymentGroupByExternalIdRequest = {
+export type GetDeploymentGroupByExternalIdGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type GetDeploymentGroupByExternalIdRequest = {
   /**
    * Project ID or name. Optional for project-scoped API keys.
    */
@@ -21,7 +24,6 @@ export type GetDeploymentGroupByExternalIdRequest = {
 
 /** @internal */
 export type GetDeploymentGroupByExternalIdRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   externalId: string;
 };
@@ -31,7 +33,6 @@ export const GetDeploymentGroupByExternalIdRequest$outboundSchema: z.ZodType<
   GetDeploymentGroupByExternalIdRequest$Outbound,
   GetDeploymentGroupByExternalIdRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   externalId: z.string(),
 });

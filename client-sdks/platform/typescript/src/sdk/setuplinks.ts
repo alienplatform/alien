@@ -5,7 +5,6 @@
 import { setupLinksCreate } from "../funcs/setupLinksCreate.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
-import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
 
 export class SetupLinks extends ClientSDK {
@@ -13,10 +12,10 @@ export class SetupLinks extends ClientSDK {
    * Create a customer setup link
    *
    * @remarks
-   * Ensures the Deployment Group identified by Project and external ID, then creates a replacement group-scoped setup link with exact captured sources.
+   * Ensures the Deployment Group identified by Project and external ID, then creates a group-scoped setup link with exact captured sources.
    */
   async create(
-    request: operations.CreateSetupLinkRequest,
+    request: models.CreateSetupLinkRequest,
     options?: RequestOptions,
   ): Promise<models.CreateSetupLinkResponse> {
     return unwrapAsync(setupLinksCreate(

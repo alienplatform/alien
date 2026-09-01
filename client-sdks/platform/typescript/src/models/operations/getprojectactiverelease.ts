@@ -4,15 +4,18 @@
 
 import * as z from "zod/v4";
 
+export type GetProjectActiveReleaseGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type GetProjectActiveReleaseRequest = {
   /**
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Optional deployment ID to check for pinned release
    */
@@ -22,7 +25,6 @@ export type GetProjectActiveReleaseRequest = {
 /** @internal */
 export type GetProjectActiveReleaseRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   deploymentId?: string | undefined;
 };
 
@@ -32,7 +34,6 @@ export const GetProjectActiveReleaseRequest$outboundSchema: z.ZodType<
   GetProjectActiveReleaseRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   deploymentId: z.string().optional(),
 });
 

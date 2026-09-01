@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type GetProjectAiUsageGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const GetProjectAiUsageQueryParamRange = {
   TwentyFourh: "24h",
   Sevend: "7d",
@@ -22,10 +29,6 @@ export type GetProjectAiUsageRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   range?: GetProjectAiUsageQueryParamRange | undefined;
 };
 
@@ -143,7 +146,6 @@ export const GetProjectAiUsageQueryParamRange$outboundSchema: z.ZodEnum<
 /** @internal */
 export type GetProjectAiUsageRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   range: string;
 };
 
@@ -153,7 +155,6 @@ export const GetProjectAiUsageRequest$outboundSchema: z.ZodType<
   GetProjectAiUsageRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   range: GetProjectAiUsageQueryParamRange$outboundSchema.default("24h"),
 });
 

@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type ListDeploymentGroupsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const ListDeploymentGroupsInclude = {
   Project: "project",
 } as const;
@@ -16,10 +23,6 @@ export type ListDeploymentGroupsInclude = ClosedEnum<
 >;
 
 export type ListDeploymentGroupsRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -109,7 +112,6 @@ export const ListDeploymentGroupsInclude$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ListDeploymentGroupsRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   search?: string | undefined;
   include?: Array<string> | undefined;
@@ -122,7 +124,6 @@ export const ListDeploymentGroupsRequest$outboundSchema: z.ZodType<
   ListDeploymentGroupsRequest$Outbound,
   ListDeploymentGroupsRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   search: z.string().optional(),
   include: z.array(ListDeploymentGroupsInclude$outboundSchema).optional(),

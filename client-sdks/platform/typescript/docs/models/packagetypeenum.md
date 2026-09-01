@@ -13,5 +13,5 @@ let value: PackageTypeEnum = "operator-image";
 ## Values
 
 ```typescript
-"cli" | "cloudformation" | "helm" | "operator-image" | "terraform"
+"cli" | "cloudformation" | "helm" | "operator-image" | "sandbox-bundle" | "terraform"
 ```

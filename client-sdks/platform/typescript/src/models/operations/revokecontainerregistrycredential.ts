@@ -4,6 +4,13 @@
 
 import * as z from "zod/v4";
 
+export type RevokeContainerRegistryCredentialGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type RevokeContainerRegistryCredentialRequest = {
   /**
    * Unique identifier for the deployment group.
@@ -13,17 +20,12 @@ export type RevokeContainerRegistryCredentialRequest = {
    * Unique identifier for the container registry credential.
    */
   credentialId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /** @internal */
 export type RevokeContainerRegistryCredentialRequest$Outbound = {
   id: string;
   credentialId: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -33,7 +35,6 @@ export const RevokeContainerRegistryCredentialRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   credentialId: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function revokeContainerRegistryCredentialRequestToJSON(

@@ -4,11 +4,14 @@
 
 import * as z from "zod/v4";
 
-export type ListManagersRequest = {
+export type ListManagersGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListManagersRequest = {
   /**
    * Search managers by name
    */
@@ -21,7 +24,6 @@ export type ListManagersRequest = {
 
 /** @internal */
 export type ListManagersRequest$Outbound = {
-  workspace?: string | undefined;
   search?: string | undefined;
   limit?: number | undefined;
 };
@@ -31,7 +33,6 @@ export const ListManagersRequest$outboundSchema: z.ZodType<
   ListManagersRequest$Outbound,
   ListManagersRequest
 > = z.object({
-  workspace: z.string().optional(),
   search: z.string().optional(),
   limit: z.int().optional(),
 });

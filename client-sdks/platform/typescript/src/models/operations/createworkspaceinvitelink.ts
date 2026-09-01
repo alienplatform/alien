@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import * as models from "../index.js";
 
+export type CreateWorkspaceInviteLinkGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CreateWorkspaceInviteLinkRequestBody = {
   /**
    * Role for workspace-scoped service accounts
@@ -18,10 +25,6 @@ export type CreateWorkspaceInviteLinkRequest = {
    * Unique identifier for the workspace.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: CreateWorkspaceInviteLinkRequestBody | undefined;
 };
 
@@ -51,7 +54,6 @@ export function createWorkspaceInviteLinkRequestBodyToJSON(
 /** @internal */
 export type CreateWorkspaceInviteLinkRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   RequestBody?: CreateWorkspaceInviteLinkRequestBody$Outbound | undefined;
 };
 
@@ -61,7 +63,6 @@ export const CreateWorkspaceInviteLinkRequest$outboundSchema: z.ZodType<
   CreateWorkspaceInviteLinkRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => CreateWorkspaceInviteLinkRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

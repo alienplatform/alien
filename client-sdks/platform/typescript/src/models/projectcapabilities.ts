@@ -85,12 +85,20 @@ export type ProjectCapabilitiesRegistry = {
   credentialPolicy: ProjectCapabilitiesCredentialPolicy;
 };
 
+export type ProjectCapabilitiesRemoteSandbox = {
+  enabled: boolean;
+  baseImage?: string | undefined;
+  imageBundleUri?: string | undefined;
+  maxSessionLifetimeSeconds: number;
+};
+
 export type ProjectCapabilitiesCapabilities = {
   deployments?: ProjectCapabilitiesDeployments | undefined;
   keys?: ProjectCapabilitiesKeys | undefined;
   models?: ProjectCapabilitiesModels | undefined;
   buckets?: ProjectCapabilitiesBuckets | undefined;
   registry?: ProjectCapabilitiesRegistry | undefined;
+  remoteSandbox?: ProjectCapabilitiesRemoteSandbox | undefined;
 };
 
 export type ProjectCapabilities = {
@@ -243,6 +251,27 @@ export function projectCapabilitiesRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectCapabilitiesRemoteSandbox$inboundSchema: z.ZodType<
+  ProjectCapabilitiesRemoteSandbox,
+  unknown
+> = z.object({
+  enabled: z.boolean(),
+  baseImage: z.string().optional(),
+  imageBundleUri: z.string().optional(),
+  maxSessionLifetimeSeconds: z.int(),
+});
+
+export function projectCapabilitiesRemoteSandboxFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectCapabilitiesRemoteSandbox, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectCapabilitiesRemoteSandbox$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectCapabilitiesRemoteSandbox' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectCapabilitiesCapabilities$inboundSchema: z.ZodType<
   ProjectCapabilitiesCapabilities,
   unknown
@@ -253,6 +282,8 @@ export const ProjectCapabilitiesCapabilities$inboundSchema: z.ZodType<
   models: z.lazy(() => ProjectCapabilitiesModels$inboundSchema).optional(),
   buckets: z.lazy(() => ProjectCapabilitiesBuckets$inboundSchema).optional(),
   registry: z.lazy(() => ProjectCapabilitiesRegistry$inboundSchema).optional(),
+  remoteSandbox: z.lazy(() => ProjectCapabilitiesRemoteSandbox$inboundSchema)
+    .optional(),
 });
 
 export function projectCapabilitiesCapabilitiesFromJSON(

@@ -5,6 +5,13 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type GetReleaseGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const GetReleaseInclude = {
   Project: "project",
   Rollout: "rollout",
@@ -17,10 +24,6 @@ export type GetReleaseRequest = {
    * Unique identifier for the release.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Optional fields to include: project, rollout
    */
@@ -35,7 +38,6 @@ export const GetReleaseInclude$outboundSchema: z.ZodEnum<
 /** @internal */
 export type GetReleaseRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   include?: Array<string> | undefined;
 };
 
@@ -45,7 +47,6 @@ export const GetReleaseRequest$outboundSchema: z.ZodType<
   GetReleaseRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   include: z.array(GetReleaseInclude$outboundSchema).optional(),
 });
 

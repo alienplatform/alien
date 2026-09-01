@@ -11,6 +11,7 @@ export const DeploymentSetupItemSelectionItem = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type DeploymentSetupItemSelectionItem = ClosedEnum<
   typeof DeploymentSetupItemSelectionItem
@@ -32,6 +33,9 @@ export type DeploymentSetupItemSelection = {
   item: DeploymentSetupItemSelectionItem;
   required: boolean;
   releaseChannel?: string | undefined;
+  /**
+   * Deprecated request shorthand. Use deploymentSetupConfig.policy.allowedAIProviders.
+   */
   providerAllowlist?:
     | Array<DeploymentSetupItemSelectionProviderAllowlist>
     | undefined;

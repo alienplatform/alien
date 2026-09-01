@@ -7,7 +7,7 @@ import { APIKeyDeploymentSetupConfigSourceBuiltIn } from "@alienplatform/platfor
 
 let value: APIKeyDeploymentSetupConfigSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-ai",
+  definitionId: "customer-key",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

@@ -4,12 +4,15 @@
 
 import * as z from "zod/v4";
 
-export type ListAgentSessionEventsRequest = {
-  id: string;
+export type ListAgentSessionEventsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ListAgentSessionEventsRequest = {
+  id: string;
   after?: number | null | undefined;
   limit?: number | undefined;
 };
@@ -17,7 +20,6 @@ export type ListAgentSessionEventsRequest = {
 /** @internal */
 export type ListAgentSessionEventsRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   after: number | null;
   limit: number;
 };
@@ -28,7 +30,6 @@ export const ListAgentSessionEventsRequest$outboundSchema: z.ZodType<
   ListAgentSessionEventsRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   after: z.nullable(z.int().default(0)),
   limit: z.int().default(200),
 });

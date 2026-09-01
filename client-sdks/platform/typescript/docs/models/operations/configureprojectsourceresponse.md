@@ -1,6 +1,6 @@
 # ConfigureProjectSourceResponse
 
-Project source connected and GitHub Actions configured.
+Project source connected.
 
 ## Example Usage
 

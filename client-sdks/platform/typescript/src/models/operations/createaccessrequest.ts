@@ -3,47 +3,63 @@
  */
 
 import * as z from "zod/v4";
-import { remap as remap$ } from "../../lib/primitives.js";
 import { safeParse } from "../../lib/schemas.js";
 import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
-export type CommandRequest = {
-  command: string;
-  summary: string;
-};
-
-export type CreateAccessRequestRequestBody = {
-  deploymentId: string;
-  remediationPlanId: string;
-  title: string;
-  reason?: string | undefined;
-  commands: Array<CommandRequest>;
-};
-
-export type CreateAccessRequestRequest = {
+export type CreateAccessRequestGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
-  requestBody?: CreateAccessRequestRequestBody | undefined;
 };
 
-export type CreateAccessRequestCommandResponse = {
+export type CreateAccessRequestDeployment = {
+  id: string;
+  name: string;
+  deploymentGroup?: models.DeploymentGroupInfo | undefined;
+};
+
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export const CreateAccessRequestTier = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export type CreateAccessRequestTier = ClosedEnum<
+  typeof CreateAccessRequestTier
+>;
+
+export type CreateAccessRequestCommand = {
   command: string;
   summary: string;
+  params?: any | null | undefined;
+  /**
+   * How risky an operation is (declared by the plugin metadata).
+   */
+  tier?: CreateAccessRequestTier | undefined;
 };
 
-export const CreateAccessRequestStatus = {
-  PendingApproval: "pending-approval",
-  Queued: "queued",
-  CustomerApproved: "customer-approved",
-  Expired: "expired",
-  Rejected: "rejected",
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export const CreateAccessRequestMaxRisk = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
 } as const;
-export type CreateAccessRequestStatus = ClosedEnum<
-  typeof CreateAccessRequestStatus
+/**
+ * How risky an operation is (declared by the plugin metadata).
+ */
+export type CreateAccessRequestMaxRisk = ClosedEnum<
+  typeof CreateAccessRequestMaxRisk
 >;
 
 /**
@@ -52,116 +68,70 @@ export type CreateAccessRequestStatus = ClosedEnum<
 export type CreateAccessRequestResponse = {
   id: string;
   deploymentId: string;
-  remediationPlanId: string;
+  deployment?: CreateAccessRequestDeployment | undefined;
+  remediationPlanId: string | null;
   title: string;
   reason: string | null;
-  commands: Array<CreateAccessRequestCommandResponse>;
-  status: CreateAccessRequestStatus;
+  commands: Array<CreateAccessRequestCommand>;
+  operationPattern: string | null;
+  /**
+   * How risky an operation is (declared by the plugin metadata).
+   */
+  maxRisk: CreateAccessRequestMaxRisk | null;
+  status: models.AccessRequestStatus;
   approvedUntil: string | null;
 };
 
 /** @internal */
-export type CommandRequest$Outbound = {
-  command: string;
-  summary: string;
-};
-
-/** @internal */
-export const CommandRequest$outboundSchema: z.ZodType<
-  CommandRequest$Outbound,
-  CommandRequest
+export const CreateAccessRequestDeployment$inboundSchema: z.ZodType<
+  CreateAccessRequestDeployment,
+  unknown
 > = z.object({
-  command: z.string(),
-  summary: z.string(),
+  id: z.string(),
+  name: z.string(),
+  deploymentGroup: models.DeploymentGroupInfo$inboundSchema.optional(),
 });
 
-export function commandRequestToJSON(commandRequest: CommandRequest): string {
-  return JSON.stringify(CommandRequest$outboundSchema.parse(commandRequest));
-}
-
-/** @internal */
-export type CreateAccessRequestRequestBody$Outbound = {
-  deploymentId: string;
-  remediationPlanId: string;
-  title: string;
-  reason?: string | undefined;
-  commands: Array<CommandRequest$Outbound>;
-};
-
-/** @internal */
-export const CreateAccessRequestRequestBody$outboundSchema: z.ZodType<
-  CreateAccessRequestRequestBody$Outbound,
-  CreateAccessRequestRequestBody
-> = z.object({
-  deploymentId: z.string(),
-  remediationPlanId: z.string(),
-  title: z.string(),
-  reason: z.string().optional(),
-  commands: z.array(z.lazy(() => CommandRequest$outboundSchema)),
-});
-
-export function createAccessRequestRequestBodyToJSON(
-  createAccessRequestRequestBody: CreateAccessRequestRequestBody,
-): string {
-  return JSON.stringify(
-    CreateAccessRequestRequestBody$outboundSchema.parse(
-      createAccessRequestRequestBody,
-    ),
+export function createAccessRequestDeploymentFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateAccessRequestDeployment, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateAccessRequestDeployment$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateAccessRequestDeployment' from JSON`,
   );
 }
 
 /** @internal */
-export type CreateAccessRequestRequest$Outbound = {
-  workspace?: string | undefined;
-  RequestBody?: CreateAccessRequestRequestBody$Outbound | undefined;
-};
+export const CreateAccessRequestTier$inboundSchema: z.ZodEnum<
+  typeof CreateAccessRequestTier
+> = z.enum(CreateAccessRequestTier);
 
 /** @internal */
-export const CreateAccessRequestRequest$outboundSchema: z.ZodType<
-  CreateAccessRequestRequest$Outbound,
-  CreateAccessRequestRequest
-> = z.object({
-  workspace: z.string().optional(),
-  requestBody: z.lazy(() => CreateAccessRequestRequestBody$outboundSchema)
-    .optional(),
-}).transform((v) => {
-  return remap$(v, {
-    requestBody: "RequestBody",
-  });
-});
-
-export function createAccessRequestRequestToJSON(
-  createAccessRequestRequest: CreateAccessRequestRequest,
-): string {
-  return JSON.stringify(
-    CreateAccessRequestRequest$outboundSchema.parse(createAccessRequestRequest),
-  );
-}
-
-/** @internal */
-export const CreateAccessRequestCommandResponse$inboundSchema: z.ZodType<
-  CreateAccessRequestCommandResponse,
+export const CreateAccessRequestCommand$inboundSchema: z.ZodType<
+  CreateAccessRequestCommand,
   unknown
 > = z.object({
   command: z.string(),
   summary: z.string(),
+  params: z.nullable(z.any()).optional(),
+  tier: CreateAccessRequestTier$inboundSchema.optional(),
 });
 
-export function createAccessRequestCommandResponseFromJSON(
+export function createAccessRequestCommandFromJSON(
   jsonString: string,
-): SafeParseResult<CreateAccessRequestCommandResponse, SDKValidationError> {
+): SafeParseResult<CreateAccessRequestCommand, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) =>
-      CreateAccessRequestCommandResponse$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'CreateAccessRequestCommandResponse' from JSON`,
+    (x) => CreateAccessRequestCommand$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateAccessRequestCommand' from JSON`,
   );
 }
 
 /** @internal */
-export const CreateAccessRequestStatus$inboundSchema: z.ZodEnum<
-  typeof CreateAccessRequestStatus
-> = z.enum(CreateAccessRequestStatus);
+export const CreateAccessRequestMaxRisk$inboundSchema: z.ZodEnum<
+  typeof CreateAccessRequestMaxRisk
+> = z.enum(CreateAccessRequestMaxRisk);
 
 /** @internal */
 export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
@@ -170,13 +140,15 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   deploymentId: z.string(),
-  remediationPlanId: z.string(),
+  deployment: z.lazy(() => CreateAccessRequestDeployment$inboundSchema)
+    .optional(),
+  remediationPlanId: z.nullable(z.string()),
   title: z.string(),
   reason: z.nullable(z.string()),
-  commands: z.array(
-    z.lazy(() => CreateAccessRequestCommandResponse$inboundSchema),
-  ),
-  status: CreateAccessRequestStatus$inboundSchema,
+  commands: z.array(z.lazy(() => CreateAccessRequestCommand$inboundSchema)),
+  operationPattern: z.nullable(z.string()),
+  maxRisk: z.nullable(CreateAccessRequestMaxRisk$inboundSchema),
+  status: models.AccessRequestStatus$inboundSchema,
   approvedUntil: z.nullable(z.string()),
 });
 

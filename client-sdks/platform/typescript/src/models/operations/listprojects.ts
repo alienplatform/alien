@@ -9,6 +9,13 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ListProjectsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const ListProjectsInclude = {
   DeploymentCount: "deploymentCount",
   LatestRelease: "latestRelease",
@@ -16,10 +23,6 @@ export const ListProjectsInclude = {
 export type ListProjectsInclude = ClosedEnum<typeof ListProjectsInclude>;
 
 export type ListProjectsRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Search projects by name
    */
@@ -59,7 +62,6 @@ export const ListProjectsInclude$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ListProjectsRequest$Outbound = {
-  workspace?: string | undefined;
   search?: string | undefined;
   include?: Array<string> | undefined;
   limit: number;
@@ -71,7 +73,6 @@ export const ListProjectsRequest$outboundSchema: z.ZodType<
   ListProjectsRequest$Outbound,
   ListProjectsRequest
 > = z.object({
-  workspace: z.string().optional(),
   search: z.string().optional(),
   include: z.array(ListProjectsInclude$outboundSchema).optional(),
   limit: z.int().default(20),

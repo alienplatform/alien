@@ -9,16 +9,19 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ListEventsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const ListEventsInclude = {
   ReleaseCreatedAt: "releaseCreatedAt",
 } as const;
 export type ListEventsInclude = ClosedEnum<typeof ListEventsInclude>;
 
 export type ListEventsRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -66,7 +69,6 @@ export const ListEventsInclude$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ListEventsRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   deploymentId?: string | undefined;
   releaseId?: string | undefined;
@@ -80,7 +82,6 @@ export const ListEventsRequest$outboundSchema: z.ZodType<
   ListEventsRequest$Outbound,
   ListEventsRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   deploymentId: z.string().optional(),
   releaseId: z.string().optional(),

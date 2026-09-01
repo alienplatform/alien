@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type ListResourceDeploymentsGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const ListResourceDeploymentsArea = {
   Container: "container",
   Worker: "worker",
@@ -21,10 +28,6 @@ export type ListResourceDeploymentsArea = ClosedEnum<
 export type ListResourceDeploymentsRequest = {
   area: ListResourceDeploymentsArea;
   resourceId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -72,7 +75,6 @@ export const ListResourceDeploymentsArea$outboundSchema: z.ZodEnum<
 export type ListResourceDeploymentsRequest$Outbound = {
   area: string;
   resourceId: string;
-  workspace?: string | undefined;
   project: string;
   deploymentGroupId?: string | undefined;
   deploymentId?: string | undefined;
@@ -85,7 +87,6 @@ export const ListResourceDeploymentsRequest$outboundSchema: z.ZodType<
 > = z.object({
   area: ListResourceDeploymentsArea$outboundSchema,
   resourceId: z.string(),
-  workspace: z.string().optional(),
   project: z.string(),
   deploymentGroupId: z.string().optional(),
   deploymentId: z.string().optional(),

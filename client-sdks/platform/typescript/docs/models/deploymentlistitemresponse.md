@@ -13,7 +13,7 @@ let value: DeploymentListItemResponse = {
   platform: "test",
   deploymentProtocolVersion: 850514,
   deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-  purpose: "encryption",
+  purpose: "ai",
   currentReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   desiredReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
   pinnedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",

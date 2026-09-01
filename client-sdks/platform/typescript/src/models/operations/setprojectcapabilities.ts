@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type SetProjectCapabilitiesGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const Enabled = {
   Deployments: "deployments",
   Models: "models",
@@ -24,10 +31,6 @@ export type SetProjectCapabilitiesRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: SetProjectCapabilitiesRequestBody | undefined;
 };
 
@@ -62,7 +65,6 @@ export function setProjectCapabilitiesRequestBodyToJSON(
 /** @internal */
 export type SetProjectCapabilitiesRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   RequestBody?: SetProjectCapabilitiesRequestBody$Outbound | undefined;
 };
 
@@ -72,7 +74,6 @@ export const SetProjectCapabilitiesRequest$outboundSchema: z.ZodType<
   SetProjectCapabilitiesRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => SetProjectCapabilitiesRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

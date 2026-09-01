@@ -7,15 +7,18 @@ import { safeParse } from "../../lib/schemas.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type CancelManagerSetupGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type CancelManagerSetupRequest = {
   /**
    * Unique identifier for a manager.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /**
@@ -28,7 +31,6 @@ export type CancelManagerSetupResponse = {
 /** @internal */
 export type CancelManagerSetupRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -37,7 +39,6 @@ export const CancelManagerSetupRequest$outboundSchema: z.ZodType<
   CancelManagerSetupRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function cancelManagerSetupRequestToJSON(

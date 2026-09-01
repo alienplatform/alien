@@ -6,6 +6,13 @@ import * as z from "zod/v4";
 import { remap as remap$ } from "../../lib/primitives.js";
 import { ClosedEnum } from "../../types/enums.js";
 
+export type CreateDomainEndpointGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const CreateDomainEndpointKind = {
   DeploymentPortal: "deployment_portal",
   WorkspacePackages: "workspace_packages",
@@ -40,10 +47,6 @@ export type CreateDomainEndpointRequest = {
    * Unique identifier for the domain.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: CreateDomainEndpointRequestBody | undefined;
 };
 
@@ -101,7 +104,6 @@ export function createDomainEndpointRequestBodyToJSON(
 /** @internal */
 export type CreateDomainEndpointRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   RequestBody?: CreateDomainEndpointRequestBody$Outbound | undefined;
 };
 
@@ -111,7 +113,6 @@ export const CreateDomainEndpointRequest$outboundSchema: z.ZodType<
   CreateDomainEndpointRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => CreateDomainEndpointRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

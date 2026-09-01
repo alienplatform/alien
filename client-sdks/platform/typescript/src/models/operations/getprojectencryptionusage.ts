@@ -8,6 +8,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type GetProjectEncryptionUsageGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export const GetProjectEncryptionUsageQueryParamRange = {
   TwentyFourh: "24h",
   Sevend: "7d",
@@ -22,10 +29,6 @@ export type GetProjectEncryptionUsageRequest = {
    * Project ID or name.
    */
   idOrName: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   range?: GetProjectEncryptionUsageQueryParamRange | undefined;
 };
 
@@ -106,7 +109,6 @@ export const GetProjectEncryptionUsageQueryParamRange$outboundSchema: z.ZodEnum<
 /** @internal */
 export type GetProjectEncryptionUsageRequest$Outbound = {
   idOrName: string;
-  workspace?: string | undefined;
   range: string;
 };
 
@@ -116,7 +118,6 @@ export const GetProjectEncryptionUsageRequest$outboundSchema: z.ZodType<
   GetProjectEncryptionUsageRequest
 > = z.object({
   idOrName: z.string(),
-  workspace: z.string().optional(),
   range: GetProjectEncryptionUsageQueryParamRange$outboundSchema.default("24h"),
 });
 

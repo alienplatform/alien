@@ -4,41 +4,32 @@
 
 import * as z from "zod/v4";
 import { safeParse } from "../../lib/schemas.js";
-import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
+import * as models from "../index.js";
 
-export type GetAccessRequestCoordinatesRequest = {
-  id: string;
+export type GetAccessRequestCoordinatesGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
 };
 
-export const GetAccessRequestCoordinatesStatus = {
-  PendingApproval: "pending-approval",
-  Queued: "queued",
-  CustomerApproved: "customer-approved",
-  Expired: "expired",
-  Rejected: "rejected",
-} as const;
-export type GetAccessRequestCoordinatesStatus = ClosedEnum<
-  typeof GetAccessRequestCoordinatesStatus
->;
+export type GetAccessRequestCoordinatesRequest = {
+  id: string;
+};
 
 /**
  * The approve command (or null) and current status.
  */
 export type GetAccessRequestCoordinatesResponse = {
-  status: GetAccessRequestCoordinatesStatus;
+  status: models.AccessRequestStatus;
   kubectlApprove: string | null;
 };
 
 /** @internal */
 export type GetAccessRequestCoordinatesRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -47,7 +38,6 @@ export const GetAccessRequestCoordinatesRequest$outboundSchema: z.ZodType<
   GetAccessRequestCoordinatesRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function getAccessRequestCoordinatesRequestToJSON(
@@ -61,16 +51,11 @@ export function getAccessRequestCoordinatesRequestToJSON(
 }
 
 /** @internal */
-export const GetAccessRequestCoordinatesStatus$inboundSchema: z.ZodEnum<
-  typeof GetAccessRequestCoordinatesStatus
-> = z.enum(GetAccessRequestCoordinatesStatus);
-
-/** @internal */
 export const GetAccessRequestCoordinatesResponse$inboundSchema: z.ZodType<
   GetAccessRequestCoordinatesResponse,
   unknown
 > = z.object({
-  status: GetAccessRequestCoordinatesStatus$inboundSchema,
+  status: models.AccessRequestStatus$inboundSchema,
   kubectlApprove: z.nullable(z.string()),
 });
 

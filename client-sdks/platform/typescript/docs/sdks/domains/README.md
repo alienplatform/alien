@@ -22,13 +22,12 @@ List system domains and workspace domains.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.domains.list({
-    workspace: "my-workspace",
-  });
+  const result = await alien.domains.list();
 
   console.log(result);
 }
@@ -47,13 +46,12 @@ import { domainsList } from "@alienplatform/platform-api/funcs/domainsList.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await domainsList(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await domainsList(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
@@ -96,17 +94,15 @@ Create a workspace domain and optional initial endpoints.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.domains.create({
-    workspace: "my-workspace",
-    requestBody: {
-      domain: "mealy-cellar.com",
-      setup: {
-        deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-      },
+    domain: "mealy-cellar.com",
+    setup: {
+      deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     },
   });
 
@@ -127,17 +123,15 @@ import { domainsCreate } from "@alienplatform/platform-api/funcs/domainsCreate.j
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await domainsCreate(alien, {
-    workspace: "my-workspace",
-    requestBody: {
-      domain: "mealy-cellar.com",
-      setup: {
-        deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-      },
+    domain: "mealy-cellar.com",
+    setup: {
+      deploymentUrlProjectId: "prj_mcytp6z3j91f7tn5ryqsfwtr",
     },
   });
   if (res.ok) {
@@ -183,13 +177,13 @@ Create an endpoint under a workspace domain.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.domains.createEndpoint({
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -209,13 +203,13 @@ import { domainsCreateEndpoint } from "@alienplatform/platform-api/funcs/domains
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await domainsCreateEndpoint(alien, {
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -260,13 +254,13 @@ Get domain by ID.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.domains.get({
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -286,13 +280,13 @@ import { domainsGet } from "@alienplatform/platform-api/funcs/domainsGet.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await domainsGet(alien, {
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -337,13 +331,13 @@ Delete a workspace domain.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.domains.delete({
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -363,13 +357,13 @@ import { domainsDelete } from "@alienplatform/platform-api/funcs/domainsDelete.j
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await domainsDelete(alien, {
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -414,13 +408,13 @@ Refresh workspace domain verification.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.domains.refresh({
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
 
   console.log(result);
@@ -440,13 +434,13 @@ import { domainsRefresh } from "@alienplatform/platform-api/funcs/domainsRefresh
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await domainsRefresh(alien, {
     id: "dom_469m0agk8luj4s16sakmmpdd",
-    workspace: "my-workspace",
   });
   if (res.ok) {
     const { value: result } = res;

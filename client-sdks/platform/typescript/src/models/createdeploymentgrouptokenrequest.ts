@@ -3,21 +3,41 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../types/enums.js";
 import {
-  DeploymentSetupConfig,
-  DeploymentSetupConfig$Outbound,
-  DeploymentSetupConfig$outboundSchema,
-} from "./deploymentsetupconfig.js";
+  DeploymentSetupConfigInput,
+  DeploymentSetupConfigInput$Outbound,
+  DeploymentSetupConfigInput$outboundSchema,
+} from "./deploymentsetupconfiginput.js";
 import {
   DeploymentSetupItemSelection,
   DeploymentSetupItemSelection$Outbound,
   DeploymentSetupItemSelection$outboundSchema,
 } from "./deploymentsetupitemselection.js";
 import {
+  SetupLinkEntryPoint,
+  SetupLinkEntryPoint$Outbound,
+  SetupLinkEntryPoint$outboundSchema,
+} from "./setuplinkentrypoint.js";
+import {
   StackInputValueRequest,
   StackInputValueRequest$Outbound,
   StackInputValueRequest$outboundSchema,
 } from "./stackinputvaluerequest.js";
+
+export const CreateDeploymentGroupTokenRequestSetupItemsEnum = {
+  All: "all",
+} as const;
+export type CreateDeploymentGroupTokenRequestSetupItemsEnum = ClosedEnum<
+  typeof CreateDeploymentGroupTokenRequestSetupItemsEnum
+>;
+
+/**
+ * Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior.
+ */
+export type CreateDeploymentGroupTokenRequestSetupItemsUnion =
+  | CreateDeploymentGroupTokenRequestSetupItemsEnum
+  | Array<DeploymentSetupItemSelection>;
 
 export type CreateDeploymentGroupTokenRequest = {
   /**
@@ -28,20 +48,63 @@ export type CreateDeploymentGroupTokenRequest = {
    * Optional expiration date for the API key
    */
   expiresAt?: Date | null | undefined;
-  deploymentSetupConfig: DeploymentSetupConfig;
+  deploymentSetupConfig?: DeploymentSetupConfigInput | undefined;
   /**
-   * Customer infrastructure to include. The server snapshots its exact reviewed sources.
+   * Setup to include. Use 'all' for every capability enabled for the Project. Omit to preserve the standard deployment-link behavior.
    */
-  setupItems?: Array<DeploymentSetupItemSelection> | undefined;
+  setupItems?:
+    | CreateDeploymentGroupTokenRequestSetupItemsEnum
+    | Array<DeploymentSetupItemSelection>
+    | undefined;
+  /**
+   * Portal destination to open first. This controls navigation, not authorization.
+   */
+  entryPoint?: SetupLinkEntryPoint | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
 };
+
+/** @internal */
+export const CreateDeploymentGroupTokenRequestSetupItemsEnum$outboundSchema:
+  z.ZodEnum<typeof CreateDeploymentGroupTokenRequestSetupItemsEnum> = z.enum(
+    CreateDeploymentGroupTokenRequestSetupItemsEnum,
+  );
+
+/** @internal */
+export type CreateDeploymentGroupTokenRequestSetupItemsUnion$Outbound =
+  | string
+  | Array<DeploymentSetupItemSelection$Outbound>;
+
+/** @internal */
+export const CreateDeploymentGroupTokenRequestSetupItemsUnion$outboundSchema:
+  z.ZodType<
+    CreateDeploymentGroupTokenRequestSetupItemsUnion$Outbound,
+    CreateDeploymentGroupTokenRequestSetupItemsUnion
+  > = z.union([
+    CreateDeploymentGroupTokenRequestSetupItemsEnum$outboundSchema,
+    z.array(DeploymentSetupItemSelection$outboundSchema),
+  ]);
+
+export function createDeploymentGroupTokenRequestSetupItemsUnionToJSON(
+  createDeploymentGroupTokenRequestSetupItemsUnion:
+    CreateDeploymentGroupTokenRequestSetupItemsUnion,
+): string {
+  return JSON.stringify(
+    CreateDeploymentGroupTokenRequestSetupItemsUnion$outboundSchema.parse(
+      createDeploymentGroupTokenRequestSetupItemsUnion,
+    ),
+  );
+}
 
 /** @internal */
 export type CreateDeploymentGroupTokenRequest$Outbound = {
   description?: string | undefined;
   expiresAt?: string | null | undefined;
-  deploymentSetupConfig: DeploymentSetupConfig$Outbound;
-  setupItems?: Array<DeploymentSetupItemSelection$Outbound> | undefined;
+  deploymentSetupConfig?: DeploymentSetupConfigInput$Outbound | undefined;
+  setupItems?:
+    | string
+    | Array<DeploymentSetupItemSelection$Outbound>
+    | undefined;
+  entryPoint?: SetupLinkEntryPoint$Outbound | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
 };
 
@@ -52,8 +115,12 @@ export const CreateDeploymentGroupTokenRequest$outboundSchema: z.ZodType<
 > = z.object({
   description: z.string().optional(),
   expiresAt: z.nullable(z.date().transform(v => v.toISOString())).optional(),
-  deploymentSetupConfig: DeploymentSetupConfig$outboundSchema,
-  setupItems: z.array(DeploymentSetupItemSelection$outboundSchema).optional(),
+  deploymentSetupConfig: DeploymentSetupConfigInput$outboundSchema.optional(),
+  setupItems: z.union([
+    CreateDeploymentGroupTokenRequestSetupItemsEnum$outboundSchema,
+    z.array(DeploymentSetupItemSelection$outboundSchema),
+  ]).optional(),
+  entryPoint: SetupLinkEntryPoint$outboundSchema.optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
 });

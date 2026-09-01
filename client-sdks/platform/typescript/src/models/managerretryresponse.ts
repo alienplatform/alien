@@ -27,6 +27,7 @@ export const ManagerRetryResponseItemEnum = {
   Keys: "keys",
   Bucket: "bucket",
   Registry: "registry",
+  Sandbox: "sandbox",
 } as const;
 export type ManagerRetryResponseItemEnum = ClosedEnum<
   typeof ManagerRetryResponseItemEnum
@@ -37,6 +38,7 @@ export const ManagerRetryResponseDefinitionId = {
   CustomerKey: "customer-key",
   CustomerStorage: "customer-storage",
   CustomerRegistry: "customer-registry",
+  CustomerSandbox: "customer-sandbox",
 } as const;
 export type ManagerRetryResponseDefinitionId = ClosedEnum<
   typeof ManagerRetryResponseDefinitionId

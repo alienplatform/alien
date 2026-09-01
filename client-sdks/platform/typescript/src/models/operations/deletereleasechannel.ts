@@ -4,12 +4,15 @@
 
 import * as z from "zod/v4";
 
-export type DeleteReleaseChannelRequest = {
-  name: string;
+export type DeleteReleaseChannelGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type DeleteReleaseChannelRequest = {
+  name: string;
   /**
    * Filter by project ID or name.
    */
@@ -19,7 +22,6 @@ export type DeleteReleaseChannelRequest = {
 /** @internal */
 export type DeleteReleaseChannelRequest$Outbound = {
   name: string;
-  workspace?: string | undefined;
   project: string;
 };
 
@@ -29,7 +31,6 @@ export const DeleteReleaseChannelRequest$outboundSchema: z.ZodType<
   DeleteReleaseChannelRequest
 > = z.object({
   name: z.string(),
-  workspace: z.string().optional(),
   project: z.string(),
 });
 

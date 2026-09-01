@@ -18,12 +18,12 @@
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.resources.listInventory({
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -44,12 +44,12 @@ import { resourcesListInventory } from "@alienplatform/platform-api/funcs/resour
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await resourcesListInventory(alien, {
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -93,13 +93,13 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.resources.listOverview({
     area: "worker",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -120,13 +120,13 @@ import { resourcesListOverview } from "@alienplatform/platform-api/funcs/resourc
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await resourcesListOverview(alien, {
     area: "worker",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -170,6 +170,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -177,7 +178,6 @@ async function run() {
   const result = await alien.resources.listDeployments({
     area: "worker",
     resourceId: "<id>",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -198,6 +198,7 @@ import { resourcesListDeployments } from "@alienplatform/platform-api/funcs/reso
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -205,7 +206,6 @@ async function run() {
   const res = await resourcesListDeployments(alien, {
     area: "worker",
     resourceId: "<id>",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {
@@ -249,6 +249,7 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -257,7 +258,6 @@ async function run() {
     area: "daemon",
     deploymentId: "<id>",
     resourceId: "<id>",
-    workspace: "my-workspace",
     project: "my-project",
   });
 
@@ -278,6 +278,7 @@ import { resourcesGetDeploymentDetail } from "@alienplatform/platform-api/funcs/
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
@@ -286,7 +287,6 @@ async function run() {
     area: "daemon",
     deploymentId: "<id>",
     resourceId: "<id>",
-    workspace: "my-workspace",
     project: "my-project",
   });
   if (res.ok) {

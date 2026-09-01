@@ -84,12 +84,14 @@ async function $do(
     return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
-  const body = encodeJSON("body", payload?.RequestBody, { explode: true });
+  const body = payload === undefined
+    ? null
+    : encodeJSON("body", payload, { explode: true });
 
   const path = pathToFunc("/v1/packages/rebuild")();
 
   const query = encodeFormQuery({
-    "workspace": payload?.workspace,
+    "workspace": client._options.workspace,
   });
 
   const headers = new Headers(compactMap({
@@ -134,7 +136,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    errorCodes: ["404", "4XX", "500", "5XX"],
+    errorCodes: ["404", "409", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -160,7 +162,7 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, operations.RebuildPackagesResponse$inboundSchema),
-    M.jsonErr(404, errors.APIError$inboundSchema),
+    M.jsonErr([404, 409], errors.APIError$inboundSchema),
     M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),

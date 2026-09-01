@@ -22,19 +22,17 @@ List full deployment records for manager operational loops. This endpoint is int
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.list({
-    workspace: "my-workspace",
-    syncListRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
 
   console.log(result);
@@ -54,19 +52,17 @@ import { syncList } from "@alienplatform/platform-api/funcs/syncList.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncList(alien, {
-    workspace: "my-workspace",
-    syncListRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    deploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -83,7 +79,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncListRequest](../../models/operations/synclistrequest.md)                                                                                                       | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncListRequest](../../models/synclistrequest.md)                                                                                                                      | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -111,16 +107,14 @@ Get computed deployment state and configuration for a manager-side operation wit
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.context({
-    workspace: "my-workspace",
-    syncContextRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
 
   console.log(result);
@@ -140,16 +134,14 @@ import { syncContext } from "@alienplatform/platform-api/funcs/syncContext.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncContext(alien, {
-    workspace: "my-workspace",
-    syncContextRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -166,7 +158,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncContextRequest](../../models/operations/synccontextrequest.md)                                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncContextRequest](../../models/synccontextrequest.md)                                                                                                                | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -194,21 +186,19 @@ Acquire a batch of deployments for processing. Used by Manager to atomically loc
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.acquire({
-    workspace: "my-workspace",
-    syncAcquireRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      session: "<value>",
-      requestId: "<id>",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      deploymentModel: "pull",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    session: "<value>",
+    requestId: "<id>",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    deploymentModel: "pull",
   });
 
   console.log(result);
@@ -228,21 +218,19 @@ import { syncAcquire } from "@alienplatform/platform-api/funcs/syncAcquire.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncAcquire(alien, {
-    workspace: "my-workspace",
-    syncAcquireRequest: {
-      managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
-      session: "<value>",
-      requestId: "<id>",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      deploymentModel: "pull",
-    },
+    managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+    session: "<value>",
+    requestId: "<id>",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    deploymentModel: "pull",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -259,7 +247,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncAcquireRequest](../../models/operations/syncacquirerequest.md)                                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncAcquireRequest](../../models/syncacquirerequest.md)                                                                                                                | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -287,19 +275,17 @@ Reconcile deployment state. Push model requests that include a session verify lo
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.reconcile({
-    workspace: "my-workspace",
-    syncReconcileRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      state: {
-        platform: "aws",
-        protocolVersion: 149716,
-        status: "provisioning-failed",
-      },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    state: {
+      platform: "aws",
+      protocolVersion: 149716,
+      status: "provisioning-failed",
     },
   });
 
@@ -320,19 +306,17 @@ import { syncReconcile } from "@alienplatform/platform-api/funcs/syncReconcile.j
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncReconcile(alien, {
-    workspace: "my-workspace",
-    syncReconcileRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      state: {
-        platform: "aws",
-        protocolVersion: 149716,
-        status: "provisioning-failed",
-      },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    state: {
+      platform: "aws",
+      protocolVersion: 149716,
+      status: "provisioning-failed",
     },
   });
   if (res.ok) {
@@ -350,7 +334,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncReconcileRequest](../../models/operations/syncreconcilerequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncReconcileRequest](../../models/syncreconcilerequest.md)                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -376,19 +360,17 @@ run();
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.renew({
-    workspace: "my-workspace",
-    syncRenewRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      session: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    session: "<value>",
   });
 
   console.log(result);
@@ -408,19 +390,17 @@ import { syncRenew } from "@alienplatform/platform-api/funcs/syncRenew.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncRenew(alien, {
-    workspace: "my-workspace",
-    syncRenewRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      deploymentIds: [
-        "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      ],
-      session: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    deploymentIds: [
+      "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    session: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -437,7 +417,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncRenewRequest](../../models/operations/syncrenewrequest.md)                                                                                                     | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncRenewRequest](../../models/syncrenewrequest.md)                                                                                                                    | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
@@ -465,16 +445,14 @@ Release a deployment lock. Must be called after processing an acquired deploymen
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const result = await alien.sync.release({
-    workspace: "my-workspace",
-    syncReleaseRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      session: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    session: "<value>",
   });
 
   console.log(result);
@@ -494,16 +472,14 @@ import { syncRelease } from "@alienplatform/platform-api/funcs/syncRelease.js";
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
   const res = await syncRelease(alien, {
-    workspace: "my-workspace",
-    syncReleaseRequest: {
-      deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-      session: "<value>",
-    },
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    session: "<value>",
   });
   if (res.ok) {
     const { value: result } = res;
@@ -520,7 +496,7 @@ run();
 
 | Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.SyncReleaseRequest](../../models/operations/syncreleaserequest.md)                                                                                                 | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `request`                                                                                                                                                                      | [models.SyncReleaseRequest](../../models/syncreleaserequest.md)                                                                                                                | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
 | `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
 | `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
 | `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |

@@ -4,25 +4,23 @@
 
 import * as z from "zod/v4";
 
-export type GetWorkspaceBillingEntitlementsRequest = {
+export type GetWorkspaceBillingEntitlementsGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
 };
 
+export type GetWorkspaceBillingEntitlementsRequest = {};
+
 /** @internal */
-export type GetWorkspaceBillingEntitlementsRequest$Outbound = {
-  workspace?: string | undefined;
-};
+export type GetWorkspaceBillingEntitlementsRequest$Outbound = {};
 
 /** @internal */
 export const GetWorkspaceBillingEntitlementsRequest$outboundSchema: z.ZodType<
   GetWorkspaceBillingEntitlementsRequest$Outbound,
   GetWorkspaceBillingEntitlementsRequest
-> = z.object({
-  workspace: z.string().optional(),
-});
+> = z.object({});
 
 export function getWorkspaceBillingEntitlementsRequestToJSON(
   getWorkspaceBillingEntitlementsRequest:

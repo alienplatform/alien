@@ -9,6 +9,13 @@ import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 import * as models from "../index.js";
 
+export type ListPackagesGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 /**
  * Filter by package type
  */
@@ -17,6 +24,7 @@ export const ListPackagesType = {
   Cloudformation: "cloudformation",
   Helm: "helm",
   OperatorImage: "operator-image",
+  SandboxBundle: "sandbox-bundle",
   Terraform: "terraform",
 } as const;
 /**
@@ -40,10 +48,6 @@ export const ListPackagesStatus = {
 export type ListPackagesStatus = ClosedEnum<typeof ListPackagesStatus>;
 
 export type ListPackagesRequest = {
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   /**
    * Filter by project ID or name.
    */
@@ -96,7 +100,6 @@ export const ListPackagesStatus$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ListPackagesRequest$Outbound = {
-  workspace?: string | undefined;
   project?: string | undefined;
   type?: string | undefined;
   status?: string | undefined;
@@ -110,7 +113,6 @@ export const ListPackagesRequest$outboundSchema: z.ZodType<
   ListPackagesRequest$Outbound,
   ListPackagesRequest
 > = z.object({
-  workspace: z.string().optional(),
   project: z.string().optional(),
   type: ListPackagesType$outboundSchema.optional(),
   status: ListPackagesStatus$outboundSchema.optional(),

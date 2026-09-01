@@ -4,23 +4,25 @@
 
 import * as z from "zod/v4";
 
+export type RemoveMachinesMachineGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type RemoveMachinesMachineRequest = {
   /**
    * Unique identifier for the deployment.
    */
   id: string;
   machineId: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
 };
 
 /** @internal */
 export type RemoveMachinesMachineRequest$Outbound = {
   id: string;
   machineId: string;
-  workspace?: string | undefined;
 };
 
 /** @internal */
@@ -30,7 +32,6 @@ export const RemoveMachinesMachineRequest$outboundSchema: z.ZodType<
 > = z.object({
   id: z.string(),
   machineId: z.string(),
-  workspace: z.string().optional(),
 });
 
 export function removeMachinesMachineRequestToJSON(

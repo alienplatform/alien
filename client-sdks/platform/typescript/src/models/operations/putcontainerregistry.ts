@@ -9,6 +9,13 @@ import { ClosedEnum } from "../../types/enums.js";
 import { Result as SafeParseResult } from "../../types/fp.js";
 import { SDKValidationError } from "../errors/sdkvalidationerror.js";
 
+export type PutContainerRegistryGlobals = {
+  /**
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+   */
+  workspace?: string | undefined;
+};
+
 export type PutContainerRegistryRequestBody = {
   /**
    * Unique identifier for the deployment.
@@ -22,10 +29,6 @@ export type PutContainerRegistryRequest = {
    * Unique identifier for the deployment group.
    */
   id: string;
-  /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
-   */
-  workspace?: string | undefined;
   requestBody?: PutContainerRegistryRequestBody | undefined;
 };
 
@@ -91,7 +94,6 @@ export function putContainerRegistryRequestBodyToJSON(
 /** @internal */
 export type PutContainerRegistryRequest$Outbound = {
   id: string;
-  workspace?: string | undefined;
   RequestBody?: PutContainerRegistryRequestBody$Outbound | undefined;
 };
 
@@ -101,7 +103,6 @@ export const PutContainerRegistryRequest$outboundSchema: z.ZodType<
   PutContainerRegistryRequest
 > = z.object({
   id: z.string(),
-  workspace: z.string().optional(),
   requestBody: z.lazy(() => PutContainerRegistryRequestBody$outboundSchema)
     .optional(),
 }).transform((v) => {

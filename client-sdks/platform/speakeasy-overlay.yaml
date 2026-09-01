@@ -1,0 +1,20 @@
+overlay: 1.0.0
+info:
+  title: Platform TypeScript SDK ergonomics
+  version: 1.0.0
+actions:
+  - target: "$"
+    update:
+      x-speakeasy-globals:
+        parameters:
+          - name: workspace
+            in: query
+            description: Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
+            required: false
+            schema:
+              type: string
+              minLength: 4
+              maxLength: 100
+              pattern: "^(?!ws[-_])[a-z0-9](-?[a-z0-9])*$"
+            example: my-workspace
+            x-speakeasy-globals-hidden: true

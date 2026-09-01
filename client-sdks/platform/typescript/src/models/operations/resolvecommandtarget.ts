@@ -4,11 +4,14 @@
 
 import * as z from "zod/v4";
 
-export type ResolveCommandTargetRequest = {
+export type ResolveCommandTargetGlobals = {
   /**
-   * Workspace name. Required for user/session/OAuth requests. Optional for API keys because API keys are workspace-scoped; if provided with an API key, it must match the key's workspace.
+   * Workspace name. Platform API keys already select a workspace; other authentication methods can configure it once on the SDK client.
    */
   workspace?: string | undefined;
+};
+
+export type ResolveCommandTargetRequest = {
   /**
    * Deployment to resolve the target for
    */
@@ -21,7 +24,6 @@ export type ResolveCommandTargetRequest = {
 
 /** @internal */
 export type ResolveCommandTargetRequest$Outbound = {
-  workspace?: string | undefined;
   deploymentId: string;
   target?: string | undefined;
 };
@@ -31,7 +33,6 @@ export const ResolveCommandTargetRequest$outboundSchema: z.ZodType<
   ResolveCommandTargetRequest$Outbound,
   ResolveCommandTargetRequest
 > = z.object({
-  workspace: z.string().optional(),
   deploymentId: z.string(),
   target: z.string().optional(),
 });

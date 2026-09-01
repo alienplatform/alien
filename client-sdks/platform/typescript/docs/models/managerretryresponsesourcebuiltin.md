@@ -7,7 +7,7 @@ import { ManagerRetryResponseSourceBuiltIn } from "@alienplatform/platform-api/m
 
 let value: ManagerRetryResponseSourceBuiltIn = {
   type: "built-in",
-  definitionId: "customer-storage",
+  definitionId: "customer-registry",
   version: "<value>",
   sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
 };

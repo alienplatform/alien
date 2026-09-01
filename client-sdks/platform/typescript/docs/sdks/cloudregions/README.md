@@ -17,13 +17,12 @@ Get cloud regions supported by this Alien environment.
 import { Alien } from "@alienplatform/platform-api";
 
 const alien = new Alien({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const result = await alien.cloudRegions.get({
-    workspace: "my-workspace",
-  });
+  const result = await alien.cloudRegions.get();
 
   console.log(result);
 }
@@ -42,13 +41,12 @@ import { cloudRegionsGet } from "@alienplatform/platform-api/funcs/cloudRegionsG
 // Use `AlienCore` for best tree-shaking performance.
 // You can create one instance of it to use across an application.
 const alien = new AlienCore({
+  workspace: "my-workspace",
   apiKey: process.env["ALIEN_API_KEY"] ?? "",
 });
 
 async function run() {
-  const res = await cloudRegionsGet(alien, {
-    workspace: "my-workspace",
-  });
+  const res = await cloudRegionsGet(alien);
   if (res.ok) {
     const { value: result } = res;
     console.log(result);
