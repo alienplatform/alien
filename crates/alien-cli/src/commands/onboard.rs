@@ -180,13 +180,14 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
 
     let response = create_setup_link
         .body(alien_platform_api::types::CreateSetupLinkRequest {
-            deployment_setup_config: platform_onboard_deployment_setup_config(
+            deployment_setup_config: Some(platform_onboard_deployment_setup_config(
                 setup_environment_variables,
                 &selected_platforms,
                 public_subdomain.as_deref(),
                 &name,
-            )?,
+            )?),
             description: None,
+            entry_point: None,
             expires_at: None,
             external_id: external_id.clone().try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
@@ -209,10 +210,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     message: format!("{}", e),
                 })
             })?,
-            setup_items: args
-                .setup_items
-                .iter()
-                .map(|item| alien_platform_api::types::DeploymentSetupItemSelection {
+            setup_items: Some(
+                args.setup_items
+                    .iter()
+                    .map(|item| alien_platform_api::types::DeploymentSetupItemSelection {
                     item: match item {
                         OnboardSetupItem::Application => alien_platform_api::types::DeploymentSetupItemSelectionItem::Deployment,
                         OnboardSetupItem::Models => alien_platform_api::types::DeploymentSetupItemSelectionItem::Models,
@@ -224,8 +225,10 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     provider_allowlist: Vec::new(),
                     release_channel: None,
                     required: true,
-                })
-                .collect(),
+                    })
+                    .collect::<Vec<_>>()
+                    .into(),
+            ),
         })
         .send()
         .await
@@ -393,13 +396,13 @@ fn platform_onboard_deployment_setup_config(
     platforms: &[Platform],
     public_subdomain: Option<&str>,
     customer_name: &str,
-) -> Result<alien_platform_api::types::DeploymentSetupConfig> {
+) -> Result<alien_platform_api::types::DeploymentSetupConfigInput> {
     use alien_platform_api::types;
 
     let public_subdomain = public_subdomain
         .map(|value| {
             value
-                .parse::<types::DeploymentSetupConfigPublicSubdomain>()
+                .parse::<types::DeploymentSetupConfigInputPublicSubdomain>()
                 .map_err(|error| {
                     AlienError::new(ErrorData::ValidationError {
                         field: "subdomain".to_string(),
@@ -411,12 +414,12 @@ fn platform_onboard_deployment_setup_config(
 
     let allowed_platforms = if platforms.is_empty() {
         vec![
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Aws,
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Gcp,
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Azure,
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes,
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Machines,
-            types::DeploymentSetupPolicyAllowedPlatformsItem::Local,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Aws,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Gcp,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Azure,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Kubernetes,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Machines,
+            types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Local,
         ]
     } else {
         platforms
@@ -432,17 +435,18 @@ fn platform_onboard_deployment_setup_config(
         serde_json::Value::String(customer_name.to_string()),
     );
 
-    Ok(types::DeploymentSetupConfig {
-        metadata: types::DeploymentSetupMetadata(metadata),
+    Ok(types::DeploymentSetupConfigInput {
+        metadata: Some(types::DeploymentSetupMetadata(metadata)),
         public_subdomain,
-        policy: types::DeploymentSetupPolicy {
+        policy: Some(types::DeploymentSetupConfigInputPolicy {
             allow_release_pinning: None,
+            allowed_ai_providers: Vec::new(),
             allowed_platforms,
             allowed_kubernetes_base_platforms: vec![
-                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Aws,
-                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Gcp,
-                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::Azure,
-                types::DeploymentSetupPolicyAllowedKubernetesBasePlatformsItem::OnPrem,
+                types::DeploymentSetupConfigInputPolicyAllowedKubernetesBasePlatformsItem::Aws,
+                types::DeploymentSetupConfigInputPolicyAllowedKubernetesBasePlatformsItem::Gcp,
+                types::DeploymentSetupConfigInputPolicyAllowedKubernetesBasePlatformsItem::Azure,
+                types::DeploymentSetupConfigInputPolicyAllowedKubernetesBasePlatformsItem::OnPrem,
             ],
             allowed_kubernetes_cluster_sources: vec![
                 types::KubernetesClusterSource::Create,
@@ -485,9 +489,8 @@ fn platform_onboard_deployment_setup_config(
                 ],
                 defaults: None,
             }),
-        },
+        }),
         environment_variables,
-        input_values: None,
     })
 }
 
@@ -514,16 +517,16 @@ fn validate_public_subdomain(value: &str) -> Result<String> {
 #[cfg(feature = "platform")]
 fn platform_to_setup_policy_platform(
     platform: &Platform,
-) -> Result<alien_platform_api::types::DeploymentSetupPolicyAllowedPlatformsItem> {
-    use alien_platform_api::types::DeploymentSetupPolicyAllowedPlatformsItem;
+) -> Result<alien_platform_api::types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem> {
+    use alien_platform_api::types::DeploymentSetupConfigInputPolicyAllowedPlatformsItem;
 
     match platform {
-        Platform::Aws => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Aws),
-        Platform::Gcp => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Gcp),
-        Platform::Azure => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Azure),
-        Platform::Kubernetes => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Kubernetes),
-        Platform::Machines => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Machines),
-        Platform::Local => Ok(DeploymentSetupPolicyAllowedPlatformsItem::Local),
+        Platform::Aws => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Aws),
+        Platform::Gcp => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Gcp),
+        Platform::Azure => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Azure),
+        Platform::Kubernetes => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Kubernetes),
+        Platform::Machines => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Machines),
+        Platform::Local => Ok(DeploymentSetupConfigInputPolicyAllowedPlatformsItem::Local),
         Platform::Test => Err(AlienError::new(ErrorData::ValidationError {
             field: "platforms".to_string(),
             message: "`test` is not a deployment-link platform. Use aws, gcp, azure, kubernetes, machines, or local.".to_string(),
