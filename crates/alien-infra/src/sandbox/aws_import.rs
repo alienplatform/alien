@@ -15,7 +15,8 @@ use crate::sandbox::{AwsSandboxController, AwsSandboxState};
 /// Two registration shapes arrive here, and which fields are present says which. A Frozen
 /// sandbox names the image stack creation built, and imports Ready. A Live one names the
 /// build role and bundle instead — the two values the runtime controller cannot derive — and
-/// imports at the start of the create flow, so the deployment loop builds the image.
+/// imports at the start of the create flow, so the deployment loop builds the image once. A
+/// later release's changed bundle is rolled by the update flow, not by re-importing.
 #[derive(Debug, Default)]
 pub struct AwsSandboxImporter;
 
@@ -76,8 +77,7 @@ impl ResourceImporter for AwsSandboxImporter {
                     state: AwsSandboxState::Ready,
                     image_identifier: Some(image_identifier),
                     image_arn: Some(image_arn),
-                    image_version: Some(image_version),
-                    image_active: true,
+                    active_version: Some(image_version),
                     region: Some(region),
                     ..base
                 };

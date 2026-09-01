@@ -26,8 +26,8 @@ use alien_aws_clients::lambda_microvms::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    standard_resource_tags, ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox,
-    SandboxOutputs,
+    parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
+    ResourceStatus, Sandbox, SandboxCode, SandboxOutputs,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
@@ -48,6 +48,11 @@ const ARCHITECTURE: &str = "ARM_64";
 const BUILD_POLL_INTERVAL: Duration = Duration::from_secs(10);
 const BUILD_MAX_POLLS: u32 = 90;
 
+/// AWS's own ceiling on a MicroVM's life, used as the retention window when a declaration sets
+/// none: a session cannot outlive it, so nothing can still be running on a version older than
+/// this.
+const MAX_SESSION_LIFETIME_SECONDS: i64 = 28_800;
+
 /// AWS Sandbox controller.
 #[controller]
 pub struct AwsSandboxController {
@@ -55,9 +60,26 @@ pub struct AwsSandboxController {
     pub(crate) image_identifier: Option<String>,
     /// Image ARN, published in outputs so the binding can address it.
     pub(crate) image_arn: Option<String>,
-    /// Image version sessions are enumerated by, together with the image. `1.0` for a fresh
-    /// image, not `1`.
-    pub(crate) image_version: Option<String>,
+    /// Version sessions run on and the binding names. `1.0` for a fresh image, not `1`.
+    ///
+    /// The alias reads state written before a sandbox's image was ever rebuilt, where this was
+    /// the only version field.
+    #[serde(default, alias = "imageVersion")]
+    pub(crate) active_version: Option<String>,
+    /// Version currently building. Never published: a binding is a promise sessions can be
+    /// created now, and a building version cannot serve one.
+    #[serde(default)]
+    pub(crate) pending_version: Option<String>,
+    /// Bundle `pending_version` is being built from, promoted with it so a failed build leaves
+    /// no claim that the new release is serving.
+    #[serde(default)]
+    pub(crate) pending_bundle_uri: Option<String>,
+    /// Version a roll replaced, retained while sessions started from it may still be running.
+    #[serde(default)]
+    pub(crate) previous_version: Option<String>,
+    /// When `previous_version` stopped serving, which starts its retention window.
+    #[serde(default)]
+    pub(crate) retired_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Region the MicroVMs run in. Held here because the binding is built without a context.
     pub(crate) region: Option<String>,
     /// Role passed to `CreateMicrovmImage`. Setup owns it because `sandbox/provision` grants
@@ -67,11 +89,6 @@ pub struct AwsSandboxController {
     /// Bundle the image is built from, handed over by the registration.
     #[serde(default)]
     pub(crate) bundle_uri: Option<String>,
-    /// Whether the built version has been observed ACTIVE. Gates the binding: the image
-    /// fields above are known from the moment the create call returns, long before a session
-    /// could start from them.
-    #[serde(default)]
-    pub(crate) image_active: bool,
     /// Connectors every session is started with; empty is `allow`, readable only because
     /// `allow_egress` travels with it.
     #[serde(default)]
@@ -160,10 +177,9 @@ impl AwsSandboxController {
             client_token: build_client_token(&image_name, &bundle_uri),
         };
 
-        // The image name is unique per account, so a release that changed the bundle re-enters
-        // this handler against an image that already exists and a create would collide. Read
-        // first, then either create or roll a version onto what is there — one mutation either
-        // way.
+        // A create whose response never reached state leaves an image under this
+        // account-unique name, and a second create would collide with it. Read first and adopt
+        // what is there; a bundle that changed later is rolled by the update flow, not here.
         let existing = match client.get_microvm_image(&image_name).await {
             Ok(image) => Some(image),
             Err(error) if is_remote_resource_absent(&error) => None,
@@ -199,17 +215,11 @@ impl AwsSandboxController {
                     created.image_version,
                 )
             }
-            // The previous version keeps serving until its own sessions drain; deletion is the
-            // delete flow's job, and it already sweeps every version.
-            Some(_) => {
-                let rolled = client
-                    .update_microvm_image(&image_name, inputs.update_request())
-                    .await
-                    .context(ErrorData::CloudPlatformError {
-                        message: format!("Failed to roll MicroVM image '{image_name}'"),
-                        resource_id: Some(config.id.clone()),
-                    })?;
-                ("UpdateMicrovmImage", rolled.image_arn, rolled.image_version)
+            // Adopting costs no mutation: the build this image is already running is the one
+            // this handler would have asked for.
+            Some(image) => {
+                drop(inputs);
+                ("GetMicrovmImage", image.image_arn, image.image_version)
             }
         };
 
@@ -228,7 +238,8 @@ impl AwsSandboxController {
 
         self.image_identifier = Some(image_arn.clone());
         self.image_arn = Some(image_arn);
-        self.image_version = Some(image_version);
+        self.pending_version = Some(image_version);
+        self.pending_bundle_uri = Some(bundle_uri);
         self.region = Some(aws_config.region.clone());
 
         info!(sandbox_id = %config.id, image = %image_name, "MicroVM image build started");
@@ -302,7 +313,7 @@ impl AwsSandboxController {
                 }))
             }
             VersionReadiness::Ready => {
-                self.image_active = true;
+                self.promote_pending_version();
                 info!(sandbox_id = %config.id, version = %image_version, "MicroVM image is active");
                 Ok(HandlerAction::Continue {
                     state: Ready,
@@ -337,12 +348,15 @@ impl AwsSandboxController {
             if image.image_arn.is_some() {
                 self.image_arn = image.image_arn.clone();
             }
-            // A rolled version changes what sessions enumerate under; kept when the read
-            // carries none, because dropping it would unpublish a binding in use.
-            if image.image_version.is_some() {
-                self.image_version = image.image_version.clone();
+            // The served version is this controller's own record: it is promoted only when a
+            // build is observed ACTIVE. Taking it from the image read would adopt a version
+            // some other writer rolled and point the binding at a bundle nothing here built.
+            if self.active_version.is_none() && image.image_version.is_some() {
+                self.active_version = image.image_version.clone();
             }
             self.region = Some(aws_config.region.clone());
+
+            self.reap_retired_version(&client, &config.id).await?;
 
             // Session counts require `lambda:ListMicrovms`, which AWS authorizes against no
             // resource type — no sandbox permission set grants it, so the count travels as
@@ -403,19 +417,138 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        // The session-policy ceilings feed the binding and cost nothing to refresh. The image
-        // itself does not rebuild here: its inputs — bundle and build role — are registration
-        // facts, and a changed registration arrives through re-import, not through this
-        // handler.
+        // The session-policy ceilings feed the binding and cost nothing to refresh.
         self.idle_suspend_seconds = config.session.idle_suspend_seconds;
         self.max_lifetime_seconds = config.session.max_lifetime_seconds;
 
-        info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
+        let aws_config = ctx.get_aws_config()?;
+        let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+
+        if self.bundle_uri.as_deref() == Some(desired_bundle.as_str()) {
+            info!(sandbox_id = %config.id, "Updated AWS sandbox configuration");
+            return Ok(HandlerAction::Continue {
+                state: Ready,
+                suggested_delay: None,
+            });
+        }
+
+        // A Frozen sandbox's image is built and owned by stack creation. Rebuilding it here
+        // would act with credentials that were never granted it, so the mismatch is surfaced
+        // rather than acted on.
+        if !self.owns_image_builds(ctx, &config.id) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "sandbox '{}' declares bundle '{desired_bundle}' but its image is owned by \
+                     stack creation; redeploy the setup package to change it",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
+
+        info!(sandbox_id = %config.id, bundle = %desired_bundle, "rolling MicroVM image onto a new bundle");
 
         Ok(HandlerAction::Continue {
-            state: Ready,
+            state: UpdatingImage,
             suggested_delay: None,
         })
+    }
+
+    #[handler(
+        state = UpdatingImage,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating
+    )]
+    async fn updating_image(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        let build_role_arn = self.build_role_arn.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "no build role was registered for this sandbox; setup must install \
+                          one before the image can be rebuilt"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+        let image_identifier = self.image_identifier.clone().ok_or_else(|| {
+            AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "no MicroVM image is recorded for this sandbox; there is nothing to \
+                          roll a new version onto"
+                    .to_string(),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        let aws_config = ctx.get_aws_config()?;
+        let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        let tier = config
+            .microvm_tier()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "declared limits do not fit any MicroVM tier".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        let client = ctx
+            .service_provider
+            .get_aws_microvms_client(aws_config)
+            .await?;
+
+        let rolled = client
+            .update_microvm_image(
+                &image_identifier,
+                image_build_inputs(
+                    &aws_config.region,
+                    &config.id,
+                    &build_role_arn,
+                    &desired_bundle,
+                    tier.baseline_memory_mib,
+                )
+                .update_request(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to roll MicroVM image '{image_identifier}'"),
+                resource_id: Some(config.id.clone()),
+            })?;
+
+        let image_version = rolled.image_version.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("UpdateMicrovmImage for '{image_identifier}' returned no version"),
+                resource_id: Some(config.id.clone()),
+            })
+        })?;
+
+        // The version that is serving stays in `active_version` until this build is observed
+        // ACTIVE, so the binding keeps naming the bundle sessions can actually start from.
+        self.pending_version = Some(image_version);
+        self.pending_bundle_uri = Some(desired_bundle);
+        if let Some(arn) = rolled.image_arn {
+            self.image_arn = Some(arn);
+        }
+
+        info!(sandbox_id = %config.id, image = %image_identifier, "MicroVM image roll started");
+
+        Ok(HandlerAction::Continue {
+            state: WaitingForRolledImageActive,
+            suggested_delay: Some(Duration::from_secs(5)),
+        })
+    }
+
+    /// The create flow's poll, routed to `UpdateFailed`: a roll that fails must leave the
+    /// sandbox updatable rather than provision-failed, with the previous version still serving.
+    #[handler(
+        state = WaitingForRolledImageActive,
+        on_failure = UpdateFailed,
+        status = ResourceStatus::Updating
+    )]
+    async fn waiting_for_rolled_image_active(
+        &mut self,
+        ctx: &ResourceControllerContext<'_>,
+    ) -> Result<HandlerAction> {
+        self.waiting_for_image_active(ctx).await
     }
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
@@ -439,7 +572,7 @@ impl AwsSandboxController {
 
         // The binding is a promise sessions can be created now; withdraw it before the first
         // delete rather than after the last one.
-        self.image_active = false;
+        self.active_version = None;
 
         // A setup-baked image belongs to the setup stack and is removed by stack teardown;
         // deleting it here would act with credentials that were never granted it — and would
@@ -558,7 +691,7 @@ impl AwsSandboxController {
             }
         }
 
-        self.image_active = false;
+        self.active_version = None;
         info!(sandbox_id = %config.id, "AWS sandbox image deleted; sessions expire on their own");
 
         Ok(HandlerAction::Continue {
@@ -570,15 +703,13 @@ impl AwsSandboxController {
     fn get_binding_params(&self) -> Result<Option<serde_json::Value>> {
         use alien_core::bindings::{AwsSandboxBinding, BindingValue, SandboxBinding};
 
-        // No binding until the version has been observed ACTIVE: the fields below are known
-        // from the moment the create call returns, ~160s before a session could start from
-        // them, and a published binding is a promise sessions can be created now.
-        if !self.image_active {
-            return Ok(None);
-        }
+        // Only the active version is publishable. It is set when a build is observed ACTIVE,
+        // ~160s after the create call returns every other field below — and during a roll it
+        // still names the version that is serving, so an update never withdraws a working
+        // binding to advertise one that is still building.
         let (Some(image_arn), Some(image_version), Some(region)) = (
             self.image_arn.as_ref(),
-            self.image_version.as_ref(),
+            self.active_version.as_ref(),
             self.region.as_ref(),
         ) else {
             return Ok(None);
@@ -663,15 +794,133 @@ impl AwsSandboxController {
     }
 
     fn require_image(&self, resource_id: &str) -> Result<(String, String)> {
-        match (self.image_identifier.clone(), self.image_version.clone()) {
+        match (self.image_identifier.clone(), self.pending_version.clone()) {
             (Some(identifier), Some(version)) => Ok((identifier, version)),
             _ => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "waiting on a MicroVM image build with no image identifier or version \
-                          recorded"
+                message: "waiting on a MicroVM image build with no image identifier or pending \
+                          version recorded"
                     .to_string(),
                 resource_id: Some(resource_id.to_string()),
             })),
         }
+    }
+
+    /// Moves the built version into service and starts the retention clock on the one it
+    /// replaced. Both halves happen together: a gap would either unpublish a working binding or
+    /// leave a retired version with no window.
+    fn promote_pending_version(&mut self) {
+        let Some(pending) = self.pending_version.take() else {
+            return;
+        };
+        if let Some(replaced) = self.active_version.replace(pending) {
+            self.previous_version = Some(replaced);
+            self.retired_at = Some(chrono::Utc::now());
+        }
+        if let Some(bundle) = self.pending_bundle_uri.take() {
+            self.bundle_uri = Some(bundle);
+        }
+    }
+
+    /// Deletes the version a roll replaced, once nothing started from it can still be running.
+    ///
+    /// Sessions cannot be enumerated (see the module doc), so the only sound signal is time: a
+    /// MicroVM cannot outlive the declared ceiling, and AWS's own 8-hour maximum stands in when
+    /// the declaration sets none.
+    async fn reap_retired_version(
+        &mut self,
+        client: &std::sync::Arc<dyn alien_aws_clients::lambda_microvms::LambdaMicrovmsApi>,
+        resource_id: &str,
+    ) -> Result<()> {
+        let (Some(version), Some(retired_at), Some(identifier)) = (
+            self.previous_version.clone(),
+            self.retired_at,
+            self.image_identifier.clone(),
+        ) else {
+            return Ok(());
+        };
+
+        let window = self
+            .max_lifetime_seconds
+            .map(i64::from)
+            .unwrap_or(MAX_SESSION_LIFETIME_SECONDS);
+        if (chrono::Utc::now() - retired_at).num_seconds() < window {
+            return Ok(());
+        }
+
+        match client
+            .delete_microvm_image_version(&identifier, &version)
+            .await
+        {
+            Ok(()) => {}
+            Err(error) if is_remote_resource_absent(&error) => {}
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to delete retired MicroVM image '{identifier}' version '{version}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                });
+            }
+        }
+
+        self.previous_version = None;
+        self.retired_at = None;
+        debug!(sandbox_id = %resource_id, version = %version, "retired MicroVM image version deleted");
+        Ok(())
+    }
+
+    /// Whether this controller built the image and may therefore rebuild it. A Frozen sandbox's
+    /// image belongs to the setup stack, which owns its bundle too.
+    fn owns_image_builds(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
+        self.owns_image_deletion(ctx, resource_id)
+    }
+}
+
+/// Assembles the build inputs from the declaration, so a create and a roll of the same sandbox
+/// differ only in the bundle.
+fn image_build_inputs(
+    region: &str,
+    resource_id: &str,
+    build_role_arn: &str,
+    bundle_uri: &str,
+    baseline_memory_mib: i64,
+) -> ImageBuildInputs {
+    ImageBuildInputs {
+        description: format!("Sandbox {resource_id}"),
+        base_image_arn: managed_base_image_arn(region),
+        build_role_arn: build_role_arn.to_string(),
+        code_artifact: MicrovmCodeArtifact {
+            uri: bundle_uri.to_string(),
+        },
+        egress_network_connectors: vec![internet_egress_connector_arn(region)],
+        resources: vec![MicrovmImageResources {
+            minimum_memory_in_mib: baseline_memory_mib,
+        }],
+        client_token: build_client_token(resource_id, bundle_uri),
+    }
+}
+
+/// The bundle the declaration asks for, with the region token resolved.
+///
+/// AWS builds a MicroVM image only from a bucket in the image's own region, so a vendor's one
+/// stored URI resolves per region here exactly as the emitters resolve it.
+fn desired_bundle_uri(config: &Sandbox, region: &str) -> Result<String> {
+    let SandboxCode::Image { image } = &config.code else {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: "an AWS sandbox is built from a prebuilt s3:// bundle, not from source"
+                .to_string(),
+            resource_id: Some(config.id.clone()),
+        }));
+    };
+
+    match parse_bundle_uri(image).map_err(|reason| {
+        AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: reason,
+            resource_id: Some(config.id.clone()),
+        })
+    })? {
+        BundleUri::Literal(uri) => Ok(uri.to_string()),
+        BundleUri::Regional { before, after } => Ok(format!("{before}{region}{after}")),
     }
 }
 
@@ -908,7 +1157,7 @@ mod tests {
     fn sandbox() -> Sandbox {
         Sandbox::new("agents".to_string())
             .code(SandboxCode::Image {
-                image: "manager.example.com/alien-artifacts-proj:base".to_string(),
+                image: BUNDLE_URI.to_string(),
             })
             .egress(SandboxEgress::Deny)
             .session(SandboxSessionPolicy {
@@ -920,6 +1169,20 @@ mod tests {
 
     /// The controller as the importer seeds it for a Live sandbox: build inputs present, no
     /// image yet.
+    /// The same sandbox declaring a different bundle, which is what a new release looks like.
+    fn sandbox_with_bundle(bundle_uri: &str) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: bundle_uri.to_string(),
+            })
+            .egress(SandboxEgress::Deny)
+            .session(SandboxSessionPolicy {
+                max_lifetime_seconds: Some(1800),
+                idle_suspend_seconds: Some(600),
+            })
+            .build()
+    }
+
     fn runtime_seeded_controller() -> AwsSandboxController {
         AwsSandboxController {
             build_role_arn: Some(BUILD_ROLE_ARN.to_string()),
@@ -935,8 +1198,7 @@ mod tests {
             state: AwsSandboxState::Ready,
             image_identifier: Some(IMAGE_ARN.to_string()),
             image_arn: Some(IMAGE_ARN.to_string()),
-            image_version: Some("1.0".to_string()),
-            image_active: true,
+            active_version: Some("1.0".to_string()),
             region: Some("us-east-1".to_string()),
             ..runtime_seeded_controller()
         }
@@ -1092,8 +1354,11 @@ mod tests {
         let controller = executor
             .internal_state::<AwsSandboxController>()
             .expect("typed controller");
-        assert_eq!(controller.image_version.as_deref(), Some("1.0"));
-        assert!(controller.image_active);
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
+        assert!(
+            controller.pending_version.is_none(),
+            "the built version is promoted, not left pending"
+        );
 
         let binding = controller
             .get_binding_params()
@@ -1111,43 +1376,29 @@ mod tests {
     /// A re-imported release lands here with fresh state while the image from the previous
     /// release still exists under the account-unique name. The probe must adopt that image and
     /// roll the new bundle onto it as a new version — a second create under the same name is
-    /// the collision this pins, and the mock panics on any `create_microvm_image` call.
+    // ─────────────── UPDATE FLOW ──────────────────────────────────────────
+
+    /// A new release's bundle rolls onto the existing image as a further version, and the
+    /// binding keeps naming the version that is serving until the new one is ACTIVE. Publishing
+    /// the pending version early would hand an application an image no session can start from.
     #[tokio::test]
-    async fn an_existing_image_is_adopted_and_the_new_bundle_becomes_a_new_version() {
+    async fn a_changed_bundle_rolls_a_version_and_switches_the_binding_only_when_active() {
+        const NEXT_BUNDLE: &str = "s3://alien-bundles-test/sandbox/bundle-v2.zip";
+
         let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_get_microvm_image()
-            .withf(|identifier| identifier == "test-agents")
-            .times(1)
-            .returning(|_| {
-                Ok(MicrovmImage {
-                    image_identifier: None,
-                    image_arn: Some(IMAGE_ARN.to_string()),
-                    image_version: Some("1.0".to_string()),
-                    state: Some("CREATED".to_string()),
-                })
-            });
         client
             .expect_update_microvm_image()
             .withf(|identifier, request| {
-                identifier == "test-agents"
-                    && request.code_artifact.uri == BUNDLE_URI
+                identifier == IMAGE_ARN
+                    && request.code_artifact.uri == NEXT_BUNDLE
                     && request.build_role_arn == BUILD_ROLE_ARN
                     && request.base_image_arn
                         == "arn:aws:lambda:us-east-1:aws:microvm-image:al2023-1"
-                    && request.base_image_version.as_deref() == Some("1")
-                    // The same bundle-keyed token as a create, so a retried roll replays.
-                    && request.client_token == build_client_token("test-agents", BUNDLE_URI)
-                    && request.logging == Some(MicrovmImageLogging::Disabled {})
-                    && request
-                        .hooks
-                        .as_ref()
-                        .is_some_and(|hooks| hooks.port == AGENT_PORT)
-                    && request
-                        .environment_variables
-                        .get("ALIEN_SANDBOX_PORT")
-                        .map(String::as_str)
-                        == Some("8971")
+                    && request.resources
+                        == vec![MicrovmImageResources {
+                            minimum_memory_in_mib: 2048,
+                        }]
+                    && request.client_token.starts_with("agents-")
             })
             .times(1)
             .returning(|_, _| {
@@ -1158,67 +1409,106 @@ mod tests {
                     image_version: Some("2.0".to_string()),
                 })
             });
-        // The poll must target the minted version, not the previous release's `1.0`.
+        // Still building on the first poll, ACTIVE on the second: the binding must not move
+        // until the second.
+        let mut sequence = mockall::Sequence::new();
         client
             .expect_get_microvm_image_version()
             .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
             .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_version: Some("2.0".to_string()),
+                    state: Some("IN_PROGRESS".to_string()),
+                    status: Some("INACTIVE".to_string()),
+                    ..active_version()
+                })
+            });
+        client
+            .expect_get_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .in_sequence(&mut sequence)
             .returning(|_, _| {
                 Ok(MicrovmImageVersion {
                     image_version: Some("2.0".to_string()),
                     ..active_version()
                 })
             });
-        client
-            .expect_get_microvm_image()
-            .withf(|identifier| identifier == IMAGE_ARN)
-            .returning(|_| {
-                Ok(MicrovmImage {
-                    image_identifier: None,
-                    image_arn: Some(IMAGE_ARN.to_string()),
-                    image_version: Some("2.0".to_string()),
-                    state: Some("UPDATED".to_string()),
-                })
-            });
 
-        let mut executor = executor(runtime_seeded_controller(), client).await;
-        executor
-            .run_until_terminal()
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .build()
             .await
-            .expect("the roll flow should succeed");
+            .expect("executor should build");
 
-        assert_eq!(executor.status(), ResourceStatus::Running);
+        executor
+            .update(sandbox_with_bundle(NEXT_BUNDLE))
+            .expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+        executor.step().await.expect("updating_image");
+
+        let binding = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller")
+            .get_binding_params()
+            .expect("binding params")
+            .expect("the serving version keeps its binding while the roll builds");
+        assert_eq!(
+            binding["imageVersion"], "1.0",
+            "the binding must name the version sessions can actually start from"
+        );
+
+        executor.step().await.expect("first poll, still building");
+        let binding = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller")
+            .get_binding_params()
+            .expect("binding params")
+            .expect("a building roll does not withdraw the binding");
+        assert_eq!(binding["imageVersion"], "1.0", "still building, still 1.0");
+
+        executor.step().await.expect("second poll, ACTIVE");
 
         let controller = executor
             .internal_state::<AwsSandboxController>()
             .expect("typed controller");
-        assert_eq!(controller.image_arn.as_deref(), Some(IMAGE_ARN));
-        assert!(controller.image_active);
-
+        assert_eq!(controller.active_version.as_deref(), Some("2.0"));
+        assert!(controller.pending_version.is_none());
+        assert_eq!(
+            controller.previous_version.as_deref(),
+            Some("1.0"),
+            "the replaced version is retained until its sessions can no longer be running"
+        );
+        assert!(
+            controller.retired_at.is_some(),
+            "retention starts at the switch"
+        );
+        assert_eq!(
+            controller.bundle_uri.as_deref(),
+            Some(NEXT_BUNDLE),
+            "the promoted bundle is what the sandbox now serves"
+        );
         let binding = controller
             .get_binding_params()
             .expect("binding params")
-            .expect("an active image publishes a binding");
-        assert_eq!(binding["imageArn"], IMAGE_ARN);
-        assert_eq!(
-            binding["imageVersion"], "2.0",
-            "the binding must carry the rolled version, not the previous release's"
-        );
+            .expect("an active version publishes a binding");
+        assert_eq!(binding["imageVersion"], "2.0");
     }
 
-    /// A failed roll build reports the same way a failed create build does: the version's own
-    /// reason plus each failed build's, read for the minted version.
+    /// A roll whose build fails must leave the previous version serving and the sandbox
+    /// updatable — not provision-failed with no binding.
     #[tokio::test]
-    async fn a_failed_roll_surfaces_the_services_own_reason() {
+    async fn a_failed_roll_keeps_the_previous_version_serving() {
+        const NEXT_BUNDLE: &str = "s3://alien-bundles-test/sandbox/bundle-v2.zip";
+
         let mut client = MockLambdaMicrovmsApi::new();
-        client.expect_get_microvm_image().times(1).returning(|_| {
-            Ok(MicrovmImage {
-                image_identifier: None,
-                image_arn: Some(IMAGE_ARN.to_string()),
-                image_version: Some("1.0".to_string()),
-                state: Some("CREATED".to_string()),
-            })
-        });
         client
             .expect_update_microvm_image()
             .times(1)
@@ -1232,7 +1522,6 @@ mod tests {
             });
         client
             .expect_get_microvm_image_version()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
             .times(1)
             .returning(|_, _| {
                 Ok(MicrovmImageVersion {
@@ -1245,31 +1534,211 @@ mod tests {
             });
         client
             .expect_list_microvm_image_builds()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
             .times(1)
             .returning(|_, _| {
                 Ok(vec![MicrovmImageBuild {
-                    build_id: Some("build-2".to_string()),
+                    build_id: Some("build-9".to_string()),
                     build_state: Some("FAILED".to_string()),
                     state_reason: Some("bundle setup command exited non-zero".to_string()),
                 }])
             });
 
-        let mut executor = executor(runtime_seeded_controller(), client).await;
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .update(sandbox_with_bundle(NEXT_BUNDLE))
+            .expect("transition to update");
         let error = executor
             .run_until_terminal()
             .await
-            .expect_err("a failed roll build must fail the create flow");
+            .expect_err("a failed roll must fail the update flow");
 
         let rendered = format!("{error:?}");
-        assert!(
-            rendered.contains("One or more builds failed"),
-            "the version's own reason must survive into the error: {rendered}"
-        );
         assert!(
             rendered.contains("bundle setup command exited non-zero"),
             "the failed build's own reason must survive into the error: {rendered}"
         );
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller.active_version.as_deref(),
+            Some("1.0"),
+            "a failed roll must not disturb the version that is serving"
+        );
+        let binding = controller
+            .get_binding_params()
+            .expect("binding params")
+            .expect("the previous version keeps its binding");
+        assert_eq!(binding["imageVersion"], "1.0");
+    }
+
+    /// An update that changes nothing about the bundle must not rebuild: an image build is
+    /// ~160s and a new billed version. The expectation-free mock panics on any call.
+    #[tokio::test]
+    async fn an_unchanged_bundle_rebuilds_nothing() {
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        let mut executor = executor(controller, MockLambdaMicrovmsApi::new()).await;
+
+        executor.update(sandbox()).expect("transition to update");
+        executor.step().await.expect("updating_sandbox");
+
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .expect("typed controller")
+                .active_version
+                .as_deref(),
+            Some("1.0")
+        );
+    }
+
+    /// A Frozen sandbox's image belongs to the setup stack. Rebuilding it at runtime would use
+    /// credentials that were never granted it, so a changed bundle is refused rather than built.
+    #[tokio::test]
+    async fn a_frozen_sandbox_refuses_to_rebuild_its_image() {
+        let controller = AwsSandboxController {
+            state: AwsSandboxState::Ready,
+            image_identifier: Some(IMAGE_ARN.to_string()),
+            image_arn: Some(IMAGE_ARN.to_string()),
+            active_version: Some("1.0".to_string()),
+            region: Some("us-east-1".to_string()),
+            bundle_uri: Some(BUNDLE_URI.to_string()),
+            // The importer's Frozen arm leaves the build role empty, and that absence is what
+            // says setup owns the image.
+            ..Default::default()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .update(sandbox_with_bundle(
+                "s3://alien-bundles-test/sandbox/bundle-v2.zip",
+            ))
+            .expect("transition to update");
+        let error = executor
+            .run_until_terminal()
+            .await
+            .expect_err("a Frozen sandbox must refuse the rebuild");
+        assert!(
+            error.to_string().contains("owned by stack creation"),
+            "the refusal names its cause: {error}"
+        );
+    }
+
+    /// The retired version is the only cleanup scope for sessions that cannot be enumerated, so
+    /// it must survive its whole retention window and then actually be deleted.
+    #[tokio::test]
+    async fn a_retired_version_is_deleted_only_after_its_sessions_can_no_longer_run() {
+        // Inside the window: nothing may be deleted. Any delete call panics the mock.
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("2.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        controller.max_lifetime_seconds = Some(1800);
+        controller.previous_version = Some("1.0".to_string());
+        controller.retired_at = Some(chrono::Utc::now() - chrono::Duration::seconds(60));
+        let mut inside_window = executor(controller, client).await;
+        inside_window
+            .step()
+            .await
+            .expect("ready tick inside the window");
+        assert_eq!(
+            inside_window
+                .internal_state::<AwsSandboxController>()
+                .expect("typed controller")
+                .previous_version
+                .as_deref(),
+            Some("1.0"),
+            "a version whose sessions may still be running must not be deleted"
+        );
+
+        // Past the declared 1800s ceiling: the version is swept and the fields cleared.
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("2.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        controller.max_lifetime_seconds = Some(1800);
+        controller.previous_version = Some("1.0".to_string());
+        controller.retired_at = Some(chrono::Utc::now() - chrono::Duration::seconds(3600));
+        let mut executor = executor(controller, client).await;
+        executor.step().await.expect("ready tick past the window");
+
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert!(controller.previous_version.is_none());
+        assert!(controller.retired_at.is_none());
+    }
+
+    /// State written before a sandbox's image could be rebuilt carried one version field and no
+    /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
+    /// active version" would withdraw the binding of a deployment that never changed.
+    #[test]
+    fn state_written_before_versions_were_tracked_keeps_its_binding() {
+        let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({
+            "_controllerStateVersion": 1,
+            "allowEgress": false,
+            "egressConnectorArns": ["arn:aws:lambda:us-east-2:111122223333:network-connector:deny"],
+            "imageArn": "arn:aws:lambda:us-east-2:111122223333:microvm-image:sbx-image",
+            "imageIdentifier": "sbx-image",
+            "imageVersion": "1.0",
+            "internalStayCount": null,
+            "previewPorts": [8080],
+            "region": "us-east-2",
+            "state": "ready",
+            "type": "AwsSandboxController"
+        }))
+        .expect("a settled record must re-hydrate");
+
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
+
+        let binding = controller
+            .get_binding_params()
+            .expect("binding params")
+            .expect("a settled record must keep publishing its binding");
+        assert_eq!(
+            binding["imageArn"],
+            "arn:aws:lambda:us-east-2:111122223333:microvm-image:sbx-image"
+        );
+        assert_eq!(binding["imageVersion"], "1.0");
+        assert_eq!(binding["region"], "us-east-2");
     }
 
     /// The failure error must carry AWS's own reasons — the version's and each failed
@@ -1558,8 +2027,7 @@ mod tests {
             state: AwsSandboxState::Ready,
             image_identifier: Some(IMAGE_ARN.to_string()),
             image_arn: Some(IMAGE_ARN.to_string()),
-            image_version: Some("1.0".to_string()),
-            image_active: true,
+            active_version: Some("1.0".to_string()),
             region: Some("us-east-1".to_string()),
             // The importer's Frozen arm leaves the build inputs empty, and that absence is
             // what says setup owns the image.

@@ -64,9 +64,10 @@
         }
       },
       {
-        // An image declaring egress names its connector, and CreateMicrovmImage is authorized
-        // as that pass too. AWS authorizes it against the connector ARN, but that ARN ends in
-        // an AWS-assigned id rather than the name, so a prefix scope would deny a real one.
+        // An image declaring egress names its connector, and both CreateMicrovmImage and the
+        // UpdateMicrovmImage roll are authorized as that pass. AWS authorizes it against the
+        // connector ARN, but that ARN ends in an AWS-assigned id rather than the name, so a
+        // prefix scope would deny a real one.
         "label": "pass-sandbox-egress-connector",
         "description": "Allow the sandbox image to be built against its egress connector.",
         "grant": {
@@ -82,8 +83,9 @@
         }
       },
       {
-        // The build runs under a role the create call names, so CreateMicrovmImage is authorized
-        // as a pass of it too. Name-scoped, like the session-time pass in sandbox/management:
+        // The build runs under a role the call names, so CreateMicrovmImage — and the
+        // UpdateMicrovmImage roll, which restates it — are authorized as a pass of it too.
+        // Name-scoped, like the session-time pass in sandbox/management:
         // PassRole is evaluated against the role being passed, which carries no tag to bound it.
         "label": "pass-sandbox-build-role",
         "description": "Allow the sandbox image to be built under its build role.",
