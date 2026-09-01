@@ -16,7 +16,8 @@ use alien_bindings::{
 };
 use alien_core::{
     AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    Platform, RemoteStackManagementOutputs, RuntimeMetadata, Stack, StackState, Worker, WorkerCode,
+    Platform, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata, Sandbox, SandboxCode,
+    Stack, StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
@@ -322,7 +323,7 @@ pub async fn cleanup_deleted_registry_access(
     // becoming available, in which case `registry_access_granted` remains
     // false so reconciliation retries the complete grant. Still clean up that
     // partial grant when the deployment is deleted.
-    if !registry_access_granted && !has_worker_image(state) {
+    if !registry_access_granted && !has_registry_backed_image(state, &platform) {
         return Ok(());
     }
 
@@ -379,13 +380,13 @@ fn repository_ids_for_access(
         Some(Platform::Aws)
     ) {
         let mut repo_ids = HashSet::new();
-        collect_worker_image_repositories(state, &prefix, &mut repo_ids);
+        collect_image_repositories(state, &prefix, INCLUDE_SANDBOX, &mut repo_ids);
         let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
         repo_ids.sort();
         return repo_ids;
     }
 
-    if !has_worker_image_in_repository_prefix(state, &prefix) {
+    if !has_image_in_repository_prefix(state, &prefix, EXCLUDE_SANDBOX) {
         return Vec::new();
     }
 
@@ -395,92 +396,114 @@ fn repository_ids_for_access(
     repo_ids
 }
 
-fn collect_worker_image_repositories(
+/// Only the AWS sandbox takes its root filesystem from an image Alien hosts, so counting one on
+/// any other provider would claim a grant that provider never needs.
+const INCLUDE_SANDBOX: bool = true;
+const EXCLUDE_SANDBOX: bool = false;
+
+/// The image a resource pulls from Alien's registry, if it declares one.
+fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Option<&str> {
+    if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+        return match &worker.code {
+            WorkerCode::Image { image } => Some(image),
+            _ => None,
+        };
+    }
+    if include_sandbox {
+        if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
+            return match &sandbox.code {
+                SandboxCode::Image { image } => Some(image),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
+fn collect_image_repositories(
     state: &DeploymentState,
     prefix: &str,
+    include_sandbox: bool,
     repo_ids: &mut HashSet<String>,
 ) {
+    let mut collect = |stack: &Stack| {
+        for (_id, entry) in stack.resources() {
+            let Some(image) = resource_image_reference(entry, include_sandbox) else {
+                continue;
+            };
+            if let Some(repo_id) = ecr_repository_from_image(image, prefix) {
+                repo_ids.insert(repo_id);
+            }
+        }
+    };
+
     if let Some(release) = &state.current_release {
-        collect_worker_image_repositories_from_stack(&release.stack, prefix, repo_ids);
+        collect(&release.stack);
     }
     if let Some(release) = &state.target_release {
-        collect_worker_image_repositories_from_stack(&release.stack, prefix, repo_ids);
+        collect(&release.stack);
     }
     if let Some(runtime_metadata) = &state.runtime_metadata {
         if let Some(stack) = &runtime_metadata.prepared_stack {
-            collect_worker_image_repositories_from_stack(stack, prefix, repo_ids);
+            collect(stack);
         }
     }
 }
 
-fn collect_worker_image_repositories_from_stack(
-    stack: &Stack,
+fn has_image_in_repository_prefix(
+    state: &DeploymentState,
     prefix: &str,
-    repo_ids: &mut HashSet<String>,
-) {
-    for (_id, entry) in stack.resources() {
-        let Some(worker) = entry.config.downcast_ref::<Worker>() else {
-            continue;
-        };
-        let WorkerCode::Image { image } = &worker.code else {
-            continue;
-        };
-        if let Some(repo_id) = ecr_repository_from_image(image, prefix) {
-            repo_ids.insert(repo_id);
-        }
-    }
-}
-
-fn has_worker_image_in_repository_prefix(state: &DeploymentState, prefix: &str) -> bool {
-    state
-        .current_release
-        .as_ref()
-        .is_some_and(|release| stack_has_worker_image_in_repository_prefix(&release.stack, prefix))
-        || state.target_release.as_ref().is_some_and(|release| {
-            stack_has_worker_image_in_repository_prefix(&release.stack, prefix)
+    include_sandbox: bool,
+) -> bool {
+    let stack_matches = |stack: &Stack| {
+        stack.resources().any(|(_id, entry)| {
+            resource_image_reference(entry, include_sandbox)
+                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
         })
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(|stack| stack_has_worker_image_in_repository_prefix(stack, prefix))
-}
+    };
 
-fn has_worker_image(state: &DeploymentState) -> bool {
     state
         .current_release
         .as_ref()
-        .is_some_and(|release| stack_has_worker_image(&release.stack))
+        .is_some_and(|release| stack_matches(&release.stack))
         || state
             .target_release
             .as_ref()
-            .is_some_and(|release| stack_has_worker_image(&release.stack))
+            .is_some_and(|release| stack_matches(&release.stack))
         || state
             .runtime_metadata
             .as_ref()
             .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(stack_has_worker_image)
+            .is_some_and(stack_matches)
 }
 
-fn stack_has_worker_image(stack: &Stack) -> bool {
-    stack.resources().any(|(_id, entry)| {
-        entry
-            .config
-            .downcast_ref::<Worker>()
-            .is_some_and(|worker| matches!(&worker.code, WorkerCode::Image { .. }))
-    })
+/// Whether the deployment declares any image that could have earned a registry grant.
+///
+/// Deliberately over-inclusive: the repository prefix is only known once the registry binding
+/// loads, so answering `true` too often costs a lookup, while answering `false` too often leaves
+/// a live cross-account grant on Alien's registry with nothing left to revoke it.
+fn has_registry_backed_image(state: &DeploymentState, platform: &Platform) -> bool {
+    let include_sandbox = matches!(platform, Platform::Aws);
+
+    state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| stack_has_registry_backed_image(&release.stack, include_sandbox))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| stack_has_registry_backed_image(&release.stack, include_sandbox))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
+            .is_some_and(|stack| stack_has_registry_backed_image(stack, include_sandbox))
 }
 
-fn stack_has_worker_image_in_repository_prefix(stack: &Stack, prefix: &str) -> bool {
-    stack.resources().any(|(_id, entry)| {
-        let Some(worker) = entry.config.downcast_ref::<Worker>() else {
-            return false;
-        };
-        let WorkerCode::Image { image } = &worker.code else {
-            return false;
-        };
-        image_repository_matches_prefix(image, prefix)
-    })
+fn stack_has_registry_backed_image(stack: &Stack, include_sandbox: bool) -> bool {
+    stack
+        .resources()
+        .any(|(_id, entry)| resource_image_reference(entry, include_sandbox).is_some())
 }
 
 fn ecr_repository_from_image(image: &str, prefix: &str) -> Option<String> {
@@ -641,11 +664,15 @@ pub async fn load_artifact_registry(
 mod tests {
     use super::*;
     use alien_bindings::error::{ErrorData as BindingErrorData, Result as BindingResult};
+    use alien_bindings::providers::artifact_registry::ecr::cross_account_repository_policy;
     use alien_bindings::traits::{
         ArtifactRegistryCredentials, ArtifactRegistryPermissions, BindingsProviderApi,
         CrossAccountPermissions, RepositoryResponse,
     };
-    use alien_core::{ReleaseInfo, ResourceLifecycle};
+    use alien_core::{
+        ReleaseInfo, RemoteStackManagement, Resource, ResourceLifecycle, ResourceOutputs,
+        ResourceStatus, SandboxEgress, SandboxSessionPolicy, StackResourceState,
+    };
     use alien_error::AlienError;
     use async_trait::async_trait;
 
@@ -875,6 +902,48 @@ mod tests {
             .build()
     }
 
+    fn sandbox_stack(image: &str) -> Stack {
+        Stack::new("test-stack".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: image.to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    /// A registered deployment's stack state: the RSM role ARN only exists once the customer's
+    /// setup stack reported its outputs, which is what makes the grant legal at all.
+    fn registered_stack_state(role_arn: &str) -> StackState {
+        let remote_management = RemoteStackManagement::new("management".to_string()).build();
+        let mut stack_state =
+            StackState::with_resource_prefix(Platform::Aws, "test-prefix".to_string());
+        stack_state.resources.insert(
+            remote_management.id.clone(),
+            StackResourceState::builder()
+                .resource_type(RemoteStackManagement::RESOURCE_TYPE.to_string())
+                .status(ResourceStatus::Running)
+                .config(Resource::new(remote_management))
+                .outputs(ResourceOutputs::new(RemoteStackManagementOutputs {
+                    management_resource_id: role_arn.to_string(),
+                    access_configuration: role_arn.to_string(),
+                    legacy_remote_bindings_access: None,
+                }))
+                .lifecycle(ResourceLifecycle::Frozen)
+                .dependencies(vec![])
+                .build(),
+        );
+        stack_state
+    }
+
     fn gcp_deployment_record(id: &str, status: &str, project_number: &str) -> DeploymentRecord {
         DeploymentRecord {
             id: id.to_string(),
@@ -1064,6 +1133,233 @@ mod tests {
         assert_eq!(
             error.source.as_ref().map(|source| source.code.as_str()),
             Some("BINDINGS_ERROR")
+        );
+    }
+    #[test]
+    fn aws_registry_access_uses_sandbox_image_repository() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
+        };
+        // A sandbox base image pushed through the registry proxy, which is the only shape that
+        // names a repository Alien hosts.
+        let state = aws_state_with_stack(sandbox_stack(
+            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
+        ));
+
+        assert_eq!(
+            repository_ids_for_access(&registry, &state),
+            vec!["alien-artifacts-prj_test".to_string()],
+            "a sandbox-only stack must resolve the repository its base image lives in"
+        );
+    }
+
+    #[test]
+    fn aws_registry_access_skips_sandbox_images_outside_the_repository_prefix() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
+        };
+
+        for image in [
+            "s3://acme-artifacts/agents/bundle.zip",
+            "ubuntu:24.04",
+            "ghcr.io/acme/sandbox:latest",
+            "manager.example.com/alien-artifacts-prj_other:agents-abc123",
+        ] {
+            let state = aws_state_with_stack(sandbox_stack(image));
+            assert!(
+                repository_ids_for_access(&registry, &state).is_empty(),
+                "'{image}' names no repository Alien hosts and must not produce a grant"
+            );
+        }
+    }
+
+    #[test]
+    fn aws_sandbox_only_stack_grants_the_customer_account_and_rsm_role() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
+        };
+        let role_arn = "arn:aws:iam::123456789012:role/alien-rsm-role";
+        let mut state = aws_state_with_stack(sandbox_stack(
+            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
+        ));
+        state.stack_state = Some(registered_stack_state(role_arn));
+
+        assert_eq!(
+            repository_ids_for_access(&registry, &state),
+            vec!["alien-artifacts-prj_test".to_string()]
+        );
+
+        let access = build_cross_account_access(
+            state.environment_info.as_ref().expect("AWS environment"),
+            state.stack_state.as_ref(),
+        )
+        .expect("AWS cross-account access should be configured");
+        let CrossAccountAccess::Aws(aws_access) = access else {
+            panic!("AWS environment must produce AWS cross-account access");
+        };
+
+        let policy = cross_account_repository_policy(&aws_access);
+        let statements = policy["Statement"]
+            .as_array()
+            .expect("policy must carry statements");
+        let cross_account = statements
+            .iter()
+            .find(|statement| statement["Sid"] == "CrossAccountRolePermission")
+            .expect("the customer principals statement must be written");
+
+        assert_eq!(
+            cross_account["Principal"]["AWS"],
+            serde_json::json!(["arn:aws:iam::123456789012:root", role_arn]),
+            "the policy must name the customer account root and the RSM role"
+        );
+        assert_eq!(
+            cross_account["Action"],
+            serde_json::json!([
+                "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer",
+                "ecr:BatchGetImage",
+                "ecr:GetRepositoryPolicy",
+                "ecr:SetRepositoryPolicy"
+            ]),
+            "the MicroVM build pulls layers and manifests through this statement"
+        );
+        assert_eq!(policy["Version"], "2012-10-17");
+    }
+
+    /// The whole document for one account and role. The policy is built from the environment and
+    /// the RSM outputs alone — never from stack resources — so this pins what every deployment
+    /// gets, whichever resources earned it.
+    #[test]
+    fn aws_repository_policy_document_is_pinned() {
+        let role_arn = "arn:aws:iam::123456789012:role/alien-rsm-role";
+        let stack_state = registered_stack_state(role_arn);
+        let environment_info = EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+        });
+
+        let access = build_cross_account_access(&environment_info, Some(&stack_state))
+            .expect("AWS cross-account access should be configured");
+        let CrossAccountAccess::Aws(aws_access) = access else {
+            panic!("AWS environment must produce AWS cross-account access");
+        };
+        let policy = cross_account_repository_policy(&aws_access);
+
+        assert_eq!(
+            policy,
+            serde_json::json!({
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "CrossAccountRolePermission",
+                        "Effect": "Allow",
+                        "Principal": {
+                            "AWS": ["arn:aws:iam::123456789012:root", role_arn]
+                        },
+                        "Action": [
+                            "ecr:BatchCheckLayerAvailability",
+                            "ecr:GetDownloadUrlForLayer",
+                            "ecr:BatchGetImage",
+                            "ecr:GetRepositoryPolicy",
+                            "ecr:SetRepositoryPolicy"
+                        ]
+                    },
+                    {
+                        "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
+                        "Effect": "Allow",
+                        "Principal": { "Service": "lambda.amazonaws.com" },
+                        "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                        "Condition": {
+                            "StringLike": {
+                                "aws:sourceArn": ["arn:aws:lambda:us-east-2:123456789012:function:*"]
+                            }
+                        }
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn aws_cleanup_guard_covers_a_sandbox_only_stack() {
+        let state = aws_state_with_stack(sandbox_stack(
+            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
+        ));
+
+        assert!(
+            has_registry_backed_image(&state, &Platform::Aws),
+            "a partial AWS sandbox grant must still be cleaned up on delete"
+        );
+        assert!(
+            !has_registry_backed_image(&state, &Platform::Gcp),
+            "no GCP sandbox pulls from Alien's registry, so cleanup must stay a no-op there"
+        );
+
+        // The guard is deliberately looser than the repository scan and asks only whether an
+        // image is declared, matching what a Worker naming a public image has always done.
+        let bundle_state = aws_state_with_stack(sandbox_stack("s3://acme-artifacts/bundle.zip"));
+        assert!(has_registry_backed_image(&bundle_state, &Platform::Aws));
+    }
+
+    #[test]
+    fn aws_registry_access_covers_a_worker_and_a_sandbox_together() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts-prj_test".to_string(),
+            fail_remove: false,
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                Worker::new("test-worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/alien-artifacts-prj_test:test-worker-abc123"
+                            .to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "manager.example.com/alien-artifacts-prj_test-sandbox:agents-abc123"
+                            .to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        assert_eq!(
+            repository_ids_for_access(&registry, &aws_state_with_stack(stack)),
+            vec![
+                "alien-artifacts-prj_test".to_string(),
+                "alien-artifacts-prj_test-sandbox".to_string()
+            ],
+            "each resource keeps its own repository and neither displaces the other"
+        );
+    }
+
+    #[test]
+    fn gcp_registry_access_ignores_sandbox_images() {
+        let registry = TestArtifactRegistry {
+            prefix: "test-project/alien-artifacts".to_string(),
+            fail_remove: false,
+        };
+        let state = gcp_state_with_stack(sandbox_stack(
+            "manager.example.com/test-project/alien-artifacts/agents:abc123",
+        ));
+
+        assert!(
+            repository_ids_for_access(&registry, &state).is_empty(),
+            "a GCP sandbox takes no image from Alien's registry, so it must grant nothing"
         );
     }
 }
