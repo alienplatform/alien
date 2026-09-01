@@ -197,6 +197,14 @@ fn sandbox_resource() -> Sandbox {
 }
 
 fn sandbox_stack_state(binding: SandboxBinding, platform: Platform) -> StackState {
+    sandbox_stack_state_with_lifecycle(binding, platform, ResourceLifecycle::Frozen)
+}
+
+fn sandbox_stack_state_with_lifecycle(
+    binding: SandboxBinding,
+    platform: Platform,
+    lifecycle: ResourceLifecycle,
+) -> StackState {
     let mut stack_state = StackState::new(platform);
     stack_state.resources.insert(
         "agents".to_string(),
@@ -204,7 +212,7 @@ fn sandbox_stack_state(binding: SandboxBinding, platform: Platform) -> StackStat
             .resource_type(Sandbox::RESOURCE_TYPE.to_string())
             .status(ResourceStatus::Running)
             .config(Resource::new(sandbox_resource()))
-            .lifecycle(ResourceLifecycle::Frozen)
+            .lifecycle(lifecycle)
             .remote_binding_params(serde_json::to_value(binding).unwrap())
             .dependencies(Vec::new())
             .build(),
@@ -248,6 +256,29 @@ fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
         binding.allow_egress,
         "an empty connector list means open egress, and the client re-checks the pair"
     );
+}
+
+/// A Live sandbox's binding is published by its runtime controller once the image build
+/// reaches ACTIVE, and must resolve exactly like a Frozen one's — refusing on lifecycle here
+/// would make every runtime-provisioned sandbox unreachable over Remote Bindings.
+#[test]
+fn remote_sandbox_validation_accepts_a_live_sandbox() {
+    let deployment = deployment(sandbox_stack_state_with_lifecycle(
+        open_sandbox_binding(),
+        Platform::Aws,
+        ResourceLifecycle::Live,
+    ));
+
+    let Ok(RemoteSandboxBinding::Aws(binding)) = remote_sandbox_binding(&deployment, "agents")
+    else {
+        panic!("a running Live sandbox with an open-egress binding resolves")
+    };
+
+    assert_eq!(
+        binding.image_arn,
+        "arn:aws:lambda:us-east-1:123456789012:microvm-image:stack-agents"
+    );
+    assert_eq!(binding.image_version, "3");
 }
 
 /// `sandbox/remote-execute` withholds `lambda:PassNetworkConnector`, so a session cannot be

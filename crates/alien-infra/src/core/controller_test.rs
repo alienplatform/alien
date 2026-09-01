@@ -634,6 +634,7 @@ pub struct SingleControllerExecutorBuilder {
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
+    resource_lifecycle: ResourceLifecycle,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -657,7 +658,15 @@ impl SingleControllerExecutorBuilder {
             dependencies: Vec::new(),
             service_provider: None,
             client_config: None,
+            resource_lifecycle: ResourceLifecycle::Live,
         }
+    }
+
+    /// Sets the main resource's lifecycle in stack and state. Live by default; a controller
+    /// that branches on ownership needs the Frozen shape to be constructible too.
+    pub fn resource_lifecycle(mut self, lifecycle: ResourceLifecycle) -> Self {
+        self.resource_lifecycle = lifecycle;
+        self
     }
 
     /// Sets the stack settings.
@@ -974,7 +983,7 @@ impl SingleControllerExecutorBuilder {
             resource_id.clone(),
             ResourceEntry {
                 config: resource.clone(),
-                lifecycle: ResourceLifecycle::Live,
+                lifecycle: self.resource_lifecycle,
                 dependencies: self
                     .dependencies
                     .iter()
@@ -999,7 +1008,7 @@ impl SingleControllerExecutorBuilder {
             .config(resource.clone())
             .maybe_internal_state(internal_state)
             .maybe_outputs(outputs)
-            .lifecycle(ResourceLifecycle::Live)
+            .lifecycle(self.resource_lifecycle)
             .dependencies(
                 self.dependencies
                     .iter()

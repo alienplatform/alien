@@ -12,6 +12,7 @@ use crate::aws::credential_provider::AwsCredentialProvider;
 use alien_client_core::{ErrorData, Result};
 use alien_error::{AlienError, Context};
 use async_trait::async_trait;
+use bon::Builder;
 use reqwest::{Client, Method};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -94,12 +95,309 @@ pub struct MicrovmAuthToken {
     pub auth_token: std::collections::HashMap<String, String>,
 }
 
+/// One version of a MicroVM image — the unit a build produces and sessions run from.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmImageVersion {
+    /// Image ARN
+    pub image_arn: Option<String>,
+    /// The version this record describes
+    pub image_version: Option<String>,
+    /// Build lifecycle: `PENDING` / `IN_PROGRESS` / `SUCCESSFUL` / `FAILED` / delete states
+    pub state: Option<String>,
+    /// Availability: only an `ACTIVE` version can be run; `INACTIVE` is blocked from launching
+    pub status: Option<String>,
+    /// The service's own reason for the current state
+    pub state_reason: Option<String>,
+}
+
+/// One build attempt of an image version.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmImageBuild {
+    /// Build request id
+    pub build_id: Option<String>,
+    /// `PENDING` / `IN_PROGRESS` / `SUCCESSFUL` / `FAILED`
+    pub build_state: Option<String>,
+    /// The service's own reason for the build state — the only place AWS explains a failure
+    pub state_reason: Option<String>,
+}
+
+/// Response from listing an image version's builds.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListMicrovmImageBuildsResponse {
+    #[serde(default)]
+    items: Vec<MicrovmImageBuild>,
+    next_token: Option<String>,
+}
+
+/// The bundle a MicroVM image is built from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmCodeArtifact {
+    /// S3 URI of the bundle zip
+    pub uri: String,
+}
+
+/// Logging configuration for a MicroVM image — exactly one member.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum MicrovmImageLogging {
+    /// Logging turned off; serializes as `{"disabled": {}}`
+    Disabled {},
+    /// Logs stream to a CloudWatch log group
+    CloudWatch {
+        /// Target log group
+        #[serde(rename = "logGroup")]
+        log_group: String,
+    },
+}
+
+/// A CPU configuration entry; the schema's only architecture is `ARM_64`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmCpuConfiguration {
+    /// Target architecture
+    pub architecture: String,
+}
+
+/// A resource requirement entry.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct MicrovmImageResources {
+    /// Baseline memory; the MicroVM bursts to four times it
+    #[serde(rename = "minimumMemoryInMiB")]
+    pub minimum_memory_in_mib: i64,
+}
+
+/// Build-time hooks for a MicroVM image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmImageBuildHooks {
+    /// `ENABLED` / `DISABLED`
+    pub ready: String,
+    /// Ceiling on the in-image ready hook
+    pub ready_timeout_in_seconds: u32,
+}
+
+/// Session-lifecycle hooks baked into a MicroVM image.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmLifecycleHooks {
+    /// `ENABLED` / `DISABLED`
+    pub run: String,
+    /// Ceiling on the run hook
+    pub run_timeout_in_seconds: u32,
+    /// `ENABLED` / `DISABLED`
+    pub resume: String,
+    /// Ceiling on the resume hook
+    pub resume_timeout_in_seconds: u32,
+}
+
+/// Hook configuration for `CreateMicrovmImage`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct MicrovmImageHooks {
+    /// Port the hooks listener serves on
+    pub port: u16,
+    /// Build-time hooks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub microvm_image_hooks: Option<MicrovmImageBuildHooks>,
+    /// Session-lifecycle hooks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub microvm_hooks: Option<MicrovmLifecycleHooks>,
+}
+
+/// `CreateMicrovmImage` request body, mirroring the published wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMicrovmImageRequest {
+    /// Image name, unique within the account
+    #[builder(into)]
+    pub name: String,
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(into)]
+    pub description: Option<String>,
+    /// ARN of the Lambda-managed base image
+    #[builder(into)]
+    pub base_image_arn: String,
+    /// Specific version of the managed base image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(into)]
+    pub base_image_version: Option<String>,
+    /// Role the build assumes; the create call is authorized as a pass of it
+    #[builder(into)]
+    pub build_role_arn: String,
+    /// Bundle the image is built from
+    pub code_artifact: MicrovmCodeArtifact,
+    /// Build-time and runtime logging
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<MicrovmImageLogging>,
+    /// Connectors the build's network traffic routes through
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub egress_network_connectors: Vec<String>,
+    /// Supported CPU configurations
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub cpu_configurations: Vec<MicrovmCpuConfiguration>,
+    /// Resource requirements
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub resources: Vec<MicrovmImageResources>,
+    /// Extra OS capabilities; always serialized so "none requested" is explicit on the wire
+    #[builder(default)]
+    pub additional_os_capabilities: Vec<String>,
+    /// Lifecycle hooks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<MicrovmImageHooks>,
+    /// Environment variables set in the runtime environment — a map here, unlike the
+    /// CloudFormation property, which is a list of key/value objects
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[builder(default)]
+    pub environment_variables: std::collections::BTreeMap<String, String>,
+    /// Resource tags; ABAC conditions on `CreateMicrovmImage` are evaluated against these
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[builder(default)]
+    pub tags: std::collections::BTreeMap<String, String>,
+    /// Idempotency token: a retried create with the same token returns the prior success
+    #[builder(into)]
+    pub client_token: String,
+}
+
+/// Response from `CreateMicrovmImage`.
+///
+/// Not folded into [`MicrovmImage`]: this response carries both `imageVersion` (the version the
+/// create minted) and `latestActiveImageVersion` (absent until the build finishes), and the
+/// shared struct aliases one onto the other.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateMicrovmImageResponse {
+    /// ARN of the created image
+    pub image_arn: Option<String>,
+    /// Image name
+    pub name: Option<String>,
+    /// Image lifecycle state
+    pub state: Option<String>,
+    /// The version this create minted — `1.0` for a new image, not `1`
+    pub image_version: Option<String>,
+}
+
+/// `UpdateMicrovmImage` request body — the API's only way to mint a further version of an
+/// image that already exists.
+///
+/// PUT semantics: the request restates every build input, so a field left out is dropped from
+/// the new version rather than inherited. Member-for-member the create request minus `name` and
+/// `tags` — the identifier rides the path, and an image keeps the tags its create set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Builder)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMicrovmImageRequest {
+    /// Human-readable description
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(into)]
+    pub description: Option<String>,
+    /// ARN of the Lambda-managed base image
+    #[builder(into)]
+    pub base_image_arn: String,
+    /// Specific version of the managed base image
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[builder(into)]
+    pub base_image_version: Option<String>,
+    /// Role the build assumes
+    #[builder(into)]
+    pub build_role_arn: String,
+    /// Bundle the new version is built from
+    pub code_artifact: MicrovmCodeArtifact,
+    /// Build-time and runtime logging
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub logging: Option<MicrovmImageLogging>,
+    /// Connectors the build's network traffic routes through
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub egress_network_connectors: Vec<String>,
+    /// Supported CPU configurations
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub cpu_configurations: Vec<MicrovmCpuConfiguration>,
+    /// Resource requirements
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[builder(default)]
+    pub resources: Vec<MicrovmImageResources>,
+    /// Extra OS capabilities; always serialized so "none requested" is explicit on the wire
+    #[builder(default)]
+    pub additional_os_capabilities: Vec<String>,
+    /// Lifecycle hooks
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hooks: Option<MicrovmImageHooks>,
+    /// Environment variables set in the runtime environment — a map, as on create
+    #[serde(skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[builder(default)]
+    pub environment_variables: std::collections::BTreeMap<String, String>,
+    /// Idempotency token: a retried roll with the same token returns the prior success
+    #[builder(into)]
+    pub client_token: String,
+}
+
+/// Response from `UpdateMicrovmImage`.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateMicrovmImageResponse {
+    /// ARN of the rolled image
+    pub image_arn: Option<String>,
+    /// Image name
+    pub name: Option<String>,
+    /// Image lifecycle state
+    pub state: Option<String>,
+    /// The version this roll minted, and the one to poll — `2.0` onwards
+    pub image_version: Option<String>,
+}
+
 #[cfg_attr(feature = "test-utils", automock)]
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
+    /// Creates an image. Returns as soon as AWS accepts the request; the build continues
+    /// asynchronously and is observed through `get_microvm_image_version`.
+    async fn create_microvm_image(
+        &self,
+        request: CreateMicrovmImageRequest,
+    ) -> Result<CreateMicrovmImageResponse>;
+
+    /// Mints a further version of an existing image and starts its build. Returns as soon as
+    /// AWS accepts the request, like the create; the new version is observed the same way.
+    async fn update_microvm_image(
+        &self,
+        image_identifier: &str,
+        request: UpdateMicrovmImageRequest,
+    ) -> Result<UpdateMicrovmImageResponse>;
+
     /// Reads one image.
     async fn get_microvm_image(&self, image_identifier: &str) -> Result<MicrovmImage>;
+
+    /// Reads one version — where the build state, availability, and the service's own
+    /// `stateReason` live.
+    async fn get_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<MicrovmImageVersion>;
+
+    /// Lists a version's build attempts, following pagination. A failed build's `stateReason`
+    /// is the only place AWS explains why.
+    async fn list_microvm_image_builds(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<Vec<MicrovmImageBuild>>;
+
+    /// Deletes one image version. The versions hold the image: deleting the image while
+    /// versions remain is accepted by the API and removes nothing.
+    async fn delete_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<()>;
 
     /// Deletes an image. Fails while the image is still `CREATING`.
     async fn delete_microvm_image(&self, image_identifier: &str) -> Result<()>;
@@ -347,6 +645,47 @@ fn classify(error: &AlienError<ErrorData>, operation: &str) -> ErrorData {
 #[cfg_attr(target_arch = "wasm32", async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait)]
 impl LambdaMicrovmsApi for LambdaMicrovmsClient {
+    async fn create_microvm_image(
+        &self,
+        request: CreateMicrovmImageRequest,
+    ) -> Result<CreateMicrovmImageResponse> {
+        let body = serde_json::to_value(&request).map_err(|error| {
+            AlienError::new(ErrorData::SerializationError {
+                message: format!("Failed to serialize CreateMicrovmImage body: {error}"),
+            })
+        })?;
+
+        self.send(
+            Method::POST,
+            &format!("/{API_VERSION}/microvm-images"),
+            &[],
+            Some(body),
+            "CreateMicrovmImage",
+        )
+        .await
+    }
+
+    async fn update_microvm_image(
+        &self,
+        image_identifier: &str,
+        request: UpdateMicrovmImageRequest,
+    ) -> Result<UpdateMicrovmImageResponse> {
+        let body = serde_json::to_value(&request).map_err(|error| {
+            AlienError::new(ErrorData::SerializationError {
+                message: format!("Failed to serialize UpdateMicrovmImage body: {error}"),
+            })
+        })?;
+
+        self.send(
+            Method::PUT,
+            &format!("/{API_VERSION}/microvm-images/{image_identifier}"),
+            &[],
+            Some(body),
+            "UpdateMicrovmImage",
+        )
+        .await
+    }
+
     async fn get_microvm_image(&self, image_identifier: &str) -> Result<MicrovmImage> {
         self.send(
             Method::GET,
@@ -366,6 +705,74 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
                 &[],
                 None,
                 "DeleteMicrovmImage",
+            )
+            .await?;
+        Ok(())
+    }
+
+    async fn get_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<MicrovmImageVersion> {
+        self.send(
+            Method::GET,
+            &format!("/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}"),
+            &[],
+            None,
+            "GetMicrovmImageVersion",
+        )
+        .await
+    }
+
+    async fn list_microvm_image_builds(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<Vec<MicrovmImageBuild>> {
+        let mut builds = Vec::new();
+        let mut next: Option<String> = None;
+
+        loop {
+            let query: Vec<(&str, String)> = next
+                .as_ref()
+                .map(|token| vec![("nextToken", token.clone())])
+                .unwrap_or_default();
+
+            let page: ListMicrovmImageBuildsResponse = self
+                .send(
+                    Method::GET,
+                    &format!(
+                        "/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}/builds"
+                    ),
+                    &query,
+                    None,
+                    "ListMicrovmImageBuilds",
+                )
+                .await?;
+
+            builds.extend(page.items);
+            next = page.next_token;
+            if next.is_none() {
+                return Ok(builds);
+            }
+        }
+    }
+
+    async fn delete_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .send(
+                Method::DELETE,
+                &format!(
+                    "/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}"
+                ),
+                &[],
+                None,
+                "DeleteMicrovmImageVersion",
             )
             .await?;
         Ok(())
@@ -617,6 +1024,226 @@ mod tests {
     #[test]
     fn the_api_version_matches_the_published_wire_contract() {
         assert_eq!(API_VERSION, "2025-09-09");
+    }
+
+    /// The create body must match the published wire contract exactly: `tags` and
+    /// `environmentVariables` are maps (the CloudFormation properties are lists), `resources`
+    /// spells `minimumMemoryInMiB` with a capital B that `camelCase` renaming cannot produce,
+    /// and `logging` is a union. Each mismatch fails remotely as a 400 or an ABAC denial that
+    /// reads like a permissions bug, not as anything a compiler can catch.
+    #[test]
+    fn the_create_image_body_matches_the_published_wire_contract() {
+        let request = CreateMicrovmImageRequest::builder()
+            .name("stack-sbx")
+            .base_image_arn("arn:aws:lambda:us-east-2:aws:microvm-image:al2023-1")
+            .base_image_version("1")
+            .build_role_arn("arn:aws:iam::123456789012:role/stack-sbx-build")
+            .code_artifact(MicrovmCodeArtifact {
+                uri: "s3://bundles/sandbox.zip".to_string(),
+            })
+            .logging(MicrovmImageLogging::Disabled {})
+            .egress_network_connectors(vec!["arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS".to_string()])
+            .cpu_configurations(vec![MicrovmCpuConfiguration {
+                architecture: "ARM_64".to_string(),
+            }])
+            .resources(vec![MicrovmImageResources {
+                minimum_memory_in_mib: 512,
+            }])
+            .hooks(
+                MicrovmImageHooks::builder()
+                    .port(8971)
+                    .microvm_image_hooks(MicrovmImageBuildHooks {
+                        ready: "ENABLED".to_string(),
+                        ready_timeout_in_seconds: 120,
+                    })
+                    .microvm_hooks(MicrovmLifecycleHooks {
+                        run: "ENABLED".to_string(),
+                        run_timeout_in_seconds: 30,
+                        resume: "ENABLED".to_string(),
+                        resume_timeout_in_seconds: 30,
+                    })
+                    .build(),
+            )
+            .environment_variables(std::collections::BTreeMap::from([(
+                "ALIEN_SANDBOX_PORT".to_string(),
+                "8971".to_string(),
+            )]))
+            .tags(std::collections::BTreeMap::from([(
+                "managed-by".to_string(),
+                "runtime".to_string(),
+            )]))
+            .client_token("stack-sbx")
+            .build();
+
+        let body = serde_json::to_value(&request).expect("serializes");
+
+        assert_eq!(body["name"], "stack-sbx");
+        assert_eq!(body["baseImageVersion"], "1");
+        assert_eq!(body["codeArtifact"]["uri"], "s3://bundles/sandbox.zip");
+        assert_eq!(body["logging"], serde_json::json!({ "disabled": {} }));
+        assert_eq!(body["cpuConfigurations"][0]["architecture"], "ARM_64");
+        assert_eq!(body["resources"][0]["minimumMemoryInMiB"], 512);
+        assert_eq!(body["additionalOsCapabilities"], serde_json::json!([]));
+        assert_eq!(body["hooks"]["port"], 8971);
+        assert_eq!(body["hooks"]["microvmImageHooks"]["ready"], "ENABLED");
+        assert_eq!(
+            body["hooks"]["microvmImageHooks"]["readyTimeoutInSeconds"],
+            120
+        );
+        assert_eq!(body["hooks"]["microvmHooks"]["resumeTimeoutInSeconds"], 30);
+        assert_eq!(
+            body["environmentVariables"],
+            serde_json::json!({ "ALIEN_SANDBOX_PORT": "8971" })
+        );
+        assert_eq!(body["tags"], serde_json::json!({ "managed-by": "runtime" }));
+        assert_eq!(body["clientToken"], "stack-sbx");
+    }
+
+    /// The roll's body is the create's minus `name` and `tags`. Sending either is a rejected
+    /// request, and the omission is not cosmetic: `tags` cannot be restated here, so the roll is
+    /// authorized against the image ARN rather than by the request tags the create is bound on.
+    /// PUT semantics make the rest load-bearing too — a build input left out is dropped from the
+    /// new version rather than inherited from the old one.
+    #[test]
+    fn the_update_image_body_matches_the_published_wire_contract() {
+        let request = UpdateMicrovmImageRequest::builder()
+            .description("Sandbox agents")
+            .base_image_arn("arn:aws:lambda:us-east-2:aws:microvm-image:al2023-1")
+            .base_image_version("1")
+            .build_role_arn("arn:aws:iam::123456789012:role/stack-sbx-build")
+            .code_artifact(MicrovmCodeArtifact {
+                uri: "s3://bundles/sandbox-v2.zip".to_string(),
+            })
+            .logging(MicrovmImageLogging::Disabled {})
+            .egress_network_connectors(vec!["arn:aws:lambda:us-east-2:aws:network-connector:aws-network-connector:INTERNET_EGRESS".to_string()])
+            .cpu_configurations(vec![MicrovmCpuConfiguration {
+                architecture: "ARM_64".to_string(),
+            }])
+            .resources(vec![MicrovmImageResources {
+                minimum_memory_in_mib: 2048,
+            }])
+            .hooks(
+                MicrovmImageHooks::builder()
+                    .port(8971)
+                    .microvm_image_hooks(MicrovmImageBuildHooks {
+                        ready: "ENABLED".to_string(),
+                        ready_timeout_in_seconds: 120,
+                    })
+                    .build(),
+            )
+            .environment_variables(std::collections::BTreeMap::from([(
+                "ALIEN_SANDBOX_PORT".to_string(),
+                "8971".to_string(),
+            )]))
+            .client_token("stack-sbx-deadbeef")
+            .build();
+
+        let body = serde_json::to_value(&request).expect("serializes");
+
+        assert!(
+            body.get("name").is_none(),
+            "the image is named by the path, and a name in the body is rejected: {body}"
+        );
+        assert!(
+            body.get("tags").is_none(),
+            "UpdateMicrovmImage accepts no tags; the image keeps the create's: {body}"
+        );
+        assert_eq!(body["codeArtifact"]["uri"], "s3://bundles/sandbox-v2.zip");
+        assert_eq!(
+            body["baseImageArn"],
+            "arn:aws:lambda:us-east-2:aws:microvm-image:al2023-1"
+        );
+        assert_eq!(body["baseImageVersion"], "1");
+        assert_eq!(
+            body["buildRoleArn"],
+            "arn:aws:iam::123456789012:role/stack-sbx-build"
+        );
+        assert_eq!(body["logging"], serde_json::json!({ "disabled": {} }));
+        assert_eq!(body["cpuConfigurations"][0]["architecture"], "ARM_64");
+        // Capital B, which `camelCase` renaming cannot produce.
+        assert_eq!(body["resources"][0]["minimumMemoryInMiB"], 2048);
+        assert_eq!(body["additionalOsCapabilities"], serde_json::json!([]));
+        assert_eq!(body["hooks"]["port"], 8971);
+        assert_eq!(body["hooks"]["microvmImageHooks"]["ready"], "ENABLED");
+        assert_eq!(
+            body["environmentVariables"],
+            serde_json::json!({ "ALIEN_SANDBOX_PORT": "8971" })
+        );
+        assert_eq!(body["clientToken"], "stack-sbx-deadbeef");
+    }
+
+    /// The roll's `imageVersion` is the version to poll. Reading `latestActiveImageVersion`
+    /// instead would poll the version the roll replaced, which is already ACTIVE — the sandbox
+    /// would report ready on the old bundle.
+    #[test]
+    fn the_update_response_carries_the_newly_minted_version() {
+        let response: UpdateMicrovmImageResponse = serde_json::from_str(
+            r#"{
+                "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-sbx",
+                "name": "stack-sbx",
+                "state": "UPDATING",
+                "imageVersion": "2.0",
+                "latestActiveImageVersion": "1.0",
+                "createdAt": 1.7869E9
+            }"#,
+        )
+        .expect("deserializes");
+
+        assert_eq!(response.image_version.as_deref(), Some("2.0"));
+        assert_eq!(response.state.as_deref(), Some("UPDATING"));
+        assert_eq!(
+            response.image_arn.as_deref(),
+            Some("arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-sbx")
+        );
+    }
+
+    /// The create response's `imageVersion` is the minted version and the poll key; reading it
+    /// out of the wrong field would poll a version that does not exist and time out at the
+    /// deadline instead of at the build.
+    #[test]
+    fn the_create_response_carries_the_minted_version() {
+        let response: CreateMicrovmImageResponse = serde_json::from_str(
+            r#"{
+                "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-sbx",
+                "name": "stack-sbx",
+                "state": "CREATING",
+                "imageVersion": "1.0",
+                "latestActiveImageVersion": null,
+                "createdAt": 1.7869E9
+            }"#,
+        )
+        .expect("deserializes");
+
+        assert_eq!(response.image_version.as_deref(), Some("1.0"));
+        assert_eq!(response.state.as_deref(), Some("CREATING"));
+        assert_eq!(
+            response.image_arn.as_deref(),
+            Some("arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-sbx")
+        );
+    }
+
+    /// A version read carries both the build lifecycle (`state`) and availability (`status`),
+    /// plus the service's own `stateReason` — the whole basis for the runtime controller's
+    /// ready/failed decision and its failure surfacing.
+    #[test]
+    fn a_version_read_carries_state_status_and_reason() {
+        let version: MicrovmImageVersion = serde_json::from_str(
+            r#"{
+                "imageArn": "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-sbx",
+                "imageVersion": "1.0",
+                "state": "FAILED",
+                "status": "INACTIVE",
+                "stateReason": "One or more builds failed"
+            }"#,
+        )
+        .expect("deserializes");
+
+        assert_eq!(version.state.as_deref(), Some("FAILED"));
+        assert_eq!(version.status.as_deref(), Some("INACTIVE"));
+        assert_eq!(
+            version.state_reason.as_deref(),
+            Some("One or more builds failed")
+        );
     }
 
     /// The egress connector is the whole of what makes `egress: deny` real, and the failure
@@ -872,7 +1499,7 @@ mod live_image_create {
                     body["logging"] = serde_json::json!({ "cloudWatch": { "logGroup": std::env::var("PROBE_LOG_GROUP").expect("PROBE_LOG_GROUP") } })
                 }
                 "conn" => {
-                    if let Some(c) = std::env::var("PROBE_CONNECTOR_ARN").ok() {
+                    if let Ok(c) = std::env::var("PROBE_CONNECTOR_ARN") {
                         body["egressNetworkConnectors"] = serde_json::json!([c]);
                     }
                 }

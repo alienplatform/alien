@@ -33,7 +33,7 @@
   },
   "sandbox": {
     "frozen": true,
-    "live": false
+    "live": true
   },
   "storage": {
     "frozen": true,

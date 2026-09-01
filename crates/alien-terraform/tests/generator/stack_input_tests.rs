@@ -135,7 +135,7 @@ fn a_secret_input_cannot_reach_the_input_values_output() {
             let outputs = module
                 .iter()
                 .find(|(name, _)| *name == "outputs.tf")
-                .map(|(_, contents)| contents.clone())
+                .map(|(_, contents)| contents)
                 .expect("outputs.tf should render");
             assert!(
                 !outputs.contains("deployment_input_values"),

@@ -17,8 +17,8 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
-    NetworkSettings, RemoteBindings, Result, Sandbox, SandboxCode, SandboxEgress,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    NetworkSettings, RemoteBindings, ResourceLifecycle, Result, Sandbox, SandboxCode,
+    SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -95,46 +95,91 @@ impl TfEmitter for AwsSandboxEmitter {
             tags(ctx, "sandbox"),
         );
 
-        let build_policy = iam_role_policy_block(
-            label,
-            label,
-            "sandbox-image-build",
-            // Statements are raw objects: `iam_role_policy_block` already jsonencodes the whole
-            // document, and encoding them again renders each one as a JSON *string*, which IAM
-            // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
-            // and the string are both well-formed — so it only shows up at apply.
-            vec![
-                Expression::from_iter([
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+        // Statements are raw objects: `iam_role_policy_block` already jsonencodes the whole
+        // document, and encoding them again renders each one as a JSON *string*, which IAM
+        // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
+        // and the string are both well-formed — so it only shows up at apply.
+        let mut build_statements = vec![
+            Expression::from_iter([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+                ),
+                (
+                    "Resource",
+                    // A template for the same reason the operator policy's ARNs are: a plain
+                    // string literal has its `${` escaped, so the partition would reach IAM as
+                    // literal text and the grant would match nothing.
+                    expr::template(artifact_object_arn(artifact_uri)),
+                ),
+            ]),
+            Expression::from_iter([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![
+                        // CreateLogGroup as well as the writes: the build creates no group of
+                        // its own, so without it the first build's logs go nowhere. The house
+                        // build role grants all three.
+                        Expression::String("logs:CreateLogGroup".to_string()),
+                        Expression::String("logs:CreateLogStream".to_string()),
+                        Expression::String("logs:PutLogEvents".to_string()),
+                    ]),
+                ),
+                ("Resource", Expression::String("*".to_string())),
+            ]),
+        ];
+        // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
+        // role carries no ECR grant; a runtime-built image's base is a private registry image.
+        if provisioned_at_runtime(ctx) {
+            build_statements.push(Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String("PullSandboxBaseImage".to_string()),
+                ),
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Action",
+                    // The token call plus the two pull actions a live build was observed to be
+                    // denied without — the registry's repository policy alone did not authorize it.
+                    Expression::from(vec![
+                        Expression::String("ecr:GetAuthorizationToken".to_string()),
+                        Expression::String("ecr:BatchGetImage".to_string()),
+                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    ]),
+                ),
+                // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
+                // the base image is unknown when the module is rendered, so the pull pair is `*`
+                // too; the Deny below stops it reading this account's own private repositories.
+                ("Resource", Expression::String("*".to_string())),
+            ]));
+            // Same-account pulls are authorized by identity policy alone — no repository policy
+            // participates — and this role runs a customer-authored Dockerfile. The base image
+            // is cross-account by construction, so a same-account pull is never legitimate.
+            build_statements.push(Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String("DenySameAccountImagePull".to_string()),
+                ),
+                ("Effect", Expression::String("Deny".to_string())),
+                (
+                    "Action",
+                    Expression::from(vec![
+                        Expression::String("ecr:BatchGetImage".to_string()),
+                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                    ]),
+                ),
+                (
+                    "Resource",
+                    expr::template(
+                        "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
                     ),
-                    (
-                        "Resource",
-                        // A template for the same reason the operator policy's ARNs are: a plain
-                        // string literal has its `${` escaped, so the partition would reach IAM as
-                        // literal text and the grant would match nothing.
-                        expr::template(artifact_object_arn(artifact_uri)),
-                    ),
-                ]),
-                Expression::from_iter([
-                    ("Effect", Expression::String("Allow".to_string())),
-                    (
-                        "Action",
-                        Expression::from(vec![
-                            // CreateLogGroup as well as the writes: the build creates no group of
-                            // its own, so without it the first build's logs go nowhere. The house
-                            // build role grants all three.
-                            Expression::String("logs:CreateLogGroup".to_string()),
-                            Expression::String("logs:CreateLogStream".to_string()),
-                            Expression::String("logs:PutLogEvents".to_string()),
-                        ]),
-                    ),
-                    ("Resource", Expression::String("*".to_string())),
-                ]),
-            ],
-        );
+                ),
+            ]));
+        }
+        let build_policy =
+            iam_role_policy_block(label, label, "sandbox-image-build", build_statements);
 
         // Lambda assumes this to manage the connector's ENIs in the customer's VPC. The API
         // documents the permissions it must hold; the field being optional is not a promise
@@ -353,9 +398,19 @@ impl TfEmitter for AwsSandboxEmitter {
 
         let mut fragment = TfFragment::empty()
             .with_resource(build_role)
-            .with_resource(build_policy)
-            .with_resource(iam_propagation)
-            .with_resource(image);
+            .with_resource(build_policy);
+        // The barrier exists to let the roles propagate before the connector and the image are
+        // created. An open, runtime-provisioned sandbox creates neither, so keeping it would ship
+        // a customer a thirty-second wait that gates nothing.
+        if !open || !provisioned_at_runtime(ctx) {
+            fragment = fragment.with_resource(iam_propagation);
+        }
+        // A Live sandbox is built by the runtime controller once the deployment has registered,
+        // because only then is the customer's account a principal Alien's registry can be opened
+        // to. The role and the connector stay: the controller may pass them and creates neither.
+        if !provisioned_at_runtime(ctx) {
+            fragment = fragment.with_resource(image);
+        }
         if !open {
             fragment = fragment
                 .with_resource(operator_role)
@@ -370,6 +425,9 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        if provisioned_at_runtime(ctx) {
+            return runtime_import_ref(sandbox, label);
+        }
         Ok(expr::object([
             ("previewPorts", preview_ports(sandbox)),
             ("egressConnectorArns", egress_connector_arns(sandbox, label)),
@@ -395,6 +453,12 @@ impl TfEmitter for AwsSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
+        // `AwsSandboxBinding` requires `imageArn` and `imageVersion`, which a runtime-provisioned
+        // sandbox does not have until its controller has built. A partial binding fails to
+        // deserialize in the workload that reads it, so none is offered here.
+        if provisioned_at_runtime(ctx) {
+            return Ok(None);
+        }
         let mut fields = vec![
             ("service", Expression::String("sandbox-aws".to_string())),
             ("previewPorts", preview_ports(sandbox)),
@@ -427,6 +491,32 @@ impl TfEmitter for AwsSandboxEmitter {
         }
         Ok(Some(expr::object(fields)))
     }
+}
+
+/// Whether this sandbox's image is built by the runtime controller rather than by `terraform apply`.
+fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
+    ctx.resource.lifecycle == ResourceLifecycle::Live
+}
+
+/// What a runtime-provisioned sandbox registers.
+///
+/// The image fields are absent because the image doesn't exist yet. In their place go what the
+/// controller cannot derive — the build role it passes and the bundle it builds from — plus the
+/// egress facts the module still owns.
+fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
+    Ok(expr::object([
+        ("previewPorts", preview_ports(sandbox)),
+        ("egressConnectorArns", egress_connector_arns(sandbox, label)),
+        (
+            "allowEgress",
+            Expression::Bool(matches!(sandbox.egress, SandboxEgress::Allow)),
+        ),
+        (
+            "buildRoleArn",
+            expr::traversal(["aws_iam_role", label, "arn"]),
+        ),
+        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+    ]))
 }
 
 /// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.

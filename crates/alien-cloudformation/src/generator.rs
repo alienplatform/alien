@@ -12,8 +12,9 @@ use alien_core::{
     ownership_policy_for_resource_type, CapacityGroup, CapacityGroupScalePolicy, ComputeCluster,
     ComputePoolSelection, DeploymentModel, DomainSettings, ErrorData, HeartbeatsMode,
     KubernetesCluster, KubernetesSettings, Network, NetworkSettings, Platform, RemoteBindings,
-    ResourceLifecycle, Result, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
-    StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker, WorkerCode,
+    ResourceLifecycle, Result, Sandbox, Stack, StackInputDefaultValue, StackInputDefinition,
+    StackInputKind, StackInputProvider, StackSettings, TelemetryMode, UpdatesMode, Worker,
+    WorkerCode,
 };
 use alien_error::AlienError;
 use indexmap::{indexmap, IndexMap};
@@ -239,14 +240,30 @@ pub fn generate_cloudformation_template(
     }
 
     let names = logical_names(stack)?;
+    // CREATE_COMPLETE reads as "the package is installed". For a runtime-provisioned sandbox the
+    // image does not exist yet, and the stack description is the one line every console shows.
+    // Not on a Kubernetes target: the sandbox is skipped there, so no build follows registration.
+    let runtime_sandbox = !options.target.is_kubernetes()
+        && stack.resources().any(|(_, entry)| {
+            entry.config.resource_type().0.as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
+                && entry.lifecycle == ResourceLifecycle::Live
+        });
     let mut template = CfTemplate {
         aws_template_format_version: TEMPLATE_VERSION.to_string(),
-        description: Some(
-            options
+        description: Some({
+            let base = options
                 .description
                 .clone()
-                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id())),
-        ),
+                .unwrap_or_else(|| format!("Application setup stack for {}", stack.id()));
+            if runtime_sandbox {
+                format!(
+                    "{base}. The sandbox image is built after the deployment registers, so a \
+                     completed stack does not mean the sandbox can accept sessions yet."
+                )
+            } else {
+                base
+            }
+        }),
         transform: vec![LANGUAGE_EXTENSIONS_TRANSFORM.to_string()],
         metadata: IndexMap::new(),
         parameters: IndexMap::new(),
@@ -307,7 +324,7 @@ pub fn generate_cloudformation_template(
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
-        if !ownership.should_emit_in_setup(resource.lifecycle) {
+        if !ownership.emits_setup_scaffolding(resource.lifecycle) {
             continue;
         }
         // A sandbox on a Kubernetes target is a pod bounded by the chart's NetworkPolicy, not

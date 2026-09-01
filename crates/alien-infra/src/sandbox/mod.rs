@@ -1,5 +1,15 @@
 //! Sandbox resource controllers.
 
+#[cfg(feature = "aws")]
+mod aws;
+#[cfg(feature = "aws")]
+pub use aws::*;
+
+#[cfg(feature = "aws")]
+mod aws_import;
+#[cfg(feature = "aws")]
+pub use aws_import::*;
+
 #[cfg(feature = "kubernetes")]
 mod kubernetes_eligibility;
 #[cfg(feature = "kubernetes")]

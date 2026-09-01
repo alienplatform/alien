@@ -1258,9 +1258,15 @@ fn remote_sandbox_binding(
             "Resource '{resource_id}' is not a sandbox"
         )));
     }
-    if resource.lifecycle != Some(ResourceLifecycle::Frozen) {
+    // Frozen or Live: a Frozen sandbox's binding was registered by the setup stack, a Live
+    // one's is published by the runtime controller once its image build reaches ACTIVE. Both
+    // arrive through `remote_binding_params`, so the Running check below is the real gate.
+    if !matches!(
+        resource.lifecycle,
+        Some(ResourceLifecycle::Frozen | ResourceLifecycle::Live)
+    ) {
         return Err(ErrorData::bad_request(format!(
-            "Sandbox resource '{resource_id}' is not Frozen"
+            "Sandbox resource '{resource_id}' has no lifecycle in the deployment's stack state"
         )));
     }
     if resource.status != ResourceStatus::Running {

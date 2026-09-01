@@ -45,7 +45,8 @@ mod compute_cluster;
 pub use compute_cluster::*;
 
 mod sandbox;
-#[cfg(feature = "local")]
+// The module holds cloud controllers as well as the local one, and a caller outside this crate
+// has to be able to name them to resolve a controller by type.
 pub use sandbox::*;
 
 mod kubernetes_cluster;

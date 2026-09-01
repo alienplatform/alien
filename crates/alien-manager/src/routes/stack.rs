@@ -1294,11 +1294,14 @@ fn validate_import_handoff(req: &StackImportRequest, stack: &Stack) -> crate::er
             "Setup registration contains duplicate resource ids",
         ));
     }
+    // The emission question, not the ownership one: whatever the generators render must appear
+    // here, or a completed stack fails to register. A Live sandbox renders its build role and so
+    // registers, even though its image belongs to a runtime controller.
     let expected: std::collections::HashSet<&str> = stack
         .resources()
         .filter(|(_, entry)| {
             alien_core::ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
-                .should_emit_in_setup(entry.lifecycle)
+                .emits_setup_scaffolding(entry.lifecycle)
         })
         .map(|(resource_id, _)| resource_id.as_str())
         .collect();
@@ -1376,6 +1379,67 @@ mod setup_update_authorization_tests {
             input_values: HashMap::new(),
             resources: vec![],
         }
+    }
+
+    /// Registration must expect exactly what the generators render, and a Live sandbox is the
+    /// one resource where those two answers come from different predicates: setup installs its
+    /// build role, so it registers, while the image belongs to a runtime controller. Reading the
+    /// ownership answer here refuses a payload the emitter it shares a release with just
+    /// produced — and refuses it after the customer's install has already reached CREATE_COMPLETE.
+    #[test]
+    fn a_live_sandbox_registers_even_though_setup_does_not_own_it() {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Deny)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let worker = Worker::new("api".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .build();
+        let declared = Stack::new("declared".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .add(worker, ResourceLifecycle::Live)
+            .build();
+
+        let mut delivered = request();
+        delivered.resources = vec![ImportedResource {
+            id: "agents".to_string(),
+            resource_type: alien_core::Sandbox::RESOURCE_TYPE,
+            import_data: serde_json::json!({}),
+        }];
+        validate_import_handoff(&delivered, &declared)
+            .expect("the payload the emitter renders must be accepted");
+
+        let omitted = request();
+        let error = validate_import_handoff(&omitted, &declared)
+            .expect_err("a payload missing the sandbox's scaffolding must be refused");
+        assert!(
+            error.message.contains("agents"),
+            "the refusal must name the missing resource"
+        );
+
+        // The Worker is the control: nothing in setup renders it, so delivering one is still the
+        // second refusal. Widening the expected set to every Live resource would lose that.
+        let mut over_delivered = delivered.clone();
+        over_delivered.resources.push(ImportedResource {
+            id: "api".to_string(),
+            resource_type: Worker::RESOURCE_TYPE,
+            import_data: serde_json::json!({}),
+        });
+        let error = validate_import_handoff(&over_delivered, &declared)
+            .expect_err("a resource setup never renders must not be importable");
+        assert!(
+            error.message.contains("api") && !error.message.contains("agents"),
+            "only the worker is unowned"
+        );
     }
 
     fn record(prepared_stack: Stack) -> DeploymentRecord {

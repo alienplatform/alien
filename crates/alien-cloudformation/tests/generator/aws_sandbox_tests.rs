@@ -5,8 +5,9 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
-    SandboxEgress, SandboxSessionPolicy, Stack, StackSettings, Worker, WorkerCode,
+    import::data::AwsSandboxImportData, Network, NetworkSettings, RemoteBindings,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack,
+    StackSettings, Worker, WorkerCode,
 };
 
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
@@ -24,6 +25,14 @@ fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
 
 /// A sandbox and the network its egress connector attaches to, which the emitter requires.
 fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
+    sandbox_stack_with_lifecycle(name, egress, ResourceLifecycle::Frozen)
+}
+
+fn sandbox_stack_with_lifecycle(
+    name: &str,
+    egress: SandboxEgress,
+    lifecycle: ResourceLifecycle,
+) -> (Stack, StackSettings) {
     let settings = StackSettings {
         network: Some(NetworkSettings::Create {
             cidr: None,
@@ -38,9 +47,340 @@ fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
                 .build(),
             ResourceLifecycle::Frozen,
         )
-        .add(sandbox_fixture(egress), ResourceLifecycle::Frozen)
+        .add(sandbox_fixture(egress), lifecycle)
         .build();
     (stack, settings)
+}
+
+/// The `sandbox-image-build` policy statements of the emitted build role, parsed as IAM sees
+/// them — asserting on the serialized document catches an expression that renders wrong, not
+/// just a missing string.
+fn build_role_statements(template: &alien_cloudformation::CfTemplate) -> Vec<serde_json::Value> {
+    let role = serde_json::to_value(
+        template
+            .resources
+            .get("AgentsBuildRole")
+            .expect("the build role must render"),
+    )
+    .expect("serializes");
+    role["Properties"]["Policies"][0]["PolicyDocument"]["Statement"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the build policy statements must be a list: {role:#}"))
+        .clone()
+}
+
+/// Whether a parsed IAM statement carries any `ecr:` action.
+fn grants_ecr(statement: &serde_json::Value) -> bool {
+    statement["Action"].as_array().is_some_and(|actions| {
+        actions
+            .iter()
+            .any(|action| action.as_str().is_some_and(|a| a.starts_with("ecr:")))
+    })
+}
+
+/// Every resource type the rendered template declares.
+fn resource_types(template: &alien_cloudformation::CfTemplate) -> Vec<String> {
+    template
+        .resources
+        .values()
+        .map(|resource| resource.resource_type.clone())
+        .collect()
+}
+
+/// The `importData` a rendered registration carries for one resource id.
+///
+/// CloudFormation intrinsics stand in for values only the deployed stack knows, so each is
+/// replaced by a placeholder string — the shape is what the importer contract is judged on, not
+/// the resolved values.
+fn registration_import_data(
+    template: &alien_cloudformation::CfTemplate,
+    resource_id: &str,
+) -> serde_json::Value {
+    fn resolve(value: &serde_json::Value) -> serde_json::Value {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map
+                    .keys()
+                    .any(|key| key.starts_with("Fn::") || key == "Ref")
+                {
+                    return serde_json::Value::String("resolved-at-deploy-time".to_string());
+                }
+                serde_json::Value::Object(
+                    map.iter().map(|(k, v)| (k.clone(), resolve(v))).collect(),
+                )
+            }
+            serde_json::Value::Array(items) => {
+                serde_json::Value::Array(items.iter().map(resolve).collect())
+            }
+            other => other.clone(),
+        }
+    }
+
+    fn find(value: &serde_json::Value, resource_id: &str) -> Option<serde_json::Value> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if map.get("id").and_then(serde_json::Value::as_str) == Some(resource_id) {
+                    if let Some(import_data) = map.get("importData") {
+                        return Some(resolve(import_data));
+                    }
+                }
+                map.values().find_map(|nested| find(nested, resource_id))
+            }
+            serde_json::Value::Array(items) => {
+                items.iter().find_map(|nested| find(nested, resource_id))
+            }
+            _ => None,
+        }
+    }
+
+    let rendered = serde_json::to_value(&template.resources).expect("serializes");
+    find(&rendered, resource_id)
+        .unwrap_or_else(|| panic!("no registration importData for '{resource_id}'"))
+}
+
+/// The image must be gone — it can only be built once the customer's account is a principal
+/// Alien's registry has opened to, not true during stack creation — and the build role must
+/// stay, since `sandbox/provision` grants the controller `iam:PassRole` but no `iam:CreateRole`.
+#[test]
+fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-live",
+        SandboxEgress::Deny,
+        ResourceLifecycle::Live,
+    );
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live sandbox",
+    );
+
+    let types = resource_types(&template);
+    assert!(
+        !types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Live sandbox must not bake its image into stack creation: {types:?}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "the build role the controller passes must still be installed: {types:?}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsEgressConnector"),
+        "the connector the build and the session are passed must still be installed: {types:?}"
+    );
+
+    // The registration has to carry the two things the controller cannot derive, and must not
+    // carry a GetAtt against the image resource this template does not create.
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    assert!(
+        rendered.contains("buildRoleArn"),
+        "registration must name the build role: {rendered}"
+    );
+    assert!(
+        rendered.contains("bundleUri"),
+        "registration must name the bundle the controller builds from: {rendered}"
+    );
+    assert!(
+        !rendered.contains("LatestActiveImageVersion"),
+        "no attribute of an image that is not created may be read: {rendered}"
+    );
+
+    // Setup registration builds its expected set from `emits_setup_scaffolding` and refuses one
+    // missing any of them (`alien-manager/src/routes/stack.rs`), which is why the emitter
+    // returns a runtime import ref instead of nothing — dropping it fails every install.
+    assert!(
+        rendered.contains("\"agents\""),
+        "the sandbox must still register under its own id: {rendered}"
+    );
+
+    // The registration is the last step of a customer's install, and the contract it is parsed
+    // against lives in another crate. Asserting the rendered payload merely *mentions*
+    // `buildRoleArn` would pass while the importer rejected the whole object — so parse it.
+    let import_data = registration_import_data(&template, "agents");
+    let parsed: AwsSandboxImportData =
+        serde_json::from_value(import_data.clone()).unwrap_or_else(|error| {
+            panic!("the importer must accept what the emitter renders: {error}\n{import_data:#}")
+        });
+    assert_eq!(parsed.image_arn, None, "there is no image to name yet");
+    assert_eq!(parsed.image_version, None);
+    assert!(
+        parsed.build_role_arn.is_some(),
+        "the controller is handed the role it may only pass: {import_data:#}"
+    );
+    assert!(
+        parsed.bundle_uri.is_some(),
+        "the controller is handed the bundle it builds from: {import_data:#}"
+    );
+
+    // The runtime build's base image comes from a private registry, and the identity itself
+    // needs all three actions — a repository policy on the registry side is not enough.
+    let statements = build_role_statements(&template);
+    let ecr = statements
+        .iter()
+        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
+        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
+    assert_eq!(
+        ecr["Sid"], "PullSandboxBaseImage",
+        "the statement a security reviewer reads must say what it is for"
+    );
+    assert_eq!(
+        ecr["Action"],
+        serde_json::json!([
+            "ecr:GetAuthorizationToken",
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer"
+        ]),
+        "exactly the token call and the two pull actions, nothing wider"
+    );
+    assert_eq!(
+        ecr["Resource"],
+        serde_json::json!("*"),
+        "GetAuthorizationToken is only accepted against `*`"
+    );
+
+    // Same-account pulls are authorized by identity policy alone, so without this Deny the
+    // Allow above makes a customer-authored Dockerfile a reader of every private repository
+    // in the customer's own account.
+    let deny = statements
+        .iter()
+        .find(|statement| statement["Effect"] == "Deny")
+        .unwrap_or_else(|| {
+            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
+        });
+    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
+    assert_eq!(
+        deny["Action"],
+        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        "the deny covers exactly the two pull actions — never the token call, which the \
+         cross-account login needs"
+    );
+    assert_eq!(
+        deny["Resource"],
+        serde_json::json!({
+            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+        }),
+        "the deny must name this account's repositories through pseudo parameters, not literals"
+    );
+}
+
+/// The Frozen path is the one every installed stack is on.
+#[test]
+fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-frozen", SandboxEgress::Deny);
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "frozen sandbox",
+    );
+
+    let types = resource_types(&template);
+    assert!(
+        types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Frozen sandbox is built by stack creation: {types:?}"
+    );
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    assert!(
+        rendered.contains("LatestActiveImageVersion"),
+        "registration reads the version off the image it created: {rendered}"
+    );
+    assert!(
+        !rendered.contains("buildRoleArn"),
+        "a Frozen sandbox hands the controller nothing to build with: {rendered}"
+    );
+
+    let import_data = registration_import_data(&template, "agents");
+    let parsed: AwsSandboxImportData = serde_json::from_value(import_data.clone())
+        .unwrap_or_else(|error| panic!("the importer must accept it: {error}\n{import_data:#}"));
+    assert!(
+        parsed.image_arn.is_some() && parsed.image_version.is_some(),
+        "a setup-built sandbox registers the image it created: {import_data:#}"
+    );
+    assert_eq!(parsed.build_role_arn, None);
+
+    // A setup-baked image pulls its public base anonymously; an ECR grant here would hand the
+    // role running a customer-authored Dockerfile pull access it never needs.
+    let statements = build_role_statements(&template);
+    assert!(
+        !statements.iter().any(grants_ecr),
+        "a Frozen build role must carry no ECR action: {statements:#?}"
+    );
+}
+
+/// Open + Live is the leanest emitted combination — no image (built at runtime) and no egress
+/// apparatus (an open session starts without a connector) — and no other test renders it.
+#[test]
+fn an_open_live_sandbox_ships_only_the_build_role() {
+    let stack = Stack::new("acme-sandbox-open-live".to_string())
+        .add(
+            sandbox_fixture(SandboxEgress::Allow),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    // No network in the stack at all: an open sandbox must not need one.
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "open live sandbox",
+    );
+
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "the build role the controller passes must still be installed"
+    );
+    let types = resource_types(&template);
+    assert!(
+        !types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a Live sandbox must not bake its image into stack creation: {types:?}"
+    );
+    let rendered = serde_json::to_string(&template.resources).expect("serializes");
+    for absent in [
+        "EgressConnector",
+        "EgressSecurityGroup",
+        "EgressOperatorRole",
+    ] {
+        assert!(
+            !rendered.contains(absent),
+            "an open sandbox must not render {absent}:\n{rendered}"
+        );
+    }
+    let description = template.description.as_deref().expect("a description");
+    assert!(
+        description.contains("built after the deployment registers"),
+        "the one line every console shows must caveat the runtime build: {description}"
+    );
+}
+
+/// A Kubernetes target skips the sandbox emitter, so the stack description must not caveat a
+/// runtime image build that never happens.
+#[test]
+fn a_kubernetes_target_description_makes_no_runtime_build_promise() {
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-eks-live",
+        SandboxEgress::Deny,
+        ResourceLifecycle::Live,
+    );
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Eks,
+        "eks",
+        "live sandbox on a kubernetes target",
+    );
+    let description = template.description.as_deref().expect("a description");
+    assert!(
+        !description.contains("built after the deployment registers"),
+        "no sandbox is emitted on a Kubernetes target, so no build step may be described: \
+         {description}"
+    );
 }
 
 /// `egress: deny` has to be built, not assumed.
