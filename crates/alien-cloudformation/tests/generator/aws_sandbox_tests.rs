@@ -172,7 +172,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
     );
 
     // The registration has to carry the two things the controller cannot derive, and must not
-    // carry a GetAtt against the image resource this template no longer creates.
+    // carry a GetAtt against the image resource this template does not create.
     let rendered = serde_json::to_string(&template.resources).expect("serializes");
     assert!(
         rendered.contains("buildRoleArn"),
@@ -265,7 +265,7 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
     );
 }
 
-/// The Frozen path is the one every installed stack is on, and it does not move.
+/// The Frozen path is the one every installed stack is on.
 #[test]
 fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
     let (stack, settings) = sandbox_stack("acme-sandbox-frozen", SandboxEgress::Deny);

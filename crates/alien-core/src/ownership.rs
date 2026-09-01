@@ -273,9 +273,9 @@ mod tests {
         assert!(policy.emits_setup_scaffolding(ResourceLifecycle::Live));
     }
 
-    /// Pins the non-regression claim for every other type at once: before the split one
-    /// predicate served both questions, so any type whose answers now diverge has silently
-    /// changed behaviour at nine call sites.
+    /// Every type but the sandbox must answer `should_emit_in_setup` and
+    /// `emits_setup_scaffolding` identically; a diverging type has silently changed ownership
+    /// behaviour.
     #[test]
     fn only_the_sandbox_separates_ownership_from_scaffolding() {
         let types = crate::gateability::MANIFEST_TYPES
