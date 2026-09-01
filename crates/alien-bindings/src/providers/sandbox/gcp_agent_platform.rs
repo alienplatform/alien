@@ -498,26 +498,29 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
-    /// Narrows the platform ceiling to this instance: the TTL is fixed at construction from the
-    /// declaration, so with none declared every session this object creates runs to the service
-    /// default and none is terminated at a deadline the caller asked for.
+    /// The platform's row, unnarrowed.
+    ///
+    /// `sessionLifetime` holds whether or not a ttl was declared: `expireTime` is, in the API's own
+    /// words, *always provided on output regardless of what was sent on input*, so a session
+    /// created without one still carries a deadline the platform terminates at. Reporting `false`
+    /// there would tell a caller no lifetime is enforced while one is.
     fn capabilities(&self) -> SandboxCapabilities {
-        let mut capabilities = SandboxCapabilities::gcp_agent_platform();
-        capabilities.session_lifetime = self.session_ttl_seconds.is_some();
-        capabilities
+        SandboxCapabilities::gcp_agent_platform()
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         // A session inherits no per-session environment: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
+        // `OperationNotSupported`, not `InvalidInput`: the value is fine, the backend has nowhere
+        // to put it. AWS answers the identical condition the same way, and a portable caller
+        // branching on the code must not get two answers for one situation.
         if !request.env.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidInput {
-                operation_context: CREATE.to_string(),
-                details: "Agent Platform carries no per-session environment; pass variables on \
-                          each command instead"
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no session-level env; set env per command \
+                         instead"
                     .to_string(),
-                field_name: Some("env".to_string()),
             }));
         }
 

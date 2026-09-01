@@ -969,7 +969,12 @@ pub trait Container: Binding {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
-    /// Caller-chosen session id. Omitted means the provider allocates one.
+    /// Session id to reconnect to, for the verbs that take one.
+    ///
+    /// Not a name for a new session: `create` always allocates, on every backend, and returns the
+    /// id it allocated. `get_or_create` and `reconnect` read this as the id to look for. A caller
+    /// that sets it on `create` is answered with a different id in the response rather than
+    /// silently — the allocated one is the truth, and it is returned.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a
@@ -992,6 +997,16 @@ pub struct SandboxSession {
     pub state: SandboxSessionState,
     /// Lifecycle generation. A capability from another generation is rejected, which is how
     /// terminate revokes without distributing a revocation list.
+    ///
+    /// What it counts differs by backend, because what can be replaced differs. AWS and Azure
+    /// allocate a fresh id per session, so nothing can be swapped underneath one and a constant
+    /// carries the whole meaning. GCP addresses a session by a name that outlives the container
+    /// behind it, so it derives this from the guest's boot id — the only signal that distinguishes
+    /// a replaced container from the one a caller last spoke to.
+    ///
+    /// The boot id has a known limit: a sandbox restored from a snapshot reports its **source's**
+    /// boot id while holding a different filesystem, so it detects replacement and not restore.
+    /// Anything that needs to tell those apart must key on the resource name as well.
     pub generation: u64,
 }
 
@@ -1115,8 +1130,9 @@ pub trait Sandbox: Binding {
 
     /// Fetches a session by id, or `None` if it does not exist.
     ///
-    /// Requires `reconnect`. A GCP session id is scoped to one Cloud Run instance, so GCP
-    /// returns the typed error rather than a `None` a caller would read as "expired".
+    /// Requires `reconnect`. `None` means the session does not exist; a backend that cannot
+    /// answer the question returns the typed error instead, so an absent session and an
+    /// unreachable one are never the same result.
     async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>>;
 
     /// Fetches a session, creating it if absent.
@@ -1124,9 +1140,10 @@ pub trait Sandbox: Binding {
 
     /// Lists sessions belonging to this sandbox's parent.
     ///
-    /// Not offered on AWS, Azure or GCP, where enumerating would cost an account-wide grant or
-    /// the API has no verb for it; those raise `OperationNotSupported`. Reaching a session whose
-    /// id is known is `get`..
+    /// Offered where the backend has a verb for it and the binding's grant covers it — GCP lists
+    /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
+    /// account-wide grant the session role deliberately withholds. Reaching a session whose id is
+    /// known is `get`.
     async fn list(&self) -> Result<Vec<SandboxSession>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.

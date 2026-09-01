@@ -189,8 +189,11 @@ async fn create_refuses_a_per_session_environment() {
         })
         .await
         .expect_err("a session environment must be refused");
-    assert_eq!(error.code, "INVALID_INPUT", "{error}");
-    assert!(error.to_string().contains("each command"), "{error}");
+    // The same code AWS answers the identical condition with: the value is fine, the backend has
+    // nowhere to put it. A portable caller branching on the code must not get two answers.
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(error.to_string().contains("env"), "{error}");
+    assert!(error.to_string().contains("per command"), "{error}");
 }
 
 // ---- get / get_or_create ----------------------------------------------------------------------
@@ -1139,19 +1142,18 @@ fn access_denied() -> AlienError<AgentPlatformErrorData> {
     })
 }
 
-/// The declared ttl decides whether sessions from this object carry a deadline at all.
+/// The row a caller reads describes the backend, not this sandbox's declaration.
 ///
-/// Both directions are asserted: with no ttl the create body sends none and the service default
-/// applies, so reporting `sessionLifetime` would promise a ceiling nobody asked for and nothing
-/// applies. A hardcoded `false` would pass the first assertion alone.
+/// `sessionLifetime` holds whether or not a ttl was declared. The API states `expireTime` is
+/// *always* provided on output regardless of what was sent on input, so a session created without
+/// a ttl still carries a deadline the platform terminates at — reporting `false` would tell a
+/// caller no lifetime is enforced while one is. Asserted on the no-ttl instance, which is the one
+/// a narrowing gets wrong.
 #[test]
-fn capabilities_reflect_the_declared_session_ttl() {
-    assert!(
-        provider(MockAgentPlatformApi::new())
-            .capabilities()
-            .session_lifetime,
-        "a declared ttl makes the capability real"
-    );
+fn capabilities_describe_the_backend_not_this_declaration() {
+    let platform = SandboxCapabilities::gcp_agent_platform();
+
+    assert_eq!(provider(MockAgentPlatformApi::new()).capabilities(), platform);
 
     let untimed = GcpAgentPlatformSandbox::new(
         Arc::new(MockAgentPlatformApi::new()),
@@ -1159,14 +1161,12 @@ fn capabilities_reflect_the_declared_session_ttl() {
         TEMPLATE.to_string(),
         None,
     );
-    assert!(
-        !untimed.capabilities().session_lifetime,
-        "no declared ttl means no session this object creates is terminated at a deadline"
+    assert_eq!(
+        untimed.capabilities(),
+        platform,
+        "a session with no declared ttl still expires, so the row does not change"
     );
-
-    // The rest of the row is the platform ceiling, unchanged.
-    assert!(untimed.capabilities().snapshot);
-    assert!(untimed.capabilities().files);
+    assert!(platform.session_lifetime, "Agent Platform always sets expireTime");
 }
 
 /// A tenant key has nowhere to go in the create body, so it is refused rather than dropped.

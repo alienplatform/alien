@@ -98,10 +98,12 @@ impl AzureSandbox {
         }))
     }
 
-    fn unsupported(&self, capability: &str) -> AlienError<ErrorData> {
+    /// A refusal that says why, because "not supported" tells a caller nothing about whether to
+    /// change the declaration, use another verb, or stop asking.
+    fn unsupported(&self, capability: &str, reason: &str) -> AlienError<ErrorData> {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: capability.to_string(),
-            reason: "not supported on azure".to_string(),
+            reason: reason.to_string(),
         })
     }
 
@@ -156,14 +158,16 @@ fn refuse_unsupported_session_fields(
 
 #[async_trait]
 impl Sandbox for AzureSandbox {
-    /// Narrows the platform ceiling to this instance: the egress policy is fixed at construction
-    /// from the declaration and no session can widen it, so a sandbox declared `allow` or `deny`
-    /// restricts nothing by hostname however capable the backend is.
+    /// The platform's row, unnarrowed.
+    ///
+    /// `domainEgressRules` answers whether Azure can restrict egress to a hostname allowlist, not
+    /// whether this sandbox was declared with one — a caller reading `false` on an `allow` sandbox
+    /// would conclude the backend cannot do it at all. AWS narrows `preview` for the opposite
+    /// reason: `preview()` hard-refuses every port when none is declared, so a `true` there would
+    /// misdescribe what the call does. Azure has no such call — the egress policy is applied at
+    /// create and there is nothing for a caller to be refused.
     fn capabilities(&self) -> SandboxCapabilities {
-        let mut capabilities =
-            SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a sandbox backend");
-        capabilities.domain_egress_rules = matches!(self.egress, SandboxEgress::AllowDomains { .. });
-        capabilities
+        SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a sandbox backend")
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
@@ -287,7 +291,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {
-        Err(self.unsupported("list"))
+        Err(self.unsupported(
+            "sandbox.list",
+            "enumerating sandboxes is a control-plane read the data-plane role does not carry; \
+             reach a known session with get",
+        ))
     }
 
     async fn run_command(
@@ -457,7 +465,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn preview(&self, _session_id: &str, _port: u16) -> Result<PreviewCapability> {
-        Err(self.unsupported("preview"))
+        Err(self.unsupported(
+            "sandbox.preview",
+            "an Azure sandbox port is either published to the internet or gated on an interactive \
+             Entra login; neither is a port-scoped credential with an expiry",
+        ))
     }
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
@@ -519,7 +531,10 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
-        Err(self.unsupported("snapshot"))
+        Err(self.unsupported(
+            "sandbox.snapshot",
+            "this client sends no snapshot request, and nothing owns the artifact once taken",
+        ))
     }
 
     async fn terminate(&self, session_id: &str) -> Result<()> {
@@ -4044,13 +4059,23 @@ mod tests {
         assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
     }
 
-    /// The declared egress decides whether this sandbox restricts by hostname at all.
+    /// The row a caller reads describes the backend, not this sandbox's declaration.
     ///
-    /// Both directions are asserted because only one of them distinguishes a narrowed capability
-    /// from a hardcoded `false`: the policy is fixed when the binding is built and no session can
-    /// widen it, so a sandbox declared `allow` restricts nothing however capable Azure is.
+    /// `domainEgressRules` answers "can Azure restrict egress to a hostname allowlist". A sandbox
+    /// declared `allow` does not use one, and reporting `false` there would tell a caller the
+    /// backend cannot do it at all — which is what a portable app branches on. Asserted on the
+    /// `allow` instance specifically, because that is the one a narrowing gets wrong.
     #[test]
-    fn capabilities_reflect_the_declared_egress() {
+    fn capabilities_describe_the_backend_not_this_declaration() {
+        let platform =
+            SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a backend");
+
+        // Declared `allow`, and still reports the backend's full row.
+        assert_eq!(
+            sandbox_with(MockSandboxDataPlaneApi::new()).capabilities(),
+            platform
+        );
+
         let listed = AzureSandbox::new(
             std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
             "grp".to_string(),
@@ -4063,22 +4088,8 @@ mod tests {
             "2048Mi".to_string(),
             None,
         );
-        assert!(
-            listed.capabilities().domain_egress_rules,
-            "a declared hostname allowlist makes the capability real"
-        );
-
-        assert!(
-            !sandbox_with(MockSandboxDataPlaneApi::new())
-                .capabilities()
-                .domain_egress_rules,
-            "an `allow` sandbox restricts no hostname, whatever the platform can do"
-        );
-
-        // The rest of the row is the platform ceiling, unchanged. Asserted so a future narrowing
-        // cannot quietly turn a capability off for every Azure sandbox at once.
-        assert!(sandbox_with(MockSandboxDataPlaneApi::new()).capabilities().files);
-        assert!(sandbox_with(MockSandboxDataPlaneApi::new()).capabilities().egress_deny);
+        assert_eq!(listed.capabilities(), platform, "the declaration is not the row");
+        assert!(platform.domain_egress_rules, "Azure does host-pattern egress");
     }
 
     /// A tenant key has nowhere to go in the create body, so it is refused rather than dropped.
