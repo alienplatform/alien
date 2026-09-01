@@ -144,6 +144,11 @@ impl AzureServiceActivationMutation {
                         );
                     }
                 }
+                // A sandbox group is a `Microsoft.App` resource, and a bindings-only sandbox stack
+                // has no worker to carry the signal. Shares the `worker` arm's key so they dedupe.
+                "sandbox" if include_azure_workload_scaffolding => {
+                    services.insert("enable-app".to_string(), "Microsoft.App".to_string());
+                }
                 "storage" | "kv" => {
                     services.insert(
                         "enable-storage".to_string(),
@@ -239,5 +244,38 @@ mod tests {
             services.get("enable-servicebus").map(String::as_str),
             Some("Microsoft.ServiceBus")
         );
+    }
+
+    /// A sandbox published through a Remote Binding is the whole stack — no worker, no build —
+    /// so nothing else asks for `Microsoft.App`. Without this the module creates a
+    /// `Microsoft.App/sandboxGroups` on a subscription that may never have registered the
+    /// provider, and `terraform apply` fails where nothing warned at plan.
+    #[test]
+    fn an_azure_sandbox_alone_still_registers_the_app_provider() {
+        let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build();
+
+        let services =
+            AzureServiceActivationMutation.get_required_services(&stack, Platform::Azure);
+
+        assert_eq!(
+            services.get("enable-app").map(String::as_str),
+            Some("Microsoft.App")
+        );
+        // On AWS the same stack must ask Azure for nothing at all.
+        assert!(AzureServiceActivationMutation
+            .get_required_services(&stack, Platform::Aws)
+            .is_empty());
     }
 }
