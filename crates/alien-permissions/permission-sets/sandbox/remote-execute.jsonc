@@ -7,9 +7,14 @@
     // and the grant have to come from the same template — an AWS MicroVM image, and an Azure
     // `Microsoft.App/sandboxGroups` at `2026-02-01-preview`.
     //
-    // GCP is absent because the reasoning engine a resource-level grant would be scoped to is
-    // created by a Live controller after apply rather than by setup, so there is nothing for the
-    // assignment to name. A GCP remote binding is refused by the remote-bindings preflight.
+    // GCP is absent for two reasons, and the first is the one that has to hold before the second
+    // is worth solving. `sandbox/execute` binds GCP at `projects/${projectName}` for both stack
+    // and resource, so a grant compiled from this set would reach every sandbox in the project
+    // rather than the one published — a different security proposition from the AWS and Azure
+    // blocks above, and not one worth handing to a remote caller. Second, the reasoning engine a
+    // narrower grant would be scoped to is created by a Live controller after apply rather than by
+    // setup, so there is nothing for the assignment to name. A GCP remote binding is refused by
+    // the remote-bindings preflight.
     "aws": [
       {
         "label": "session-lifecycle",

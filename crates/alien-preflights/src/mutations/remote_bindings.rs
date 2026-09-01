@@ -256,8 +256,9 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
                 .0
                 .iter()
                 .any(|(target, permission_sets)| {
-                    (target == sandbox_id || target == "*")
-                        && permission_sets.iter().any(reference_reaches_a_session)
+                    permission_sets
+                        .iter()
+                        .any(|reference| reaches_this_sandbox(reference, target, sandbox_id))
                 })
                 .then(|| format!("permission profile '{profile_name}' grants access to it"))
         });
@@ -279,17 +280,30 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     })
 }
 
-/// Whether a profile's permission set, once resolved, reaches a session.
+/// Whether a profile entry filed under `target` reaches `sandbox_id`.
 ///
-/// A named reference is looked up in the built-in registry rather than trusted by name; an
-/// inline set is inspected directly. An unresolvable name is treated as no reach — the manager
-/// rejects an unknown set before it grants anything.
-fn reference_reaches_a_session(reference: &PermissionSetReference) -> bool {
+/// The profile key is not the scope. A **named** set is scoped by the key — `${resourceName}`
+/// interpolates to the target, so `{"some-worker": ["sandbox/execute"]}` compiles a grant on a
+/// group belonging to that worker and cannot touch this sandbox. An **inline** set carries its own
+/// scope string, which the author writes, and `${stackPrefix}` interpolates for them — so an
+/// inline set filed under any third resource can name this sandbox's group and be granted on it.
+///
+/// So an inline set that reaches a session counts under every key, and a named one only under this
+/// sandbox or the wildcard. Anything else either misses the reachable case or refuses a legitimate
+/// second sandbox that a worker is meant to drive.
+fn reaches_this_sandbox(
+    reference: &PermissionSetReference,
+    target: &str,
+    sandbox_id: &str,
+) -> bool {
     match reference {
-        PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox_session(set),
+        // An unresolvable name is no reach: the manager rejects an unknown set before it grants
+        // anything.
         PermissionSetReference::Name(name) => {
-            get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
+            (target == sandbox_id || target == "*")
+                && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
         }
+        PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox_session(set),
     }
 }
 
@@ -903,6 +917,65 @@ mod tests {
                 "{label}: the refusal must name the service account, got: {error}"
             );
         }
+    }
+
+    /// An inline set does not have to be filed under the sandbox to reach it.
+    ///
+    /// The profile key scopes a *named* set, because `${resourceName}` interpolates to it. An
+    /// inline set carries its own scope string and `${stackPrefix}` interpolates for the author,
+    /// so one filed under an unrelated worker can name this sandbox's group and be granted on it —
+    /// a second tenant on a sandbox published to a remote caller, arriving through a key the gate
+    /// was not looking at.
+    #[tokio::test]
+    async fn a_remote_sandbox_reached_by_an_inline_set_under_another_resource_is_refused() {
+        let reaching_set: alien_core::permissions::PermissionSet = serde_json::from_value(
+            serde_json::json!({
+                "id": "custom/telemetry",
+                "description": "custom",
+                "platforms": { "azure": [{
+                    "grant": { "dataActions": ["Microsoft.App/sandboxGroups/sandboxes/executeShellCommand/action"] },
+                    "binding": { "resource": { "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-agents" } }
+                }]}
+            }),
+        )
+        .expect("valid inline permission set");
+
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission(
+                "execution",
+                // Filed under a worker, not under the sandbox and not under `*`.
+                PermissionProfile::new().resource("some-worker", [reaching_set]),
+            )
+            .build();
+
+        let Err(error) = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Azure), &config())
+            .await
+        else {
+            panic!("an inline set naming this sandbox's group reaches it, whatever key it sits under")
+        };
+        assert_eq!(error.code, "STACK_MUTATION_FAILED", "{error}");
+    }
+
+    /// And a named set under another resource is still allowed, because the key is its scope.
+    ///
+    /// Without this the fix above reads as "any session-reaching set anywhere refuses the stack",
+    /// which would refuse a second, unpublished sandbox a worker is meant to drive.
+    #[tokio::test]
+    async fn a_named_session_set_targeted_at_another_resource_is_allowed() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("some-worker", ["sandbox/execute"]),
+            )
+            .build();
+
+        RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Azure), &config())
+            .await
+            .expect("a named set is scoped by its profile key and cannot name this sandbox");
     }
 
     #[tokio::test]

@@ -169,7 +169,7 @@ pub fn permission_set_reaches_a_sandbox_session(
                 .predefined_roles
                 .iter()
                 .flatten()
-                .any(|role| role == AZURE_SANDBOX_DATA_PLANE_ROLE)
+                .any(|role| role.eq_ignore_ascii_case(AZURE_SANDBOX_DATA_PLANE_ROLE))
                 || entry
                     .grant
                     .data_actions
@@ -350,7 +350,9 @@ mod tests {
             assert!(
                 !permission_set_covers_platform("sandbox/remote-execute", platform),
                 "widening sandbox/remote-execute to {platform} must be done together with \
-                 alien-manager's resolve route and alien-preflights' platform gate"
+                 alien-manager's resolve route, alien-preflights' platform gate, and \
+                 permission_set_reaches_a_sandbox_session — which has no {platform} branch, so \
+                 the single-tenancy gate would not see a set that reaches a session there"
             );
         }
 
