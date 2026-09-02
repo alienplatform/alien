@@ -987,6 +987,10 @@ fn deserialize_controller_by_tag(
         }
         #[cfg(feature = "local")]
         "LocalSandboxController" => deser!(crate::sandbox::LocalSandboxController),
+        #[cfg(feature = "aws")]
+        "AwsSandboxController" => Ok(Box::new(
+            crate::sandbox::AwsSandboxController::from_persisted(value)?,
+        )),
         #[cfg(feature = "kubernetes")]
         "KubernetesSandboxController" => {
             deser!(crate::sandbox::KubernetesSandboxController)

@@ -8,7 +8,12 @@
           // The Frozen parent on AWS is a MicroVM image and its versions. run-microvm rejects
           // the AWS-managed base image, so every AWS sandbox builds one — provision therefore
           // covers the build and its status reads, not just create and delete.
+          //
+          // UpdateMicrovmImage is the roll a new release's bundle takes onto an image that
+          // already exists. It accepts no request tags, so unlike the create below it can only
+          // be authorized here, against the image ARN pattern the stack binding compiles.
           "actions": [
+            "lambda:UpdateMicrovmImage",
             "lambda:DeleteMicrovmImage",
             "lambda:DeleteMicrovmImageVersion",
             "lambda:GetMicrovmImage",
@@ -59,9 +64,10 @@
         }
       },
       {
-        // An image declaring egress names its connector, and CreateMicrovmImage is authorized
-        // as that pass too. AWS authorizes it against the connector ARN, but that ARN ends in
-        // an AWS-assigned id rather than the name, so a prefix scope would deny a real one.
+        // An image declaring egress names its connector, and both CreateMicrovmImage and the
+        // UpdateMicrovmImage roll are authorized as that pass. AWS authorizes it against the
+        // connector ARN, but that ARN ends in an AWS-assigned id rather than the name, so a
+        // prefix scope would deny a real one.
         "label": "pass-sandbox-egress-connector",
         "description": "Allow the sandbox image to be built against its egress connector.",
         "grant": {
@@ -77,8 +83,9 @@
         }
       },
       {
-        // The build runs under a role the create call names, so CreateMicrovmImage is authorized
-        // as a pass of it too. Name-scoped, like the session-time pass in sandbox/management:
+        // The build runs under a role the call names, so CreateMicrovmImage — and the
+        // UpdateMicrovmImage roll, which restates it — are authorized as a pass of it too.
+        // Name-scoped, like the session-time pass in sandbox/management:
         // PassRole is evaluated against the role being passed, which carries no tag to bound it.
         "label": "pass-sandbox-build-role",
         "description": "Allow the sandbox image to be built under its build role.",

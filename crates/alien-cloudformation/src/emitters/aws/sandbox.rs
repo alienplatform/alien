@@ -15,8 +15,8 @@ use crate::{
     template::{CfExpression, CfResource},
 };
 use alien_core::{
-    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, Result, Sandbox,
-    SandboxCode, SandboxEgress,
+    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, ResourceLifecycle,
+    Result, Sandbox, SandboxCode, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -71,8 +71,10 @@ impl CfEmitter for AwsSandboxEmitter {
             "AssumeRolePolicyDocument".to_string(),
             service_trust_policy(["lambda.amazonaws.com"]),
         );
-        role.properties
-            .insert("Policies".to_string(), build_policies(artifact_uri));
+        role.properties.insert(
+            "Policies".to_string(),
+            build_policies(artifact_uri, provisioned_at_runtime(ctx)),
+        );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
         // An open sandbox routes nothing through a VPC, so none of this exists for it: no
@@ -236,7 +238,12 @@ impl CfEmitter for AwsSandboxEmitter {
 
         let mut resources = vec![role];
         resources.append(&mut egress_resources);
-        resources.push(image);
+        // A Live sandbox's image is built by the runtime controller once the deployment registers —
+        // only then is a customer account a principal Alien's registry can open to. The build role
+        // and connector still come from here; the controller may pass but not create them.
+        if !provisioned_at_runtime(ctx) {
+            resources.push(image);
+        }
         if let Some(policy) = remote_access_policy(ctx)? {
             resources.push(policy);
         }
@@ -246,6 +253,9 @@ impl CfEmitter for AwsSandboxEmitter {
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<CfExpression> {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
+        if provisioned_at_runtime(ctx) {
+            return runtime_import_ref(sandbox, image_id);
+        }
         Ok(CfExpression::object([
             ("previewPorts", preview_ports(sandbox)),
             (
@@ -278,6 +288,12 @@ impl CfEmitter for AwsSandboxEmitter {
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<CfExpression>> {
         let sandbox = resource_config::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let image_id = required_logical_id(ctx)?;
+        // `AwsSandboxBinding` requires `imageArn` and `imageVersion`, which a runtime-provisioned
+        // sandbox does not have until its controller has built. A partial binding fails to
+        // deserialize in the workload that reads it, so none is offered here.
+        if provisioned_at_runtime(ctx) {
+            return Ok(None);
+        }
         let mut fields = vec![
             ("service".to_string(), CfExpression::from("sandbox-aws")),
             ("previewPorts".to_string(), preview_ports(sandbox)),
@@ -378,6 +394,35 @@ fn remote_access_policy(ctx: &EmitContext<'_>) -> Result<Option<CfResource>> {
     Ok(Some(policy))
 }
 
+/// Whether this sandbox's image is built by the runtime controller rather than by stack creation.
+fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
+    ctx.resource.lifecycle == ResourceLifecycle::Live
+}
+
+/// What a runtime-provisioned sandbox registers.
+///
+/// The image fields are absent because the image doesn't exist yet. In their place go what the
+/// controller cannot derive — the build role it passes and the bundle it builds from — plus the
+/// egress facts the setup stack still owns.
+fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
+    // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
+    // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
+    let role_id = format!("{image_id}BuildRole");
+    Ok(CfExpression::object([
+        ("previewPorts", preview_ports(sandbox)),
+        (
+            "egressConnectorArns",
+            egress_connector_arns(sandbox, image_id),
+        ),
+        (
+            "allowEgress",
+            CfExpression::from(matches!(sandbox.egress, SandboxEgress::Allow)),
+        ),
+        ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
+        ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+    ]))
+}
+
 /// The ports a preview capability may be minted for.
 ///
 /// Carried into both the import data and the binding because minting is where ingress is granted:
@@ -392,51 +437,91 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
     )
 }
 
-/// What the build role may do: read the bundle, and write its own build logs.
+/// What the build role may do: read the bundle, write its own build logs, and — only when the
+/// image is built at runtime — authenticate to ECR for its base image.
 ///
 /// Scoped to the one object it reads. The bundle URI is known when the template is generated, so
 /// there is no reason for the role a customer installs to carry account-wide object read.
-fn build_policies(artifact_uri: BundleUri<'_>) -> CfExpression {
+///
+/// A setup-baked image builds from a public base and pulls it anonymously, so the Frozen role
+/// carries no ECR grant; a runtime-built image's base is a private registry image.
+fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpression {
+    let mut statements = vec![
+        CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([CfExpression::from("s3:GetObject")]),
+            ),
+            (
+                "Resource",
+                // Partition-qualified like every other ARN here: a hardcoded
+                // `aws` never matches in GovCloud or China, and the build fails
+                // on the bundle it was granted.
+                artifact_object_arn(artifact_uri),
+            ),
+        ]),
+        CfExpression::object([
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                CfExpression::list([
+                    // CreateLogGroup as well as the writes: the build creates no
+                    // group of its own, so without it the first build's logs go
+                    // nowhere. The house build role grants all three.
+                    CfExpression::from("logs:CreateLogGroup"),
+                    CfExpression::from("logs:CreateLogStream"),
+                    CfExpression::from("logs:PutLogEvents"),
+                ]),
+            ),
+            ("Resource", CfExpression::from("*")),
+        ]),
+    ];
+    if runtime_built {
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("PullSandboxBaseImage")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                // The token call plus the two pull actions a live build was observed to be
+                // denied without — the registry's repository policy alone did not authorize it.
+                CfExpression::list([
+                    CfExpression::from("ecr:GetAuthorizationToken"),
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
+            // base image is unknown when the template is generated, so the pull pair is `*` too;
+            // the Deny below is what stops it reading this account's own private repositories.
+            ("Resource", CfExpression::from("*")),
+        ]));
+        // Same-account pulls are authorized by identity policy alone — no repository policy
+        // participates — and this role runs a customer-authored Dockerfile. The base image is
+        // cross-account by construction, so a same-account pull is never legitimate.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("DenySameAccountImagePull")),
+            ("Effect", CfExpression::from("Deny")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            (
+                "Resource",
+                CfExpression::sub("arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"),
+            ),
+        ]));
+    }
     CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-image-build")),
         (
             "PolicyDocument",
             CfExpression::object([
                 ("Version", CfExpression::from("2012-10-17")),
-                (
-                    "Statement",
-                    CfExpression::list([
-                        CfExpression::object([
-                            ("Effect", CfExpression::from("Allow")),
-                            (
-                                "Action",
-                                CfExpression::list([CfExpression::from("s3:GetObject")]),
-                            ),
-                            (
-                                "Resource",
-                                // Partition-qualified like every other ARN here: a hardcoded
-                                // `aws` never matches in GovCloud or China, and the build fails
-                                // on the bundle it was granted.
-                                artifact_object_arn(artifact_uri),
-                            ),
-                        ]),
-                        CfExpression::object([
-                            ("Effect", CfExpression::from("Allow")),
-                            (
-                                "Action",
-                                CfExpression::list([
-                                    // CreateLogGroup as well as the writes: the build creates no
-                                    // group of its own, so without it the first build's logs go
-                                    // nowhere. The house build role grants all three.
-                                    CfExpression::from("logs:CreateLogGroup"),
-                                    CfExpression::from("logs:CreateLogStream"),
-                                    CfExpression::from("logs:PutLogEvents"),
-                                ]),
-                            ),
-                            ("Resource", CfExpression::from("*")),
-                        ]),
-                    ]),
-                ),
+                ("Statement", CfExpression::list(statements)),
             ]),
         ),
     ])])

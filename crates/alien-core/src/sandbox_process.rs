@@ -386,16 +386,18 @@ mod tests {
 
         // The grandchild outlives the deadline and keeps writing. stdout is closed so it cannot
         // hold the pipe open — this test is about the process surviving, not about the stream.
+        // The first write happens before the loop: the deadline below races the shell's startup,
+        // and a grandchild killed before its first write fails this test's own precondition.
         let script = format!(
-            "(while true; do echo x >> {} ; sleep 0.05; done) >/dev/null 2>&1 &\nsleep 30",
-            marker.display()
+            "(echo x >> {m}; while true; do echo x >> {m} ; sleep 0.05; done) >/dev/null 2>&1 &\nsleep 30",
+            m = marker.display()
         );
         let command = spawn("/bin/sh", &["-c".to_string(), script])
             .expect("command builds")
             .spawn()
             .expect("command spawns");
 
-        let frames = run(command, Duration::from_millis(400), 1 << 20).await;
+        let frames = run(command, Duration::from_millis(1500), 1 << 20).await;
         assert!(
             matches!(
                 terminal(&frames),

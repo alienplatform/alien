@@ -1,11 +1,28 @@
 use crate::ResourceLifecycle;
 
+/// When a resource type contributes anything to the setup artifact.
+///
+/// Most types answer with the lifecycle alone. A sandbox does not: a Live one still needs the
+/// setup stack to create its build role, since the runtime controller may only *pass* it —
+/// `sandbox/provision` grants `iam:PassRole` and no `iam:CreateRole`. Only the image moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetupEmission {
+    /// Never part of the setup artifact; a runtime controller owns the whole resource.
+    Never,
+    /// Emitted only when the resource is Frozen.
+    WhenFrozen,
+    /// Scaffolding under either lifecycle. Setup still only *owns* the Frozen one — the Live
+    /// resource itself belongs to a runtime controller, which is why the two accessors below
+    /// disagree for exactly these types.
+    Always,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResourceOwnershipPolicy {
     default_lifecycle: ResourceLifecycle,
     allow_frozen: bool,
     allow_live: bool,
-    emit_in_setup: bool,
+    emit_in_setup: SetupEmission,
     requires_management_permissions: bool,
     runtime_cleanup_before_teardown: bool,
 }
@@ -15,7 +32,7 @@ impl ResourceOwnershipPolicy {
         default_lifecycle: ResourceLifecycle,
         allow_frozen: bool,
         allow_live: bool,
-        emit_in_setup: bool,
+        emit_in_setup: SetupEmission,
         requires_management_permissions: bool,
         runtime_cleanup_before_teardown: bool,
     ) -> Self {
@@ -48,8 +65,29 @@ impl ResourceOwnershipPolicy {
         }
     }
 
+    /// Whether setup *owns* this resource: it creates it, and no runtime controller will.
+    ///
+    /// Gating, lifecycle checks and permission compilation ask this. A Live sandbox answers
+    /// `false` here and `true` from [`Self::emits_setup_scaffolding`]; answering the two with
+    /// one predicate classifies it as setup-created, which keeps its gate out of the runtime
+    /// strip and builds the image for a deployer who declined it.
     pub const fn should_emit_in_setup(self, lifecycle: ResourceLifecycle) -> bool {
-        self.emit_in_setup && matches!(lifecycle, ResourceLifecycle::Frozen)
+        !matches!(self.emit_in_setup, SetupEmission::Never)
+            && matches!(lifecycle, ResourceLifecycle::Frozen)
+    }
+
+    /// Whether the setup artifact renders anything for this resource, its own scaffolding
+    /// included — a Live sandbox's build role, which its controller may pass but not create.
+    ///
+    /// The generators and registration's expected set ask this, and must agree: registration
+    /// refuses a payload naming a resource setup does not emit, and one missing a resource it
+    /// does, so a disagreement fails every install after the stack has already completed.
+    pub const fn emits_setup_scaffolding(self, lifecycle: ResourceLifecycle) -> bool {
+        match self.emit_in_setup {
+            SetupEmission::Never => false,
+            SetupEmission::WhenFrozen => matches!(lifecycle, ResourceLifecycle::Frozen),
+            SetupEmission::Always => true,
+        }
     }
 
     pub const fn requires_management_permissions(self) -> bool {
@@ -74,7 +112,8 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
     match resource_type {
         "function" | "container-cluster" => removed_resource_type(),
         "worker" | "daemon" | "container" => live_only(),
-        "compute-cluster" | "sandbox" => frozen_with_runtime_cleanup(),
+        "compute-cluster" => frozen_with_runtime_cleanup(),
+        "sandbox" => sandbox_lifecycle(),
         "artifact-registry" | "key" => frozen_with_management(),
         "build"
         | "network"
@@ -103,27 +142,85 @@ pub fn ownership_policy_for_resource_type(resource_type: &str) -> ResourceOwners
 }
 
 const fn frozen_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        false,
+        false,
+    )
 }
 
 const fn frozen_with_management() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        true,
+        false,
+    )
 }
 
 const fn frozen_with_runtime_cleanup() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, false, true, true, true)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        false,
+        SetupEmission::WhenFrozen,
+        true,
+        true,
+    )
+}
+
+/// A sandbox may be baked by the setup stack or provisioned by a runtime controller.
+///
+/// Live is what lets the base image come from Alien's private registry: the cross-account read is
+/// granted by a repository policy naming the customer's account, which isn't known until the
+/// deployment registers. Frozen stays the default so an already-installed stack keeps its image.
+const fn sandbox_lifecycle() -> ResourceOwnershipPolicy {
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        true,
+        SetupEmission::Always,
+        true,
+        true,
+    )
 }
 
 const fn live_only() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, true, false, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Live,
+        false,
+        true,
+        SetupEmission::Never,
+        false,
+        false,
+    )
 }
 
 const fn removed_resource_type() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Live, false, false, false, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Live,
+        false,
+        false,
+        SetupEmission::Never,
+        false,
+        false,
+    )
 }
 
 const fn user_choice() -> ResourceOwnershipPolicy {
-    ResourceOwnershipPolicy::new(ResourceLifecycle::Frozen, true, true, true, false, false)
+    ResourceOwnershipPolicy::new(
+        ResourceLifecycle::Frozen,
+        true,
+        true,
+        SetupEmission::WhenFrozen,
+        false,
+        false,
+    )
 }
 
 #[cfg(test)]
@@ -150,6 +247,77 @@ mod tests {
         assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
         assert!(policy.requires_management_permissions());
         assert!(policy.has_runtime_cleanup_before_teardown());
+    }
+
+    #[test]
+    fn sandbox_defaults_to_frozen_but_may_be_live() {
+        let policy = ownership_policy_for_resource_type("sandbox");
+        assert_eq!(policy.default_lifecycle(), ResourceLifecycle::Frozen);
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Frozen));
+        assert!(policy.allows_lifecycle(ResourceLifecycle::Live));
+        assert!(policy.requires_management_permissions());
+        assert!(policy.has_runtime_cleanup_before_teardown());
+    }
+
+    /// The sandbox is the only type whose two answers differ, and each half is load-bearing:
+    /// setup must still install the build role its controller may only pass, while the image
+    /// belongs to that controller and so must reach the runtime strip a decline runs through.
+    #[test]
+    fn a_live_sandbox_is_scaffolded_by_setup_but_not_owned_by_it() {
+        let policy = ownership_policy_for_resource_type("sandbox");
+
+        assert!(policy.should_emit_in_setup(ResourceLifecycle::Frozen));
+        assert!(policy.emits_setup_scaffolding(ResourceLifecycle::Frozen));
+
+        assert!(!policy.should_emit_in_setup(ResourceLifecycle::Live));
+        assert!(policy.emits_setup_scaffolding(ResourceLifecycle::Live));
+    }
+
+    /// Every type but the sandbox must answer `should_emit_in_setup` and
+    /// `emits_setup_scaffolding` identically; a diverging type has silently changed ownership
+    /// behaviour.
+    #[test]
+    fn only_the_sandbox_separates_ownership_from_scaffolding() {
+        let types = crate::gateability::MANIFEST_TYPES
+            .iter()
+            .copied()
+            .chain([
+                "function",
+                "container-cluster",
+                "compute-cluster",
+                "artifact-registry",
+                "key",
+                "build",
+                "network",
+                "remote-stack-management",
+                "resource-access",
+                "service-account",
+                "service_activation",
+                "service-activation",
+                "azure_resource_group",
+                "azure-resource-group",
+                "azure_storage_account",
+                "azure-storage-account",
+                "azure_container_apps_environment",
+                "azure-container-apps-environment",
+                "azure_service_bus_namespace",
+                "azure-service-bus-namespace",
+                "an-unregistered-extension-type",
+            ]);
+
+        for resource_type in types {
+            if resource_type == "sandbox" {
+                continue;
+            }
+            let policy = ownership_policy_for_resource_type(resource_type);
+            for lifecycle in [ResourceLifecycle::Frozen, ResourceLifecycle::Live] {
+                assert_eq!(
+                    policy.should_emit_in_setup(lifecycle),
+                    policy.emits_setup_scaffolding(lifecycle),
+                    "'{resource_type}' answers the two questions differently under {lifecycle:?}"
+                );
+            }
+        }
     }
 
     #[test]

@@ -27,8 +27,8 @@ use alien_core::{
     ownership_policy_for_resource_type, DeploymentModel, ErrorData, HeartbeatsMode, Key,
     KubernetesCertificateMode, KubernetesExposureSettings, KubernetesSettings, Network,
     NetworkSettings, RemoteBindings, RemoteStackManagement, ResourceLifecycle, Result, Sandbox,
-    Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind, StackInputProvider,
-    StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
+    SandboxEgress, Stack, StackInputDefaultValue, StackInputDefinition, StackInputKind,
+    StackInputProvider, StackInputValidation, StackSettings, TelemetryMode, UpdatesMode,
 };
 use alien_error::{AlienError, IntoAlienError};
 use hcl::{
@@ -203,7 +203,7 @@ pub fn generate_terraform_module(
     for (resource_id, resource) in stack.resources() {
         let resource_type = resource.config.resource_type();
         let ownership = ownership_policy_for_resource_type(resource_type.as_ref());
-        if !ownership.should_emit_in_setup(resource.lifecycle) {
+        if !ownership.emits_setup_scaffolding(resource.lifecycle) {
             continue;
         }
 
@@ -3208,6 +3208,41 @@ fn readme_md(
             "This module exposes `deployment_management_config`, `deployment_stack_settings`, `deployment_resources`, and (when the stack declares deployer inputs) `deployment_input_values` outputs for registration flows managed outside Terraform.\n".to_string()
         });
 
+    // An installer reads "apply succeeded" as "the package is installed". For a runtime-built
+    // sandbox that is not true, and the gap is minutes long, so the note sits right under the
+    // apply step. Not on a Kubernetes target: the sandbox is skipped there, so no build follows.
+    let live_sandboxes: Vec<&Sandbox> = if target.is_kubernetes() {
+        Vec::new()
+    } else {
+        stack
+            .resources
+            .values()
+            .filter(|entry| entry.lifecycle == ResourceLifecycle::Live)
+            .filter_map(|entry| entry.config.downcast_ref::<Sandbox>())
+            .collect()
+    };
+    let runtime_sandbox_note = if live_sandboxes.is_empty() {
+        String::new()
+    } else {
+        // The inventory matches the emitter: a restricted sandbox installs its egress apparatus
+        // at setup, an open one emits none of it, and naming an absent resource sends an
+        // approver looking for it.
+        let scaffolding = if live_sandboxes
+            .iter()
+            .any(|sandbox| !matches!(sandbox.egress, SandboxEgress::Allow))
+        {
+            "build scaffolding — the build role, egress connector, operator role, and security \
+             group —"
+        } else {
+            "build role"
+        };
+        format!(
+            "\nA completed apply installs the sandbox's {scaffolding} but not the sandbox image \
+             itself. The image is built after the deployment registers; the deployment's status \
+             in Alien reports when the sandbox can accept sessions.\n"
+        )
+    };
+
     let display_name = display_name.unwrap_or_else(|| stack.id());
     let mut input_sections = vec![readme_required_inputs(registration.is_some())];
     let setup_only = stack
@@ -3267,7 +3302,7 @@ This module creates setup-owned infrastructure, grants the management access nee
 {inputs}\n\n\
 ## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
-```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n\n\
+```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
 {registration_note}\n\
 ## Outputs\n\n\
@@ -3281,6 +3316,7 @@ Use your organization's normal backend and approval workflow. A typical local re
         target = target.name(),
         inputs = inputs,
         required_env = required_env,
+        runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
         retained_key_operations = retained_key_operations

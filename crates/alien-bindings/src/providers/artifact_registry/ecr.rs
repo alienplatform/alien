@@ -33,6 +33,105 @@ pub struct EcrArtifactRegistry {
     push_role_arn: Option<String>,
 }
 
+/// Builds the ECR repository policy document granting a customer account cross-account pull.
+///
+/// Separate from the API call so the document a deployment produces can be asserted directly.
+pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Value {
+    let mut statements = Vec::new();
+
+    // Add cross-account access for target accounts + specific role ARNs.
+    // Per AWS docs, Lambda cross-account ECR pulls require the account root
+    // as a principal (arn:aws:iam::{account}:root), not just specific roles.
+    // See: https://github.com/aws-samples/lambda-cross-account-ecr
+    {
+        let mut principals: Vec<String> = aws_access
+            .account_ids
+            .iter()
+            .map(|id| format!("arn:aws:iam::{}:root", id))
+            .collect();
+        for arn in &aws_access.role_arns {
+            if !principals.contains(arn) {
+                principals.push(arn.clone());
+            }
+        }
+        if !principals.is_empty() {
+            statements.push(json!({
+                "Sid": "CrossAccountRolePermission",
+                "Effect": "Allow",
+                "Principal": {
+                    "AWS": principals
+                },
+                "Action": [
+                    "ecr:BatchCheckLayerAvailability",
+                    "ecr:GetDownloadUrlForLayer",
+                    "ecr:BatchGetImage",
+                    // Lambda verifies and sets the ECR repo policy itself when
+                    // it creates a resource from a cross-account image — a
+                    // function, and equally a MicroVM image — so the calling
+                    // principal needs these on the repo.
+                    "ecr:GetRepositoryPolicy",
+                    "ecr:SetRepositoryPolicy"
+                ]
+            }));
+        }
+    }
+
+    // Add service-specific access based on compute service types
+    for service_type in &aws_access.allowed_service_types {
+        match service_type {
+            ComputeServiceType::Worker => {
+                if !aws_access.account_ids.is_empty() {
+                    // Build sourceArn patterns per AWS docs:
+                    // https://docs.aws.amazon.com/lambda/latest/dg/images-create.html
+                    // Pattern: arn:aws:lambda:{region}:{account_id}:function:*
+                    let source_arns: Vec<String> = aws_access
+                        .account_ids
+                        .iter()
+                        .flat_map(|account_id| {
+                            if aws_access.regions.is_empty() {
+                                vec![format!("arn:aws:lambda:*:{}:function:*", account_id)]
+                            } else {
+                                aws_access
+                                    .regions
+                                    .iter()
+                                    .map(|region| {
+                                        format!(
+                                            "arn:aws:lambda:{}:{}:function:*",
+                                            region, account_id
+                                        )
+                                    })
+                                    .collect()
+                            }
+                        })
+                        .collect();
+
+                    statements.push(json!({
+                        "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
+                        "Effect": "Allow",
+                        "Principal": {
+                            "Service": "lambda.amazonaws.com"
+                        },
+                        "Action": [
+                            "ecr:BatchGetImage",
+                            "ecr:GetDownloadUrlForLayer"
+                        ],
+                        "Condition": {
+                            "StringLike": {
+                                "aws:sourceArn": source_arns
+                            }
+                        }
+                    }));
+                }
+            }
+        }
+    }
+
+    json!({
+        "Version": "2012-10-17",
+        "Statement": statements
+    })
+}
+
 impl EcrArtifactRegistry {
     /// Creates a new AWS ECR artifact registry binding from binding parameters.
     pub async fn new(
@@ -203,100 +302,7 @@ impl EcrArtifactRegistry {
         repo_name: &str,
         aws_access: &AwsCrossAccountAccess,
     ) -> Result<()> {
-        let mut statements = Vec::new();
-
-        // Add cross-account access for target accounts + specific role ARNs.
-        // Per AWS docs, Lambda cross-account ECR pulls require the account root
-        // as a principal (arn:aws:iam::{account}:root), not just specific roles.
-        // See: https://github.com/aws-samples/lambda-cross-account-ecr
-        {
-            let mut principals: Vec<String> = aws_access
-                .account_ids
-                .iter()
-                .map(|id| format!("arn:aws:iam::{}:root", id))
-                .collect();
-            for arn in &aws_access.role_arns {
-                if !principals.contains(arn) {
-                    principals.push(arn.clone());
-                }
-            }
-            if !principals.is_empty() {
-                statements.push(json!({
-                    "Sid": "CrossAccountRolePermission",
-                    "Effect": "Allow",
-                    "Principal": {
-                        "AWS": principals
-                    },
-                    "Action": [
-                        "ecr:BatchCheckLayerAvailability",
-                        "ecr:GetDownloadUrlForLayer",
-                        "ecr:BatchGetImage",
-                        // Required for Lambda CreateFunction: Lambda internally
-                        // verifies/sets the ECR repo policy when creating a
-                        // function with a cross-account image. The calling
-                        // principal needs these permissions on the ECR repo.
-                        "ecr:GetRepositoryPolicy",
-                        "ecr:SetRepositoryPolicy"
-                    ]
-                }));
-            }
-        }
-
-        // Add service-specific access based on compute service types
-        for service_type in &aws_access.allowed_service_types {
-            match service_type {
-                ComputeServiceType::Worker => {
-                    if !aws_access.account_ids.is_empty() {
-                        // Build sourceArn patterns per AWS docs:
-                        // https://docs.aws.amazon.com/lambda/latest/dg/images-create.html
-                        // Pattern: arn:aws:lambda:{region}:{account_id}:function:*
-                        let source_arns: Vec<String> = aws_access
-                            .account_ids
-                            .iter()
-                            .flat_map(|account_id| {
-                                if aws_access.regions.is_empty() {
-                                    vec![format!("arn:aws:lambda:*:{}:function:*", account_id)]
-                                } else {
-                                    aws_access
-                                        .regions
-                                        .iter()
-                                        .map(|region| {
-                                            format!(
-                                                "arn:aws:lambda:{}:{}:function:*",
-                                                region, account_id
-                                            )
-                                        })
-                                        .collect()
-                                }
-                            })
-                            .collect();
-
-                        statements.push(json!({
-                            "Sid": "LambdaECRImageCrossAccountRetrievalPolicy",
-                            "Effect": "Allow",
-                            "Principal": {
-                                "Service": "lambda.amazonaws.com"
-                            },
-                            "Action": [
-                                "ecr:BatchGetImage",
-                                "ecr:GetDownloadUrlForLayer"
-                            ],
-                            "Condition": {
-                                "StringLike": {
-                                    "aws:sourceArn": source_arns
-                                }
-                            }
-                        }));
-                    }
-                }
-            }
-        }
-
-        // Create ECR policy JSON
-        let policy = json!({
-            "Version": "2012-10-17",
-            "Statement": statements
-        });
+        let policy = cross_account_repository_policy(aws_access);
 
         let request = SetRepositoryPolicyRequest::builder()
             .repository_name(repo_name.to_string())

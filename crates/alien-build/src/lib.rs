@@ -9,7 +9,7 @@ pub mod toolchain;
 
 use alien_core::{
     alien_event, AlienEvent, BinaryTarget, Container, ContainerCode, Daemon, DaemonCode, Platform,
-    Stack, ToolchainConfig, Worker, WorkerCode,
+    Sandbox, SandboxCode, Stack, ToolchainConfig, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_preflights::runner::PreflightRunner;
@@ -1070,6 +1070,7 @@ fn strip_local_daemon_only_compute_clusters(stack: &mut Stack, platform: Platfor
 }
 
 /// A compute resource that has a locally-built image directory and needs to be pushed to a registry.
+#[derive(Debug)]
 struct ResourcePushTarget {
     /// Stack resource keys that should be updated with the pushed image URI.
     resource_ids: Vec<String>,
@@ -1231,6 +1232,41 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
                     }));
                 }
             }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            match &sandbox.code {
+                SandboxCode::Image { image } => {
+                    let path = PathBuf::from(image);
+                    if path.exists() && path.is_dir() {
+                        info!(
+                            "Sandbox '{}' has local image directory, queuing for push",
+                            sandbox.id
+                        );
+                        add_push_target_resource(
+                            &mut targets,
+                            resource_id.clone(),
+                            sandbox.id.clone(),
+                            "sandbox",
+                            path,
+                        );
+                    } else {
+                        // A bundle URI and an Azure catalog name reach this branch too: neither
+                        // is a directory, and neither is Alien's to push.
+                        info!(
+                            "Sandbox '{}' already has remote image: {}",
+                            sandbox.id, image
+                        );
+                    }
+                }
+                SandboxCode::Source { .. } => {
+                    return Err(AlienError::new(ErrorData::InvalidResourceConfig {
+                        resource_id: sandbox.id.clone(),
+                        reason: "Sandbox has source code instead of built image. No sandbox \
+                                 backend builds an image from source; give code.image a prebuilt \
+                                 reference or a local image directory."
+                            .to_string(),
+                    }));
+                }
+            }
         }
     }
 
@@ -1250,6 +1286,8 @@ fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
                 container.code = ContainerCode::Image { image: image_uri };
             } else if let Some(daemon) = resource_entry.1.config.downcast_mut::<Daemon>() {
                 daemon.code = DaemonCode::Image { image: image_uri };
+            } else if let Some(sandbox) = resource_entry.1.config.downcast_mut::<Sandbox>() {
+                sandbox.code = SandboxCode::Image { image: image_uri };
             }
         }
     }
@@ -5097,6 +5135,155 @@ mod tests {
                 ("linux".to_string(), "arm64".to_string()),
             ],
             "merged stack must push as a real multi-arch index"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sandbox_push_tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, SandboxEgress, SandboxSessionPolicy};
+
+    fn session() -> SandboxSessionPolicy {
+        SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        }
+    }
+
+    fn sandbox(id: &str, image: &str) -> Sandbox {
+        Sandbox::new(id.to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .session(session())
+            .build()
+    }
+
+    fn image_of(stack: &Stack, resource_id: &str) -> String {
+        let entry = stack
+            .resources()
+            .find(|(id, _)| id.as_str() == resource_id)
+            .unwrap_or_else(|| panic!("stack has no '{resource_id}'"))
+            .1;
+        match &entry
+            .config
+            .downcast_ref::<Sandbox>()
+            .expect("resource is a sandbox")
+            .code
+        {
+            SandboxCode::Image { image } => image.clone(),
+            SandboxCode::Source { .. } => panic!("'{resource_id}' should still be image-sourced"),
+        }
+    }
+
+    /// A locally-built base image is the only sandbox image `alien release` claims, and what the
+    /// release record ends up carrying is the proxy URI — no local path, and no registry the
+    /// developer had to name.
+    #[test]
+    fn a_locally_built_sandbox_image_is_pushed_and_replaced_by_the_proxy_uri() {
+        let local = tempfile::tempdir().expect("temp dir");
+        let local_image = local.path().to_string_lossy().to_string();
+
+        let stack = Stack::new("sandboxes".to_string())
+            .add(sandbox("built", &local_image), ResourceLifecycle::Live)
+            .add(
+                sandbox("bundle", "s3://acme-bundles-us-east-1/x/bundle.zip"),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                sandbox("published", "public.ecr.aws/acme/base:v1"),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let targets = collect_push_targets(&stack).expect("collects");
+        assert_eq!(
+            targets.len(),
+            1,
+            "only the local directory is Alien's to push"
+        );
+        assert_eq!(targets[0].resource_type, "sandbox");
+        assert_eq!(targets[0].resource_ids, vec!["built".to_string()]);
+        assert_eq!(targets[0].local_image_dir, local.path());
+
+        let mut pushed = stack.clone();
+        apply_pushed_images(
+            &mut pushed,
+            vec![(
+                "built".to_string(),
+                "manager.alien.dev/acme/sandbox:abc123".to_string(),
+            )],
+        );
+
+        assert_eq!(
+            image_of(&pushed, "built"),
+            "manager.alien.dev/acme/sandbox:abc123"
+        );
+        // `strip_registry_host` reads `s3:` as a registry host, so a bundle URI that reached the
+        // proxy-to-native rewrite would come back mangled. Nothing but the pushed target moves.
+        assert_eq!(
+            image_of(&pushed, "bundle"),
+            "s3://acme-bundles-us-east-1/x/bundle.zip"
+        );
+        assert_eq!(
+            image_of(&pushed, "published"),
+            "public.ecr.aws/acme/base:v1"
+        );
+    }
+
+    /// A base image and a worker image are different artifacts even out of one directory. Merged
+    /// into a single push target, one of the two resources would be rewritten to the other's URI.
+    #[test]
+    fn a_sandbox_and_a_worker_sharing_a_directory_stay_separate_targets() {
+        let local = tempfile::tempdir().expect("temp dir");
+        let local_image = local.path().to_string_lossy().to_string();
+
+        let stack = Stack::new("mixed".to_string())
+            .add(sandbox("box", &local_image), ResourceLifecycle::Live)
+            .add(
+                Worker::new("api".to_string())
+                    .code(WorkerCode::Image {
+                        image: local_image.clone(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let targets = collect_push_targets(&stack).expect("collects");
+        let mut types: Vec<&str> = targets.iter().map(|target| target.resource_type).collect();
+        types.sort_unstable();
+        assert_eq!(types, vec!["sandbox", "worker"]);
+    }
+
+    /// No sandbox backend builds from source, so a release says so rather than queueing a push of
+    /// a directory nothing ever wrote.
+    #[test]
+    fn a_source_sandbox_is_refused_at_release() {
+        let stack = Stack::new("source".to_string())
+            .add(
+                Sandbox::new("box".to_string())
+                    .code(SandboxCode::Source {
+                        src: "./sandbox".to_string(),
+                        toolchain: ToolchainConfig::Rust {
+                            binary_name: "box".to_string(),
+                        },
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(session())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let error = collect_push_targets(&stack).expect_err("source sandboxes are refused");
+        assert_eq!(error.code, "INVALID_RESOURCE_CONFIG");
+        assert!(
+            error.to_string().contains("from source"),
+            "the refusal must name the reason, got: {error}"
         );
     }
 }

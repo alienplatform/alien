@@ -277,6 +277,7 @@ fn critical_e2e_provider_operations_are_declared() {
             permission_set_id: "sandbox/provision",
             aws_actions: &[
                 "lambda:CreateMicrovmImage",
+                "lambda:UpdateMicrovmImage",
                 "lambda:GetMicrovmImageBuild",
                 "lambda:DeleteMicrovmImage",
                 "lambda:ListMicrovmImageVersions",
