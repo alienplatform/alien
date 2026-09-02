@@ -423,8 +423,8 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
     ]))
 }
 
-/// Lambda assumes the build role on the stack's own behalf; without the account condition any
-/// account's MicroVM build could name this role and run under it.
+/// AWS's MicroVM build-role guidance prescribes this `aws:SourceAccount` condition on the trust
+/// policy as confused-deputy prevention.
 fn build_role_trust_policy() -> CfExpression {
     CfExpression::object([
         ("Version", CfExpression::from("2012-10-17")),

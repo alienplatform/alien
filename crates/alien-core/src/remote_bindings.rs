@@ -1,4 +1,6 @@
-use crate::{ResourceEntry, ResourceType, Sandbox, SandboxEgress};
+use crate::{
+    ownership_policy_for_resource_type, ResourceEntry, ResourceType, Sandbox, SandboxEgress,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
@@ -78,7 +80,7 @@ pub fn remote_binding_definition(
 pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static RemoteBindingDefinition> {
     let resource_type = entry.config.resource_type();
     (entry.remote_access
-        && crate::ownership_policy_for_resource_type(resource_type.as_ref())
+        && ownership_policy_for_resource_type(resource_type.as_ref())
             .emits_setup_scaffolding(entry.lifecycle))
     .then(|| remote_binding_definition(&resource_type))
     .flatten()

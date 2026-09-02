@@ -310,8 +310,7 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
         "a Frozen build role must carry no ECR action: {statements:#?}"
     );
 
-    // Lambda assumes the role on the stack's behalf; without the account condition any account's
-    // MicroVM build could name this role and run under it.
+    // See `build_role_trust_policy` for why the condition belongs on this statement.
     let role = serde_json::to_value(
         template
             .resources

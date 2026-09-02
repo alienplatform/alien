@@ -152,7 +152,9 @@ impl ResourceImporter for AwsSandboxImporter {
             })?;
 
         let merged = AwsSandboxController {
-            build_role_arn: imported_controller.build_role_arn,
+            build_role_arn: imported_controller
+                .build_role_arn
+                .or(existing_controller.build_role_arn.clone()),
             egress_connector_arns: imported_controller.egress_connector_arns,
             allow_egress: imported_controller.allow_egress,
             preview_ports: imported_controller.preview_ports,
@@ -190,6 +192,7 @@ impl ResourceImporter for AwsSandboxImporter {
             internal_state: Some(internal_state),
             outputs,
             remote_binding_params,
+            lifecycle: Some(ctx.resource.lifecycle),
             ..existing
         })
     }
