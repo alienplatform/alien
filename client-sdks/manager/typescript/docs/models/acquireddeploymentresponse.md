@@ -12,6 +12,7 @@ let value: AcquiredDeploymentResponse = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `deployment`       | *any*              | :heavy_check_mark: | N/A                |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `deployment`                                         | *any*                                                | :heavy_check_mark:                                   | N/A                                                  |
+| `executionClaim`                                     | [models.ExecutionClaim](../models/executionclaim.md) | :heavy_minus_sign:                                   | N/A                                                  |

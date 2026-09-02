@@ -35,19 +35,22 @@ let value: AgentSyncRequest = {
       controllerPlatform: "local",
       data: {
         data: {
-          name: "<value>",
-          privateEndpointConnectionCount: 289000,
-          status: {
-            collectionIssues: [],
-            health: "healthy",
-            lifecycle: "running",
-            partial: false,
-            stale: true,
+          data: {
+            enabled: true,
+            keyArn: "<value>",
+            keySpec: "<value>",
+            keyState: "<value>",
+            keyUsage: "<value>",
+            status: {
+              health: "healthy",
+              lifecycle: "running",
+            },
           },
+          provider: "aws-kms",
         },
-        resourceType: "azure_service_bus_namespace",
+        resourceType: "key",
       },
-      observedAt: new Date("2026-04-15T12:52:58.852Z"),
+      observedAt: new Date("2026-03-29T08:18:22.529Z"),
       raw: [],
       resourceId: "<id>",
       resourceType: "worker",
@@ -63,6 +66,9 @@ let value: AgentSyncRequest = {
 | `capabilities`                                                                                                                                                          | [models.OperatorCapabilityReport](../models/operatorcapabilityreport.md)[]                                                                                              | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `currentState`                                                                                                                                                          | *any*                                                                                                                                                                   | :heavy_minus_sign:                                                                                                                                                      | Current deployment state as reported by the agent.<br/>When present, the manager updates the deployment record to reflect<br/>the agent's progress (status, stack_state, etc.). |
 | `deploymentId`                                                                                                                                                          | *string*                                                                                                                                                                | :heavy_check_mark:                                                                                                                                                      | N/A                                                                                                                                                                     |
+| `executionClaim`                                                                                                                                                        | [models.ExecutionClaim](../models/executionclaim.md)                                                                                                                    | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `observedInventoryBatches`                                                                                                                                              | [models.ObservedInventoryBatch](../models/observedinventorybatch.md)[]                                                                                                  | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `operatorVersion`                                                                                                                                                       | *string*                                                                                                                                                                | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `resourceHeartbeats`                                                                                                                                                    | [models.ResourceHeartbeat](../models/resourceheartbeat.md)[]                                                                                                            | :heavy_minus_sign:                                                                                                                                                      | Managed resource status samples emitted by pull-mode deployment steps.                                                                                                  |
+| `session`                                                                                                                                                               | *string*                                                                                                                                                                | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
+| `supportsExecutionClaims`                                                                                                                                               | *boolean*                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |

@@ -14,7 +14,7 @@ use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStat
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome};
 use alien_deployment::manager_api_transport::{
     acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
-    ManagerApiTransport,
+    ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
@@ -247,7 +247,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Acquire → step loop → reconcile → release
     let session = format!("cli-destroy-{}", Uuid::new_v4());
-    acquire_setup_delete_deployment(
+    let acquire_outcome = acquire_setup_delete_deployment(
         &manager_client,
         &tracked_deployment.deployment_id,
         &session,
@@ -257,6 +257,10 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
     .context(ErrorData::ConfigurationError {
         message: "Failed to acquire deployment lock for deletion".to_string(),
     })?;
+    let execution_claim = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+        SetupDeleteAcquireOutcome::AlreadyDeleted => return Ok(()),
+    };
 
     // Re-fetch under lock
     let deployment = manager_client
@@ -284,7 +288,11 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to deserialize stack_state".to_string(),
         })?;
 
-    let transport = ManagerApiTransport::new(manager_client.clone(), session.clone());
+    let transport = ManagerApiTransport::with_execution_claim(
+        manager_client.clone(),
+        session.clone(),
+        execution_claim.clone(),
+    );
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
@@ -329,6 +337,7 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
             &manager_client,
             &tracked_deployment.deployment_id,
             &session,
+            execution_claim.as_ref(),
             &current,
         )
         .await,

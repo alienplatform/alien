@@ -251,6 +251,15 @@ pub enum DeploymentAcquireMode {
 #[derive(Debug, Clone)]
 pub struct AcquiredDeployment {
     pub deployment: DeploymentRecord,
+    pub execution_claim: Option<ExecutionClaim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionClaim {
+    pub operation_id: String,
+    pub attempt_id: String,
 }
 
 /// Data for reconciling a deployment after processing.
@@ -265,6 +274,7 @@ pub struct ReconcileData {
     pub observed_inventory_batches: Vec<ObservedInventoryBatch>,
     pub capabilities: Vec<OperatorCapabilityReport>,
     pub operator_version: Option<String>,
+    pub execution_claim: Option<ExecutionClaim>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -286,6 +296,15 @@ pub struct ReconcileData {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait DeploymentStore: Send + Sync {
+    /// Whether executable deployment targets require an operation claim.
+    ///
+    /// Stores backed by a control plane with durable deployment operations
+    /// override this. The standalone SQLite store retains its single-row
+    /// execution model and therefore has no operation to claim.
+    fn requires_execution_claims(&self) -> bool {
+        false
+    }
+
     // --- Deployment CRUD ---
 
     async fn create_deployment(
@@ -409,6 +428,7 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
+        execution_claim: Option<ExecutionClaim>,
     ) -> Result<(), AlienError>;
 
     /// Release lock on a deployment.
@@ -417,6 +437,7 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
+        execution_claim: Option<ExecutionClaim>,
     ) -> Result<(), AlienError>;
 
     // --- Deployment groups ---

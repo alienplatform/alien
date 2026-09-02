@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  ExecutionClaim,
+  ExecutionClaim$Outbound,
+  ExecutionClaim$outboundSchema,
+} from "./executionclaim.js";
+import {
   ObservedInventoryBatch,
   ObservedInventoryBatch$Outbound,
   ObservedInventoryBatch$outboundSchema,
@@ -30,12 +35,15 @@ export type AgentSyncRequest = {
    */
   currentState?: any | undefined;
   deploymentId: string;
+  executionClaim?: ExecutionClaim | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
   operatorVersion?: string | null | undefined;
   /**
    * Managed resource status samples emitted by pull-mode deployment steps.
    */
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
+  session?: string | undefined;
+  supportsExecutionClaims?: boolean | undefined;
 };
 
 /** @internal */
@@ -43,9 +51,12 @@ export type AgentSyncRequest$Outbound = {
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   currentState?: any | undefined;
   deploymentId: string;
+  executionClaim?: ExecutionClaim$Outbound | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
+  session?: string | undefined;
+  supportsExecutionClaims?: boolean | undefined;
 };
 
 /** @internal */
@@ -56,10 +67,13 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   currentState: z.any().optional(),
   deploymentId: z.string(),
+  executionClaim: z.nullable(ExecutionClaim$outboundSchema).optional(),
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
   operatorVersion: z.nullable(z.string()).optional(),
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
+  session: z.string().optional(),
+  supportsExecutionClaims: z.boolean().optional(),
 });
 
 export function agentSyncRequestToJSON(

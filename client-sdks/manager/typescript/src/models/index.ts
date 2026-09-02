@@ -75,6 +75,7 @@ export * from "./domainsettings.js";
 export * from "./envelope.js";
 export * from "./environmentvariable.js";
 export * from "./environmentvariabletype.js";
+export * from "./executionclaim.js";
 export * from "./exposeprotocol.js";
 export * from "./failuredomainselection.js";
 export * from "./gcpcredentials.js";

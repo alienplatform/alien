@@ -12,7 +12,7 @@ use alien_core::{DeploymentModel, DeploymentState, ObservedInventoryBatch, Resou
 use alien_error::{AlienError, AlienErrorData, Context, ContextError, IntoAlienError};
 use alien_manager_api::{Client as ManagerClient, SdkResultExt, SdkResultExtReadingBody as _};
 use async_trait::async_trait;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
@@ -28,11 +28,41 @@ use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
 pub struct ManagerApiTransport {
     client: ManagerClient,
     session: String,
+    execution_claim: Option<ExecutionClaim>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExecutionClaim {
+    pub operation_id: String,
+    pub attempt_id: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct AcquiredDeploymentPayload {
+    pub deployment: serde_json::Value,
+    pub execution_claim: Option<ExecutionClaim>,
 }
 
 impl ManagerApiTransport {
     pub fn new(client: ManagerClient, session: String) -> Self {
-        Self { client, session }
+        Self {
+            client,
+            session,
+            execution_claim: None,
+        }
+    }
+
+    pub fn with_execution_claim(
+        client: ManagerClient,
+        session: String,
+        execution_claim: Option<ExecutionClaim>,
+    ) -> Self {
+        Self {
+            client,
+            session,
+            execution_claim,
+        }
     }
 }
 
@@ -43,6 +73,11 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             .renew()
             .body(alien_manager_api::types::RenewRequest {
                 deployment_id: deployment_id.to_string(),
+                execution_claim: self
+                    .execution_claim
+                    .as_ref()
+                    .map(to_manager_api_execution_claim)
+                    .transpose()?,
                 session: self.session.clone(),
             })
             .send()
@@ -92,6 +127,11 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             resource_heartbeats: heartbeats,
             observed_inventory_batches,
             capabilities: Vec::new(),
+            execution_claim: self
+                .execution_claim
+                .as_ref()
+                .map(to_manager_api_execution_claim)
+                .transpose()?,
             operator_version: None,
         };
         #[cfg(not(feature = "openapi"))]
@@ -104,6 +144,11 @@ impl DeploymentLoopTransport for ManagerApiTransport {
             resource_heartbeats: heartbeats,
             observed_inventory_batches,
             capabilities: Vec::new(),
+            execution_claim: self
+                .execution_claim
+                .as_ref()
+                .map(to_manager_api_execution_claim)
+                .transpose()?,
             operator_version: None,
         };
 
@@ -160,6 +205,15 @@ fn deployment_state_changed(updated: &DeploymentState, current: &DeploymentState
         || updated.protocol_version != current.protocol_version
 }
 
+fn to_manager_api_execution_claim(
+    claim: &ExecutionClaim,
+) -> Result<alien_manager_api::types::ExecutionClaim, AlienError> {
+    Ok(alien_manager_api::types::ExecutionClaim {
+        attempt_id: claim.attempt_id.clone(),
+        operation_id: claim.operation_id.clone(),
+    })
+}
+
 fn serialized_values_differ<T: Serialize>(updated: &T, current: &T) -> bool {
     serde_json::to_value(updated).ok() != serde_json::to_value(current).ok()
 }
@@ -210,7 +264,9 @@ const ACQUIRE_RETRY_DELAY_SECS: u64 = 2;
 /// Result of waiting for setup-owned deletion work.
 pub enum SetupDeleteAcquireOutcome {
     /// The setup teardown lock was acquired and must be released.
-    Acquired,
+    Acquired {
+        execution_claim: Option<ExecutionClaim>,
+    },
     /// Runtime cleanup already deleted the deployment record.
     AlreadyDeleted,
 }
@@ -248,7 +304,7 @@ pub async fn acquire_runtime_delete_deployment(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
-) -> Result<(), AlienError> {
+) -> Result<AcquiredDeploymentPayload, AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
@@ -263,7 +319,6 @@ pub async fn acquire_runtime_delete_deployment(
         ]),
     )
     .await
-    .map(|_| ())
 }
 
 /// Acquire a deployment lock from the manager, retrying until the lock is granted
@@ -276,7 +331,7 @@ pub async fn acquire_deployment(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
-) -> Result<(), AlienError> {
+) -> Result<AcquiredDeploymentPayload, AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
@@ -287,7 +342,6 @@ pub async fn acquire_deployment(
         None,
     )
     .await
-    .map(|_| ())
 }
 
 /// Acquire a deployment lock and return the manager's acquired deployment
@@ -298,7 +352,7 @@ pub async fn acquire_deployment_with_payload(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
-) -> Result<serde_json::Value, AlienError> {
+) -> Result<AcquiredDeploymentPayload, AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
@@ -321,7 +375,7 @@ pub async fn acquire_setup_run_deployment(
     deployment_id: &str,
     session: &str,
     deployment_model: DeploymentModel,
-) -> Result<serde_json::Value, AlienError> {
+) -> Result<AcquiredDeploymentPayload, AlienError> {
     acquire_deployment_with_statuses(
         client,
         deployment_id,
@@ -386,8 +440,13 @@ pub async fn acquire_setup_delete_deployment(
                 message: "Failed to acquire setup teardown sync lock".to_string(),
             })?;
 
-        if resp.into_inner().deployments.into_iter().next().is_some() {
-            return Ok(SetupDeleteAcquireOutcome::Acquired);
+        if let Some(acquired) = resp.into_inner().deployments.into_iter().next() {
+            return Ok(SetupDeleteAcquireOutcome::Acquired {
+                execution_claim: acquired.execution_claim.map(|claim| ExecutionClaim {
+                    operation_id: claim.operation_id,
+                    attempt_id: claim.attempt_id,
+                }),
+            });
         }
 
         let status = match client.get_deployment().id(deployment_id).send().await {
@@ -445,7 +504,7 @@ async fn acquire_deployment_with_statuses(
     acquire_mode: Option<String>,
     setup_method: Option<String>,
     statuses: Option<Vec<String>>,
-) -> Result<serde_json::Value, AlienError> {
+) -> Result<AcquiredDeploymentPayload, AlienError> {
     for attempt in 1..=MAX_ACQUIRE_ATTEMPTS {
         let resp = client
             .acquire()
@@ -466,8 +525,14 @@ async fn acquire_deployment_with_statuses(
                 message: "Failed to acquire sync lock".to_string(),
             })?;
 
-        if let Some(deployment) = resp.into_inner().deployments.into_iter().next() {
-            return Ok(deployment.deployment);
+        if let Some(acquired) = resp.into_inner().deployments.into_iter().next() {
+            return Ok(AcquiredDeploymentPayload {
+                deployment: acquired.deployment,
+                execution_claim: acquired.execution_claim.map(|claim| ExecutionClaim {
+                    operation_id: claim.operation_id,
+                    attempt_id: claim.attempt_id,
+                }),
+            });
         }
 
         if attempt == MAX_ACQUIRE_ATTEMPTS {
@@ -495,6 +560,7 @@ pub async fn final_reconcile(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    execution_claim: Option<&ExecutionClaim>,
     state: &DeploymentState,
 ) -> Result<(), AlienError> {
     let reconcile_result = async {
@@ -515,6 +581,9 @@ pub async fn final_reconcile(
                 resource_heartbeats: vec![],
                 observed_inventory_batches: vec![],
                 capabilities: Vec::new(),
+                execution_claim: execution_claim
+                    .map(to_manager_api_execution_claim)
+                    .transpose()?,
                 operator_version: None,
             })
             .send()
@@ -539,7 +608,7 @@ pub async fn final_reconcile(
         result => result,
     };
 
-    let release_result = release_deployment(client, deployment_id, session).await;
+    let release_result = release_deployment(client, deployment_id, session, execution_claim).await;
     match (reconcile_result, release_result) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
@@ -639,7 +708,7 @@ mod tests {
             protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
 
-        let error = final_reconcile(&client, "deployment-1", "session-1", &state)
+        let error = final_reconcile(&client, "deployment-1", "session-1", None, &state)
             .await
             .expect_err("reconcile failure must propagate");
 
@@ -677,7 +746,7 @@ mod tests {
             protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
         };
 
-        final_reconcile(&client, "deployment-1", "session-1", &state)
+        final_reconcile(&client, "deployment-1", "session-1", None, &state)
             .await
             .expect("missing deleted deployment should be complete");
         reconcile.assert_async().await;
@@ -834,11 +903,15 @@ pub async fn release_deployment(
     client: &ManagerClient,
     deployment_id: &str,
     session: &str,
+    execution_claim: Option<&ExecutionClaim>,
 ) -> Result<(), AlienError> {
     if let Err(error) = client
         .release()
         .body(alien_manager_api::types::ReleaseRequest {
             deployment_id: deployment_id.to_string(),
+            execution_claim: execution_claim
+                .map(to_manager_api_execution_claim)
+                .transpose()?,
             session: session.to_string(),
         })
         .send()

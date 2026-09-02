@@ -135,6 +135,20 @@ async fn sync_with_manager(
         .get_deployment_id()
         .await?
         .expect("deployment_id must be set in online mode");
+    let durable_execution = match state.db.get_sync_execution().await? {
+        Some(execution) => execution,
+        None => {
+            let session = format!("pull-operator-{}", Uuid::new_v4());
+            state.db.set_sync_execution(&session, None, None).await?;
+            crate::db::DurableSyncExecution {
+                session,
+                claim: None,
+                target: None,
+            }
+        }
+    };
+    let sync_session = durable_execution.session.clone();
+    let execution_claim = durable_execution.claim.clone();
     let heartbeats = state.db.get_pending_heartbeats().await?;
     let mut observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
     if deployment_state.status == DeploymentStatus::Running && state.config.observes_environment() {
@@ -165,6 +179,9 @@ async fn sync_with_manager(
 
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
+        session: sync_session.clone(),
+        supports_execution_claims: true,
+        execution_claim,
         current_state: Some(deployment_state),
         heartbeats,
         observed_inventory_batches,
@@ -226,6 +243,23 @@ async fn sync_with_manager(
                 message: "Failed to parse sync response".to_string(),
             })?;
 
+    let durable_target = sync_response.target.clone().or_else(|| {
+        (sync_response.execution_claim == durable_execution.claim)
+            .then(|| durable_execution.target.clone())
+            .flatten()
+    });
+    // A claim and its target are one durable receipt. Persist them in one
+    // SQLite value before changing deployment state/config so a crash can
+    // resume the exact immutable target rather than asking for "latest".
+    state
+        .db
+        .set_sync_execution(
+            &sync_session,
+            sync_response.execution_claim.as_ref(),
+            durable_target.as_ref(),
+        )
+        .await?;
+
     // Persist the commands URL so the deployment loop can inject it into
     // deployed functions. This is the public URL cloud functions use to poll
     // for pending commands (vs. the operator's local sync URL which is only
@@ -260,10 +294,10 @@ async fn sync_with_manager(
     }
 
     // Check if there's a new target
-    let has_update = sync_response.target.is_some();
+    let has_update = durable_target.is_some();
 
     if has_update {
-        if let Some(target_deployment) = sync_response.target {
+        if let Some(target_deployment) = durable_target {
             let now = Utc::now().to_rfc3339();
 
             // Get current deployment state (or create default)

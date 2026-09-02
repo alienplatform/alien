@@ -3,15 +3,22 @@
  */
 
 import * as z from "zod/v4";
+import {
+  ExecutionClaim,
+  ExecutionClaim$Outbound,
+  ExecutionClaim$outboundSchema,
+} from "./executionclaim.js";
 
 export type RenewRequest = {
   deploymentId: string;
+  executionClaim?: ExecutionClaim | null | undefined;
   session: string;
 };
 
 /** @internal */
 export type RenewRequest$Outbound = {
   deploymentId: string;
+  executionClaim?: ExecutionClaim$Outbound | null | undefined;
   session: string;
 };
 
@@ -21,6 +28,7 @@ export const RenewRequest$outboundSchema: z.ZodType<
   RenewRequest
 > = z.object({
   deploymentId: z.string(),
+  executionClaim: z.nullable(ExecutionClaim$outboundSchema).optional(),
   session: z.string(),
 });
 

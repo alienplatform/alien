@@ -15,7 +15,7 @@ use alien_deployment::transport::{DeploymentLoopTransport, StepReconcileResult};
 use alien_error::AlienError;
 
 use crate::auth::Subject;
-use crate::traits::deployment_store::ReconcileData;
+use crate::traits::deployment_store::{ExecutionClaim, ReconcileData};
 use crate::traits::DeploymentStore;
 
 /// Transport that persists state directly to the deployment store and
@@ -25,6 +25,7 @@ pub struct ManagerTransport {
     bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     session: String,
+    execution_claim: Option<ExecutionClaim>,
 }
 
 impl ManagerTransport {
@@ -33,12 +34,14 @@ impl ManagerTransport {
         bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
         target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
         session: String,
+        execution_claim: Option<ExecutionClaim>,
     ) -> Self {
         Self {
             deployment_store,
             bindings_provider,
             target_bindings_providers,
             session,
+            execution_claim,
         }
     }
 }
@@ -48,7 +51,12 @@ impl DeploymentLoopTransport for ManagerTransport {
     async fn renew_lease(&self, deployment_id: &str) -> Result<(), AlienError> {
         let caller = Subject::system();
         self.deployment_store
-            .renew_lease(&caller, deployment_id, &self.session)
+            .renew_lease(
+                &caller,
+                deployment_id,
+                &self.session,
+                self.execution_claim.clone(),
+            )
             .await?;
         Ok(())
     }
@@ -93,6 +101,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                     observed_inventory_batches,
                     capabilities: Vec::new(),
                     operator_version: None,
+                    execution_claim: self.execution_claim.clone(),
                 },
             )
             .await?;

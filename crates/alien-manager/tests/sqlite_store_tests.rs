@@ -131,6 +131,7 @@ fn test_reconcile_data(
     ReconcileData {
         deployment_id: deployment_id.to_string(),
         session: session.to_string(),
+        execution_claim: None,
         state: test_deployment_state(status, stack_state),
         update_heartbeat: false,
         suggested_delay_ms: None,
@@ -674,7 +675,7 @@ async fn acquire_and_release() {
 
     // Release the lock
     store
-        .release(&test_subject(), &dep.id, "session-1")
+        .release(&test_subject(), &dep.id, "session-1", None)
         .await
         .unwrap();
 
@@ -953,6 +954,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
             ReconcileData {
                 deployment_id: dep.id.clone(),
                 session: "agent-sync".to_string(),
+                execution_claim: None,
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
@@ -1057,7 +1059,7 @@ async fn stale_reconcile_preserves_runtime_delete_status_and_latest_stack_state(
         assert_eq!(fetched.locked_by.as_deref(), Some(session.as_str()));
 
         store
-            .release(&test_subject(), &deployment.id, &session)
+            .release(&test_subject(), &deployment.id, &session, None)
             .await
             .unwrap();
     }
@@ -1144,6 +1146,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
             ReconcileData {
                 deployment_id: dep.id.clone(),
                 session: "session-A".to_string(),
+                execution_claim: None,
                 state,
                 update_heartbeat: false,
                 heartbeats: vec![],
@@ -1185,12 +1188,12 @@ async fn renew_lease_requires_the_active_session() {
         .await
         .expect("deployment should be acquired");
     store
-        .renew_lease(&test_subject(), &deployment.id, "session-A")
+        .renew_lease(&test_subject(), &deployment.id, "session-A", None)
         .await
         .expect("the active session should renew its lease");
 
     let error = store
-        .renew_lease(&test_subject(), &deployment.id, "session-B")
+        .renew_lease(&test_subject(), &deployment.id, "session-B", None)
         .await
         .expect_err("a different session must not renew the lease");
     assert_eq!(error.code, "DEPLOYMENT_LOCKED");
@@ -1225,7 +1228,7 @@ async fn suggested_delay_defers_reacquisition_until_external_work_wakes_it() {
         .await
         .expect("checkpoint should persist the suggested schedule");
     store
-        .release(&test_subject(), &deployment.id, "session-A")
+        .release(&test_subject(), &deployment.id, "session-A", None)
         .await
         .expect("deployment lease should release");
 

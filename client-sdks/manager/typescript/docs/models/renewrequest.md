@@ -13,7 +13,8 @@ let value: RenewRequest = {
 
 ## Fields
 
-| Field              | Type               | Required           | Description        |
-| ------------------ | ------------------ | ------------------ | ------------------ |
-| `deploymentId`     | *string*           | :heavy_check_mark: | N/A                |
-| `session`          | *string*           | :heavy_check_mark: | N/A                |
+| Field                                                | Type                                                 | Required                                             | Description                                          |
+| ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------- |
+| `deploymentId`                                       | *string*                                             | :heavy_check_mark:                                   | N/A                                                  |
+| `executionClaim`                                     | [models.ExecutionClaim](../models/executionclaim.md) | :heavy_minus_sign:                                   | N/A                                                  |
+| `session`                                            | *string*                                             | :heavy_check_mark:                                   | N/A                                                  |

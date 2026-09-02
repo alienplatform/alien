@@ -4370,7 +4370,11 @@ pub async fn push_initial_setup(
     })?;
 
     let setup_attempt = async {
-        if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+        if let Some(acquired_config) = acquired_deployment
+            .deployment
+            .get("deploymentConfig")
+            .cloned()
+        {
             config = serde_json::from_value(acquired_config)
                 .into_alien_error()
                 .context(ErrorData::ConfigurationError {
@@ -4502,7 +4506,11 @@ pub async fn push_initial_setup(
         );
 
         // Run the shared step loop with per-step reconciliation via the manager API
-        let transport = ManagerApiTransport::new(client.clone(), session.clone());
+        let transport = ManagerApiTransport::with_execution_claim(
+            client.clone(),
+            session.clone(),
+            acquired_deployment.execution_claim.clone(),
+        );
         let policy = RunnerPolicy {
             max_steps: 400,
             // Push model: run initial setup only, then hand off to the manager.
@@ -4531,7 +4539,14 @@ pub async fn push_initial_setup(
     let runner_result = match setup_attempt {
         Ok(runner_result) => runner_result,
         Err(error) => {
-            if let Err(release_error) = release_deployment(client, deployment_id, &session).await {
+            if let Err(release_error) = release_deployment(
+                client,
+                deployment_id,
+                &session,
+                acquired_deployment.execution_claim.as_ref(),
+            )
+            .await
+            {
                 return Err(error.context(ErrorData::GenericError {
                     message: format!(
                         "Setup preparation failed and lease release also failed: {release_error}"
@@ -4556,7 +4571,14 @@ pub async fn push_initial_setup(
     // Always reconcile + release, even on error.
     let runner_result = combine_operation_and_finalization(
         runner_result,
-        final_reconcile(client, deployment_id, &session, &state).await,
+        final_reconcile(
+            client,
+            deployment_id,
+            &session,
+            acquired_deployment.execution_claim.as_ref(),
+            &state,
+        )
+        .await,
     );
 
     // Handle runner result after lock release
@@ -4774,11 +4796,12 @@ async fn run_runtime_deletion(
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
 ) -> Result<()> {
     let session = format!("push-runtime-deletion-{}", uuid::Uuid::new_v4());
-    acquire_runtime_delete_deployment(client, deployment_id, &session, deployment_model)
-        .await
-        .context(ErrorData::DeploymentFailed {
-            operation: "acquire runtime deletion lock".to_string(),
-        })?;
+    let acquired_deployment =
+        acquire_runtime_delete_deployment(client, deployment_id, &session, deployment_model)
+            .await
+            .context(ErrorData::DeploymentFailed {
+                operation: "acquire runtime deletion lock".to_string(),
+            })?;
 
     // Re-fetch deployment under lock
     let deployment = client
@@ -4811,7 +4834,11 @@ async fn run_runtime_deletion(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    let transport = ManagerApiTransport::new(client.clone(), session.clone());
+    let transport = ManagerApiTransport::with_execution_claim(
+        client.clone(),
+        session.clone(),
+        acquired_deployment.execution_claim.clone(),
+    );
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
@@ -4833,7 +4860,14 @@ async fn run_runtime_deletion(
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
         runner_result,
-        final_reconcile(client, deployment_id, &session, state).await,
+        final_reconcile(
+            client,
+            deployment_id,
+            &session,
+            acquired_deployment.execution_claim.as_ref(),
+            state,
+        )
+        .await,
     );
 
     // Handle runner result after lock release
@@ -4875,10 +4909,13 @@ async fn run_setup_deletion(
                 operation: "acquire setup teardown lock".to_string(),
             })?;
 
-    if matches!(acquire_outcome, SetupDeleteAcquireOutcome::AlreadyDeleted) {
-        output::success("Deployment deleted successfully.");
-        return Ok(());
-    }
+    let execution_claim = match acquire_outcome {
+        SetupDeleteAcquireOutcome::Acquired { execution_claim } => execution_claim,
+        SetupDeleteAcquireOutcome::AlreadyDeleted => {
+            output::success("Deployment deleted successfully.");
+            return Ok(());
+        }
+    };
 
     // Re-fetch deployment under lock
     let deployment = client
@@ -4911,7 +4948,11 @@ async fn run_setup_deletion(
             message: "Failed to deserialize runtime_metadata from manager".to_string(),
         })?;
 
-    let transport = ManagerApiTransport::new(client.clone(), session.clone());
+    let transport = ManagerApiTransport::with_execution_claim(
+        client.clone(),
+        session.clone(),
+        execution_claim.clone(),
+    );
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: LoopOperation::Delete,
@@ -4942,7 +4983,14 @@ async fn run_setup_deletion(
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
         runner_result,
-        final_reconcile(client, deployment_id, &session, state).await,
+        final_reconcile(
+            client,
+            deployment_id,
+            &session,
+            execution_claim.as_ref(),
+            state,
+        )
+        .await,
     );
 
     let result = runner_result.context(ErrorData::DeploymentFailed {
