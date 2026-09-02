@@ -405,7 +405,7 @@ resource "aws_security_group" "default_network_workload" {
 === agents.tf ===
 resource "aws_iam_role" "agents" {
   name               = length(format("%s-%s", local.resource_prefix, "agents-build")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-build") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-build"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-build")), 0, 8))
-  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
+  assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole", Condition = { StringEquals = { "aws:SourceAccount" = data.aws_caller_identity.current.account_id } } }] })
   tags = {
     "managed-by"    = "setup"
     deployment      = local.resource_prefix

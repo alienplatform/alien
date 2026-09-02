@@ -1,4 +1,6 @@
-use crate::{ResourceEntry, ResourceLifecycle, ResourceType, Sandbox, SandboxEgress};
+use crate::{
+    ownership_policy_for_resource_type, ResourceEntry, ResourceType, Sandbox, SandboxEgress,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RemoteBindingKind {
@@ -73,10 +75,15 @@ pub fn remote_binding_definition(
         .find(|definition| definition.resource_type == resource_type.as_ref())
 }
 
+/// A grant is attached by the setup artifact, so only a resource it renders something for can
+/// be published: every Frozen one, and the Live sandbox through its scaffolding.
 pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static RemoteBindingDefinition> {
-    (entry.remote_access && entry.lifecycle == ResourceLifecycle::Frozen)
-        .then(|| remote_binding_definition(&entry.config.resource_type()))
-        .flatten()
+    let resource_type = entry.config.resource_type();
+    (entry.remote_access
+        && ownership_policy_for_resource_type(resource_type.as_ref())
+            .emits_setup_scaffolding(entry.lifecycle))
+    .then(|| remote_binding_definition(&resource_type))
+    .flatten()
 }
 
 /// Why a declaration's remote binding is one a deployment cannot deliver, if it cannot.
@@ -141,7 +148,7 @@ pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Sandbox, SandboxCode, SandboxLimits, SandboxSessionPolicy};
+    use crate::{ResourceLifecycle, Sandbox, SandboxCode, SandboxLimits, SandboxSessionPolicy};
 
     fn remote_sandbox(egress: SandboxEgress, preview_ports: Vec<u16>) -> ResourceEntry {
         let sandbox = Sandbox::new("agent-sbx".to_string())

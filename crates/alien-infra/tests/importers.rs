@@ -1448,6 +1448,134 @@ fn aws_sandbox_frozen_reimport_replaces() {
         "2.0",
         "stack creation is authoritative about a setup-owned image"
     );
+
+    // Replacement is decided by the lifecycle, not by what the payload names: a Frozen
+    // registration carrying build inputs still replaces rather than merging onto the image.
+    let existing = registry
+        .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, frozen("2.0"), &ctx)
+        .expect("existing");
+    let imported = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            serde_json::to_value(AwsSandboxImportData {
+                image_identifier: None,
+                image_arn: None,
+                image_version: None,
+                build_role_arn: Some(
+                    "arn:aws:iam::123456789012:role/stack-agents-build".to_string(),
+                ),
+                bundle_uri: Some("s3://alien-bundles/sandbox/bundle.zip".to_string()),
+                egress_connector_arns: Vec::new(),
+                allow_egress: true,
+                preview_ports: Vec::new(),
+            })
+            .unwrap(),
+            &ctx,
+        )
+        .expect("re-import");
+    let replaced = registry
+        .merge_reimport(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            existing,
+            imported.clone(),
+            &ctx,
+        )
+        .expect("merge should succeed");
+    assert_eq!(replaced.status, ResourceStatus::Provisioning);
+    assert_eq!(
+        internal_state(&replaced)["state"],
+        "creatingImage",
+        "a Frozen sandbox takes the registration as it is"
+    );
+    assert!(
+        replaced.remote_binding_params.is_none(),
+        "the payload carried no image, so nothing publishes a binding"
+    );
+}
+
+/// A declaration that flips a sandbox from Frozen to Live re-registers with build inputs; the
+/// merged state must carry the new lifecycle, or the controller keeps treating the image as
+/// setup-owned and never rolls it.
+#[test]
+fn aws_sandbox_reimport_carries_the_declared_lifecycle_through_a_merge() {
+    let settings = settings();
+    let management = aws_management_config();
+    let registry = ImporterRegistry::built_in();
+    let frozen_entry = sandbox_entry(ResourceLifecycle::Frozen, true);
+    let frozen_ctx = ImportContext {
+        resource_id: "agents",
+        platform: Platform::Aws,
+        region: "us-east-2",
+        stack_settings: &settings,
+        management_config: Some(&management),
+        resource: &frozen_entry,
+    };
+    let existing = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            serde_json::to_value(AwsSandboxImportData {
+                image_identifier: Some(
+                    "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+                ),
+                image_arn: Some(
+                    "arn:aws:lambda:us-east-2:123456789012:microvm-image:stack-agents".to_string(),
+                ),
+                image_version: Some("1.0".to_string()),
+                build_role_arn: None,
+                bundle_uri: None,
+                egress_connector_arns: Vec::new(),
+                allow_egress: true,
+                preview_ports: Vec::new(),
+            })
+            .unwrap(),
+            &frozen_ctx,
+        )
+        .expect("first import");
+    assert_eq!(existing.lifecycle, Some(ResourceLifecycle::Frozen));
+
+    let live_entry = sandbox_entry(ResourceLifecycle::Live, true);
+    let live_ctx = ImportContext {
+        resource: &live_entry,
+        ..frozen_ctx
+    };
+    let imported = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            serde_json::to_value(AwsSandboxImportData {
+                image_identifier: None,
+                image_arn: None,
+                image_version: None,
+                build_role_arn: Some(
+                    "arn:aws:iam::123456789012:role/stack-agents-build".to_string(),
+                ),
+                bundle_uri: Some("s3://alien-bundles/sandbox/bundle.zip".to_string()),
+                egress_connector_arns: Vec::new(),
+                allow_egress: true,
+                preview_ports: Vec::new(),
+            })
+            .unwrap(),
+            &live_ctx,
+        )
+        .expect("re-import");
+    let merged = registry
+        .merge_reimport(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            existing,
+            imported,
+            &live_ctx,
+        )
+        .expect("merge should succeed");
+
+    assert_eq!(merged.lifecycle, Some(ResourceLifecycle::Live));
+    assert_eq!(
+        internal_state(&merged)["buildRoleArn"],
+        "arn:aws:iam::123456789012:role/stack-agents-build"
+    );
 }
 
 /// A Live sandbox registers its build inputs instead of an image, and imports Provisioning at

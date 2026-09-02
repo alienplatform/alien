@@ -635,6 +635,52 @@ async fn legacy_binding_params_cannot_bypass_a_disabled_current_release() {
     assert!(error.message.contains("not enabled for remote access"));
 }
 
+/// The resolve gate follows the preflight's rule, not the lifecycle alone: setup renders a Live
+/// sandbox's scaffolding, so its grant exists; it renders nothing for a Live bucket.
+#[tokio::test]
+async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
+    let mut live_sandbox = deployment(sandbox_stack_state_with_lifecycle(
+        open_sandbox_binding(),
+        Platform::Aws,
+        ResourceLifecycle::Live,
+    ));
+    live_sandbox.current_release_id = Some("current".to_string());
+    let sandbox_stack = Stack::new("stack".to_string())
+        .add_with_remote_access(sandbox_resource(), ResourceLifecycle::Live)
+        .build();
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, sandbox_stack),
+        )]),
+    };
+    require_current_release_remote_access(&store, &live_sandbox, "agents")
+        .await
+        .expect("a Live sandbox is scaffolded by setup and resolves");
+
+    let mut live_bucket = deployment(stack_state_with_resource(
+        Storage::RESOURCE_TYPE.as_ref(),
+        Some(ResourceLifecycle::Live),
+        ResourceStatus::Running,
+        Some(serde_json::to_value(StorageBinding::s3("files")).unwrap()),
+    ));
+    live_bucket.current_release_id = Some("current".to_string());
+    let bucket_stack = Stack::new("stack".to_string())
+        .add_with_remote_access(storage(), ResourceLifecycle::Live)
+        .build();
+    let store = StubReleaseStore {
+        releases: HashMap::from([(
+            "current".to_string(),
+            release("current", Platform::Aws, bucket_stack),
+        )]),
+    };
+    let error = require_current_release_remote_access(&store, &live_bucket, "files")
+        .await
+        .expect_err("setup renders nothing for a Live bucket, so no grant exists");
+    assert_eq!(error.code, "BAD_REQUEST");
+    assert!(error.message.contains("renders nothing"), "{}", error.message);
+}
+
 #[tokio::test]
 async fn remote_access_fails_closed_when_current_release_context_is_missing() {
     let stack_state = stack_state_with_resource(

@@ -309,6 +309,20 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
         !statements.iter().any(grants_ecr),
         "a Frozen build role must carry no ECR action: {statements:#?}"
     );
+
+    // See `build_role_trust_policy` for why the condition belongs on this statement.
+    let role = serde_json::to_value(
+        template
+            .resources
+            .get("AgentsBuildRole")
+            .expect("the build role must render"),
+    )
+    .expect("serializes");
+    assert_eq!(
+        role["Properties"]["AssumeRolePolicyDocument"]["Statement"][0]["Condition"],
+        serde_json::json!({ "StringEquals": { "aws:SourceAccount": { "Ref": "AWS::AccountId" } } }),
+        "the trust policy must be conditioned on the stack's own account: {role:#}"
+    );
 }
 
 /// Open + Live is the leanest emitted combination — no image (built at runtime) and no egress

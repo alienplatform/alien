@@ -10,8 +10,9 @@ use crate::{
     emitters::aws::helpers::{
         aws_terraform_permission_context, default_network, downcast,
         emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize, iam_role_block,
-        iam_role_name_template, iam_role_policy_block, nested_block, private_subnet_ids_expr,
-        required_label, resource_prefix_template, service_assume_role_policy, tags, vpc_id_expr,
+        iam_role_name_template, iam_role_policy_block, jsonencode, nested_block,
+        private_subnet_ids_expr, required_label, resource_prefix_template,
+        service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
@@ -91,7 +92,7 @@ impl TfEmitter for AwsSandboxEmitter {
         let build_role = iam_role_block(
             label,
             iam_role_name_template(&format!("{}-build", sandbox.id())),
-            service_assume_role_policy(&["lambda.amazonaws.com"]),
+            build_role_trust_policy(),
             tags(ctx, "sandbox"),
         );
 
@@ -516,6 +517,43 @@ fn runtime_import_ref(sandbox: &Sandbox, label: &str) -> Result<Expression> {
             expr::traversal(["aws_iam_role", label, "arn"]),
         ),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
+    ]))
+}
+
+/// The build role's trust policy, conditioned on the stack's own account. See the CloudFormation
+/// emitter's `build_role_trust_policy`.
+fn build_role_trust_policy() -> Expression {
+    jsonencode(expr::object([
+        ("Version", Expression::String("2012-10-17".to_string())),
+        (
+            "Statement",
+            Expression::Array(vec![expr::object([
+                ("Effect", Expression::String("Allow".to_string())),
+                (
+                    "Principal",
+                    expr::object([(
+                        "Service",
+                        Expression::String("lambda.amazonaws.com".to_string()),
+                    )]),
+                ),
+                ("Action", Expression::String("sts:AssumeRole".to_string())),
+                (
+                    "Condition",
+                    expr::object([(
+                        "StringEquals",
+                        expr::object([(
+                            "aws:SourceAccount",
+                            expr::traversal([
+                                "data",
+                                "aws_caller_identity",
+                                "current",
+                                "account_id",
+                            ]),
+                        )]),
+                    )]),
+                ),
+            ])]),
+        ),
     ]))
 }
 

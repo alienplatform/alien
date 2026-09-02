@@ -2,7 +2,8 @@
 
 use alien_core::{
     import::{data::AwsSandboxImportData, ImportContext},
-    ErrorData as CoreErrorData, Platform, ResourceStatus, Result, Sandbox, StackResourceState,
+    ErrorData as CoreErrorData, Platform, ResourceLifecycle, ResourceStatus, Result, Sandbox,
+    StackResourceState,
 };
 use alien_error::AlienError;
 
@@ -111,13 +112,19 @@ impl ResourceImporter for AwsSandboxImporter {
     /// sandbox that is serving — and re-run the create flow against an image that exists.
     ///
     /// Only the setup-owned facts cross over. The bundle deliberately does not: a new release's
-    /// bundle is a desired-config change and reaches the image through the update flow.
+    /// bundle is a desired-config change and reaches the image through the update flow. A Frozen
+    /// sandbox is replaced outright.
     fn merge_reimport(
         &self,
         existing: StackResourceState,
         imported: StackResourceState,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
+        // Frozen is setup-authoritative: stack creation built the image, so its registration
+        // replaces whatever state the manager held, whatever the payload names.
+        if ctx.resource.lifecycle == ResourceLifecycle::Frozen {
+            return Ok(imported);
+        }
         let (Some(existing_state), Some(imported_state)) = (
             existing.internal_state.clone(),
             imported.internal_state.clone(),
@@ -144,14 +151,10 @@ impl ResourceImporter for AwsSandboxImporter {
                 })
             })?;
 
-        // A Frozen registration names no build role. Its image is setup-owned and stack creation
-        // is authoritative about it, so replacement is right there.
-        if imported_controller.build_role_arn.is_none() {
-            return Ok(imported);
-        }
-
         let merged = AwsSandboxController {
-            build_role_arn: imported_controller.build_role_arn,
+            build_role_arn: imported_controller
+                .build_role_arn
+                .or(existing_controller.build_role_arn.clone()),
             egress_connector_arns: imported_controller.egress_connector_arns,
             allow_egress: imported_controller.allow_egress,
             preview_ports: imported_controller.preview_ports,
@@ -189,6 +192,7 @@ impl ResourceImporter for AwsSandboxImporter {
             internal_state: Some(internal_state),
             outputs,
             remote_binding_params,
+            lifecycle: Some(ctx.resource.lifecycle),
             ..existing
         })
     }
