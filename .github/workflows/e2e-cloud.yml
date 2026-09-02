@@ -128,6 +128,9 @@ on:
   merge_group:
   pull_request:
     types: [opened, reopened, synchronize, labeled]
+  schedule:
+    # Run the default smoke matrix against the tip of main every night.
+    - cron: '0 3 * * *'
 
 # Every run currently shares ALIEN_E2E_SLOT 03. Serialize the complete workflow
 # so a newer run cannot reuse resources while an older run is still testing or
@@ -173,10 +176,12 @@ jobs:
     steps:
       - id: set
         run: |
-          # Determine whether tests should run at all based on event type
+          # Determine whether tests should run at all based on event type.
+          # Scheduled runs execute from the default branch and use the same
+          # smoke matrix as merge-group runs.
           SHOULD_RUN=false
           case "${{ github.event_name }}" in
-            workflow_dispatch|merge_group)
+            workflow_dispatch|merge_group|schedule)
               SHOULD_RUN=true
               ;;
             pull_request)
