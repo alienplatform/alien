@@ -3501,6 +3501,9 @@ packages:
   zod@4.4.3:
     resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
 
+  zod@4.5.2:
+    resolution: {integrity: sha512-XkYXCol10+ba/6F/cueWV+TezUeOqXW0hdeJt5CdXjTYeAgAQg5N03RQdJ80mhfFE72+pblvYMW4wy2Qp4Qbrg==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -3550,7 +3553,7 @@ snapshots:
   '@alienplatform/ai-gateway@file:../packages/ai-gateway(@types/json-schema@7.0.15)(openapi-types@12.1.3)':
     dependencies:
       '@alienplatform/core': file:../packages/core(@types/json-schema@7.0.15)(openapi-types@12.1.3)
-      zod: 4.4.3
+      zod: 4.5.2
     transitivePeerDependencies:
       - '@types/json-schema'
       - openapi-types
@@ -3573,7 +3576,7 @@ snapshots:
     dependencies:
       '@openapi-contrib/json-schema-to-openapi-schema': 4.3.1(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       serialize-error: 12.0.0
-      zod: 4.4.3
+      zod: 4.5.2
     transitivePeerDependencies:
       - '@types/json-schema'
       - openapi-types
@@ -3587,7 +3590,7 @@ snapshots:
       '@grpc/grpc-js': 1.14.4
       nice-grpc: 2.1.14
       nice-grpc-common: 2.0.2
-      zod: 4.4.3
+      zod: 4.5.2
     transitivePeerDependencies:
       - '@types/json-schema'
       - openai
@@ -3598,7 +3601,7 @@ snapshots:
       '@alienplatform/commands': file:../packages/commands(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       '@alienplatform/core': file:../packages/core(@types/json-schema@7.0.15)(openapi-types@12.1.3)
       get-port: 7.1.0
-      zod: 4.4.3
+      zod: 4.5.2
     optionalDependencies:
       '@aws-sdk/client-ssm': 3.1004.0
       '@azure/identity': 4.13.0
@@ -7204,5 +7207,7 @@ snapshots:
   zod@4.3.2: {}
 
   zod@4.4.3: {}
+
+  zod@4.5.2: {}
 
   zwitch@2.0.4: {}
