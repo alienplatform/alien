@@ -975,14 +975,16 @@ async fn require_current_release_remote_access(
                     "Resource '{resource_id}' does not support Remote Bindings"
                 ))
             })?;
-    if resource.lifecycle != ResourceLifecycle::Frozen {
-        return Err(ErrorData::bad_request(format!(
-            "Remote resource '{resource_id}' is not Frozen in the deployment's current release"
-        )));
-    }
     if !resource.remote_access {
         return Err(ErrorData::bad_request(format!(
             "Resource '{resource_id}' is not enabled for remote access in the deployment's current release"
+        )));
+    }
+    // The same rule the preflight grants by: setup must render something for the resource.
+    if alien_core::remote_bindings::remote_binding_for_entry(resource).is_none() {
+        return Err(ErrorData::bad_request(format!(
+            "Remote resource '{resource_id}' is {:?} and setup renders nothing for it in the deployment's current release",
+            resource.lifecycle
         )));
     }
     if definition.kind == alien_core::remote_bindings::RemoteBindingKind::Key
