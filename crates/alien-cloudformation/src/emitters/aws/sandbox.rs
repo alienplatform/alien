@@ -69,7 +69,7 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         role.properties.insert(
             "AssumeRolePolicyDocument".to_string(),
-            service_trust_policy(["lambda.amazonaws.com"]),
+            build_role_trust_policy(),
         );
         role.properties.insert(
             "Policies".to_string(),
@@ -421,6 +421,35 @@ fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression>
         ("buildRoleArn", CfExpression::get_att(&role_id, "Arn")),
         ("bundleUri", code_artifact_uri(artifact_uri(sandbox)?)),
     ]))
+}
+
+/// Lambda assumes the build role on the stack's own behalf; without the account condition any
+/// account's MicroVM build could name this role and run under it.
+fn build_role_trust_policy() -> CfExpression {
+    CfExpression::object([
+        ("Version", CfExpression::from("2012-10-17")),
+        (
+            "Statement",
+            CfExpression::list([CfExpression::object([
+                ("Effect", CfExpression::from("Allow")),
+                (
+                    "Principal",
+                    CfExpression::object([("Service", CfExpression::from("lambda.amazonaws.com"))]),
+                ),
+                ("Action", CfExpression::from("sts:AssumeRole")),
+                (
+                    "Condition",
+                    CfExpression::object([(
+                        "StringEquals",
+                        CfExpression::object([(
+                            "aws:SourceAccount",
+                            CfExpression::ref_("AWS::AccountId"),
+                        )]),
+                    )]),
+                ),
+            ])]),
+        ),
+    ])
 }
 
 /// The ports a preview capability may be minted for.

@@ -305,6 +305,10 @@ fn aws_sandbox_build_policy_is_a_well_formed_scoped_document() {
         !rendered.contains("ecr:"),
         "a Frozen build role must carry no ECR action:\n{rendered}"
     );
+    assert!(
+        rendered.contains("\"aws:SourceAccount\" = data.aws_caller_identity.current.account_id"),
+        "the build role's trust policy must be conditioned on the stack's account:\n{rendered}"
+    );
 }
 
 /// A module that declares `awscc` must configure it, or the customer cannot plan.

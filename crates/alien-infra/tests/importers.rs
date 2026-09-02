@@ -1448,6 +1448,46 @@ fn aws_sandbox_frozen_reimport_replaces() {
         "2.0",
         "stack creation is authoritative about a setup-owned image"
     );
+
+    // Replacement is decided by the lifecycle, not by what the payload names: a Frozen
+    // registration carrying build inputs still replaces rather than merging onto the image.
+    let existing = registry
+        .run(&Sandbox::RESOURCE_TYPE, Platform::Aws, frozen("2.0"), &ctx)
+        .expect("existing");
+    let imported = registry
+        .run(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            serde_json::to_value(AwsSandboxImportData {
+                image_identifier: None,
+                image_arn: None,
+                image_version: None,
+                build_role_arn: Some(
+                    "arn:aws:iam::123456789012:role/stack-agents-build".to_string(),
+                ),
+                bundle_uri: Some("s3://alien-bundles/sandbox/bundle.zip".to_string()),
+                egress_connector_arns: Vec::new(),
+                allow_egress: true,
+                preview_ports: Vec::new(),
+            })
+            .unwrap(),
+            &ctx,
+        )
+        .expect("re-import");
+    let replaced = registry
+        .merge_reimport(
+            &Sandbox::RESOURCE_TYPE,
+            Platform::Aws,
+            existing,
+            imported.clone(),
+            &ctx,
+        )
+        .expect("merge should succeed");
+    assert_eq!(replaced.status, imported.status);
+    assert_eq!(
+        replaced.internal_state, imported.internal_state,
+        "a Frozen sandbox takes the registration as it is"
+    );
 }
 
 /// A Live sandbox registers its build inputs instead of an image, and imports Provisioning at

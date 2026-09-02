@@ -5,12 +5,13 @@
     "aws": [
       {
         "grant": {
-          // The Frozen parent on AWS is a MicroVM image and its versions. run-microvm rejects
-          // the AWS-managed base image, so every AWS sandbox builds one — provision therefore
-          // covers the build and its status reads, not just create and delete.
+          // The parent on AWS is a MicroVM image and its versions. run-microvm rejects the
+          // AWS-managed base image, so every AWS sandbox builds one — provision therefore covers
+          // the build and its status reads, not just create and delete, whether the installer
+          // runs it for a Frozen sandbox or the runtime controller for a Live one.
           //
           // UpdateMicrovmImage is the roll a new release's bundle takes onto an image that
-          // already exists. It accepts no request tags, so unlike the create below it can only
+          // already exists. It accepts no request tags, so unlike the creates below it can only
           // be authorized here, against the image ARN pattern the stack binding compiles.
           "actions": [
             "lambda:UpdateMicrovmImage",
@@ -39,7 +40,8 @@
       {
         "grant": {
           // AWS authorizes creation against no resource type, so an ARN here would deny rather
-          // than narrow. The boundary tags are what bound it instead.
+          // than narrow. The boundary tags are what bound it instead: this statement is the
+          // runtime controller's build.
           "actions": ["lambda:CreateMicrovmImage"]
         },
         "binding": {
@@ -58,6 +60,32 @@
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
                 "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          // The same build under the tag CloudFormation and Terraform put on a Frozen image.
+          "actions": ["lambda:CreateMicrovmImage"]
+        },
+        "binding": {
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
               }
             }
           }
@@ -85,6 +113,7 @@
       {
         // The build runs under a role the call names, so CreateMicrovmImage — and the
         // UpdateMicrovmImage roll, which restates it — are authorized as a pass of it too.
+        // Setup installs the role; neither the installer nor the controller creates it here.
         // Name-scoped, like the session-time pass in sandbox/management:
         // PassRole is evaluated against the role being passed, which carries no tag to bound it.
         "label": "pass-sandbox-build-role",

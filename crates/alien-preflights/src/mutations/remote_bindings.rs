@@ -239,16 +239,20 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
         return Some(format!("resource '{consumer_id}' links it"));
     }
 
-    let by_profile = stack.permissions.profiles.iter().find_map(|(profile_name, profile)| {
-        profile
-            .0
-            .iter()
-            .any(|(target, permission_sets)| {
-                (target == sandbox_id || target == "*")
-                    && permission_sets.iter().any(reference_reaches_a_session)
-            })
-            .then(|| format!("permission profile '{profile_name}' grants access to it"))
-    });
+    let by_profile = stack
+        .permissions
+        .profiles
+        .iter()
+        .find_map(|(profile_name, profile)| {
+            profile
+                .0
+                .iter()
+                .any(|(target, permission_sets)| {
+                    (target == sandbox_id || target == "*")
+                        && permission_sets.iter().any(reference_reaches_a_session)
+                })
+                .then(|| format!("permission profile '{profile_name}' grants access to it"))
+        });
     if by_profile.is_some() {
         return by_profile;
     }
@@ -405,6 +409,31 @@ mod tests {
         assert_eq!(bindings.grants[0].resource_id, "agents");
         assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
         assert_eq!(bindings.grants[0].revision, definition.revision);
+    }
+
+    /// A Live sandbox is scaffolded by setup — its build role and connector — and its binding is
+    /// published by the runtime controller once the image is active, so the remote grant attaches
+    /// exactly as it does for a Frozen one.
+    #[tokio::test]
+    async fn a_live_remote_sandbox_is_granted_the_remote_execute_set() {
+        let stack = Stack::new("byo-sandbox".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Live)
+            .build();
+        let state = StackState::new(Platform::Aws);
+
+        assert!(RemoteBindingsMutation.should_run(&stack, &state, &config()));
+        let mutated = RemoteBindingsMutation
+            .mutate(stack, &state, &config())
+            .await
+            .expect("a Live open-egress sandbox is a valid remote binding");
+        let bindings = mutated
+            .resources
+            .get(REMOTE_BINDINGS_ID)
+            .and_then(|entry| entry.config.downcast_ref::<RemoteBindings>())
+            .expect("Remote Bindings config");
+        assert_eq!(bindings.grants.len(), 1);
+        assert_eq!(bindings.grants[0].resource_id, "agents");
+        assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
     }
 
     /// `sandbox/remote-execute` has an AWS block alone. Without this gate the deployment installs

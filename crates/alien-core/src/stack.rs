@@ -370,8 +370,10 @@ mod tests {
         }
     }
 
+    /// The grant is rendered by setup, so a resource setup renders nothing for — a Live bucket —
+    /// cannot be published, while a Live sandbox can: setup still installs its scaffolding.
     #[test]
-    fn remote_bindings_require_a_registered_frozen_resource_and_opt_in() {
+    fn remote_bindings_require_a_setup_rendered_resource_and_opt_in() {
         assert!(resource_entry(
             Storage::new("archive".to_string()).build(),
             ResourceLifecycle::Frozen,
@@ -390,6 +392,17 @@ mod tests {
             true,
         )
         .has_remote_bindings());
+        let sandbox = crate::Sandbox::new("agents".to_string())
+            .code(crate::SandboxCode::Image {
+                image: "s3://alien-bundles/sandbox/bundle.zip".to_string(),
+            })
+            .egress(crate::SandboxEgress::Allow)
+            .session(crate::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        assert!(resource_entry(sandbox, ResourceLifecycle::Live, true).has_remote_bindings());
         assert!(!resource_entry(
             Worker::new("worker".to_string())
                 .code(WorkerCode::Image {
