@@ -359,10 +359,16 @@ impl DeploymentLoop {
     pub(crate) async fn process_heartbeat_deployment(
         &self,
         deployment: DeploymentRecord,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
     ) {
-        self.process_deployment(deployment, None, session, ProcessOptions::heartbeat_tick())
-            .await;
+        self.process_deployment(
+            deployment,
+            execution_claim,
+            session,
+            ProcessOptions::heartbeat_tick(),
+        )
+        .await;
     }
 
     /// Process a single deployment: step until stable, reconcile, release.
