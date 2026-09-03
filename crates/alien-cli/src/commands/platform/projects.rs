@@ -31,7 +31,8 @@ use std::collections::BTreeSet;
     alien --workspace my-workspace projects ls
     alien projects capabilities status
     alien projects capabilities enable ai --model byo/claude-opus-5
-    alien projects capabilities enable encryption"
+    alien projects capabilities enable encryption
+    alien projects capabilities enable remote-sandbox --base-image public.ecr.aws/example/analysis:v1 --max-session-lifetime-seconds 3600"
 )]
 pub struct ProjectArgs {
     /// Emit structured JSON output
@@ -361,36 +362,26 @@ async fn capabilities_task(
                     )
                 }
                 CapabilityName::RemoteSandbox => {
-                    let base_image = base_image.ok_or_else(|| {
-                        alien_error::AlienError::new(ErrorData::ValidationError {
-                            field: "base-image".to_string(),
-                            message: "Remote Sandbox requires --base-image.".to_string(),
-                        })
-                    })?;
+                    // validate_capability_options already rejected either flag being absent;
+                    // Option cannot carry that invariant into this arm.
                     let base_image =
-                        ConfigureRemoteSandboxRequestBaseImage::try_from(base_image).map_err(
-                            |_| {
-                                alien_error::AlienError::new(ErrorData::ValidationError {
-                                    field: "base-image".to_string(),
-                                    message: "Enter a container image reference, at most 1024 characters."
-                                        .to_string(),
-                                })
-                            },
-                        )?;
+                        base_image.ok_or_else(|| remote_sandbox_flag_required("base-image"))?;
+                    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
+                        .into_alien_error()
+                        .context(ErrorData::ValidationError {
+                            field: "base-image".to_string(),
+                            message: "Invalid base image reference".to_string(),
+                        })?;
+                    let max_session_lifetime_seconds = max_session_lifetime_seconds
+                        .ok_or_else(|| {
+                            remote_sandbox_flag_required("max-session-lifetime-seconds")
+                        })?;
                     let mut request = client
                         .configure_project_remote_sandbox()
                         .id_or_name(project)
                         .body(&ConfigureRemoteSandboxRequest {
                             base_image,
-                            max_session_lifetime_seconds: max_session_lifetime_seconds.ok_or_else(
-                                || {
-                                    alien_error::AlienError::new(ErrorData::ValidationError {
-                                        field: "max-session-lifetime-seconds".to_string(),
-                                        message: "Remote Sandbox requires --max-session-lifetime-seconds."
-                                            .to_string(),
-                                    })
-                                },
-                            )?,
+                            max_session_lifetime_seconds,
                         });
                     if let Some(workspace) = workspace {
                         request = request.workspace(workspace);
@@ -438,6 +429,13 @@ impl AiProvider {
     }
 }
 
+fn remote_sandbox_flag_required(field: &str) -> alien_error::AlienError<ErrorData> {
+    alien_error::AlienError::new(ErrorData::ValidationError {
+        field: field.to_string(),
+        message: format!("Remote Sandbox requires --{field}."),
+    })
+}
+
 fn validate_capability_options(
     capability: CapabilityName,
     models: &[String],
@@ -478,16 +476,10 @@ fn validate_capability_options(
     }
     if capability == CapabilityName::RemoteSandbox {
         if base_image.is_none() {
-            return Err(alien_error::AlienError::new(ErrorData::ValidationError {
-                field: "base-image".to_string(),
-                message: "Remote Sandbox requires --base-image.".to_string(),
-            }));
+            return Err(remote_sandbox_flag_required("base-image"));
         }
         if max_session_lifetime_seconds.is_none() {
-            return Err(alien_error::AlienError::new(ErrorData::ValidationError {
-                field: "max-session-lifetime-seconds".to_string(),
-                message: "Remote Sandbox requires --max-session-lifetime-seconds.".to_string(),
-            }));
+            return Err(remote_sandbox_flag_required("max-session-lifetime-seconds"));
         }
     } else if base_image.is_some() || max_session_lifetime_seconds.is_some() {
         return Err(alien_error::AlienError::new(ErrorData::ValidationError {
@@ -682,7 +674,10 @@ async fn list_projects_task(
 mod tests {
     use super::*;
 
-    fn sandbox_options(base_image: Option<&str>, lifetime: Option<u64>) -> Result<()> {
+    fn sandbox_options(
+        base_image: Option<&str>,
+        lifetime: Option<std::num::NonZeroU64>,
+    ) -> Result<()> {
         validate_capability_options(
             CapabilityName::RemoteSandbox,
             &[],
@@ -691,7 +686,7 @@ mod tests {
             &[],
             false,
             base_image,
-            lifetime.and_then(std::num::NonZeroU64::new),
+            lifetime,
         )
     }
 
@@ -728,10 +723,13 @@ mod tests {
 
     #[test]
     fn remote_sandbox_requires_a_base_image() {
-        sandbox_options(Some("public.ecr.aws/x/y:v1"), Some(3600))
-            .expect("a base image is accepted");
+        sandbox_options(
+            Some("public.ecr.aws/x/y:v1"),
+            std::num::NonZeroU64::new(3600),
+        )
+        .expect("a base image is accepted");
 
-        let error = sandbox_options(None, Some(3600))
+        let error = sandbox_options(None, std::num::NonZeroU64::new(3600))
             .expect_err("a missing base image must be refused");
         assert!(
             error.to_string().contains("--base-image"),
