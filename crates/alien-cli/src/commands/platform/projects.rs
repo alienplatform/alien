@@ -11,8 +11,7 @@ use alien_platform_api::types::{
     ConfigureProjectDeploymentsBodyMethodsItem, ConfigureProjectKeysBody,
     ConfigureProjectRegistryBody, ConfigureProjectRegistryBodyCredentialPolicy,
     ConfigureProjectRegistryBodyRepositoriesItem, ConfigureRemoteSandboxRequest,
-    ConfigureRemoteSandboxRequestBaseImage, ConfigureRemoteSandboxRequestImageBundleUri,
-    CreateProjectBody, CreateProjectBodyName,
+    ConfigureRemoteSandboxRequestBaseImage, CreateProjectBody, CreateProjectBodyName,
     CreateProjectWorkspace, ListProjectsWorkspace,
 };
 use alien_platform_api::SdkResultExt;
@@ -93,9 +92,6 @@ pub enum CapabilityCommand {
         /// Public container image Alien builds the sandbox bundle from.
         #[arg(long)]
         base_image: Option<String>,
-        /// Pre-built sandbox bundle to use instead of one Alien builds.
-        #[arg(long)]
-        image_bundle_uri: Option<String>,
         /// Ceiling on a single sandbox session, in seconds.
         #[arg(long)]
         max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
@@ -209,7 +205,6 @@ async fn capabilities_task(
             repositories,
             push,
             base_image,
-            image_bundle_uri,
             max_session_lifetime_seconds,
         } => {
             validate_capability_options(
@@ -220,7 +215,6 @@ async fn capabilities_task(
                 &repositories,
                 push,
                 base_image.as_deref(),
-                image_bundle_uri.as_deref(),
                 max_session_lifetime_seconds,
             )?;
             let client = http.sdk_client();
@@ -367,34 +361,27 @@ async fn capabilities_task(
                     )
                 }
                 CapabilityName::RemoteSandbox => {
-                    let base_image = base_image
-                        .map(|image| {
-                            ConfigureRemoteSandboxRequestBaseImage::try_from(image).map_err(|_| {
+                    let base_image = base_image.ok_or_else(|| {
+                        alien_error::AlienError::new(ErrorData::ValidationError {
+                            field: "base-image".to_string(),
+                            message: "Remote Sandbox requires --base-image.".to_string(),
+                        })
+                    })?;
+                    let base_image =
+                        ConfigureRemoteSandboxRequestBaseImage::try_from(base_image).map_err(
+                            |_| {
                                 alien_error::AlienError::new(ErrorData::ValidationError {
                                     field: "base-image".to_string(),
                                     message: "Enter a container image reference, at most 1024 characters."
                                         .to_string(),
                                 })
-                            })
-                        })
-                        .transpose()?;
-                    let image_bundle_uri = image_bundle_uri
-                        .map(|uri| {
-                            ConfigureRemoteSandboxRequestImageBundleUri::try_from(uri).map_err(|_| {
-                                alien_error::AlienError::new(ErrorData::ValidationError {
-                                    field: "image-bundle-uri".to_string(),
-                                    message: "Enter an s3:// bundle URI, at most 1024 characters."
-                                        .to_string(),
-                                })
-                            })
-                        })
-                        .transpose()?;
+                            },
+                        )?;
                     let mut request = client
                         .configure_project_remote_sandbox()
                         .id_or_name(project)
                         .body(&ConfigureRemoteSandboxRequest {
                             base_image,
-                            image_bundle_uri,
                             max_session_lifetime_seconds: max_session_lifetime_seconds.ok_or_else(
                                 || {
                                     alien_error::AlienError::new(ErrorData::ValidationError {
@@ -459,7 +446,6 @@ fn validate_capability_options(
     repositories: &[String],
     push: bool,
     base_image: Option<&str>,
-    image_bundle_uri: Option<&str>,
     max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
 ) -> Result<()> {
     if capability == CapabilityName::Ai && models.is_empty() && required_models.is_empty() {
@@ -491,13 +477,10 @@ fn validate_capability_options(
         }));
     }
     if capability == CapabilityName::RemoteSandbox {
-        // The API takes exactly one image source: Alien builds the bundle from a base image, or
-        // the vendor supplies a pre-built one. Neither leaves nothing to run; both is ambiguous.
-        if base_image.is_none() == image_bundle_uri.is_none() {
+        if base_image.is_none() {
             return Err(alien_error::AlienError::new(ErrorData::ValidationError {
                 field: "base-image".to_string(),
-                message: "Remote Sandbox requires exactly one of --base-image or --image-bundle-uri."
-                    .to_string(),
+                message: "Remote Sandbox requires --base-image.".to_string(),
             }));
         }
         if max_session_lifetime_seconds.is_none() {
@@ -506,13 +489,10 @@ fn validate_capability_options(
                 message: "Remote Sandbox requires --max-session-lifetime-seconds.".to_string(),
             }));
         }
-    } else if base_image.is_some()
-        || image_bundle_uri.is_some()
-        || max_session_lifetime_seconds.is_some()
-    {
+    } else if base_image.is_some() || max_session_lifetime_seconds.is_some() {
         return Err(alien_error::AlienError::new(ErrorData::ValidationError {
             field: "capability".to_string(),
-            message: "--base-image, --image-bundle-uri, and --max-session-lifetime-seconds are only valid for Remote Sandbox."
+            message: "--base-image and --max-session-lifetime-seconds are only valid for Remote Sandbox."
                 .to_string(),
         }));
     }
@@ -702,11 +682,7 @@ async fn list_projects_task(
 mod tests {
     use super::*;
 
-    fn sandbox_options(
-        base_image: Option<&str>,
-        image_bundle_uri: Option<&str>,
-        lifetime: Option<u64>,
-    ) -> Result<()> {
+    fn sandbox_options(base_image: Option<&str>, lifetime: Option<u64>) -> Result<()> {
         validate_capability_options(
             CapabilityName::RemoteSandbox,
             &[],
@@ -715,7 +691,6 @@ mod tests {
             &[],
             false,
             base_image,
-            image_bundle_uri,
             lifetime.and_then(std::num::NonZeroU64::new),
         )
     }
@@ -752,29 +727,21 @@ mod tests {
     }
 
     #[test]
-    fn remote_sandbox_takes_exactly_one_image_source() {
-        sandbox_options(Some("public.ecr.aws/x/y:v1"), None, Some(3600))
-            .expect("a base image alone is accepted");
-        sandbox_options(None, Some("s3://bucket/bundle.zip"), Some(3600))
-            .expect("a bundle uri alone is accepted");
+    fn remote_sandbox_requires_a_base_image() {
+        sandbox_options(Some("public.ecr.aws/x/y:v1"), Some(3600))
+            .expect("a base image is accepted");
 
-        let neither = sandbox_options(None, None, Some(3600))
-            .expect_err("neither image source must be refused");
+        let error = sandbox_options(None, Some(3600))
+            .expect_err("a missing base image must be refused");
         assert!(
-            neither.to_string().contains("exactly one"),
-            "unexpected message: {neither}"
-        );
-        let both = sandbox_options(Some("public.ecr.aws/x/y:v1"), Some("s3://b/c.zip"), Some(3600))
-            .expect_err("both image sources must be refused");
-        assert!(
-            both.to_string().contains("exactly one"),
-            "unexpected message: {both}"
+            error.to_string().contains("--base-image"),
+            "unexpected message: {error}"
         );
     }
 
     #[test]
     fn remote_sandbox_requires_a_session_ceiling() {
-        let error = sandbox_options(Some("public.ecr.aws/x/y:v1"), None, None)
+        let error = sandbox_options(Some("public.ecr.aws/x/y:v1"), None)
             .expect_err("a missing session ceiling must be refused");
         assert!(
             error.to_string().contains("--max-session-lifetime-seconds"),
@@ -792,7 +759,6 @@ mod tests {
             &["repo".to_string()],
             false,
             Some("public.ecr.aws/x/y:v1"),
-            None,
             None,
         )
         .expect_err("sandbox options must not apply to another capability");
