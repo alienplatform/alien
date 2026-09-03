@@ -6,6 +6,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ExecutionClaim,
+  ExecutionClaim$inboundSchema,
+} from "./executionclaim.js";
 
 export type AgentSyncResponse = {
   /**
@@ -24,6 +28,7 @@ export type AgentSyncResponse = {
    * the manager already has imported or previously reconciled state.
    */
   currentState?: any | undefined;
+  executionClaim?: ExecutionClaim | null | undefined;
   target?: any | undefined;
 };
 
@@ -34,6 +39,7 @@ export const AgentSyncResponse$inboundSchema: z.ZodType<
 > = z.object({
   commandsUrl: z.nullable(z.string()).optional(),
   currentState: z.any().optional(),
+  executionClaim: z.nullable(ExecutionClaim$inboundSchema).optional(),
   target: z.any().optional(),
 });
 

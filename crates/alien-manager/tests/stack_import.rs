@@ -869,6 +869,7 @@ async fn re_import_replaces_stack_state() {
             ReconcileData {
                 deployment_id: imported.id,
                 session: "test-reconcile".to_string(),
+                execution_claim: None,
                 state: DeploymentState {
                     status: DeploymentStatus::Running,
                     platform: imported.platform,
@@ -961,6 +962,7 @@ async fn re_import_advances_setup_registration_replay_baseline() {
             ReconcileData {
                 deployment_id: deployment.id,
                 session: "test-reconcile".to_string(),
+                execution_claim: None,
                 state: DeploymentState {
                     status: DeploymentStatus::Running,
                     platform: deployment.platform,
@@ -1332,6 +1334,7 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
             ReconcileData {
                 deployment_id: persisted.id.clone(),
                 session: "test-reconcile".to_string(),
+                execution_claim: None,
                 state: DeploymentState {
                     status: DeploymentStatus::Running,
                     platform: persisted.platform,
@@ -1423,6 +1426,7 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
             ReconcileData {
                 deployment_id: persisted.id.clone(),
                 session: "test-reconcile".to_string(),
+                execution_claim: None,
                 state: DeploymentState {
                     status: DeploymentStatus::Running,
                     platform: persisted.platform,

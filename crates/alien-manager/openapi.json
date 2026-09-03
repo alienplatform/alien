@@ -1508,7 +1508,17 @@
           "deployment"
         ],
         "properties": {
-          "deployment": {}
+          "deployment": {},
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
+          }
         }
       },
       "AgentSyncRequest": {
@@ -1529,6 +1539,16 @@
           "deploymentId": {
             "type": "string"
           },
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
+          },
           "observedInventoryBatches": {
             "type": "array",
             "items": {
@@ -1547,6 +1567,12 @@
               "$ref": "#/components/schemas/ResourceHeartbeat"
             },
             "description": "Managed resource status samples emitted by pull-mode deployment steps."
+          },
+          "session": {
+            "type": "string"
+          },
+          "supportsExecutionClaims": {
+            "type": "boolean"
           }
         }
       },
@@ -1562,6 +1588,16 @@
           },
           "currentState": {
             "description": "Authoritative deployment state from the manager.\n\nReturned when a pull deployment attaches with an empty local state while\nthe manager already has imported or previously reconciled state."
+          },
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
           },
           "target": {}
         }
@@ -7656,6 +7692,21 @@
             ]
           },
           "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ExecutionClaim": {
+        "type": "object",
+        "required": [
+          "operationId",
+          "attemptId"
+        ],
+        "properties": {
+          "attemptId": {
+            "type": "string"
+          },
+          "operationId": {
             "type": "string"
           }
         }
@@ -14187,6 +14238,16 @@
           "deploymentId": {
             "type": "string"
           },
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
+          },
           "observedInventoryBatches": {
             "type": "array",
             "items": {
@@ -14251,6 +14312,16 @@
         "properties": {
           "deploymentId": {
             "type": "string"
+          },
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
           },
           "session": {
             "type": "string"
@@ -14779,6 +14850,16 @@
         "properties": {
           "deploymentId": {
             "type": "string"
+          },
+          "executionClaim": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExecutionClaim"
+              }
+            ]
           },
           "session": {
             "type": "string"

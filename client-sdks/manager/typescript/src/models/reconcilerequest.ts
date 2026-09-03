@@ -4,6 +4,11 @@
 
 import * as z from "zod/v4";
 import {
+  ExecutionClaim,
+  ExecutionClaim$Outbound,
+  ExecutionClaim$outboundSchema,
+} from "./executionclaim.js";
+import {
   ObservedInventoryBatch,
   ObservedInventoryBatch$Outbound,
   ObservedInventoryBatch$outboundSchema,
@@ -22,6 +27,7 @@ import {
 export type ReconcileRequest = {
   capabilities?: Array<OperatorCapabilityReport> | undefined;
   deploymentId: string;
+  executionClaim?: ExecutionClaim | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
@@ -35,6 +41,7 @@ export type ReconcileRequest = {
 export type ReconcileRequest$Outbound = {
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   deploymentId: string;
+  executionClaim?: ExecutionClaim$Outbound | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
@@ -51,6 +58,7 @@ export const ReconcileRequest$outboundSchema: z.ZodType<
 > = z.object({
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   deploymentId: z.string(),
+  executionClaim: z.nullable(ExecutionClaim$outboundSchema).optional(),
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
   operatorVersion: z.nullable(z.string()).optional(),

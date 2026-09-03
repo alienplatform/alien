@@ -9,6 +9,7 @@
 //! Uses Turso with AEGIS-256 encryption for data at rest.
 
 use alien_core::{
+    sync::{SyncExecutionClaim, TargetDeployment},
     DeploymentConfig, DeploymentState, ObservedInventoryBatch, ReleaseInfo, ResourceHeartbeat,
 };
 use alien_error::{Context, IntoAlienError};
@@ -22,6 +23,14 @@ use crate::error::{ErrorData, Result};
 
 pub const MIN_SUPPORTED_OPERATOR_SCHEMA_VERSION: u32 = 1;
 pub const CURRENT_OPERATOR_SCHEMA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DurableSyncExecution {
+    pub session: String,
+    pub claim: Option<SyncExecutionClaim>,
+    pub target: Option<TargetDeployment>,
+}
 
 // =============================================================================
 // Types
@@ -961,6 +970,79 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Load the durable pull-executor session and its current operation claim.
+    pub async fn get_sync_execution(&self) -> Result<Option<DurableSyncExecution>> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query("SELECT value FROM state WHERE key = 'sync_execution'", ())
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query sync_execution".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch sync_execution row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read sync_execution value".to_string(),
+            })?;
+        if let Ok(execution) = serde_json::from_str::<DurableSyncExecution>(&value) {
+            return Ok(Some(execution));
+        }
+        // Upgrade the tuple written by claim-aware Operators before targets
+        // were persisted atomically with their claim.
+        let (session, claim): (String, Option<SyncExecutionClaim>) = serde_json::from_str(&value)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse sync_execution".to_string(),
+            })?;
+        Ok(Some(DurableSyncExecution {
+            session,
+            claim,
+            target: None,
+        }))
+    }
+
+    /// Persist the pull-executor claim before accepting its associated target.
+    pub async fn set_sync_execution(
+        &self,
+        session: &str,
+        claim: Option<&SyncExecutionClaim>,
+        target: Option<&TargetDeployment>,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+        let value = serde_json::to_string(&DurableSyncExecution {
+            session: session.to_string(),
+            claim: claim.cloned(),
+            target: target.cloned(),
+        })
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to serialize sync_execution".to_string(),
+        })?;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('sync_execution', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (value,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set sync_execution".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Get the deployment-scoped sync token returned by initialization.
     pub async fn get_sync_token(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
@@ -1065,6 +1147,7 @@ impl OperatorDb {
 #[cfg(test)]
 mod tests {
     use super::OperatorDb;
+    use alien_core::sync::{SyncExecutionClaim, TargetDeployment};
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -1105,6 +1188,54 @@ mod tests {
                 .await
                 .expect("read persisted sync token"),
             Some("deployment-token-2".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn sync_claim_and_target_persist_as_one_receipt() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let db = OperatorDb::new(
+            data_dir.path().to_str().expect("data dir path is utf-8"),
+            TEST_ENCRYPTION_KEY,
+        )
+        .await
+        .expect("open encrypted operator db");
+        let claim = SyncExecutionClaim {
+            operation_id: "duop_a".to_string(),
+            attempt_id: "duat_a".to_string(),
+        };
+        let target: TargetDeployment = serde_json::from_value(serde_json::json!({
+            "releaseInfo": {
+                "releaseId": "rel_a",
+                "stack": { "id": "test", "resources": {} }
+            },
+            "config": {
+                "stackSettings": {},
+                "environmentVariables": {
+                    "variables": [],
+                    "hash": "empty",
+                    "createdAt": "2026-09-01T00:00:00Z"
+                },
+                "externalBindings": {}
+            }
+        }))
+        .expect("build target");
+
+        db.set_sync_execution("session-a", Some(&claim), Some(&target))
+            .await
+            .expect("persist receipt");
+        let stored = db
+            .get_sync_execution()
+            .await
+            .expect("read receipt")
+            .expect("receipt exists");
+        assert_eq!(stored.session, "session-a");
+        assert_eq!(stored.claim, Some(claim));
+        assert_eq!(
+            stored
+                .target
+                .and_then(|target| target.release_info.release_id),
+            Some("rel_a".to_string())
         );
     }
 }

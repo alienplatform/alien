@@ -1256,7 +1256,6 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                         domains: None,
                         external_bindings: None,
                         kubernetes: None,
-                        logs: None,
                         public_endpoints: None,
                     };
 
@@ -1624,7 +1623,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         })?
     };
 
-    if let Some(acquired_config) = acquired_deployment.get("deploymentConfig").cloned() {
+    if let Some(acquired_config) = acquired_deployment
+        .deployment
+        .get("deploymentConfig")
+        .cloned()
+    {
         config = serde_json::from_value(acquired_config)
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
@@ -1673,7 +1676,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to deserialize runtime_metadata".to_string(),
         })?;
 
-    let transport = ManagerApiTransport::new(manager_client.clone(), session.clone());
+    let transport = ManagerApiTransport::with_execution_claim(
+        manager_client.clone(),
+        session.clone(),
+        acquired_deployment.execution_claim.clone(),
+    );
     let policy = RunnerPolicy {
         max_steps: 400,
         operation: if setup_owned_status {
@@ -1703,6 +1710,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             &manager_client,
             &tracked_deployment.deployment_id,
             &session,
+            acquired_deployment.execution_claim.as_ref(),
             &current,
         )
         .await,

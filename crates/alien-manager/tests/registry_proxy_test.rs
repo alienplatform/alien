@@ -343,6 +343,7 @@ async fn setup() -> TestSetup {
                 alien_manager::traits::ReconcileData {
                     deployment_id: dep.id.clone(),
                     session: "test-setup".to_string(),
+                    execution_claim: None,
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],
@@ -855,6 +856,7 @@ async fn test_proxy_push_then_pull() {
                 alien_manager::traits::ReconcileData {
                     deployment_id: s.deployment_id.clone(),
                     session: "push-test".to_string(),
+                    execution_claim: None,
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],

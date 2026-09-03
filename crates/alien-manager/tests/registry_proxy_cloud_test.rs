@@ -461,6 +461,7 @@ impl CloudProxyTest {
                 ReconcileData {
                     deployment_id: self.deployment_id.clone(),
                     session: "cloud-proxy-test".to_string(),
+                    execution_claim: None,
                     state,
                     update_heartbeat: false,
                     heartbeats: vec![],

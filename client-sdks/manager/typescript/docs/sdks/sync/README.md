@@ -6,22 +6,22 @@ Agent sync and state reconciliation
 
 ### Available Operations
 
-* [initialize](#initialize) - `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
-or workspace bearer for self-hosted operator workflows. New deployments
-are created via `DeploymentStore::create_deployment(caller, …)` so
-embedders that proxy to an upstream API write the row in the dg's
-workspace, not the manager's.
-* [agentSync](#agentsync) - `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
-path; `caller: &Subject` is threaded into the store so embedders see
-the agent's own scope.
-* [acquire](#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
-`caller: &Subject` is threaded into `DeploymentStore::acquire` so
-embedders can authorize against the inbound caller's scope.
-* [reconcile](#reconcile) - `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
-bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
-* [release](#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
-`caller: &Subject` is threaded into `DeploymentStore::release`.
-* [renew](#renew) - Renew an acquired deployment lease without writing deployment state.
+- [initialize](#initialize) - `POST /v1/initialize` — Inbound: deployment-group bearer (typical),
+  or workspace bearer for self-hosted operator workflows. New deployments
+  are created via `DeploymentStore::create_deployment(caller, …)` so
+  embedders that proxy to an upstream API write the row in the dg's
+  workspace, not the manager's.
+- [agentSync](#agentsync) - `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
+  path; `caller: &Subject` is threaded into the store so embedders see
+  the agent's own scope.
+- [acquire](#acquire) - `POST /v1/sync/acquire` — Inbound: workspace / dg / deployment bearer.
+  `caller: &Subject` is threaded into `DeploymentStore::acquire` so
+  embedders can authorize against the inbound caller's scope.
+- [reconcile](#reconcile) - `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
+  bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
+- [release](#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
+  `caller: &Subject` is threaded into `DeploymentStore::release`.
+- [renew](#renew) - Renew an acquired deployment lease without writing deployment state.
 
 ## initialize
 
@@ -34,6 +34,7 @@ workspace, not the manager's.
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="initialize" method="post" path="/v1/initialize" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -85,12 +86,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.InitializeRequest](../../models/initializerequest.md)                                                                                                                  | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.InitializeRequest](../../models/initializerequest.md)                           | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -98,9 +99,9 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |
 
 ## agentSync
 
@@ -111,6 +112,7 @@ the agent's own scope.
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="agent_sync" method="post" path="/v1/sync" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -258,12 +260,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.AgentSyncRequest](../../models/agentsyncrequest.md)                                                                                                                    | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.AgentSyncRequest](../../models/agentsyncrequest.md)                             | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -271,9 +273,9 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |
 
 ## acquire
 
@@ -284,6 +286,7 @@ embedders can authorize against the inbound caller's scope.
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="acquire" method="post" path="/v1/sync/acquire" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -337,12 +340,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.AcquireRequest](../../models/acquirerequest.md)                                                                                                                        | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.AcquireRequest](../../models/acquirerequest.md)                                 | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -350,9 +353,9 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |
 
 ## reconcile
 
@@ -362,6 +365,7 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="reconcile" method="post" path="/v1/sync/reconcile" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -427,77 +431,73 @@ async function run() {
     ],
     session: "<value>",
     state: {
-      "currentRelease": {
-        "releaseId": "<id>",
-        "stack": {
-          "id": "<id>",
-          "resources": {
-
-          },
+      currentRelease: {
+        releaseId: "<id>",
+        stack: {
+          id: "<id>",
+          resources: {},
         },
       },
-      "platform": "local",
-      "runtimeMetadata": {
-        "preparedStack": {
-          "id": "<id>",
-          "resources": {
-            "key": {
-              "config": {
-                "id": "<id>",
-                "type": "function",
+      platform: "local",
+      runtimeMetadata: {
+        preparedStack: {
+          id: "<id>",
+          resources: {
+            key: {
+              config: {
+                id: "<id>",
+                type: "function",
               },
-              "dependencies": [
+              dependencies: [
                 {
-                  "id": "<id>",
-                  "type": "function",
+                  id: "<id>",
+                  type: "function",
                 },
               ],
-              "lifecycle": "live",
+              lifecycle: "live",
             },
           },
         },
       },
-      "stackState": {
-        "platform": "gcp",
-        "resourcePrefix": "<value>",
-        "resources": {
-          "key": {
-            "config": {
-              "id": "<id>",
-              "type": "function",
+      stackState: {
+        platform: "gcp",
+        resourcePrefix: "<value>",
+        resources: {
+          key: {
+            config: {
+              id: "<id>",
+              type: "function",
             },
-            "dependencies": [
+            dependencies: [
               {
-                "id": "<id>",
-                "type": "function",
+                id: "<id>",
+                type: "function",
               },
             ],
-            "error": {
-              "code": "NOT_FOUND",
-              "internal": false,
-              "message": "Item not found.",
-              "retryable": false,
+            error: {
+              code: "NOT_FOUND",
+              internal: false,
+              message: "Item not found.",
+              retryable: false,
             },
-            "outputs": {
-              "type": "function",
+            outputs: {
+              type: "function",
             },
-            "previousConfig": {
-              "id": "<id>",
-              "type": "function",
+            previousConfig: {
+              id: "<id>",
+              type: "function",
             },
-            "status": "deleted",
-            "type": "<value>",
+            status: "deleted",
+            type: "<value>",
           },
         },
       },
-      "status": "deleted",
-      "targetRelease": {
-        "releaseId": "<id>",
-        "stack": {
-          "id": "<id>",
-          "resources": {
-
-          },
+      status: "deleted",
+      targetRelease: {
+        releaseId: "<id>",
+        stack: {
+          id: "<id>",
+          resources: {},
         },
       },
     },
@@ -581,77 +581,73 @@ async function run() {
     ],
     session: "<value>",
     state: {
-      "currentRelease": {
-        "releaseId": "<id>",
-        "stack": {
-          "id": "<id>",
-          "resources": {
-
-          },
+      currentRelease: {
+        releaseId: "<id>",
+        stack: {
+          id: "<id>",
+          resources: {},
         },
       },
-      "platform": "local",
-      "runtimeMetadata": {
-        "preparedStack": {
-          "id": "<id>",
-          "resources": {
-            "key": {
-              "config": {
-                "id": "<id>",
-                "type": "function",
+      platform: "local",
+      runtimeMetadata: {
+        preparedStack: {
+          id: "<id>",
+          resources: {
+            key: {
+              config: {
+                id: "<id>",
+                type: "function",
               },
-              "dependencies": [
+              dependencies: [
                 {
-                  "id": "<id>",
-                  "type": "function",
+                  id: "<id>",
+                  type: "function",
                 },
               ],
-              "lifecycle": "live",
+              lifecycle: "live",
             },
           },
         },
       },
-      "stackState": {
-        "platform": "gcp",
-        "resourcePrefix": "<value>",
-        "resources": {
-          "key": {
-            "config": {
-              "id": "<id>",
-              "type": "function",
+      stackState: {
+        platform: "gcp",
+        resourcePrefix: "<value>",
+        resources: {
+          key: {
+            config: {
+              id: "<id>",
+              type: "function",
             },
-            "dependencies": [
+            dependencies: [
               {
-                "id": "<id>",
-                "type": "function",
+                id: "<id>",
+                type: "function",
               },
             ],
-            "error": {
-              "code": "NOT_FOUND",
-              "internal": false,
-              "message": "Item not found.",
-              "retryable": false,
+            error: {
+              code: "NOT_FOUND",
+              internal: false,
+              message: "Item not found.",
+              retryable: false,
             },
-            "outputs": {
-              "type": "function",
+            outputs: {
+              type: "function",
             },
-            "previousConfig": {
-              "id": "<id>",
-              "type": "function",
+            previousConfig: {
+              id: "<id>",
+              type: "function",
             },
-            "status": "deleted",
-            "type": "<value>",
+            status: "deleted",
+            type: "<value>",
           },
         },
       },
-      "status": "deleted",
-      "targetRelease": {
-        "releaseId": "<id>",
-        "stack": {
-          "id": "<id>",
-          "resources": {
-
-          },
+      status: "deleted",
+      targetRelease: {
+        releaseId: "<id>",
+        stack: {
+          id: "<id>",
+          resources: {},
         },
       },
     },
@@ -669,12 +665,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.ReconcileRequest](../../models/reconcilerequest.md)                                                                                                                    | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.ReconcileRequest](../../models/reconcilerequest.md)                             | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -682,9 +678,9 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |
 
 ## release
 
@@ -694,6 +690,7 @@ run();
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="release" method="post" path="/v1/sync/release" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -707,8 +704,6 @@ async function run() {
     deploymentId: "<id>",
     session: "<value>",
   });
-
-
 }
 
 run();
@@ -736,7 +731,6 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
   } else {
     console.log("syncRelease failed:", res.error);
   }
@@ -747,12 +741,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.ReleaseRequest](../../models/releaserequest.md)                                                                                                                        | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.ReleaseRequest](../../models/releaserequest.md)                                 | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -760,9 +754,9 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |
 
 ## renew
 
@@ -771,6 +765,7 @@ Renew an acquired deployment lease without writing deployment state.
 ### Example Usage
 
 <!-- UsageSnippet language="typescript" operationID="renew" method="post" path="/v1/sync/renew" -->
+
 ```typescript
 import { AlienManager } from "@alienplatform/manager-api";
 
@@ -784,8 +779,6 @@ async function run() {
     deploymentId: "<id>",
     session: "<value>",
   });
-
-
 }
 
 run();
@@ -813,7 +806,6 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
   } else {
     console.log("syncRenew failed:", res.error);
   }
@@ -824,12 +816,12 @@ run();
 
 ### Parameters
 
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [models.RenewRequest](../../models/renewrequest.md)                                                                                                                            | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+| Parameter              | Type                                                                                    | Required           | Description                                                                                                                                                                    |
+| ---------------------- | --------------------------------------------------------------------------------------- | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`              | [models.RenewRequest](../../models/renewrequest.md)                                     | :heavy_check_mark: | The request object to use for the request.                                                                                                                                     |
+| `options`              | RequestOptions                                                                          | :heavy_minus_sign: | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions` | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options) | :heavy_minus_sign: | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`      | [RetryConfig](../../lib/utils/retryconfig.md)                                           | :heavy_minus_sign: | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
 
 ### Response
 
@@ -837,6 +829,6 @@ run();
 
 ### Errors
 
-| Error Type                      | Status Code                     | Content Type                    |
-| ------------------------------- | ------------------------------- | ------------------------------- |
-| errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |
+| Error Type                      | Status Code | Content Type |
+| ------------------------------- | ----------- | ------------ |
+| errors.AlienManagerDefaultError | 4XX, 5XX    | \*/\*        |

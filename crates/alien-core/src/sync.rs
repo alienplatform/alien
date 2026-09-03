@@ -42,6 +42,15 @@ pub struct OperatorCapabilityReport {
 pub struct SyncRequest {
     /// The deployment ID this agent is managing.
     pub deployment_id: String,
+    /// Stable identity for this Operator process. Used to fence update work.
+    #[serde(default)]
+    pub session: String,
+    /// Signals that this Operator persists and echoes execution claims.
+    #[serde(default)]
+    pub supports_execution_claims: bool,
+    /// Exact update claim returned by the previous sync response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_claim: Option<SyncExecutionClaim>,
     /// Current deployment state as seen by the agent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current_state: Option<DeploymentState>,
@@ -71,6 +80,9 @@ pub struct SyncRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SyncResponse {
+    /// Exact operation attempt associated with `target`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_claim: Option<SyncExecutionClaim>,
     /// Authoritative deployment state from the manager.
     ///
     /// Pull agents use this to hydrate local state when attaching to an
@@ -88,6 +100,13 @@ pub struct SyncResponse {
     /// When absent, the agent falls back to its sync URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncExecutionClaim {
+    pub operation_id: String,
+    pub attempt_id: String,
 }
 
 /// Target deployment state for the agent to converge toward.
@@ -108,6 +127,9 @@ mod tests {
     fn test_sync_request_serialization() {
         let req = SyncRequest {
             deployment_id: "dep_abc123".to_string(),
+            session: "operator-test".to_string(),
+            supports_execution_claims: true,
+            execution_claim: None,
             current_state: None,
             heartbeats: Vec::new(),
             observed_inventory_batches: Vec::new(),
@@ -117,6 +139,7 @@ mod tests {
 
         let json = serde_json::to_value(&req).unwrap();
         assert_eq!(json["deploymentId"], "dep_abc123");
+        assert_eq!(json["supportsExecutionClaims"], true);
         // current_state is None → should be omitted
         assert!(json.get("currentState").is_none());
         assert!(json.get("resourceHeartbeats").is_none());
@@ -129,6 +152,8 @@ mod tests {
         let json = r#"{"deploymentId": "dep_xyz"}"#;
         let req: SyncRequest = serde_json::from_str(json).unwrap();
         assert_eq!(req.deployment_id, "dep_xyz");
+        assert!(req.session.is_empty());
+        assert!(!req.supports_execution_claims);
         assert!(req.current_state.is_none());
         assert!(req.heartbeats.is_empty());
         assert!(req.observed_inventory_batches.is_empty());
@@ -139,6 +164,7 @@ mod tests {
     #[test]
     fn test_sync_response_empty() {
         let resp = SyncResponse {
+            execution_claim: None,
             current_state: None,
             target: None,
             commands_url: None,
@@ -152,6 +178,7 @@ mod tests {
     #[test]
     fn test_sync_response_roundtrip_no_target() {
         let resp = SyncResponse {
+            execution_claim: None,
             current_state: None,
             target: None,
             commands_url: None,
@@ -243,6 +270,7 @@ mod tests {
         assert!(!state.has_desired());
 
         let resp = SyncResponse {
+            execution_claim: None,
             current_state: Some(state),
             target: None,
             commands_url: None,

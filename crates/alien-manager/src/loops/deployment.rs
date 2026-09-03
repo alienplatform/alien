@@ -335,6 +335,7 @@ impl DeploymentLoop {
                         .for_each_concurrent(MAX_CONCURRENT_DEPLOYMENTS, |item| async {
                             self.process_deployment(
                                 item.deployment,
+                                item.execution_claim,
                                 &session,
                                 ProcessOptions::deployment_tick(),
                             )
@@ -360,7 +361,7 @@ impl DeploymentLoop {
         deployment: DeploymentRecord,
         session: &str,
     ) {
-        self.process_deployment(deployment, session, ProcessOptions::heartbeat_tick())
+        self.process_deployment(deployment, None, session, ProcessOptions::heartbeat_tick())
             .await;
     }
 
@@ -368,6 +369,7 @@ impl DeploymentLoop {
     async fn process_deployment(
         &self,
         deployment: DeploymentRecord,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
     ) {
@@ -375,7 +377,7 @@ impl DeploymentLoop {
 
         // Always release the lock when we are done, even on error.
         let result = self
-            .process_deployment_inner(deployment, session, options)
+            .process_deployment_inner(deployment, execution_claim.clone(), session, options)
             .await;
 
         if let Err(e) = &result {
@@ -390,7 +392,7 @@ impl DeploymentLoop {
         let caller = Subject::system();
         if let Err(e) = self
             .deployment_store
-            .release(&caller, &deployment_id, session)
+            .release(&caller, &deployment_id, session, execution_claim.clone())
             .await
         {
             error!(
@@ -404,6 +406,7 @@ impl DeploymentLoop {
     async fn process_deployment_inner(
         &self,
         deployment: DeploymentRecord,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
         session: &str,
         options: ProcessOptions,
     ) -> Result<(), AlienError> {
@@ -514,6 +517,7 @@ impl DeploymentLoop {
                                 observed_inventory_batches: Vec::new(),
                                 capabilities: Vec::new(),
                                 operator_version: None,
+                                execution_claim: execution_claim.clone(),
                             },
                         )
                         .await?;
@@ -765,6 +769,7 @@ impl DeploymentLoop {
             self.server_bindings.bindings_provider.clone(),
             self.server_bindings.target_bindings_providers.clone(),
             session.to_string(),
+            execution_claim,
         );
 
         let mut config = config;

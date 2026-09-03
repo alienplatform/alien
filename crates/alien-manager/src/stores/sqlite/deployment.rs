@@ -1156,6 +1156,7 @@ impl DeploymentStore for SqliteDeploymentStore {
                         locked_at: Some(now),
                         ..dep
                     },
+                    execution_claim: None,
                 });
             }
         }
@@ -1341,6 +1342,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         _caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
+        _execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)
@@ -1357,6 +1359,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         _caller: &crate::auth::Subject,
         deployment_id: &str,
         session: &str,
+        _execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     ) -> Result<(), AlienError> {
         let sql = Query::update()
             .table(Deployments::Table)

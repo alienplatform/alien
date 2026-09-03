@@ -6,9 +6,14 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  ExecutionClaim,
+  ExecutionClaim$inboundSchema,
+} from "./executionclaim.js";
 
 export type AcquiredDeploymentResponse = {
   deployment: any;
+  executionClaim?: ExecutionClaim | null | undefined;
 };
 
 /** @internal */
@@ -17,6 +22,7 @@ export const AcquiredDeploymentResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deployment: z.any(),
+  executionClaim: z.nullable(ExecutionClaim$inboundSchema).optional(),
 });
 
 export function acquiredDeploymentResponseFromJSON(

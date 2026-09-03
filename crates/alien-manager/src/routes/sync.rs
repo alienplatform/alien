@@ -68,6 +68,8 @@ pub struct AcquireResponse {
 #[serde(rename_all = "camelCase")]
 pub struct AcquiredDeploymentResponse {
     pub deployment: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -89,6 +91,8 @@ pub struct ReconcileRequest {
     pub capabilities: Vec<OperatorCapabilityReport>,
     #[serde(default, rename = "operatorVersion")]
     pub operator_version: Option<String>,
+    #[serde(default)]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
 }
 
 #[derive(Debug, Serialize)]
@@ -109,6 +113,8 @@ pub struct ReconcileResponse {
 pub struct ReleaseRequest {
     pub deployment_id: String,
     pub session: String,
+    #[serde(default)]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -117,6 +123,8 @@ pub struct ReleaseRequest {
 pub struct RenewRequest {
     pub deployment_id: String,
     pub session: String,
+    #[serde(default)]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -124,6 +132,12 @@ pub struct RenewRequest {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSyncRequest {
     pub deployment_id: String,
+    #[serde(default)]
+    pub session: String,
+    #[serde(default)]
+    pub supports_execution_claims: bool,
+    #[serde(default)]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Current deployment state as reported by the agent.
     /// When present, the manager updates the deployment record to reflect
     /// the agent's progress (status, stack_state, etc.).
@@ -144,6 +158,8 @@ pub struct AgentSyncRequest {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSyncResponse {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
     /// Authoritative deployment state from the manager.
     ///
     /// Returned when a pull deployment attaches with an empty local state while
@@ -257,7 +273,12 @@ async fn renew(
 
     match state
         .deployment_store
-        .renew_lease(&subject, &req.deployment_id, &req.session)
+        .renew_lease(
+            &subject,
+            &req.deployment_id,
+            &req.session,
+            req.execution_claim,
+        )
         .await
     {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
@@ -367,7 +388,10 @@ async fn acquire(
                     serde_json::to_value(config)?,
                 );
             }
-            Ok::<_, serde_json::Error>(AcquiredDeploymentResponse { deployment })
+            Ok::<_, serde_json::Error>(AcquiredDeploymentResponse {
+                deployment,
+                execution_claim: a.execution_claim,
+            })
         })
         .collect::<Result<Vec<_>, _>>()
     {
@@ -477,6 +501,7 @@ async fn reconcile(
                 observed_inventory_batches: req.observed_inventory_batches,
                 capabilities: req.capabilities,
                 operator_version: req.operator_version,
+                execution_claim: req.execution_claim,
             },
         )
         .await
@@ -560,7 +585,12 @@ async fn release(
 
     match state
         .deployment_store
-        .release(&subject, &req.deployment_id, &req.session)
+        .release(
+            &subject,
+            &req.deployment_id,
+            &req.session,
+            req.execution_claim,
+        )
         .await
     {
         Ok(()) => Json(serde_json::json!({ "success": true })).into_response(),
@@ -572,8 +602,8 @@ async fn release(
 mod tests {
     use alien_core::{
         DeploymentConfig, DeploymentState, DeploymentStatus, EnvironmentVariablesSnapshot,
-        ExternalBindings, Platform, ResourceHeartbeatData, RuntimeMetadata, StackSettings,
-        StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        ExternalBindings, Platform, ReleaseInfo, ResourceHeartbeatData, RuntimeMetadata, Stack,
+        StackSettings, StackState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
     use serde_json::json;
@@ -582,11 +612,12 @@ mod tests {
     use crate::traits::DeploymentRecord;
 
     use super::{
-        build_target_deployment_config, deployment_needs_target, deployment_state_from_record,
-        deployment_target_release_id, management_platform, preserve_recorded_gate_answers,
-        release_stack_platform, should_ignore_agent_state_report,
-        should_return_current_state_for_agent_sync, validate_initialize_base_platform,
-        AgentSyncRequest, InitialDesiredRelease, InitializeRequest, ReconcileRequest,
+        agent_report_completes_claim, build_target_deployment_config, deployment_needs_target,
+        deployment_state_from_record, deployment_target_release_id, management_platform,
+        may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
+        should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
+        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
+        InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -696,6 +727,7 @@ mod tests {
         assert!(req.observed_inventory_batches.is_empty());
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
+        assert!(!req.supports_execution_claims);
     }
 
     #[test]
@@ -963,6 +995,53 @@ mod tests {
     }
 
     #[test]
+    fn desired_pull_target_is_never_delivered_without_its_claim() {
+        let mut deployment = deployment_record_with_state("update-failed", None);
+        deployment.current_release_id = Some("rel_old".to_string());
+        deployment.desired_release_id = Some("rel_new".to_string());
+
+        assert!(!may_deliver_agent_target(&deployment, true, false));
+        assert!(may_deliver_agent_target(&deployment, true, true));
+    }
+
+    #[test]
+    fn standalone_pull_target_does_not_require_a_control_plane_claim() {
+        let mut deployment = deployment_record_with_state("update-pending", None);
+        deployment.current_release_id = Some("rel_old".to_string());
+        deployment.desired_release_id = Some("rel_new".to_string());
+
+        assert!(may_deliver_agent_target(&deployment, false, false));
+    }
+
+    #[test]
+    fn active_claim_only_completes_on_terminal_agent_state() {
+        let deployment = deployment_record_with_state("running", None);
+        let mut state = uninitialized_state();
+        state.status = DeploymentStatus::Updating;
+        state.target_release = Some(ReleaseInfo {
+            release_id: Some("rel_a".to_string()),
+            version: None,
+            description: None,
+            stack: Stack::new("test".to_string()).build(),
+        });
+        assert!(!agent_report_completes_claim(&deployment, &state));
+
+        state.status = DeploymentStatus::Running;
+        state.current_release = state.target_release.clone();
+        assert!(agent_report_completes_claim(&deployment, &state));
+
+        state.status = DeploymentStatus::UpdateFailed;
+        assert!(agent_report_completes_claim(&deployment, &state));
+    }
+
+    #[test]
+    fn settled_pull_deployment_still_needs_no_claim() {
+        let deployment = deployment_record_with_state("running", None);
+
+        assert!(!may_deliver_agent_target(&deployment, true, false));
+    }
+
+    #[test]
     fn target_config_preserves_control_plane_public_endpoints() {
         let mut deployment = deployment_record_with_state("provisioning", None);
         let public_endpoints = HashMap::from([(
@@ -1208,13 +1287,41 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
+    let requires_execution_claims = state.deployment_store.requires_execution_claims();
+    let report_has_claim = req.execution_claim.is_some();
+    if report_has_claim {
+        if req.session.is_empty() {
+            return ErrorData::bad_request("session is required with executionClaim")
+                .into_response();
+        }
+        if let Err(error) = state
+            .deployment_store
+            .renew_lease(
+                &subject,
+                &req.deployment_id,
+                &req.session,
+                req.execution_claim.clone(),
+            )
+            .await
+        {
+            return error.into_response();
+        }
+    }
+
     // If the agent reported its current state, persist it to the deployment record.
     // This is how pull-mode agents propagate status changes (e.g. Pending → Running)
     // back to the manager so that API consumers can observe deployment progress.
     let mut ignored_agent_state_report = false;
-    if let Some(ref current_state_value) = req.current_state {
+    let mut reported_claim_is_terminal = false;
+    // A target-bearing row without an echoed claim belongs to work the agent
+    // has not accepted yet. Do not let its idle state acknowledge that target.
+    if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
+        report_has_claim || !requires_execution_claims || deployment.desired_release_id.is_none()
+    }) {
         match serde_json::from_value::<DeploymentState>(current_state_value.clone()) {
             Ok(mut agent_state) => {
+                reported_claim_is_terminal =
+                    report_has_claim && agent_report_completes_claim(&deployment, &agent_state);
                 if should_ignore_agent_state_report(&deployment, &agent_state) {
                     ignored_agent_state_report = true;
                     tracing::info!(
@@ -1241,7 +1348,7 @@ async fn agent_sync(
                             &subject,
                             ReconcileData {
                                 deployment_id: req.deployment_id.clone(),
-                                session: "agent-sync".to_string(),
+                                session: req.session.clone(),
                                 state: agent_state.clone(),
                                 update_heartbeat: true,
                                 heartbeats: req.heartbeats.clone(),
@@ -1249,15 +1356,15 @@ async fn agent_sync(
                                 capabilities: req.capabilities.clone(),
                                 operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
+                                execution_claim: req.execution_claim.clone(),
                             },
                         )
                         .await
                     {
-                        tracing::warn!(
-                            deployment_id = %req.deployment_id,
-                            error = %e,
-                            "Failed to reconcile agent-reported state"
-                        );
+                        if report_has_claim {
+                            return e.into_response();
+                        }
+                        tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                     } else {
                         if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
                             state.deployment_store.as_ref(),
@@ -1274,6 +1381,12 @@ async fn agent_sync(
                 }
             }
             Err(e) => {
+                if report_has_claim {
+                    return ErrorData::bad_request(format!(
+                        "currentState is invalid for the active execution claim: {e}"
+                    ))
+                    .into_response();
+                }
                 tracing::warn!(
                     deployment_id = %req.deployment_id,
                     error = %e,
@@ -1283,7 +1396,22 @@ async fn agent_sync(
         }
     }
 
-    let deployment = match state
+    if reported_claim_is_terminal {
+        if let Err(error) = state
+            .deployment_store
+            .release(
+                &subject,
+                &req.deployment_id,
+                &req.session,
+                req.execution_claim.clone(),
+            )
+            .await
+        {
+            return error.into_response();
+        }
+    }
+
+    let mut deployment = match state
         .deployment_store
         .get_deployment(&subject, &req.deployment_id)
         .await
@@ -1293,8 +1421,75 @@ async fn agent_sync(
         Err(e) => return e.into_response(),
     };
 
+    // A nonterminal claim remains attached to the same agent session across
+    // polls. Releasing it on every heartbeat would turn one execution into a
+    // chain of handed-off attempts and briefly make the immutable target
+    // available to another executor.
+    let mut execution_claim = if report_has_claim && !reported_claim_is_terminal {
+        req.execution_claim.clone()
+    } else {
+        None
+    };
+    if execution_claim.is_none() && req.supports_execution_claims && !req.session.is_empty() {
+        // Ask the store even when the legacy desired-release projection is
+        // empty. The authoritative operation may be a same-release config
+        // update, deletion, or maintenance attempt.
+        let filter = DeploymentFilter {
+            deployment_group_id: None,
+            name: None,
+            deployment_ids: Some(vec![req.deployment_id.clone()]),
+            statuses: Some(vec![deployment.status.clone()]),
+            platforms: Some(vec![deployment.platform]),
+            setup_method: None,
+            acquire_mode: Some(DeploymentAcquireMode::Runtime),
+            deployment_model: Some(DeploymentModel::Pull),
+            limit: Some(1),
+        };
+        match state
+            .deployment_store
+            .acquire(&subject, &req.session, &filter, 1)
+            .await
+        {
+            Ok(mut acquired) => {
+                if let Some(acquired) = acquired.pop() {
+                    if let Err(error) = state
+                        .deployment_store
+                        .renew_lease(
+                            &subject,
+                            &req.deployment_id,
+                            &req.session,
+                            acquired.execution_claim.clone(),
+                        )
+                        .await
+                    {
+                        return error.into_response();
+                    }
+                    execution_claim = acquired.execution_claim;
+                    deployment = acquired.deployment;
+                }
+            }
+            Err(error) => return error.into_response(),
+        }
+    } else if requires_execution_claims
+        && execution_claim.is_none()
+        && deployment.desired_release_id.is_some()
+    {
+        return ErrorData::bad_request(
+            "This deployment has update work; upgrade the Operator to a version that supports execution claims.",
+        )
+        .into_response();
+    }
+
     // Return target state if deployment needs updating
-    let target = if deployment_needs_target(&deployment) {
+    // A desired target is executable only when Platform granted the exact
+    // operation claim. In particular, a failed operation keeps its desired
+    // release for diagnosis but must not be silently retried by a pull agent.
+    let may_deliver_target = may_deliver_agent_target(
+        &deployment,
+        requires_execution_claims,
+        execution_claim.is_some() && (!report_has_claim || reported_claim_is_terminal),
+    );
+    let target = if may_deliver_target {
         let release = if let Some(release_id) = deployment_target_release_id(&deployment) {
             let system = crate::auth::Subject::system();
             match state.release_store.get_release(&system, release_id).await {
@@ -1425,10 +1620,11 @@ async fn agent_sync(
         let target_release = target.as_ref().map(|t| t.release_info.clone());
         match deployment_state_from_record(&deployment, current_release, target_release) {
             Some(deployment_state) => {
-                if !req.heartbeats.is_empty()
-                    || !req.observed_inventory_batches.is_empty()
-                    || !req.capabilities.is_empty()
-                    || req.operator_version.is_some()
+                if execution_claim.is_none()
+                    && (!req.heartbeats.is_empty()
+                        || !req.observed_inventory_batches.is_empty()
+                        || !req.capabilities.is_empty()
+                        || req.operator_version.is_some())
                 {
                     if let Err(e) = state
                         .deployment_store
@@ -1444,6 +1640,7 @@ async fn agent_sync(
                                 capabilities: req.capabilities.clone(),
                                 operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
+                                execution_claim: None,
                             },
                         )
                         .await
@@ -1472,6 +1669,7 @@ async fn agent_sync(
     };
 
     Json(AgentSyncResponse {
+        execution_claim,
         current_state,
         target: match target.map(|t| serde_json::to_value(&t)).transpose() {
             Ok(v) => v,
@@ -1664,6 +1862,41 @@ fn agent_state_is_delete_progress(state: &DeploymentState) -> bool {
     )
 }
 
+fn agent_report_completes_claim(_deployment: &DeploymentRecord, state: &DeploymentState) -> bool {
+    if matches!(
+        state.status,
+        DeploymentStatus::PreflightsFailed
+            | DeploymentStatus::InitialSetupFailed
+            | DeploymentStatus::ProvisioningFailed
+            | DeploymentStatus::UpdateFailed
+            | DeploymentStatus::RefreshFailed
+            | DeploymentStatus::DeleteFailed
+            | DeploymentStatus::TeardownFailed
+            | DeploymentStatus::Deleted
+    ) {
+        return true;
+    }
+
+    if state.status != DeploymentStatus::Running {
+        return false;
+    }
+
+    let Some(target_release_id) = state
+        .target_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+    else {
+        // Maintenance has no new release target. Reaching Running completes
+        // that claimed refresh attempt.
+        return true;
+    };
+    state
+        .current_release
+        .as_ref()
+        .and_then(|release| release.release_id.as_deref())
+        == Some(target_release_id)
+}
+
 fn deployment_target_release_id(deployment: &DeploymentRecord) -> Option<&str> {
     if deployment_is_deleting(deployment) {
         deployment
@@ -1692,6 +1925,18 @@ fn deployment_needs_target(deployment: &DeploymentRecord) -> bool {
         deployment_status_from_record(&deployment.status),
         Some(DeploymentStatus::Running)
     )
+}
+
+fn may_deliver_agent_target(
+    deployment: &DeploymentRecord,
+    requires_execution_claim: bool,
+    has_execution_claim: bool,
+) -> bool {
+    if requires_execution_claim && deployment.desired_release_id.is_some() {
+        has_execution_claim
+    } else {
+        deployment_needs_target(deployment)
+    }
 }
 
 fn deployment_state_from_record(
