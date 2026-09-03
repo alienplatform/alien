@@ -64,7 +64,8 @@ pub enum ErrorData {
         code = "API_REQUEST_FAILED",
         message = "API request failed: {message}",
         retryable = "inherit",
-        internal = "false"
+        internal = "inherit",
+        http_status_code = "inherit"
     )]
     ApiRequestFailed {
         /// Human-readable description of the API failure
@@ -351,7 +352,7 @@ pub type Result<T> = alien_error::Result<T, ErrorData>;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_error::AlienErrorData;
+    use alien_error::{AlienError, AlienErrorData, Context, GenericError};
 
     #[test]
     fn workspace_selection_required_exposes_names_in_context() {
@@ -370,5 +371,26 @@ mod tests {
             .filter_map(|value| value.as_str())
             .collect();
         assert_eq!(names, vec!["alpha", "beta"]);
+    }
+
+    #[test]
+    fn api_request_context_preserves_transport_metadata() {
+        let mut source = AlienError::new(GenericError {
+            message: "retry conflicts with an active operation".to_string(),
+        });
+        source.http_status_code = Some(409);
+        source.retryable = true;
+        source.internal = true;
+
+        let wrapped = Err::<(), _>(source)
+            .context(ErrorData::ApiRequestFailed {
+                message: "Failed to retry deployment".to_string(),
+                url: Some("https://api.alien.dev/v1/deployments/example/retry".to_string()),
+            })
+            .unwrap_err();
+
+        assert_eq!(wrapped.http_status_code, Some(409));
+        assert!(wrapped.retryable);
+        assert!(wrapped.internal);
     }
 }
