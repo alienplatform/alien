@@ -85,6 +85,9 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           fetch-depth: 0
 
+      - name: Test release metadata and routing
+        run: node --test scripts/sdk-release-metadata.test.mjs scripts/release-routing.test.mjs
+
       - name: Compute next version
         id: bump
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
@@ -272,6 +275,10 @@ jobs:
             }
           "
 
+      - name: Generate SDK release metadata
+        if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
+        run: node scripts/sdk-release-metadata.mjs
+
       - name: Regenerate Cargo lockfile
         if: ${{ inputs.stable_action == 'prepare' || inputs.dry_run }}
         run: cargo metadata --format-version 1 >/dev/null
@@ -298,12 +305,14 @@ jobs:
             client-sdks/platform/typescript/package-lock.json
             client-sdks/platform/typescript/.speakeasy/gen.yaml
             client-sdks/platform/typescript/.speakeasy/gen.lock
+            client-sdks/platform/typescript/src/lib/config.ts
             client-sdks/manager/typescript/package.json
             client-sdks/manager/typescript/jsr.json
             client-sdks/manager/typescript/package-lock.json
             client-sdks/manager/typescript/examples/package-lock.json
             client-sdks/manager/typescript/.speakeasy/gen.yaml
             client-sdks/manager/typescript/.speakeasy/gen.lock
+            client-sdks/manager/typescript/src/lib/config.ts
             packages/bindings/package.json
             crates/alien-bindings-node/package.json
             packages/bindings/npm/darwin-arm64/package.json
@@ -363,6 +372,10 @@ jobs:
               exit 1
             fi
           done
+
+      - name: Verify SDK release metadata
+        if: ${{ inputs.stable_action == 'qualification' || inputs.stable_action == 'publish' }}
+        run: node scripts/sdk-release-metadata.mjs --check
 
       - name: Select same-run qualification artifacts
         id: qualification
