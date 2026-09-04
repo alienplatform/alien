@@ -15,7 +15,7 @@
     "db:seed": "tsx scripts/seed.ts"
   },
   "dependencies": {
-    "@alienplatform/commands": "^1.0.0",
+    "@alienplatform/commands": "^3.3.11",
     "@alienplatform/platform-api": "^1.0.52",
     "@hookform/resolvers": "^3.10.0",
     "@tabler/icons-react": "^3.46.0",
