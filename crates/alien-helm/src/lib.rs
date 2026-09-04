@@ -24,5 +24,6 @@ pub use generator::{
     generate_helm_chart, generate_operator_manifest, render_manager_fetch_values, HelmChart,
     HelmOptions, ManagerFetchHelmValuesOptions, OperatorLogCollectorOptions,
     OperatorManifestOptions, OperatorOutputFormat, OperatorPermission, OperatorScope,
+    OPERATOR_RBAC_POLICY_VERSION,
 };
 pub use registry::HelmRegistry;
