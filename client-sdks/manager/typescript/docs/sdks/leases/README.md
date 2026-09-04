@@ -140,7 +140,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("leasesReleaseLease failed:", res.error);
   }

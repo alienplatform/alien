@@ -54,6 +54,11 @@ import {
   DaemonHeartbeatData$outboundSchema,
 } from "./daemonheartbeatdata.js";
 import {
+  KeyHeartbeatData,
+  KeyHeartbeatData$Outbound,
+  KeyHeartbeatData$outboundSchema,
+} from "./keyheartbeatdata.js";
+import {
   KubernetesClusterHeartbeatData,
   KubernetesClusterHeartbeatData$Outbound,
   KubernetesClusterHeartbeatData$outboundSchema,
@@ -84,6 +89,11 @@ import {
   RemoteStackManagementHeartbeatData$outboundSchema,
 } from "./remotestackmanagementheartbeatdata.js";
 import {
+  SandboxHeartbeatData,
+  SandboxHeartbeatData$Outbound,
+  SandboxHeartbeatData$outboundSchema,
+} from "./sandboxheartbeatdata.js";
+import {
   ServiceAccountHeartbeatData,
   ServiceAccountHeartbeatData$Outbound,
   ServiceAccountHeartbeatData$outboundSchema,
@@ -108,6 +118,24 @@ import {
   WorkerHeartbeatData$Outbound,
   WorkerHeartbeatData$outboundSchema,
 } from "./workerheartbeatdata.js";
+
+export type ResourceHeartbeatDataSandbox = {
+  /**
+   * Content-free telemetry about a sandbox's sessions.
+   *
+   * @remarks
+   *
+   * Never anything from inside a session. A controller reaches only the cloud's management APIs,
+   * and the whole point of the resource is that the control plane cannot see what runs in it.
+   */
+  data: SandboxHeartbeatData;
+  resourceType: "sandbox";
+};
+
+export type ResourceHeartbeatDataKey = {
+  data: KeyHeartbeatData;
+  resourceType: "key";
+};
 
 export type ResourceHeartbeatDataAi = {
   data: AiHeartbeatData;
@@ -235,7 +263,57 @@ export type ResourceHeartbeatData =
   | ResourceHeartbeatDataAzureStorageAccount
   | ResourceHeartbeatDataAzureContainerAppsEnvironment
   | ResourceHeartbeatDataAzureServiceBusNamespace
-  | ResourceHeartbeatDataAi;
+  | ResourceHeartbeatDataAi
+  | ResourceHeartbeatDataKey
+  | ResourceHeartbeatDataSandbox;
+
+/** @internal */
+export type ResourceHeartbeatDataSandbox$Outbound = {
+  data: SandboxHeartbeatData$Outbound;
+  resourceType: "sandbox";
+};
+
+/** @internal */
+export const ResourceHeartbeatDataSandbox$outboundSchema: z.ZodType<
+  ResourceHeartbeatDataSandbox$Outbound,
+  ResourceHeartbeatDataSandbox
+> = z.object({
+  data: SandboxHeartbeatData$outboundSchema,
+  resourceType: z.literal("sandbox"),
+});
+
+export function resourceHeartbeatDataSandboxToJSON(
+  resourceHeartbeatDataSandbox: ResourceHeartbeatDataSandbox,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatDataSandbox$outboundSchema.parse(
+      resourceHeartbeatDataSandbox,
+    ),
+  );
+}
+
+/** @internal */
+export type ResourceHeartbeatDataKey$Outbound = {
+  data: KeyHeartbeatData$Outbound;
+  resourceType: "key";
+};
+
+/** @internal */
+export const ResourceHeartbeatDataKey$outboundSchema: z.ZodType<
+  ResourceHeartbeatDataKey$Outbound,
+  ResourceHeartbeatDataKey
+> = z.object({
+  data: KeyHeartbeatData$outboundSchema,
+  resourceType: z.literal("key"),
+});
+
+export function resourceHeartbeatDataKeyToJSON(
+  resourceHeartbeatDataKey: ResourceHeartbeatDataKey,
+): string {
+  return JSON.stringify(
+    ResourceHeartbeatDataKey$outboundSchema.parse(resourceHeartbeatDataKey),
+  );
+}
 
 /** @internal */
 export type ResourceHeartbeatDataAi$Outbound = {
@@ -784,7 +862,9 @@ export type ResourceHeartbeatData$Outbound =
   | ResourceHeartbeatDataAzureStorageAccount$Outbound
   | ResourceHeartbeatDataAzureContainerAppsEnvironment$Outbound
   | ResourceHeartbeatDataAzureServiceBusNamespace$Outbound
-  | ResourceHeartbeatDataAi$Outbound;
+  | ResourceHeartbeatDataAi$Outbound
+  | ResourceHeartbeatDataKey$Outbound
+  | ResourceHeartbeatDataSandbox$Outbound;
 
 /** @internal */
 export const ResourceHeartbeatData$outboundSchema: z.ZodType<
@@ -814,6 +894,8 @@ export const ResourceHeartbeatData$outboundSchema: z.ZodType<
   ),
   z.lazy(() => ResourceHeartbeatDataAzureServiceBusNamespace$outboundSchema),
   z.lazy(() => ResourceHeartbeatDataAi$outboundSchema),
+  z.lazy(() => ResourceHeartbeatDataKey$outboundSchema),
+  z.lazy(() => ResourceHeartbeatDataSandbox$outboundSchema),
 ]);
 
 export function resourceHeartbeatDataToJSON(

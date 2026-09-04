@@ -124,6 +124,31 @@ pub enum AiProvider {
 }
 
 pub async fn project_task(args: ProjectArgs, ctx: ExecutionMode) -> Result<()> {
+    if let ProjectCmd::Capabilities {
+        command:
+            CapabilityCommand::Enable {
+                capability,
+                models,
+                required_models,
+                providers,
+                repositories,
+                push,
+                base_image,
+                max_session_lifetime_seconds,
+            },
+    } = &args.cmd
+    {
+        validate_capability_options(
+            *capability,
+            models,
+            required_models,
+            providers,
+            repositories,
+            *push,
+            base_image.as_deref(),
+            *max_session_lifetime_seconds,
+        )?;
+    }
     let http = ctx.auth_http().await?;
     let workspace_name = ctx
         .resolve_workspace_query_with_bootstrap(!args.json)
@@ -208,16 +233,6 @@ async fn capabilities_task(
             base_image,
             max_session_lifetime_seconds,
         } => {
-            validate_capability_options(
-                capability,
-                &models,
-                &required_models,
-                &providers,
-                &repositories,
-                push,
-                base_image.as_deref(),
-                max_session_lifetime_seconds,
-            )?;
             let client = http.sdk_client();
             let result = match capability {
                 CapabilityName::Deployments => {
@@ -362,27 +377,14 @@ async fn capabilities_task(
                     )
                 }
                 CapabilityName::RemoteSandbox => {
-                    // validate_capability_options already rejected either flag being absent;
-                    // Option cannot carry that invariant into this arm.
-                    let base_image =
-                        base_image.ok_or_else(|| remote_sandbox_flag_required("base-image"))?;
-                    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
-                        .into_alien_error()
-                        .context(ErrorData::ValidationError {
-                            field: "base-image".to_string(),
-                            message: "Invalid base image reference".to_string(),
-                        })?;
-                    let max_session_lifetime_seconds = max_session_lifetime_seconds
-                        .ok_or_else(|| {
-                            remote_sandbox_flag_required("max-session-lifetime-seconds")
-                        })?;
+                    let body = remote_sandbox_request(
+                        base_image.as_deref(),
+                        max_session_lifetime_seconds,
+                    )?;
                     let mut request = client
                         .configure_project_remote_sandbox()
                         .id_or_name(project)
-                        .body(&ConfigureRemoteSandboxRequest {
-                            base_image,
-                            max_session_lifetime_seconds,
-                        });
+                        .body(&body);
                     if let Some(workspace) = workspace {
                         request = request.workspace(workspace);
                     }
@@ -436,6 +438,32 @@ fn remote_sandbox_flag_required(field: &str) -> alien_error::AlienError<ErrorDat
     })
 }
 
+fn remote_sandbox_request(
+    base_image: Option<&str>,
+    max_session_lifetime_seconds: Option<std::num::NonZeroU64>,
+) -> Result<ConfigureRemoteSandboxRequest> {
+    let base_image = base_image.ok_or_else(|| remote_sandbox_flag_required("base-image"))?;
+    let base_image = ConfigureRemoteSandboxRequestBaseImage::try_from(base_image)
+        .into_alien_error()
+        .context(ErrorData::ValidationError {
+            field: "base-image".to_string(),
+            message: "Invalid base image reference".to_string(),
+        })?;
+    let max_session_lifetime_seconds = max_session_lifetime_seconds
+        .ok_or_else(|| remote_sandbox_flag_required("max-session-lifetime-seconds"))?;
+    if max_session_lifetime_seconds.get() > 28_800 {
+        return Err(alien_error::AlienError::new(ErrorData::ValidationError {
+            field: "max-session-lifetime-seconds".to_string(),
+            message: "Sandbox sessions must be at most 28800 seconds (8 hours).".to_string(),
+        }));
+    }
+    Ok(ConfigureRemoteSandboxRequest {
+        base_image: Some(base_image),
+        image_bundle_uri: None,
+        max_session_lifetime_seconds,
+    })
+}
+
 fn validate_capability_options(
     capability: CapabilityName,
     models: &[String],
@@ -475,17 +503,13 @@ fn validate_capability_options(
         }));
     }
     if capability == CapabilityName::RemoteSandbox {
-        if base_image.is_none() {
-            return Err(remote_sandbox_flag_required("base-image"));
-        }
-        if max_session_lifetime_seconds.is_none() {
-            return Err(remote_sandbox_flag_required("max-session-lifetime-seconds"));
-        }
+        remote_sandbox_request(base_image, max_session_lifetime_seconds)?;
     } else if base_image.is_some() || max_session_lifetime_seconds.is_some() {
         return Err(alien_error::AlienError::new(ErrorData::ValidationError {
             field: "capability".to_string(),
-            message: "--base-image and --max-session-lifetime-seconds are only valid for Remote Sandbox."
-                .to_string(),
+            message:
+                "--base-image and --max-session-lifetime-seconds are only valid for Remote Sandbox."
+                    .to_string(),
         }));
     }
     Ok(())
@@ -691,6 +715,61 @@ mod tests {
     }
 
     #[test]
+    fn remote_sandbox_request_serializes_only_the_base_image_source() {
+        let request = remote_sandbox_request(
+            Some("public.ecr.aws/example/analysis:v1"),
+            std::num::NonZeroU64::new(28_800),
+        )
+        .expect("the maximum session lifetime should be accepted");
+        assert_eq!(
+            serde_json::to_value(request).expect("request should serialize"),
+            serde_json::json!({
+                "baseImage": "public.ecr.aws/example/analysis:v1",
+                "maxSessionLifetimeSeconds": 28_800,
+            }),
+        );
+    }
+
+    #[test]
+    fn remote_sandbox_rejects_invalid_base_images() {
+        for image in [
+            "".to_string(),
+            "image with spaces".to_string(),
+            "x".repeat(1025),
+        ] {
+            let error = sandbox_options(Some(&image), std::num::NonZeroU64::new(3600))
+                .expect_err("invalid image references must be rejected");
+            assert!(error.to_string().contains("base-image"), "{error}");
+        }
+    }
+
+    #[test]
+    fn remote_sandbox_rejects_sessions_longer_than_eight_hours() {
+        let error = sandbox_options(
+            Some("public.ecr.aws/example/analysis:v1"),
+            std::num::NonZeroU64::new(28_801),
+        )
+        .expect_err("the API session lifetime limit must be enforced locally");
+        assert!(error.to_string().contains("28800"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn remote_sandbox_validates_before_resolving_auth_or_project() {
+        let args = ProjectArgs::try_parse_from([
+            "projects",
+            "capabilities",
+            "enable",
+            "remote-sandbox",
+            "--json",
+        ])
+        .expect("the command should parse before capability validation");
+        let error = project_task(args, ExecutionMode::Dev { port: 0 })
+            .await
+            .expect_err("missing flags must fail before connecting to any API");
+        assert!(error.to_string().contains("--base-image"), "{error}");
+    }
+
+    #[test]
     fn remote_sandbox_parses_its_own_flags() {
         let args = ProjectArgs::try_parse_from([
             "projects",
@@ -717,8 +796,14 @@ mod tests {
             panic!("expected a capability enable command");
         };
         assert_eq!(capability, CapabilityName::RemoteSandbox);
-        assert_eq!(base_image.as_deref(), Some("public.ecr.aws/example/analysis:v1"));
-        assert_eq!(max_session_lifetime_seconds.map(std::num::NonZeroU64::get), Some(3600));
+        assert_eq!(
+            base_image.as_deref(),
+            Some("public.ecr.aws/example/analysis:v1")
+        );
+        assert_eq!(
+            max_session_lifetime_seconds.map(std::num::NonZeroU64::get),
+            Some(3600)
+        );
     }
 
     #[test]

@@ -47,6 +47,23 @@ const value: operations.DataAzureSandboxGroup = {
 };
 ```
 
+### `operations.DataGcpAgentPlatform`
+
+```typescript
+const value: operations.DataGcpAgentPlatform = {
+  engine: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopping",
+    partial: false,
+    stale: false,
+  },
+  templateId: "<id>",
+  backend: "gcpAgentPlatform",
+};
+```
+
 ### `operations.DataKubernetesPods`
 
 ```typescript
@@ -58,7 +75,7 @@ const value: operations.DataKubernetesPods = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },

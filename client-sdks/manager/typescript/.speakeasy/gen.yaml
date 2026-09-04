@@ -32,13 +32,15 @@ generation:
     generateTests: false
     generateNewTests: true
     skipResponseBodyAssertions: false
-  versioningStrategy: automatic
+  versioningStrategy: manual
 typescript:
   version: 3.3.19
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
-    devDependencies: {}
+    devDependencies:
+      globals: ^17.0.0
+      typescript: ~5.9.0
     peerDependencies: {}
   additionalPackageJSON:
     homepage: https://alien.dev

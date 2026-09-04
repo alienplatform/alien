@@ -47,6 +47,23 @@ const value: models.DataAzureSandboxGroup = {
 };
 ```
 
+### `models.DataGcpAgentPlatform`
+
+```typescript
+const value: models.DataGcpAgentPlatform = {
+  engine: "<value>",
+  status: {
+    collectionIssues: [],
+    health: "unknown",
+    lifecycle: "stopping",
+    partial: false,
+    stale: false,
+  },
+  templateId: "<id>",
+  backend: "gcpAgentPlatform",
+};
+```
+
 ### `models.DataKubernetesPods`
 
 ```typescript

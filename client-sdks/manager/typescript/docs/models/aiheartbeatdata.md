@@ -7,6 +7,23 @@
 
 ```typescript
 const value: models.AiHeartbeatDataAwsBedrock = {
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "not-checked",
+        availability: "available",
+        blockers: [
+          "agreement-required",
+        ],
+        clientApis: [
+          "anthropic-messages",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "aws-bedrock",
+  },
   region: "<value>",
   status: {
     collectionIssues: [
@@ -17,9 +34,9 @@ const value: models.AiHeartbeatDataAwsBedrock = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "creating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: true,
     stale: true,
   },
   backend: "awsBedrock",
@@ -30,6 +47,23 @@ const value: models.AiHeartbeatDataAwsBedrock = {
 
 ```typescript
 const value: models.AiHeartbeatDataGcpVertex = {
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "not-checked",
+        availability: "available",
+        blockers: [
+          "agreement-required",
+        ],
+        clientApis: [
+          "anthropic-messages",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "aws-bedrock",
+  },
   location: "<value>",
   project: "<value>",
   status: {
@@ -41,9 +75,9 @@ const value: models.AiHeartbeatDataGcpVertex = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "creating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: true,
     stale: true,
   },
   backend: "gcpVertex",
@@ -55,6 +89,23 @@ const value: models.AiHeartbeatDataGcpVertex = {
 ```typescript
 const value: models.AiHeartbeatDataAzureFoundry = {
   accountName: "<value>",
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "not-checked",
+        availability: "available",
+        blockers: [
+          "agreement-required",
+        ],
+        clientApis: [
+          "anthropic-messages",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "aws-bedrock",
+  },
   status: {
     collectionIssues: [
       {
@@ -64,9 +115,9 @@ const value: models.AiHeartbeatDataAzureFoundry = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "creating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: true,
     stale: true,
   },
   backend: "azureFoundry",
@@ -87,9 +138,9 @@ const value: models.AiHeartbeatDataExternal = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "creating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: true,
     stale: true,
   },
   backend: "external",
