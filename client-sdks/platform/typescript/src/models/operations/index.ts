@@ -5,6 +5,7 @@
 export * from "./acceptworkspaceinvitation.js";
 export * from "./addworkspacemember.js";
 export * from "./applycontainerregistrymanagersnapshot.js";
+export * from "./approveaccessrequest.js";
 export * from "./approveagentsession.js";
 export * from "./cancelmachinesmachinedrain.js";
 export * from "./cancelmanagersetup.js";
@@ -58,6 +59,7 @@ export * from "./deletemanager.js";
 export * from "./deleteproject.js";
 export * from "./deletereleasechannel.js";
 export * from "./deleteworkspace.js";
+export * from "./denyaccessrequest.js";
 export * from "./dispatchcommand.js";
 export * from "./drainmachinesmachine.js";
 export * from "./ensuredeploymentgroupbyexternalid.js";

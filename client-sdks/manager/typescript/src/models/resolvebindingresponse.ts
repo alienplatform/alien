@@ -7,13 +7,33 @@ import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 import {
+  RemoteAwsBedrockAiBinding,
+  RemoteAwsBedrockAiBinding$inboundSchema,
+} from "./remoteawsbedrockaibinding.js";
+import {
   RemoteAwsClientConfig,
   RemoteAwsClientConfig$inboundSchema,
 } from "./remoteawsclientconfig.js";
 import {
+  RemoteAwsKmsKeyBinding,
+  RemoteAwsKmsKeyBinding$inboundSchema,
+} from "./remoteawskmskeybinding.js";
+import {
+  RemoteAwsSandboxBinding,
+  RemoteAwsSandboxBinding$inboundSchema,
+} from "./remoteawssandboxbinding.js";
+import {
   RemoteAzureClientConfig,
   RemoteAzureClientConfig$inboundSchema,
 } from "./remoteazureclientconfig.js";
+import {
+  RemoteAzureFoundryAiBinding,
+  RemoteAzureFoundryAiBinding$inboundSchema,
+} from "./remoteazurefoundryaibinding.js";
+import {
+  RemoteAzureKeyVaultKeyBinding,
+  RemoteAzureKeyVaultKeyBinding$inboundSchema,
+} from "./remoteazurekeyvaultkeybinding.js";
 import {
   RemoteBlobStorageBinding,
   RemoteBlobStorageBinding$inboundSchema,
@@ -23,6 +43,14 @@ import {
   RemoteGcpClientConfig$inboundSchema,
 } from "./remotegcpclientconfig.js";
 import {
+  RemoteGcpCloudKmsKeyBinding,
+  RemoteGcpCloudKmsKeyBinding$inboundSchema,
+} from "./remotegcpcloudkmskeybinding.js";
+import {
+  RemoteGcpVertexAiBinding,
+  RemoteGcpVertexAiBinding$inboundSchema,
+} from "./remotegcpvertexaibinding.js";
+import {
   RemoteGcsStorageBinding,
   RemoteGcsStorageBinding$inboundSchema,
 } from "./remotegcsstoragebinding.js";
@@ -30,6 +58,129 @@ import {
   RemoteS3StorageBinding,
   RemoteS3StorageBinding$inboundSchema,
 } from "./remotes3storagebinding.js";
+
+/**
+ * AWS Lambda MicroVM sandbox and an AWS session.
+ */
+export type ResolveBindingResponseSandboxAws = {
+  /**
+   * Concrete MicroVM sandbox topology returned to remote clients.
+   *
+   * @remarks
+   *
+   * Deliberately without the execution role and the egress connectors of the in-cloud binding: the
+   * provider passes no role, and a binding carrying connectors is refused before it reaches here.
+   */
+  binding: RemoteAwsSandboxBinding;
+  /**
+   * Response-safe AWS client configuration. The public contract deliberately
+   *
+   * @remarks
+   * has no static, profile, metadata, or web-identity credential variants.
+   */
+  clientConfig: RemoteAwsClientConfig;
+  expiresAt: string;
+  service: "sandbox-aws";
+};
+
+/**
+ * Azure AI Foundry and a Cognitive Services access token.
+ */
+export type ResolveBindingResponseFoundry = {
+  binding: RemoteAzureFoundryAiBinding;
+  /**
+   * Response-safe Azure client configuration containing one storage-audience
+   *
+   * @remarks
+   * access token for the stack's Remote Bindings identity.
+   */
+  clientConfig: RemoteAzureClientConfig;
+  expiresAt: string;
+  resourceId: string;
+  service: "foundry";
+};
+
+/**
+ * GCP Vertex AI and an access token.
+ */
+export type ResolveBindingResponseVertex = {
+  binding: RemoteGcpVertexAiBinding;
+  /**
+   * Response-safe GCP client configuration. Refreshable source credentials and
+   *
+   * @remarks
+   * service endpoint overrides cannot be represented by this type.
+   */
+  clientConfig: RemoteGcpClientConfig;
+  expiresAt: string;
+  resourceId: string;
+  service: "vertex";
+};
+
+/**
+ * AWS Bedrock and an AWS session.
+ */
+export type ResolveBindingResponseBedrock = {
+  binding: RemoteAwsBedrockAiBinding;
+  /**
+   * Response-safe AWS client configuration. The public contract deliberately
+   *
+   * @remarks
+   * has no static, profile, metadata, or web-identity credential variants.
+   */
+  clientConfig: RemoteAwsClientConfig;
+  expiresAt: string;
+  resourceId: string;
+  service: "bedrock";
+};
+
+/**
+ * Azure Key Vault key and a vault-audience access token.
+ */
+export type ResolveBindingResponseKeyVaultKey = {
+  binding: RemoteAzureKeyVaultKeyBinding;
+  /**
+   * Response-safe Azure client configuration containing one storage-audience
+   *
+   * @remarks
+   * access token for the stack's Remote Bindings identity.
+   */
+  clientConfig: RemoteAzureClientConfig;
+  expiresAt: string;
+  service: "key-vault-key";
+};
+
+/**
+ * GCP Cloud KMS key and an access token.
+ */
+export type ResolveBindingResponseCloudKms = {
+  binding: RemoteGcpCloudKmsKeyBinding;
+  /**
+   * Response-safe GCP client configuration. Refreshable source credentials and
+   *
+   * @remarks
+   * service endpoint overrides cannot be represented by this type.
+   */
+  clientConfig: RemoteGcpClientConfig;
+  expiresAt: string;
+  service: "cloud-kms";
+};
+
+/**
+ * AWS KMS key and an AWS session.
+ */
+export type ResolveBindingResponseKms = {
+  binding: RemoteAwsKmsKeyBinding;
+  /**
+   * Response-safe AWS client configuration. The public contract deliberately
+   *
+   * @remarks
+   * has no static, profile, metadata, or web-identity credential variants.
+   */
+  clientConfig: RemoteAwsClientConfig;
+  expiresAt: string;
+  service: "kms";
+};
 
 /**
  * Google Cloud Storage and a Remote Bindings identity access token.
@@ -97,7 +248,164 @@ export type ResolveBindingResponseS3 = {
 export type ResolveBindingResponse =
   | ResolveBindingResponseS3
   | ResolveBindingResponseBlob
-  | ResolveBindingResponseGcs;
+  | ResolveBindingResponseGcs
+  | ResolveBindingResponseKms
+  | ResolveBindingResponseCloudKms
+  | ResolveBindingResponseKeyVaultKey
+  | ResolveBindingResponseBedrock
+  | ResolveBindingResponseVertex
+  | ResolveBindingResponseFoundry
+  | ResolveBindingResponseSandboxAws;
+
+/** @internal */
+export const ResolveBindingResponseSandboxAws$inboundSchema: z.ZodType<
+  ResolveBindingResponseSandboxAws,
+  unknown
+> = z.object({
+  binding: RemoteAwsSandboxBinding$inboundSchema,
+  clientConfig: RemoteAwsClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("sandbox-aws"),
+});
+
+export function resolveBindingResponseSandboxAwsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseSandboxAws, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseSandboxAws$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseSandboxAws' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseFoundry$inboundSchema: z.ZodType<
+  ResolveBindingResponseFoundry,
+  unknown
+> = z.object({
+  binding: RemoteAzureFoundryAiBinding$inboundSchema,
+  clientConfig: RemoteAzureClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  resourceId: z.string(),
+  service: z.literal("foundry"),
+});
+
+export function resolveBindingResponseFoundryFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseFoundry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseFoundry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseFoundry' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseVertex$inboundSchema: z.ZodType<
+  ResolveBindingResponseVertex,
+  unknown
+> = z.object({
+  binding: RemoteGcpVertexAiBinding$inboundSchema,
+  clientConfig: RemoteGcpClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  resourceId: z.string(),
+  service: z.literal("vertex"),
+});
+
+export function resolveBindingResponseVertexFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseVertex, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseVertex$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseVertex' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseBedrock$inboundSchema: z.ZodType<
+  ResolveBindingResponseBedrock,
+  unknown
+> = z.object({
+  binding: RemoteAwsBedrockAiBinding$inboundSchema,
+  clientConfig: RemoteAwsClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  resourceId: z.string(),
+  service: z.literal("bedrock"),
+});
+
+export function resolveBindingResponseBedrockFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseBedrock, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseBedrock$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseBedrock' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseKeyVaultKey$inboundSchema: z.ZodType<
+  ResolveBindingResponseKeyVaultKey,
+  unknown
+> = z.object({
+  binding: RemoteAzureKeyVaultKeyBinding$inboundSchema,
+  clientConfig: RemoteAzureClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("key-vault-key"),
+});
+
+export function resolveBindingResponseKeyVaultKeyFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseKeyVaultKey, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseKeyVaultKey$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseKeyVaultKey' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseCloudKms$inboundSchema: z.ZodType<
+  ResolveBindingResponseCloudKms,
+  unknown
+> = z.object({
+  binding: RemoteGcpCloudKmsKeyBinding$inboundSchema,
+  clientConfig: RemoteGcpClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("cloud-kms"),
+});
+
+export function resolveBindingResponseCloudKmsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseCloudKms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseCloudKms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseCloudKms' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseKms$inboundSchema: z.ZodType<
+  ResolveBindingResponseKms,
+  unknown
+> = z.object({
+  binding: RemoteAwsKmsKeyBinding$inboundSchema,
+  clientConfig: RemoteAwsClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("kms"),
+});
+
+export function resolveBindingResponseKmsFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseKms, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ResolveBindingResponseKms$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseKms' from JSON`,
+  );
+}
 
 /** @internal */
 export const ResolveBindingResponseGcs$inboundSchema: z.ZodType<
@@ -170,6 +478,13 @@ export const ResolveBindingResponse$inboundSchema: z.ZodType<
   z.lazy(() => ResolveBindingResponseS3$inboundSchema),
   z.lazy(() => ResolveBindingResponseBlob$inboundSchema),
   z.lazy(() => ResolveBindingResponseGcs$inboundSchema),
+  z.lazy(() => ResolveBindingResponseKms$inboundSchema),
+  z.lazy(() => ResolveBindingResponseCloudKms$inboundSchema),
+  z.lazy(() => ResolveBindingResponseKeyVaultKey$inboundSchema),
+  z.lazy(() => ResolveBindingResponseBedrock$inboundSchema),
+  z.lazy(() => ResolveBindingResponseVertex$inboundSchema),
+  z.lazy(() => ResolveBindingResponseFoundry$inboundSchema),
+  z.lazy(() => ResolveBindingResponseSandboxAws$inboundSchema),
 ]);
 
 export function resolveBindingResponseFromJSON(

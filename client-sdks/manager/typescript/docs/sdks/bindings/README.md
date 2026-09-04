@@ -24,7 +24,6 @@ const alienManager = new AlienManager({
 async function run() {
   const result = await alienManager.bindings.resolveBinding({
     deploymentId: "<id>",
-    resourceId: "<id>",
   });
 
   console.log(result);
@@ -51,7 +50,6 @@ const alienManager = new AlienManagerCore({
 async function run() {
   const res = await bindingsResolveBinding(alienManager, {
     deploymentId: "<id>",
-    resourceId: "<id>",
   });
   if (res.ok) {
     const { value: result } = res;
