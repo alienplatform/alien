@@ -82,8 +82,20 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          ref: ${{ inputs.stable_action == 'qualification' && inputs.source_ref || github.ref }}
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           fetch-depth: 0
+
+      - name: Verify qualification source commit
+        if: ${{ inputs.stable_action == 'qualification' }}
+        env:
+          SOURCE_REF: ${{ inputs.source_ref }}
+        run: |
+          if ! grep -qE '^[0-9a-f]{40}$' <<< "$SOURCE_REF" || \
+             [ "$(git rev-parse HEAD)" != "$SOURCE_REF" ]; then
+            echo "::error::Qualification must validate its exact source commit"
+            exit 1
+          fi
 
       - name: Test release metadata and routing
         run: node --test scripts/sdk-release-metadata.test.mjs scripts/release-routing.test.mjs
