@@ -30,12 +30,16 @@ pnpm run generate:platform-api     # Regenerate platform TypeScript SDK from che
 
 ### Platform TypeScript SDK drift
 
-Before including a platform TypeScript SDK regeneration in a feature PR,
-inspect the generated diff from a clean worktree. If it rewrites endpoints or
-models unrelated to the feature, keep the relevant OpenAPI and Rust inputs
-produced by the supported generation pipeline and move the full TypeScript SDK
-refresh to a dedicated PR. Do not manually edit or selectively patch generated
-SDK code to force a smaller diff.
+The supported Platform API generation pipeline copies the same contract to
+`platform/openapi.json`, `platform/rust/openapi.json`, and
+`platform/rust/openapi-3.0.json` before running Speakeasy.
+
+Before including a Platform TypeScript SDK regeneration in a feature PR,
+inspect the generated diff from a clean worktree. Keep generated models and
+documentation caused by the feature. If Speakeasy also rewrites unrelated
+endpoints or models, restore those unrelated files to their pre-generation
+state and refresh them in a dedicated SDK-sync PR. Do not manually edit or
+selectively patch generated SDK code to force a smaller diff.
 
 ## Don't
 
