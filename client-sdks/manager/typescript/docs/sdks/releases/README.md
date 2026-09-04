@@ -299,4 +299,5 @@ run();
 
 | Error Type                      | Status Code                     | Content Type                    |
 | ------------------------------- | ------------------------------- | ------------------------------- |
+| errors.AlienError               | 404                             | application/json                |
 | errors.AlienManagerDefaultError | 4XX, 5XX                        | \*/\*                           |

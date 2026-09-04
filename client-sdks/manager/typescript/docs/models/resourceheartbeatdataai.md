@@ -8,6 +8,23 @@ import { ResourceHeartbeatDataAi } from "@alienplatform/manager-api/models";
 let value: ResourceHeartbeatDataAi = {
   data: {
     accountName: "<value>",
+    availability: {
+      catalogRevision: "<value>",
+      models: [
+        {
+          accessTest: "not-checked",
+          availability: "available",
+          blockers: [
+            "agreement-required",
+          ],
+          clientApis: [
+            "anthropic-messages",
+          ],
+          publicModelId: "<id>",
+        },
+      ],
+      source: "aws-bedrock",
+    },
     status: {
       collectionIssues: [
         {
@@ -17,9 +34,9 @@ let value: ResourceHeartbeatDataAi = {
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "creating",
-      partial: false,
+      health: "healthy",
+      lifecycle: "updating",
+      partial: true,
       stale: true,
     },
     backend: "azureFoundry",

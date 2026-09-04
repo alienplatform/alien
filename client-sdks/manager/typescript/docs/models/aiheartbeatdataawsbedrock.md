@@ -6,6 +6,23 @@
 import { AiHeartbeatDataAwsBedrock } from "@alienplatform/manager-api/models";
 
 let value: AiHeartbeatDataAwsBedrock = {
+  availability: {
+    catalogRevision: "<value>",
+    models: [
+      {
+        accessTest: "not-checked",
+        availability: "available",
+        blockers: [
+          "agreement-required",
+        ],
+        clientApis: [
+          "anthropic-messages",
+        ],
+        publicModelId: "<id>",
+      },
+    ],
+    source: "aws-bedrock",
+  },
   region: "<value>",
   status: {
     collectionIssues: [
@@ -16,9 +33,9 @@ let value: AiHeartbeatDataAwsBedrock = {
         source: "<value>",
       },
     ],
-    health: "unhealthy",
-    lifecycle: "creating",
-    partial: false,
+    health: "healthy",
+    lifecycle: "updating",
+    partial: true,
     stale: true,
   },
   backend: "awsBedrock",
@@ -27,8 +44,9 @@ let value: AiHeartbeatDataAwsBedrock = {
 
 ## Fields
 
-| Field                                                      | Type                                                       | Required                                                   | Description                                                |
-| ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `region`                                                   | *string*                                                   | :heavy_check_mark:                                         | N/A                                                        |
-| `status`                                                   | [models.AiHeartbeatStatus](../models/aiheartbeatstatus.md) | :heavy_check_mark:                                         | N/A                                                        |
-| `backend`                                                  | *"awsBedrock"*                                             | :heavy_check_mark:                                         | N/A                                                        |
+| Field                                                                      | Type                                                                       | Required                                                                   | Description                                                                |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
+| `availability`                                                             | [models.AiAvailabilityObservation](../models/aiavailabilityobservation.md) | :heavy_check_mark:                                                         | N/A                                                                        |
+| `region`                                                                   | *string*                                                                   | :heavy_check_mark:                                                         | N/A                                                                        |
+| `status`                                                                   | [models.AiHeartbeatStatus](../models/aiheartbeatstatus.md)                 | :heavy_check_mark:                                                         | N/A                                                                        |
+| `backend`                                                                  | *"awsBedrock"*                                                             | :heavy_check_mark:                                                         | N/A                                                                        |

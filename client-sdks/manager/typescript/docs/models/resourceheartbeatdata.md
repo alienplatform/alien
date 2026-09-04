@@ -205,9 +205,9 @@ const value: models.ResourceHeartbeatDataQueue = {
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "running",
-      partial: false,
-      stale: true,
+      lifecycle: "deleted",
+      partial: true,
+      stale: false,
     },
     subscriptionLabels: {
       "key": "<value>",
@@ -534,13 +534,13 @@ const value: models.ResourceHeartbeatDataAzureContainerAppsEnvironment = {
 const value: models.ResourceHeartbeatDataAzureServiceBusNamespace = {
   data: {
     name: "<value>",
-    privateEndpointConnectionCount: 289000,
+    privateEndpointConnectionCount: 24724,
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "running",
-      partial: false,
-      stale: true,
+      lifecycle: "deleted",
+      partial: true,
+      stale: false,
     },
   },
   resourceType: "azure_service_bus_namespace",
@@ -553,6 +553,23 @@ const value: models.ResourceHeartbeatDataAzureServiceBusNamespace = {
 const value: models.ResourceHeartbeatDataAi = {
   data: {
     accountName: "<value>",
+    availability: {
+      catalogRevision: "<value>",
+      models: [
+        {
+          accessTest: "not-checked",
+          availability: "available",
+          blockers: [
+            "agreement-required",
+          ],
+          clientApis: [
+            "anthropic-messages",
+          ],
+          publicModelId: "<id>",
+        },
+      ],
+      source: "aws-bedrock",
+    },
     status: {
       collectionIssues: [
         {
@@ -562,14 +579,56 @@ const value: models.ResourceHeartbeatDataAi = {
           source: "<value>",
         },
       ],
-      health: "unhealthy",
-      lifecycle: "creating",
-      partial: false,
+      health: "healthy",
+      lifecycle: "updating",
+      partial: true,
       stale: true,
     },
     backend: "azureFoundry",
   },
   resourceType: "ai",
+};
+```
+
+### `models.ResourceHeartbeatDataKey`
+
+```typescript
+const value: models.ResourceHeartbeatDataKey = {
+  data: {
+    data: {
+      enabled: true,
+      keyArn: "<value>",
+      keySpec: "<value>",
+      keyState: "<value>",
+      keyUsage: "<value>",
+      status: {
+        health: "healthy",
+        lifecycle: "running",
+      },
+    },
+    provider: "aws-kms",
+  },
+  resourceType: "key",
+};
+```
+
+### `models.ResourceHeartbeatDataSandbox`
+
+```typescript
+const value: models.ResourceHeartbeatDataSandbox = {
+  data: {
+    activeSessions: 953383,
+    routeServing: true,
+    status: {
+      collectionIssues: [],
+      health: "unhealthy",
+      lifecycle: "unknown",
+      partial: true,
+      stale: false,
+    },
+    backend: "local",
+  },
+  resourceType: "sandbox",
 };
 ```
 

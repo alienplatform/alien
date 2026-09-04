@@ -15,7 +15,7 @@ let value: DataKubernetesPods = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "collection-failed",
+        reason: "forbidden",
         severity: "warning",
         source: "<value>",
       },
@@ -36,5 +36,5 @@ let value: DataKubernetesPods = {
 | `activeSessions`                                                   | *number*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
 | `idlePods`                                                         | *number*                                                           | :heavy_check_mark:                                                 | Claimed but unused pods waiting in the pool.                       |
 | `namespace`                                                        | *string*                                                           | :heavy_check_mark:                                                 | N/A                                                                |
-| `status`                                                           | [operations.DataStatus75](../../models/operations/datastatus75.md) | :heavy_check_mark:                                                 | N/A                                                                |
+| `status`                                                           | [operations.DataStatus76](../../models/operations/datastatus76.md) | :heavy_check_mark:                                                 | N/A                                                                |
 | `backend`                                                          | *"kubernetesPods"*                                                 | :heavy_check_mark:                                                 | N/A                                                                |

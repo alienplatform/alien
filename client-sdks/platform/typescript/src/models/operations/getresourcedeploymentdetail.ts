@@ -93,6 +93,80 @@ export const ControllerPlatform = {
  */
 export type ControllerPlatform = ClosedEnum<typeof ControllerPlatform>;
 
+export const GetResourceDeploymentDetailReason74 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type GetResourceDeploymentDetailReason74 = ClosedEnum<
+  typeof GetResourceDeploymentDetailReason74
+>;
+
+export const CollectionIssueSeverity74 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type CollectionIssueSeverity74 = ClosedEnum<
+  typeof CollectionIssueSeverity74
+>;
+
+export type CollectionIssue74 = {
+  message: string;
+  reason: GetResourceDeploymentDetailReason74;
+  severity: CollectionIssueSeverity74;
+  source: string;
+};
+
+export const Health77 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type Health77 = ClosedEnum<typeof Health77>;
+
+export const Lifecycle77 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type Lifecycle77 = ClosedEnum<typeof Lifecycle77>;
+
+export type DataStatus77 = {
+  collectionIssues: Array<CollectionIssue74>;
+  health: Health77;
+  lifecycle: Lifecycle77;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/**
+ * Local: containers Docker still holds for this sandbox.
+ */
+export type DataLocal12 = {
+  activeSessions: number;
+  /**
+   * Whether the loopback route is serving in this process. False after a manager restart until
+   *
+   * @remarks
+   * the next tick rebinds it.
+   */
+  routeServing: boolean;
+  status: DataStatus77;
+  backend: "local";
+};
+
 export const GetResourceDeploymentDetailReason73 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -152,19 +226,17 @@ export type DataStatus76 = {
 };
 
 /**
- * Local: containers Docker still holds for this sandbox.
+ * Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
  */
-export type DataLocal12 = {
+export type DataKubernetesPods = {
   activeSessions: number;
   /**
-   * Whether the loopback route is serving in this process. False after a manager restart until
-   *
-   * @remarks
-   * the next tick rebinds it.
+   * Claimed but unused pods waiting in the pool.
    */
-  routeServing: boolean;
+  idlePods: number;
+  namespace: string;
   status: DataStatus76;
-  backend: "local";
+  backend: "kubernetesPods";
 };
 
 export const GetResourceDeploymentDetailReason72 = {
@@ -226,17 +298,25 @@ export type DataStatus75 = {
 };
 
 /**
- * Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
+ * GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.
+ *
+ * @remarks
+ *
+ * No session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management
+ * permission set holds. No template state either — emission is gated on reading it `ACTIVE`,
+ * which is what `status` already says.
  */
-export type DataKubernetesPods = {
-  activeSessions: number;
+export type DataGcpAgentPlatform = {
   /**
-   * Claimed but unused pods waiting in the pool.
+   * Reasoning engine the template hangs under, without which the template id names nothing.
    */
-  idlePods: number;
-  namespace: string;
+  engine: string;
   status: DataStatus75;
-  backend: "kubernetesPods";
+  /**
+   * The template sessions are currently cut from.
+   */
+  templateId: string;
+  backend: "gcpAgentPlatform";
 };
 
 export const GetResourceDeploymentDetailReason71 = {
@@ -402,6 +482,7 @@ export type DataAwsMicrovm = {
 export type DataUnion18 =
   | DataAwsMicrovm
   | DataAzureSandboxGroup
+  | DataGcpAgentPlatform
   | DataKubernetesPods
   | DataLocal12;
 
@@ -417,6 +498,7 @@ export type DataSandbox = {
   data:
     | DataAwsMicrovm
     | DataAzureSandboxGroup
+    | DataGcpAgentPlatform
     | DataKubernetesPods
     | DataLocal12;
   resourceType: "sandbox";
@@ -8603,6 +8685,87 @@ export const ControllerPlatform$inboundSchema: z.ZodEnum<
 > = z.enum(ControllerPlatform);
 
 /** @internal */
+export const GetResourceDeploymentDetailReason74$inboundSchema: z.ZodEnum<
+  typeof GetResourceDeploymentDetailReason74
+> = z.enum(GetResourceDeploymentDetailReason74);
+
+/** @internal */
+export const CollectionIssueSeverity74$inboundSchema: z.ZodEnum<
+  typeof CollectionIssueSeverity74
+> = z.enum(CollectionIssueSeverity74);
+
+/** @internal */
+export const CollectionIssue74$inboundSchema: z.ZodType<
+  CollectionIssue74,
+  unknown
+> = z.object({
+  message: z.string(),
+  reason: GetResourceDeploymentDetailReason74$inboundSchema,
+  severity: CollectionIssueSeverity74$inboundSchema,
+  source: z.string(),
+});
+
+export function collectionIssue74FromJSON(
+  jsonString: string,
+): SafeParseResult<CollectionIssue74, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CollectionIssue74$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CollectionIssue74' from JSON`,
+  );
+}
+
+/** @internal */
+export const Health77$inboundSchema: z.ZodEnum<typeof Health77> = z.enum(
+  Health77,
+);
+
+/** @internal */
+export const Lifecycle77$inboundSchema: z.ZodEnum<typeof Lifecycle77> = z.enum(
+  Lifecycle77,
+);
+
+/** @internal */
+export const DataStatus77$inboundSchema: z.ZodType<DataStatus77, unknown> = z
+  .object({
+    collectionIssues: z.array(z.lazy(() => CollectionIssue74$inboundSchema)),
+    health: Health77$inboundSchema,
+    lifecycle: Lifecycle77$inboundSchema,
+    message: z.nullable(z.string()).optional(),
+    partial: z.boolean(),
+    stale: z.boolean(),
+  });
+
+export function dataStatus77FromJSON(
+  jsonString: string,
+): SafeParseResult<DataStatus77, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataStatus77$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataStatus77' from JSON`,
+  );
+}
+
+/** @internal */
+export const DataLocal12$inboundSchema: z.ZodType<DataLocal12, unknown> = z
+  .object({
+    activeSessions: z.int(),
+    routeServing: z.boolean(),
+    status: z.lazy(() => DataStatus77$inboundSchema),
+    backend: z.literal("local"),
+  });
+
+export function dataLocal12FromJSON(
+  jsonString: string,
+): SafeParseResult<DataLocal12, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => DataLocal12$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataLocal12' from JSON`,
+  );
+}
+
+/** @internal */
 export const GetResourceDeploymentDetailReason73$inboundSchema: z.ZodEnum<
   typeof GetResourceDeploymentDetailReason73
 > = z.enum(GetResourceDeploymentDetailReason73);
@@ -8665,21 +8828,24 @@ export function dataStatus76FromJSON(
 }
 
 /** @internal */
-export const DataLocal12$inboundSchema: z.ZodType<DataLocal12, unknown> = z
-  .object({
-    activeSessions: z.int(),
-    routeServing: z.boolean(),
-    status: z.lazy(() => DataStatus76$inboundSchema),
-    backend: z.literal("local"),
-  });
+export const DataKubernetesPods$inboundSchema: z.ZodType<
+  DataKubernetesPods,
+  unknown
+> = z.object({
+  activeSessions: z.int(),
+  idlePods: z.int(),
+  namespace: z.string(),
+  status: z.lazy(() => DataStatus76$inboundSchema),
+  backend: z.literal("kubernetesPods"),
+});
 
-export function dataLocal12FromJSON(
+export function dataKubernetesPodsFromJSON(
   jsonString: string,
-): SafeParseResult<DataLocal12, SDKValidationError> {
+): SafeParseResult<DataKubernetesPods, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataLocal12$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataLocal12' from JSON`,
+    (x) => DataKubernetesPods$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataKubernetesPods' from JSON`,
   );
 }
 
@@ -8746,24 +8912,23 @@ export function dataStatus75FromJSON(
 }
 
 /** @internal */
-export const DataKubernetesPods$inboundSchema: z.ZodType<
-  DataKubernetesPods,
+export const DataGcpAgentPlatform$inboundSchema: z.ZodType<
+  DataGcpAgentPlatform,
   unknown
 > = z.object({
-  activeSessions: z.int(),
-  idlePods: z.int(),
-  namespace: z.string(),
+  engine: z.string(),
   status: z.lazy(() => DataStatus75$inboundSchema),
-  backend: z.literal("kubernetesPods"),
+  templateId: z.string(),
+  backend: z.literal("gcpAgentPlatform"),
 });
 
-export function dataKubernetesPodsFromJSON(
+export function dataGcpAgentPlatformFromJSON(
   jsonString: string,
-): SafeParseResult<DataKubernetesPods, SDKValidationError> {
+): SafeParseResult<DataGcpAgentPlatform, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => DataKubernetesPods$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'DataKubernetesPods' from JSON`,
+    (x) => DataGcpAgentPlatform$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'DataGcpAgentPlatform' from JSON`,
   );
 }
 
@@ -8936,6 +9101,7 @@ export const DataUnion18$inboundSchema: z.ZodType<DataUnion18, unknown> = z
   .union([
     z.lazy(() => DataAwsMicrovm$inboundSchema),
     z.lazy(() => DataAzureSandboxGroup$inboundSchema),
+    z.lazy(() => DataGcpAgentPlatform$inboundSchema),
     z.lazy(() => DataKubernetesPods$inboundSchema),
     z.lazy(() => DataLocal12$inboundSchema),
   ]);
@@ -8956,6 +9122,7 @@ export const DataSandbox$inboundSchema: z.ZodType<DataSandbox, unknown> = z
     data: z.union([
       z.lazy(() => DataAwsMicrovm$inboundSchema),
       z.lazy(() => DataAzureSandboxGroup$inboundSchema),
+      z.lazy(() => DataGcpAgentPlatform$inboundSchema),
       z.lazy(() => DataKubernetesPods$inboundSchema),
       z.lazy(() => DataLocal12$inboundSchema),
     ]),

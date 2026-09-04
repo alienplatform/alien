@@ -34,6 +34,14 @@ export type SyncAcquireResponseDeployment = {
   deploymentGroupId: string;
   setupMethod?: DeploymentSetupMethod | undefined;
   /**
+   * Immutable target claimed for this execution, or null for observation-only work.
+   */
+  operationId: string | null;
+  /**
+   * Execution attempt claimed by this manager session, or null for observation-only work.
+   */
+  attemptId: string | null;
+  /**
    * Current deployment state (includes releases)
    */
   current: DeploymentState;
@@ -52,6 +60,8 @@ export const SyncAcquireResponseDeployment$inboundSchema: z.ZodType<
   projectId: z.string(),
   deploymentGroupId: z.string(),
   setupMethod: DeploymentSetupMethod$inboundSchema.optional(),
+  operationId: z.nullable(z.string()),
+  attemptId: z.nullable(z.string()),
   current: DeploymentState$inboundSchema,
   config: DeploymentConfig$inboundSchema,
 });

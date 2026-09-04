@@ -53,6 +53,82 @@ export type SyncReconcileRequestControllerPlatform = ClosedEnum<
   typeof SyncReconcileRequestControllerPlatform
 >;
 
+export const SyncReconcileRequestReason74 = {
+  Forbidden: "forbidden",
+  NotInstalled: "not-installed",
+  ApiUnavailable: "api-unavailable",
+  CollectionFailed: "collection-failed",
+  TimedOut: "timed-out",
+} as const;
+export type SyncReconcileRequestReason74 = ClosedEnum<
+  typeof SyncReconcileRequestReason74
+>;
+
+export const StatusSeverity74 = {
+  Info: "info",
+  Warning: "warning",
+  Error: "error",
+} as const;
+export type StatusSeverity74 = ClosedEnum<typeof StatusSeverity74>;
+
+export type SyncReconcileRequestCollectionIssue74 = {
+  message: string;
+  reason: SyncReconcileRequestReason74;
+  severity: StatusSeverity74;
+  source: string;
+};
+
+export const SyncReconcileRequestHealth77 = {
+  Unknown: "unknown",
+  Healthy: "healthy",
+  Degraded: "degraded",
+  Unhealthy: "unhealthy",
+} as const;
+export type SyncReconcileRequestHealth77 = ClosedEnum<
+  typeof SyncReconcileRequestHealth77
+>;
+
+export const SyncReconcileRequestLifecycle77 = {
+  Unknown: "unknown",
+  Creating: "creating",
+  Updating: "updating",
+  Running: "running",
+  Scaling: "scaling",
+  Stopping: "stopping",
+  Stopped: "stopped",
+  Deleting: "deleting",
+  Deleted: "deleted",
+  Failed: "failed",
+} as const;
+export type SyncReconcileRequestLifecycle77 = ClosedEnum<
+  typeof SyncReconcileRequestLifecycle77
+>;
+
+export type SyncReconcileRequestStatus77 = {
+  collectionIssues: Array<SyncReconcileRequestCollectionIssue74>;
+  health: SyncReconcileRequestHealth77;
+  lifecycle: SyncReconcileRequestLifecycle77;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/**
+ * Local: containers Docker still holds for this sandbox.
+ */
+export type DataLocal12 = {
+  activeSessions: number;
+  /**
+   * Whether the loopback route is serving in this process. False after a manager restart until
+   *
+   * @remarks
+   * the next tick rebinds it.
+   */
+  routeServing: boolean;
+  status: SyncReconcileRequestStatus77;
+  backend: "local";
+};
+
 export const SyncReconcileRequestReason73 = {
   Forbidden: "forbidden",
   NotInstalled: "not-installed",
@@ -114,19 +190,17 @@ export type SyncReconcileRequestStatus76 = {
 };
 
 /**
- * Local: containers Docker still holds for this sandbox.
+ * Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
  */
-export type DataLocal12 = {
+export type DataKubernetesPods = {
   activeSessions: number;
   /**
-   * Whether the loopback route is serving in this process. False after a manager restart until
-   *
-   * @remarks
-   * the next tick rebinds it.
+   * Claimed but unused pods waiting in the pool.
    */
-  routeServing: boolean;
+  idlePods: number;
+  namespace: string;
   status: SyncReconcileRequestStatus76;
-  backend: "local";
+  backend: "kubernetesPods";
 };
 
 export const SyncReconcileRequestReason72 = {
@@ -190,17 +264,25 @@ export type SyncReconcileRequestStatus75 = {
 };
 
 /**
- * Kubernetes: pods carrying the sandbox label, in the deployment's namespace.
+ * GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.
+ *
+ * @remarks
+ *
+ * No session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management
+ * permission set holds. No template state either — emission is gated on reading it `ACTIVE`,
+ * which is what `status` already says.
  */
-export type DataKubernetesPods = {
-  activeSessions: number;
+export type DataGcpAgentPlatform = {
   /**
-   * Claimed but unused pods waiting in the pool.
+   * Reasoning engine the template hangs under, without which the template id names nothing.
    */
-  idlePods: number;
-  namespace: string;
+  engine: string;
   status: SyncReconcileRequestStatus75;
-  backend: "kubernetesPods";
+  /**
+   * The template sessions are currently cut from.
+   */
+  templateId: string;
+  backend: "gcpAgentPlatform";
 };
 
 export const SyncReconcileRequestReason71 = {
@@ -370,6 +452,7 @@ export type DataAwsMicrovm = {
 export type SyncReconcileRequestDataUnion18 =
   | DataAwsMicrovm
   | DataAzureSandboxGroup
+  | DataGcpAgentPlatform
   | DataKubernetesPods
   | DataLocal12;
 
@@ -385,6 +468,7 @@ export type DataSandbox = {
   data:
     | DataAwsMicrovm
     | DataAzureSandboxGroup
+    | DataGcpAgentPlatform
     | DataKubernetesPods
     | DataLocal12;
   resourceType: "sandbox";
@@ -8641,6 +8725,14 @@ export type SyncReconcileRequest = {
    * Lock session (push model only) - verifies lock ownership
    */
   session?: string | undefined;
+  /**
+   * Immutable operation claimed at acquisition. Required with attemptId for update execution.
+   */
+  operationId?: string | undefined;
+  /**
+   * Execution attempt claimed at acquisition. Required with operationId for update execution.
+   */
+  attemptId?: string | undefined;
   state: DeploymentState;
   /**
    * Update heartbeat timestamp (for successful health checks)
@@ -8677,6 +8769,113 @@ export const SyncReconcileRequestBackendEnum$outboundSchema: z.ZodEnum<
 export const SyncReconcileRequestControllerPlatform$outboundSchema: z.ZodEnum<
   typeof SyncReconcileRequestControllerPlatform
 > = z.enum(SyncReconcileRequestControllerPlatform);
+
+/** @internal */
+export const SyncReconcileRequestReason74$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestReason74
+> = z.enum(SyncReconcileRequestReason74);
+
+/** @internal */
+export const StatusSeverity74$outboundSchema: z.ZodEnum<
+  typeof StatusSeverity74
+> = z.enum(StatusSeverity74);
+
+/** @internal */
+export type SyncReconcileRequestCollectionIssue74$Outbound = {
+  message: string;
+  reason: string;
+  severity: string;
+  source: string;
+};
+
+/** @internal */
+export const SyncReconcileRequestCollectionIssue74$outboundSchema: z.ZodType<
+  SyncReconcileRequestCollectionIssue74$Outbound,
+  SyncReconcileRequestCollectionIssue74
+> = z.object({
+  message: z.string(),
+  reason: SyncReconcileRequestReason74$outboundSchema,
+  severity: StatusSeverity74$outboundSchema,
+  source: z.string(),
+});
+
+export function syncReconcileRequestCollectionIssue74ToJSON(
+  syncReconcileRequestCollectionIssue74: SyncReconcileRequestCollectionIssue74,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCollectionIssue74$outboundSchema.parse(
+      syncReconcileRequestCollectionIssue74,
+    ),
+  );
+}
+
+/** @internal */
+export const SyncReconcileRequestHealth77$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestHealth77
+> = z.enum(SyncReconcileRequestHealth77);
+
+/** @internal */
+export const SyncReconcileRequestLifecycle77$outboundSchema: z.ZodEnum<
+  typeof SyncReconcileRequestLifecycle77
+> = z.enum(SyncReconcileRequestLifecycle77);
+
+/** @internal */
+export type SyncReconcileRequestStatus77$Outbound = {
+  collectionIssues: Array<SyncReconcileRequestCollectionIssue74$Outbound>;
+  health: string;
+  lifecycle: string;
+  message?: string | null | undefined;
+  partial: boolean;
+  stale: boolean;
+};
+
+/** @internal */
+export const SyncReconcileRequestStatus77$outboundSchema: z.ZodType<
+  SyncReconcileRequestStatus77$Outbound,
+  SyncReconcileRequestStatus77
+> = z.object({
+  collectionIssues: z.array(
+    z.lazy(() => SyncReconcileRequestCollectionIssue74$outboundSchema),
+  ),
+  health: SyncReconcileRequestHealth77$outboundSchema,
+  lifecycle: SyncReconcileRequestLifecycle77$outboundSchema,
+  message: z.nullable(z.string()).optional(),
+  partial: z.boolean(),
+  stale: z.boolean(),
+});
+
+export function syncReconcileRequestStatus77ToJSON(
+  syncReconcileRequestStatus77: SyncReconcileRequestStatus77,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestStatus77$outboundSchema.parse(
+      syncReconcileRequestStatus77,
+    ),
+  );
+}
+
+/** @internal */
+export type DataLocal12$Outbound = {
+  activeSessions: number;
+  routeServing: boolean;
+  status: SyncReconcileRequestStatus77$Outbound;
+  backend: "local";
+};
+
+/** @internal */
+export const DataLocal12$outboundSchema: z.ZodType<
+  DataLocal12$Outbound,
+  DataLocal12
+> = z.object({
+  activeSessions: z.int(),
+  routeServing: z.boolean(),
+  status: z.lazy(() => SyncReconcileRequestStatus77$outboundSchema),
+  backend: z.literal("local"),
+});
+
+export function dataLocal12ToJSON(dataLocal12: DataLocal12): string {
+  return JSON.stringify(DataLocal12$outboundSchema.parse(dataLocal12));
+}
 
 /** @internal */
 export const SyncReconcileRequestReason73$outboundSchema: z.ZodEnum<
@@ -8763,26 +8962,32 @@ export function syncReconcileRequestStatus76ToJSON(
 }
 
 /** @internal */
-export type DataLocal12$Outbound = {
+export type DataKubernetesPods$Outbound = {
   activeSessions: number;
-  routeServing: boolean;
+  idlePods: number;
+  namespace: string;
   status: SyncReconcileRequestStatus76$Outbound;
-  backend: "local";
+  backend: "kubernetesPods";
 };
 
 /** @internal */
-export const DataLocal12$outboundSchema: z.ZodType<
-  DataLocal12$Outbound,
-  DataLocal12
+export const DataKubernetesPods$outboundSchema: z.ZodType<
+  DataKubernetesPods$Outbound,
+  DataKubernetesPods
 > = z.object({
   activeSessions: z.int(),
-  routeServing: z.boolean(),
+  idlePods: z.int(),
+  namespace: z.string(),
   status: z.lazy(() => SyncReconcileRequestStatus76$outboundSchema),
-  backend: z.literal("local"),
+  backend: z.literal("kubernetesPods"),
 });
 
-export function dataLocal12ToJSON(dataLocal12: DataLocal12): string {
-  return JSON.stringify(DataLocal12$outboundSchema.parse(dataLocal12));
+export function dataKubernetesPodsToJSON(
+  dataKubernetesPods: DataKubernetesPods,
+): string {
+  return JSON.stringify(
+    DataKubernetesPods$outboundSchema.parse(dataKubernetesPods),
+  );
 }
 
 /** @internal */
@@ -8870,31 +9075,29 @@ export function syncReconcileRequestStatus75ToJSON(
 }
 
 /** @internal */
-export type DataKubernetesPods$Outbound = {
-  activeSessions: number;
-  idlePods: number;
-  namespace: string;
+export type DataGcpAgentPlatform$Outbound = {
+  engine: string;
   status: SyncReconcileRequestStatus75$Outbound;
-  backend: "kubernetesPods";
+  templateId: string;
+  backend: "gcpAgentPlatform";
 };
 
 /** @internal */
-export const DataKubernetesPods$outboundSchema: z.ZodType<
-  DataKubernetesPods$Outbound,
-  DataKubernetesPods
+export const DataGcpAgentPlatform$outboundSchema: z.ZodType<
+  DataGcpAgentPlatform$Outbound,
+  DataGcpAgentPlatform
 > = z.object({
-  activeSessions: z.int(),
-  idlePods: z.int(),
-  namespace: z.string(),
+  engine: z.string(),
   status: z.lazy(() => SyncReconcileRequestStatus75$outboundSchema),
-  backend: z.literal("kubernetesPods"),
+  templateId: z.string(),
+  backend: z.literal("gcpAgentPlatform"),
 });
 
-export function dataKubernetesPodsToJSON(
-  dataKubernetesPods: DataKubernetesPods,
+export function dataGcpAgentPlatformToJSON(
+  dataGcpAgentPlatform: DataGcpAgentPlatform,
 ): string {
   return JSON.stringify(
-    DataKubernetesPods$outboundSchema.parse(dataKubernetesPods),
+    DataGcpAgentPlatform$outboundSchema.parse(dataGcpAgentPlatform),
   );
 }
 
@@ -9120,6 +9323,7 @@ export function dataAwsMicrovmToJSON(dataAwsMicrovm: DataAwsMicrovm): string {
 export type SyncReconcileRequestDataUnion18$Outbound =
   | DataAwsMicrovm$Outbound
   | DataAzureSandboxGroup$Outbound
+  | DataGcpAgentPlatform$Outbound
   | DataKubernetesPods$Outbound
   | DataLocal12$Outbound;
 
@@ -9130,6 +9334,7 @@ export const SyncReconcileRequestDataUnion18$outboundSchema: z.ZodType<
 > = z.union([
   z.lazy(() => DataAwsMicrovm$outboundSchema),
   z.lazy(() => DataAzureSandboxGroup$outboundSchema),
+  z.lazy(() => DataGcpAgentPlatform$outboundSchema),
   z.lazy(() => DataKubernetesPods$outboundSchema),
   z.lazy(() => DataLocal12$outboundSchema),
 ]);
@@ -9149,6 +9354,7 @@ export type DataSandbox$Outbound = {
   data:
     | DataAwsMicrovm$Outbound
     | DataAzureSandboxGroup$Outbound
+    | DataGcpAgentPlatform$Outbound
     | DataKubernetesPods$Outbound
     | DataLocal12$Outbound;
   resourceType: "sandbox";
@@ -9162,6 +9368,7 @@ export const DataSandbox$outboundSchema: z.ZodType<
   data: z.union([
     z.lazy(() => DataAwsMicrovm$outboundSchema),
     z.lazy(() => DataAzureSandboxGroup$outboundSchema),
+    z.lazy(() => DataGcpAgentPlatform$outboundSchema),
     z.lazy(() => DataKubernetesPods$outboundSchema),
     z.lazy(() => DataLocal12$outboundSchema),
   ]),
@@ -26013,6 +26220,8 @@ export function resourceHeartbeatToJSON(
 export type SyncReconcileRequest$Outbound = {
   deploymentId: string;
   session?: string | undefined;
+  operationId?: string | undefined;
+  attemptId?: string | undefined;
   state: DeploymentState$Outbound;
   updateHeartbeat?: boolean | undefined;
   suggestedDelayMs?: number | undefined;
@@ -26029,6 +26238,8 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   session: z.string().optional(),
+  operationId: z.string().optional(),
+  attemptId: z.string().optional(),
   state: DeploymentState$outboundSchema,
   updateHeartbeat: z.boolean().optional(),
   suggestedDelayMs: z.int().optional(),

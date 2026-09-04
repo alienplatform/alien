@@ -15,14 +15,14 @@ let value: ResolveBindingResponseS3 = {
     accountId: "<id>",
     credentials: {
       accessKeyId: "<id>",
-      expiresAt: "1755867390141",
+      expiresAt: "1744601542027",
       secretAccessKey: "<value>",
       sessionToken: "<value>",
       type: "sessionCredentials",
     },
     region: "<value>",
   },
-  expiresAt: "1750122153944",
+  expiresAt: "1755867390141",
   service: "s3",
 };
 ```

@@ -30,6 +30,10 @@ export type InitializeRequest = {
   platform?: PlatformEnum | null | undefined;
   scope?: string | null | undefined;
   /**
+   * Customer setup item selected from the deployment-group contract.
+   */
+  setupItem?: string | null | undefined;
+  /**
    * Setup method that is registering this deployment, such as `manual` for
    *
    * @remarks
@@ -48,6 +52,7 @@ export type InitializeRequest$Outbound = {
   permission?: string | null | undefined;
   platform?: string | null | undefined;
   scope?: string | null | undefined;
+  setupItem?: string | null | undefined;
   setupMethod?: string | null | undefined;
   stackSettings?: StackSettings$Outbound | null | undefined;
 };
@@ -64,6 +69,7 @@ export const InitializeRequest$outboundSchema: z.ZodType<
   permission: z.nullable(z.string()).optional(),
   platform: z.nullable(PlatformEnum$outboundSchema).optional(),
   scope: z.nullable(z.string()).optional(),
+  setupItem: z.nullable(z.string()).optional(),
   setupMethod: z.nullable(z.string()).optional(),
   stackSettings: z.nullable(StackSettings$outboundSchema).optional(),
 });
