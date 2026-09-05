@@ -28,26 +28,6 @@ function parseJobs(source) {
   return jobs
 }
 
-const stableJobs = [
-  "prepare",
-  "generate-changelog",
-  "publish-crates",
-  "publish-npm",
-  "publish-client-sdks",
-  "build-addon",
-  "smoke-addon",
-  "publish-bindings",
-  "build-binaries-linux-x86_64",
-  "build-binaries-linux-aarch64",
-  "build-binaries-darwin",
-  "build-binaries-windows",
-  "upload-binaries",
-  "create-github-release",
-  "publish-images",
-  "publish-homebrew-tap",
-  "publish-npm-cli-wrapper",
-]
-
 test("stable remains the default release mode", () => {
   assert.match(
     workflow,
@@ -75,15 +55,11 @@ test("dev publication passes npm an unambiguous local tarball path", () => {
 
 test("dev mode can reach only the reusable npm dev workflow", () => {
   const jobs = parseJobs(workflow)
-  assert.deepEqual([...jobs.keys()].sort(), ["publish-npm-dev", ...stableJobs].sort())
   assert.equal(jobs.get("publish-npm-dev").if, "inputs.mode == 'dev'")
   assert.equal(jobs.get("publish-npm-dev").uses, "./.github/workflows/publish-npm-dev.yml")
 
-  for (const name of stableJobs) {
-    assert.match(
-      jobs.get(name).if,
-      /inputs\.mode == 'stable'/,
-      `${name} must be unreachable in dev mode`,
-    )
+  for (const [name, job] of jobs) {
+    if (name === "publish-npm-dev") continue
+    assert.match(job.if, /inputs\.mode == 'stable'/, `${name} must be unreachable in dev mode`)
   }
 })
