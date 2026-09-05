@@ -51,7 +51,7 @@ jobs:
         with:
           version: v0.16.0
 
-      - uses: taiki-e/install-action@43cb5d9d3c33252b8482ffa34f4e609859a530d8 # cargo-nextest
+      - uses: taiki-e/install-action@fa28440a40dbcbcc38d3dffc79221f2401656563 # cargo-nextest
         with:
           tool: cargo-nextest
 
@@ -302,7 +302,7 @@ jobs:
         with:
           toolchain: nightly
 
-      - uses: taiki-e/install-action@43cb5d9d3c33252b8482ffa34f4e609859a530d8 # cargo-nextest
+      - uses: taiki-e/install-action@fa28440a40dbcbcc38d3dffc79221f2401656563 # cargo-nextest
         if: steps.survived.outputs.stack == 'present'
         with:
           tool: cargo-nextest
