@@ -107,6 +107,9 @@ const GENERIC_BINDINGS_CODE = "BINDINGS_ERROR"
 /** Envelope codes the wrapper maps to a dedicated typed error. */
 const BINDING_NOT_CONFIGURED = "BINDING_NOT_CONFIGURED"
 
+/** Envelope code for an operation the sandbox never reported the outcome of. */
+const SANDBOX_OUTCOME_UNKNOWN = "SANDBOX_OUTCOME_UNKNOWN"
+
 /** The structured payload the addon serializes into `err.message`. */
 interface NapiErrorEnvelope {
   code: string
@@ -194,6 +197,17 @@ export function unwrapNapiError(err: unknown): AlienError {
     hint: envelope.hint,
     context,
   })
+}
+
+/**
+ * Whether a sandbox operation was dispatched without reporting what it did.
+ *
+ * Callers branch on the envelope's code rather than on the message, which is prose and free to
+ * change. A caller that must not run an operation twice reads this: anything else either reached
+ * the sandbox and was answered, or never left.
+ */
+export function isSandboxOutcomeUnknown(error: unknown): error is AlienError {
+  return error instanceof AlienError && error.code === SANDBOX_OUTCOME_UNKNOWN
 }
 
 // Shared with the AI binding surface in @alienplatform/ai-gateway.

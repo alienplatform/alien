@@ -1120,11 +1120,9 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
         }));
     }
     if !saw_terminal {
-        frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: "outcomeUnknown".to_string(),
-            reason: "the command's output ended without a terminal frame, so whether it finished \
-                     is unknown"
-                .to_string(),
+        frames.push(Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+            operation: RUN_COMMAND.to_string(),
+            reason: "the command's output ended without a terminal frame".to_string(),
         })));
     }
     Ok(frames)

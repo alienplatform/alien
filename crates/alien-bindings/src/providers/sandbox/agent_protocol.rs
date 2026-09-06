@@ -214,9 +214,9 @@ fn deadline_millis(deadline: Duration) -> u64 {
 /// twice, and the refusal must not carry the retry signal.
 fn unanswered(operation: &str, reason: &str) -> ErrorData {
     if operation == RUN_COMMAND {
-        return ErrorData::SandboxCommandFailed {
-            failure: "outcomeUnknown".to_string(),
-            reason: format!("{reason}; the command may have started, its outcome is unknown"),
+        return ErrorData::SandboxOutcomeUnknown {
+            operation: operation.to_string(),
+            reason: reason.to_string(),
         };
     }
     ErrorData::SandboxUnreachable {
@@ -256,49 +256,22 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
     // two would let a dropped connection claim the request never arrived.
     let body = match response.text().await {
         Ok(body) => body,
-        // Unknown, and said so: for `run_command` a repeat could run it twice, so it is marked
-        // non-retryable; the file operations are idempotent and keep the retryable classification
-        // they had before the read failed.
-        Err(error) if operation == RUN_COMMAND => {
-            return Err(error)
-                .into_alien_error()
-                .context(ErrorData::SandboxCommandFailed {
-                    failure: "outcomeUnknown".to_string(),
-                    reason: format!(
-                        "{operation} returned {status} and its body could not be read, so whether \
-                         it ran is unknown"
-                    ),
-                })
-        }
         Err(error) => {
-            return Err(error)
-                .into_alien_error()
-                .context(ErrorData::SandboxUnreachable {
-                    operation: operation.to_string(),
-                    reason: format!("{operation} returned {status} and its body could not be read"),
-                })
+            return Err(error).into_alien_error().context(unanswered(
+                operation,
+                &format!("{operation} returned {status} and its body could not be read"),
+            ))
         }
     };
 
     // A 5xx with no body is the cloud's proxy, not the agent — it answers 502/503/504 that way
-    // when it cannot reach the guest, but can also synthesize one after delivering the request,
-    // so `run_command` reports an unknown outcome rather than never-delivered.
+    // when it cannot reach the guest, but can also synthesize one after delivering the request, so
+    // this cannot claim the request never arrived.
     if status.is_server_error() && body.trim().is_empty() {
-        if operation == RUN_COMMAND {
-            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "outcomeUnknown".to_string(),
-                reason: format!(
-                    "the sandbox host returned {status} with no response from the agent, so \
-                     whether the command ran is unknown"
-                ),
-            }));
-        }
-        return Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: operation.to_string(),
-            reason: format!(
-                "the sandbox host returned {status} before the request reached the agent"
-            ),
-        }));
+        return Err(AlienError::new(unanswered(
+            operation,
+            &format!("the sandbox host returned {status} with no response from the agent"),
+        )));
     }
 
     // A 5xx is the agent failing to complete a request it accepted, which is worth another
@@ -353,7 +326,11 @@ fn frame_stream(
                     Ok(frame) => frame,
                     Err(error) => {
                         state.finished = true;
-                        let failure = malformed(&error.to_string(), state.provider);
+                        // Classified like the decode arms in `into_output`, and for the same
+                        // reason: the frame arrived, so the command ran.
+                        let failure = Err::<(), _>(malformed(&error.to_string(), state.provider))
+                            .context(unanswered(RUN_COMMAND, "an output frame did not parse"))
+                            .expect_err("the Err arm is constructed on the line above");
                         return Some((Err(failure), state));
                     }
                 };
@@ -407,13 +384,18 @@ fn frame_stream(
 impl AgentFrame {
     fn into_output(self, provider: &'static str) -> Result<CommandOutput> {
         match self {
+            // A frame that arrived is proof the command ran, so a payload that will not decode
+            // leaves the outcome unestablished rather than merely malformed — reading it as a
+            // format problem would let a caller repeat a command that already executed.
             Self::Stdout { seq, data } => Ok(CommandOutput::Stdout {
                 seq,
-                data: decode(&data, provider, RUN_COMMAND, "data")?,
+                data: decode(&data, provider, RUN_COMMAND, "data")
+                    .context(unanswered(RUN_COMMAND, "an output frame did not decode"))?,
             }),
             Self::Stderr { seq, data } => Ok(CommandOutput::Stderr {
                 seq,
-                data: decode(&data, provider, RUN_COMMAND, "data")?,
+                data: decode(&data, provider, RUN_COMMAND, "data")
+                    .context(unanswered(RUN_COMMAND, "an output frame did not decode"))?,
             }),
             Self::Exit { code, truncated } => Ok(CommandOutput::Exit { code, truncated }),
             // An error frame is the command's outcome, so it surfaces as an error rather than
@@ -530,8 +512,8 @@ mod tests {
             !rendered.contains("agentRefused"),
             "a proxy 502 is not the agent refusing: {rendered}"
         );
-        assert!(
-            rendered.contains("outcomeUnknown"),
+        assert_eq!(
+            error.code, "SANDBOX_OUTCOME_UNKNOWN",
             "a proxy can synthesize a 502 after the agent accepted the request, so the caller has \
              to be told the outcome is unknown rather than that it is safe to repeat: {rendered}"
         );
@@ -548,8 +530,8 @@ mod tests {
             rendered.contains("spawn failed: ENOMEM"),
             "the agent's cause has to survive: {rendered}"
         );
-        assert!(
-            !rendered.contains("outcomeUnknown"),
+        assert_ne!(
+            error.code, "SANDBOX_OUTCOME_UNKNOWN",
             "the agent answered with its own cause, so the outcome is not unknown: {rendered}"
         );
     }
@@ -686,13 +668,13 @@ mod tests {
         .await
         .expect_err("a dropped connection is a refusal, not a response");
 
-        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
         assert!(
             !error.retryable,
             "a command that may have started must not be retried: {error}"
         );
         assert!(
-            error.to_string().contains("may have started"),
+            error.to_string().contains("may have taken effect"),
             "the refusal says the outcome is unknown: {error}"
         );
     }
@@ -710,14 +692,14 @@ mod tests {
         .await
         .expect_err("a stalled agent must be refused, not waited on");
 
-        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
         assert!(
             !error.retryable,
             "a command with an unknown outcome must not be retried: {error}"
         );
         assert!(
             error.to_string().contains("did not answer")
-                && error.to_string().contains("may have started"),
+                && error.to_string().contains("may have taken effect"),
             "the refusal says the agent stalled and the outcome is unknown: {error}"
         );
     }
@@ -811,6 +793,43 @@ mod tests {
         );
     }
 
+    /// A frame that arrived is proof the command ran, so a payload that will not decode leaves the
+    /// outcome unestablished. Reported as a format problem it would read as safe to repeat, and the
+    /// repeat would be a second execution.
+    #[tokio::test]
+    async fn a_frame_that_arrives_but_does_not_decode_leaves_the_outcome_unknown() {
+        let outputs = frames_from(vec!["{\"t\":\"stdout\",\"seq\":0,\"data\":\"!!not base64!!\"}\n"]).await;
+
+        let error = outputs[0]
+            .as_ref()
+            .expect_err("a payload that does not decode is not output");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+        assert!(
+            !error.retryable,
+            "the command ran; a repeat would run it twice: {error}"
+        );
+        // The cause survives, so the reader still learns what was wrong with the frame.
+        assert!(
+            error.to_string().contains("base64"),
+            "the decode failure must stay in the chain: {error}"
+        );
+    }
+
+    /// A line that does not parse arrives the same way a decodable one does, so it carries the same
+    /// proof that the command ran.
+    #[tokio::test]
+    async fn a_frame_that_does_not_parse_leaves_the_outcome_unknown() {
+        let outputs = frames_from(vec!["{not json at all}\n"]).await;
+
+        let error = outputs[0].as_ref().expect_err("a malformed frame is not output");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+        assert!(!error.retryable, "the command ran: {error}");
+        assert!(
+            error.to_string().contains("did not parse"),
+            "the parse failure must stay in the chain: {error}"
+        );
+    }
+
     /// A body that stops early looks exactly like a command that produced less output — the
     /// difference is only visible in the missing terminal frame. The command had started, so
     /// its end is unknown, and a retry could run it twice: the refusal must not invite one.
@@ -827,7 +846,7 @@ mod tests {
             error.to_string().contains("without a terminal frame"),
             "the failure must name the cause: {error}"
         );
-        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
         assert!(
             !error.retryable,
             "a command that started and whose end was lost must not be retried: {error}"

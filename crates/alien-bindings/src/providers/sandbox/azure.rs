@@ -118,12 +118,9 @@ impl AzureSandbox {
         }
 
         if operation == RUN_COMMAND || operation == CREATE {
-            return error.context(ErrorData::SandboxCommandFailed {
-                failure: "outcomeUnknown".to_string(),
-                reason: format!(
-                    "{operation} did not complete against the Azure sandbox data plane, so \
-                     whether it took effect is unknown"
-                ),
+            return error.context(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: "the Azure sandbox data plane did not complete the call".to_string(),
             });
         }
 
@@ -2164,7 +2161,7 @@ mod tests {
             Ok(_) => panic!("an unavailable data plane is an error"),
             Err(error) => error,
         };
-        assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
+        assert_eq!(command.code, "SANDBOX_OUTCOME_UNKNOWN", "{command}");
         assert!(
             !command.retryable,
             "the command may already be running, so a retry would run it twice: {command}"

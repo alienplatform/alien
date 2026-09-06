@@ -241,6 +241,22 @@ mod tests {
         }
     }
 
+    /// The code and `retryable` flag have to survive the napi boundary, and neither side's tests
+    /// can see that alone: the Rust tests stop at the error, the TypeScript tests start at the
+    /// envelope.
+    #[test]
+    fn an_unknown_outcome_reaches_typescript_as_a_code_and_a_retry_flag() {
+        let napi_err = map_alien_error(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+            operation: "sandbox.runCommand".to_string(),
+            reason: "the request never reached the agent".to_string(),
+        }));
+
+        let env = envelope_of(&napi_err);
+        assert_eq!(env["code"], "SANDBOX_OUTCOME_UNKNOWN");
+        assert_eq!(env["retryable"], false);
+        assert_eq!(env["context"]["operation"], "sandbox.runCommand");
+    }
+
     /// `retryable` must survive translation (STORAGE_OPERATION_FAILED is
     /// retryable, BINDING_NOT_CONFIGURED is not).
     #[test]

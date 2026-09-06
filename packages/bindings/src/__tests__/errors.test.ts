@@ -1,6 +1,10 @@
 import { AlienError } from "@alienplatform/core"
 import { describe, expect, it } from "vitest"
-import { BindingNotConfiguredError, unwrapNapiError } from "../errors.js"
+import {
+  BindingNotConfiguredError,
+  isSandboxOutcomeUnknown,
+  unwrapNapiError,
+} from "../errors.js"
 
 /** Build a napi-style error whose message carries the addon envelope. */
 function napiError(envelope: unknown): Error {
@@ -75,5 +79,24 @@ describe("unwrapNapiError", () => {
     const err = unwrapNapiError("boom")
     expect(err.code).toBe("BINDINGS_ERROR")
     expect(err.message).toBe("boom")
+  })
+})
+
+describe("isSandboxOutcomeUnknown", () => {
+  // Asserted against the envelope the addon actually emits rather than a hand-built AlienError:
+  // the envelope shape is the contract, and a hand-built object cannot break when it changes.
+  const napiError = (code: string) =>
+    new Error(JSON.stringify({ code, message: "m", retryable: false, internal: false }))
+
+  it("recognizes an operation the sandbox never reported the outcome of", () => {
+    expect(isSandboxOutcomeUnknown(unwrapNapiError(napiError("SANDBOX_OUTCOME_UNKNOWN")))).toBe(true)
+  })
+
+  it("does not recognize a failure the sandbox answered", () => {
+    expect(isSandboxOutcomeUnknown(unwrapNapiError(napiError("SANDBOX_COMMAND_FAILED")))).toBe(false)
+  })
+
+  it("does not recognize a value that is not an alien error", () => {
+    expect(isSandboxOutcomeUnknown(new Error("SANDBOX_OUTCOME_UNKNOWN"))).toBe(false)
   })
 })

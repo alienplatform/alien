@@ -46,6 +46,7 @@ export {
   BindingNotFoundError,
   defineError,
   InvalidPostgresTlsConfigError,
+  isSandboxOutcomeUnknown,
   UnknownPostgresSslModeError,
   UnknownSandboxValueError,
 } from "./errors.js"
