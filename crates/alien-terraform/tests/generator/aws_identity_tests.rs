@@ -392,10 +392,19 @@ fn aws_sandbox_refuses_an_egress_mode_it_cannot_deliver() {
     }
 }
 
+/// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
+/// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
+/// were taken with.
+const LIVE_BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
+
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
+    sandbox_fixture_with(egress, "s3://acme-artifacts/agents/bundle.zip")
+}
+
+fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
-            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            image: image.to_string(),
         })
         .egress(egress)
         .session(SandboxSessionPolicy {
@@ -451,7 +460,10 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
                 .build(),
             ResourceLifecycle::Frozen,
         )
-        .add(sandbox_fixture(egress), ResourceLifecycle::Live)
+        .add(
+            sandbox_fixture_with(egress, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
         .build();
     (stack, settings)
 }
@@ -487,9 +499,23 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         "the connector the build and the session are passed must still be installed:\n{rendered}"
     );
 
+    let statements = build_policy_statements(&rendered);
+
+    // The grant a runtime rebuild needs, and the assertion that keeps this module and the
+    // CloudFormation one from installing different roles for one declaration: both derive the
+    // prefix through `alien_core::stable_bundle_key_prefix`, and both must render it.
+    let bundle = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "ReadSandboxBundlePrefix")
+        .unwrap_or_else(|| panic!("a Live build role must read its bundle: {statements:#?}"));
+    assert_eq!(
+        bundle["Resource"],
+        "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/sandbox-bundle/*",
+        "a Live role reads the prefix the moving key stays inside, not the one object"
+    );
+
     // The runtime build's base image comes from a private registry, and the identity itself
     // needs all three actions — a repository policy on the registry side is not enough.
-    let statements = build_policy_statements(&rendered);
     let allow = statements
         .iter()
         .find(|statement| statement["Sid"] == "PullSandboxBaseImage")

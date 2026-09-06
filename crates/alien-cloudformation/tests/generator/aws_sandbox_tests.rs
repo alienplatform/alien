@@ -10,10 +10,19 @@ use alien_core::{
     StackSettings, Worker, WorkerCode,
 };
 
+/// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
+/// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
+/// were taken with.
+const LIVE_BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
+
 fn sandbox_fixture(egress: SandboxEgress) -> Sandbox {
+    sandbox_fixture_with(egress, "s3://acme-artifacts/agents/bundle.zip")
+}
+
+fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
     Sandbox::new("agents".to_string())
         .code(SandboxCode::Image {
-            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+            image: image.to_string(),
         })
         .egress(egress)
         .session(SandboxSessionPolicy {
@@ -47,7 +56,13 @@ fn sandbox_stack_with_lifecycle(
                 .build(),
             ResourceLifecycle::Frozen,
         )
-        .add(sandbox_fixture(egress), lifecycle)
+        .add(
+            match lifecycle {
+                ResourceLifecycle::Live => sandbox_fixture_with(egress, LIVE_BUNDLE),
+                _ => sandbox_fixture(egress),
+            },
+            lifecycle,
+        )
         .build();
     (stack, settings)
 }
@@ -67,6 +82,19 @@ fn build_role_statements(template: &alien_cloudformation::CfTemplate) -> Vec<ser
         .as_array()
         .unwrap_or_else(|| panic!("the build policy statements must be a list: {role:#}"))
         .clone()
+}
+
+/// The `Fn::Sub` text of the statement granting `s3:GetObject`, which is the bundle grant.
+fn bundle_grant(template: &alien_cloudformation::CfTemplate) -> String {
+    let statements = build_role_statements(template);
+    let grant = statements
+        .iter()
+        .find(|statement| statement["Action"] == serde_json::json!(["s3:GetObject"]))
+        .unwrap_or_else(|| panic!("the build role must read its bundle: {statements:#?}"));
+    grant["Resource"]["Fn::Sub"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the grant must be partition-qualified through Sub: {grant:#}"))
+        .to_string()
 }
 
 /// Whether a parsed IAM statement carries any `ecr:` action.
@@ -265,6 +293,46 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
     );
 }
 
+/// A grant naming the one object the template was generated with denies the build the first
+/// time the base image changes its key — exactly the update Live exists to avoid. The Frozen
+/// case here is the mutation guard: the same code path must not widen its grant too.
+#[test]
+fn only_a_live_build_role_reads_the_bundle_prefix() {
+    let (live, live_settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-live-grant",
+        SandboxEgress::Deny,
+        ResourceLifecycle::Live,
+    );
+    let (live_template, _yaml) = render_built_ins_template(
+        &live,
+        live_settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live sandbox",
+    );
+    let (frozen, frozen_settings) = sandbox_stack("acme-sandbox-frozen-grant", SandboxEgress::Deny);
+    let (frozen_template, _yaml) = render_built_ins_template(
+        &frozen,
+        frozen_settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "frozen sandbox",
+    );
+
+    assert_eq!(
+        bundle_grant(&frozen_template),
+        "arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip",
+        "a Frozen role reads the one object its template names, and nothing else"
+    );
+    assert_eq!(
+        bundle_grant(&live_template),
+        "arn:${AWS::Partition}:s3:::acme-artifacts/sandbox-bundle/*",
+        "a Live role reads the prefix the moving key stays inside"
+    );
+}
+
 /// The Frozen path is the one every installed stack is on.
 #[test]
 fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
@@ -331,7 +399,7 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
 fn an_open_live_sandbox_ships_only_the_build_role() {
     let stack = Stack::new("acme-sandbox-open-live".to_string())
         .add(
-            sandbox_fixture(SandboxEgress::Allow),
+            sandbox_fixture_with(SandboxEgress::Allow, LIVE_BUNDLE),
             ResourceLifecycle::Live,
         )
         .build();
