@@ -691,8 +691,8 @@ async fn a_job_error_object_becomes_a_stream_error() {
 
 /// The write-once / read-retries split, pinned in one test so neither half can pass on the
 /// absence of the other. A mutating `:execute` that fails is delivered exactly once — it may have
-/// already run, and re-sending it could double a side effect — while a read is polled until the
-/// session settles. Mutation check: give `execute_op` a retry loop and `execute`'s `.times(1)`
+/// already run, so its outcome is unestablished and re-sending it could double a side effect —
+/// while a read is polled until the session settles. Mutation check: give `execute_op` a retry loop and `execute`'s `.times(1)`
 /// fails; remove `terminate`'s poll and the read count collapses to one.
 #[tokio::test(start_paused = true)]
 async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
@@ -733,7 +733,11 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
     else {
         panic!("a mutating command whose execute fails is refused, not retried into success");
     };
-    assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
+    assert_eq!(command.code, "SANDBOX_OUTCOME_UNKNOWN", "{command}");
+    assert!(
+        !command.retryable,
+        "the call may have started the command, so it is delivered once: {command}"
+    );
 
     sut.terminate("s1")
         .await
@@ -1024,6 +1028,47 @@ fn an_output_without_a_terminal_frame_is_an_unknown_outcome() {
         error.to_string().contains("without a terminal frame"),
         "{error}"
     );
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+    assert!(
+        !error.retryable,
+        "the command started and its end was lost, so a repeat would run it twice: {error}"
+    );
+}
+
+/// A frame that arrived is proof the command ran, so a payload that will not decode leaves the
+/// outcome unestablished. Reported as a response-format problem it would read as safe to repeat.
+#[test]
+fn a_frame_that_does_not_decode_leaves_the_outcome_unknown() {
+    let frames = parse_exec_frames(&ndjson(&[serde_json::json!({
+        "t": "stdout",
+        "seq": 0,
+        "data": "!!not base64!!",
+    })]))
+    .expect("frames parse");
+
+    let error = frames[0]
+        .as_ref()
+        .expect_err("a payload that does not decode is not output");
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+    assert!(
+        error.to_string().contains("base64"),
+        "the decode failure must stay in the chain: {error}"
+    );
+}
+
+/// The same rule for a line that does not parse once frames have already arrived.
+#[test]
+fn a_frame_that_does_not_parse_after_output_leaves_the_outcome_unknown() {
+    let mut body = ndjson(&[stdout_frame(0, b"partial")]);
+    body.extend_from_slice(b"{not json at all}\n");
+
+    let frames = parse_exec_frames(&body).expect("frames parse");
+    let error = frames
+        .last()
+        .expect("a trailing item")
+        .as_ref()
+        .expect_err("a malformed frame is not output");
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
 }
 
 /// A body that is not frames at all is the agent's refusal, not a command's output.

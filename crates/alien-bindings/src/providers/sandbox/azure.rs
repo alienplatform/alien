@@ -359,12 +359,18 @@ impl Sandbox for AzureSandbox {
                 ),
             })));
         } else {
-            frames.push(Ok(CommandOutput::Exit {
-                // A missing exit code is not success. Azure did not report one, so the command's
-                // outcome is unknown, and -1 says that rather than claiming zero.
-                code: result.exit_code.unwrap_or(-1),
-                truncated: false,
-            }));
+            match result.exit_code {
+                Some(code) => frames.push(Ok(CommandOutput::Exit {
+                    code,
+                    truncated: false,
+                })),
+                // Azure reported no exit code, so the command's outcome was never established.
+                // Any invented code is indistinguishable from one the command really exited with.
+                None => frames.push(Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the data plane returned no exit code for the command".to_string(),
+                }))),
+            }
         }
 
         Ok(Box::pin(stream::iter(frames)))

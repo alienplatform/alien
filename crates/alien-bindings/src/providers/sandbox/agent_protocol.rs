@@ -22,7 +22,7 @@ use serde_json::json;
 
 use crate::error::{ErrorData, Result};
 use crate::traits::{CommandOutput, RunCommandRequest};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 pub use alien_core::sandbox_process::AGENT_PORT;
 
@@ -264,24 +264,16 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
         }
     };
 
-    // A 5xx with no body is the cloud's proxy, not the agent — it answers 502/503/504 that way
-    // when it cannot reach the guest, but can also synthesize one after delivering the request, so
-    // this cannot claim the request never arrived.
-    if status.is_server_error() && body.trim().is_empty() {
+    // A 5xx never proves the agent answered, with or without a body: the cloud's proxy emits them
+    // too, and a 504 means the request reached the guest and no answer came back in time. A body
+    // is no evidence either way — a proxy's error page is a body. So a 5xx is the unanswered case,
+    // which for the idempotent file operations is still safe to repeat and for `run_command` is
+    // not. A 4xx is the agent refusing before it does anything, which is an answer.
+    if status.is_server_error() {
         return Err(AlienError::new(unanswered(
             operation,
-            &format!("the sandbox host returned {status} with no response from the agent"),
+            &format!("the sandbox host returned {status}: {body}"),
         )));
-    }
-
-    // A 5xx is the agent failing to complete a request it accepted, which is worth another
-    // attempt — except for `run_command`, where the command may already be running and a retry
-    // would run it twice. A 4xx is a refusal: repeating it repeats the refusal.
-    if status.is_server_error() && operation != RUN_COMMAND {
-        return Err(AlienError::new(ErrorData::SandboxUnreachable {
-            operation: operation.to_string(),
-            reason: format!("the agent returned {status}: {body}"),
-        }));
     }
 
     Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -326,11 +318,11 @@ fn frame_stream(
                     Ok(frame) => frame,
                     Err(error) => {
                         state.finished = true;
+                        state.buffer.clear();
                         // Classified like the decode arms in `into_output`, and for the same
                         // reason: the frame arrived, so the command ran.
-                        let failure = Err::<(), _>(malformed(&error.to_string(), state.provider))
-                            .context(unanswered(RUN_COMMAND, "an output frame did not parse"))
-                            .expect_err("the Err arm is constructed on the line above");
+                        let failure = malformed(&error.to_string(), state.provider)
+                            .context(unanswered(RUN_COMMAND, "an output frame did not parse"));
                         return Some((Err(failure), state));
                     }
                 };
@@ -340,6 +332,14 @@ fn frame_stream(
                 }
 
                 let output = frame.into_output(state.provider);
+                // A failure here ends the stream. Yielding whatever the buffer still holds would
+                // let a later exit frame answer the question this item just reported as
+                // unanswerable, and which of the two a caller believes would depend only on
+                // whether it stopped at the first error.
+                if output.is_err() {
+                    state.finished = true;
+                    state.buffer.clear();
+                }
                 return Some((output, state));
             }
 
@@ -519,20 +519,46 @@ mod tests {
         );
     }
 
-    /// The counterpart: the agent puts its cause in the body, and that is a real refusal which
-    /// must stay distinguishable from the transport failing to deliver the request.
+    /// A body is not evidence of who sent it: a proxy's error page is a body too, and a 504 in
+    /// particular means the request reached the guest. The cause still has to survive for whoever
+    /// reads the failure.
     #[tokio::test]
-    async fn a_server_error_carrying_the_agents_own_cause_stays_a_refusal() {
+    async fn a_server_error_is_unknown_however_much_body_it_carries() {
         let error = send_status(StatusCode::INTERNAL_SERVER_ERROR, "spawn failed: ENOMEM").await;
         let rendered = error.to_string();
 
         assert!(
             rendered.contains("spawn failed: ENOMEM"),
-            "the agent's cause has to survive: {rendered}"
+            "the cause has to survive: {rendered}"
         );
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {rendered}");
+    }
+
+    /// The scenario the rule above exists for: a gateway timing out on a command that is still
+    /// running, and answering with its own HTML.
+    #[tokio::test]
+    async fn a_gateway_timeout_with_an_error_page_does_not_read_as_the_agent_refusing() {
+        let error = send_status(
+            StatusCode::GATEWAY_TIMEOUT,
+            "<html><body>504 Gateway Time-out</body></html>",
+        )
+        .await;
+
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+        assert!(
+            !error.retryable,
+            "the command may still be running behind the gateway: {error}"
+        );
+    }
+
+    /// A 4xx is the agent refusing before it does anything, which is an answer.
+    #[tokio::test]
+    async fn a_client_error_is_the_agent_answering() {
+        let error = send_status(StatusCode::BAD_REQUEST, "the command was empty").await;
+
         assert_ne!(
             error.code, "SANDBOX_OUTCOME_UNKNOWN",
-            "the agent answered with its own cause, so the outcome is not unknown: {rendered}"
+            "a refusal before dispatch establishes that nothing ran: {error}"
         );
     }
 
@@ -808,7 +834,6 @@ mod tests {
             !error.retryable,
             "the command ran; a repeat would run it twice: {error}"
         );
-        // The cause survives, so the reader still learns what was wrong with the frame.
         assert!(
             error.to_string().contains("base64"),
             "the decode failure must stay in the chain: {error}"
@@ -827,6 +852,37 @@ mod tests {
         assert!(
             error.to_string().contains("did not parse"),
             "the parse failure must stay in the chain: {error}"
+        );
+    }
+
+    /// One chunk can hold both a frame that will not parse and the exit frame after it. The stream
+    /// has to stop at the first: yielding the exit as well would answer the question the failure
+    /// just reported as unanswerable, and a caller that reads to the end would believe the wrong
+    /// one of the two.
+    #[tokio::test]
+    async fn an_unestablished_outcome_ends_the_stream_mid_chunk() {
+        let outputs = frames_from(vec![
+            "{not json at all}\n{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n",
+        ])
+        .await;
+
+        assert_eq!(outputs.len(), 1, "the exit frame must not follow the failure");
+        let error = outputs[0].as_ref().expect_err("a malformed frame is not output");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+    }
+
+    /// The same rule for a payload that arrives whole and will not decode.
+    #[tokio::test]
+    async fn a_decode_failure_ends_the_stream_mid_chunk() {
+        let outputs = frames_from(vec![
+            "{\"t\":\"stdout\",\"seq\":0,\"data\":\"!!\"}\n{\"t\":\"exit\",\"code\":0,\"truncated\":false}\n",
+        ])
+        .await;
+
+        assert_eq!(outputs.len(), 1, "the exit frame must not follow the failure");
+        assert_eq!(
+            outputs[0].as_ref().expect_err("a bad payload is not output").code,
+            "SANDBOX_OUTCOME_UNKNOWN"
         );
     }
 

@@ -202,9 +202,12 @@ impl LocalSandbox {
         {
             Ok(inner) => inner,
             Err(_) => {
+                // Terminating ends the session, not whatever the command already did before the
+                // kill landed, so this is an outcome that was never reported rather than one the
+                // sandbox established.
                 self.terminate(session_id).await?;
-                Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                    failure: "deadlineExceeded".to_string(),
+                Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                    operation: "sandbox.runCommand".to_string(),
                     reason: format!(
                         "the command exceeded its {}s deadline and the session could not end it, so the session was terminated",
                         request.deadline.as_secs()
@@ -702,7 +705,8 @@ mod tests {
     }
 
     /// When the session cannot end the command — the route never answers — the guard ends the
-    /// session and reports the deadline. Time is paused, so the guard fires instantly.
+    /// session. Ending it does not undo whatever the command did first, so the outcome is
+    /// unreported rather than established. Time is paused, so the guard fires instantly.
     #[tokio::test(start_paused = true)]
     async fn a_command_the_session_cannot_end_takes_the_session_with_it() {
         let route = Arc::new(Route::default());
@@ -714,7 +718,11 @@ mod tests {
             .err()
             .expect("a command that outran its deadline has not succeeded");
 
-        assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+        assert!(
+            !error.retryable,
+            "the command may have run before the kill landed: {error}"
+        );
         assert_eq!(
             route.deleted.lock().expect("deleted").clone(),
             vec!["s1".to_string()],

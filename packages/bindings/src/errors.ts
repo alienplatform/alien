@@ -205,9 +205,13 @@ export function unwrapNapiError(err: unknown): AlienError {
  * Callers branch on the envelope's code rather than on the message, which is prose and free to
  * change. A caller that must not run an operation twice reads this: anything else either reached
  * the sandbox and was answered, or never left.
+ *
+ * The whole chain is searched, not just the outermost code, so a caller that adds its own context
+ * before checking still sees the signal. Reading only the outermost would answer "safe to repeat"
+ * for a wrapped error, which is the one wrong answer that runs a command a second time.
  */
 export function isSandboxOutcomeUnknown(error: unknown): error is AlienError {
-  return error instanceof AlienError && error.code === SANDBOX_OUTCOME_UNKNOWN
+  return error instanceof AlienError && error.hasErrorCode(SANDBOX_OUTCOME_UNKNOWN)
 }
 
 // Shared with the AI binding surface in @alienplatform/ai-gateway.
