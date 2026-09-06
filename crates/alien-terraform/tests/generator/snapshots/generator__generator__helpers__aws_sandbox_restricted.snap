@@ -417,7 +417,7 @@ resource "aws_iam_role" "agents" {
 resource "aws_iam_role_policy" "agents" {
   name   = "sandbox-image-build"
   role   = aws_iam_role.agents.id
-  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }, { "Effect" = "Allow", "Action" = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource" = "*" }] })
+  policy = jsonencode({ Version = "2012-10-17", Statement = [{ "Sid" = "ReadSandboxBundle", "Effect" = "Allow", "Action" = ["s3:GetObject"], "Resource" = "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/agents/bundle.zip" }, { "Effect" = "Allow", "Action" = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"], "Resource" = "*" }] })
 }
 
 resource "time_sleep" "agents_iam_propagation" {

@@ -100,8 +100,20 @@ impl TfEmitter for AwsSandboxEmitter {
         // document, and encoding them again renders each one as a JSON *string*, which IAM
         // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
         // and the string are both well-formed — so it only shows up at apply.
+        let runtime_built = provisioned_at_runtime(ctx);
         let mut build_statements = vec![
             Expression::from_iter([
+                (
+                    "Sid",
+                    Expression::String(
+                        if runtime_built {
+                            "ReadSandboxBundlePrefix"
+                        } else {
+                            "ReadSandboxBundle"
+                        }
+                        .to_string(),
+                    ),
+                ),
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
@@ -112,7 +124,11 @@ impl TfEmitter for AwsSandboxEmitter {
                     // A template for the same reason the operator policy's ARNs are: a plain
                     // string literal has its `${` escaped, so the partition would reach IAM as
                     // literal text and the grant would match nothing.
-                    expr::template(artifact_object_arn(artifact_uri)),
+                    expr::template(if runtime_built {
+                        artifact_prefix_arn(sandbox, artifact_uri)?
+                    } else {
+                        artifact_object_arn(artifact_uri)
+                    }),
                 ),
             ]),
             Expression::from_iter([
@@ -133,7 +149,7 @@ impl TfEmitter for AwsSandboxEmitter {
         ];
         // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
         // role carries no ECR grant; a runtime-built image's base is a private registry image.
-        if provisioned_at_runtime(ctx) {
+        if runtime_built {
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",
@@ -672,20 +688,54 @@ fn base_image_arn() -> Expression {
     ))
 }
 
-/// The one object the build reads, as an ARN.
+/// The one object a setup-baked build reads, as an ARN.
 ///
 /// The bundle URI is known when the module is emitted, so the build role is scoped to it rather
 /// than to every object in the account. `s3://bucket/key` maps to `arn:<partition>:s3:::bucket/key`; a
 /// URI without a key would be a bucket ARN, which `artifact_uri` has already refused.
 fn artifact_object_arn(uri: BundleUri<'_>) -> String {
-    let path = match uri {
+    format!(
+        "arn:${{data.aws_partition.current.partition}}:s3:::{}",
+        bundle_object_path(uri)
+    )
+}
+
+/// The bucket-and-key path a bundle URI addresses, with the region token resolved.
+fn bundle_object_path(uri: BundleUri<'_>) -> String {
+    match uri {
         BundleUri::Literal(uri) => uri.trim_start_matches("s3://").to_string(),
         BundleUri::Regional { before, after } => format!(
             "{}${{data.aws_region.current.region}}{after}",
             before.trim_start_matches("s3://")
         ),
+    }
+}
+
+/// The prefix a runtime-built image's build role reads bundles under — `stable_bundle_key_prefix`
+/// says which part of the key that is, and the CloudFormation template grants through the same
+/// rule, so one declaration installs one grant whichever package format a customer chose.
+fn artifact_prefix_arn(sandbox: &Sandbox, uri: BundleUri<'_>) -> Result<String> {
+    let path = bundle_object_path(uri);
+    let (bucket, key) = path
+        .split_once('/')
+        .unwrap_or_else(|| unreachable!("artifact_uri refuses a URI with no object key"));
+
+    let Some(prefix) = alien_core::stable_bundle_key_prefix(key) else {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+            reason: format!(
+                "code.image key '{key}' cannot be granted to a sandbox built at runtime: each \
+                 rebuild reads a new key, so the grant has to name a prefix the new key still \
+                 sits under, and this one has nothing above its version segment. Publish the \
+                 bundle under a stable prefix, for example \
+                 s3://bucket/sandbox-bundle/<version>/bundle.zip"
+            ),
+        }));
     };
-    format!("arn:${{data.aws_partition.current.partition}}:s3:::{path}")
+
+    Ok(format!(
+        "arn:${{data.aws_partition.current.partition}}:s3:::{bucket}/{prefix}/*"
+    ))
 }
 
 /// The `CodeArtifact.Uri`, with the region resolved where the vendor asked for one.

@@ -73,7 +73,7 @@ impl CfEmitter for AwsSandboxEmitter {
         );
         role.properties.insert(
             "Policies".to_string(),
-            build_policies(artifact_uri, provisioned_at_runtime(ctx)),
+            build_policies(sandbox, artifact_uri, provisioned_at_runtime(ctx))?,
         );
         role.properties.insert("Tags".to_string(), tags(ctx));
 
@@ -469,14 +469,26 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
 /// What the build role may do: read the bundle, write its own build logs, and — only when the
 /// image is built at runtime — authenticate to ECR for its base image.
 ///
-/// Scoped to the one object it reads. The bundle URI is known when the template is generated, so
-/// there is no reason for the role a customer installs to carry account-wide object read.
+/// A setup-baked image is built once, from the bundle the template names, so its role reads that
+/// one object; a runtime-built image reads the prefix instead — see `artifact_prefix_arn`.
 ///
 /// A setup-baked image builds from a public base and pulls it anonymously, so the Frozen role
 /// carries no ECR grant; a runtime-built image's base is a private registry image.
-fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpression {
+fn build_policies(
+    sandbox: &Sandbox,
+    artifact_uri: BundleUri<'_>,
+    runtime_built: bool,
+) -> Result<CfExpression> {
     let mut statements = vec![
         CfExpression::object([
+            (
+                "Sid",
+                CfExpression::from(if runtime_built {
+                    "ReadSandboxBundlePrefix"
+                } else {
+                    "ReadSandboxBundle"
+                }),
+            ),
             ("Effect", CfExpression::from("Allow")),
             (
                 "Action",
@@ -484,10 +496,11 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
             ),
             (
                 "Resource",
-                // Partition-qualified like every other ARN here: a hardcoded
-                // `aws` never matches in GovCloud or China, and the build fails
-                // on the bundle it was granted.
-                artifact_object_arn(artifact_uri),
+                if runtime_built {
+                    artifact_prefix_arn(sandbox, artifact_uri)?
+                } else {
+                    artifact_object_arn(artifact_uri)
+                },
             ),
         ]),
         CfExpression::object([
@@ -544,7 +557,7 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
             ),
         ]));
     }
-    CfExpression::list([CfExpression::object([
+    Ok(CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-image-build")),
         (
             "PolicyDocument",
@@ -553,7 +566,7 @@ fn build_policies(artifact_uri: BundleUri<'_>, runtime_built: bool) -> CfExpress
                 ("Statement", CfExpression::list(statements)),
             ]),
         ),
-    ])])
+    ])]))
 }
 
 /// Lifecycle hooks, served by the agent on its own port.
@@ -826,14 +839,48 @@ fn code_artifact_uri(uri: BundleUri<'_>) -> CfExpression {
 /// The bundle object's ARN. Partition-qualified like every other ARN here — a hardcoded `aws`
 /// never matches in GovCloud — and region-qualified for the same reason one region out.
 fn artifact_object_arn(uri: BundleUri<'_>) -> CfExpression {
-    let path = match uri {
+    CfExpression::sub(format!(
+        "arn:${{AWS::Partition}}:s3:::{}",
+        bundle_object_path(uri)
+    ))
+}
+
+/// The bucket-and-key path a bundle URI addresses, with the region token resolved.
+fn bundle_object_path(uri: BundleUri<'_>) -> String {
+    match uri {
         BundleUri::Literal(uri) => uri.trim_start_matches("s3://").to_string(),
         BundleUri::Regional { before, after } => format!(
             "{}${{AWS::Region}}{after}",
             before.trim_start_matches("s3://")
         ),
+    }
+}
+
+/// The prefix a runtime-built image's build role reads bundles under — `stable_bundle_key_prefix`
+/// says which part of the key that is, and the Terraform module grants through the same rule.
+/// Refused, not narrowly granted, when absent: the alternative denies partway through a build.
+fn artifact_prefix_arn(sandbox: &Sandbox, uri: BundleUri<'_>) -> Result<CfExpression> {
+    let path = bundle_object_path(uri);
+    let (bucket, key) = path
+        .split_once('/')
+        .unwrap_or_else(|| unreachable!("artifact_uri refuses a URI with no object key"));
+
+    let Some(prefix) = alien_core::stable_bundle_key_prefix(key) else {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
+            reason: format!(
+                "code.image key '{key}' cannot be granted to a sandbox built at runtime: each \
+                 rebuild reads a new key, so the grant has to name a prefix the new key still \
+                 sits under, and this one has nothing above its version segment. Publish the \
+                 bundle under a stable prefix, for example \
+                 s3://bucket/sandbox-bundle/<version>/bundle.zip"
+            ),
+        }));
     };
-    CfExpression::sub(format!("arn:${{AWS::Partition}}:s3:::{path}"))
+
+    Ok(CfExpression::sub(format!(
+        "arn:${{AWS::Partition}}:s3:::{bucket}/{prefix}/*"
+    )))
 }
 
 #[cfg(test)]
@@ -892,6 +939,75 @@ mod tests {
             uri_text.contains("${AWS::Region}") && !uri_text.contains("{region}"),
             "the token must be consumed, not emitted verbatim: {uri_text}"
         );
+    }
+
+    /// A sandbox carrying one bundle URI, for the prefix-grant cases.
+    fn sandbox_with(image: &str) -> Sandbox {
+        Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: image.to_string(),
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: "1".to_string(),
+                memory: "2Gi".to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build()
+    }
+
+    fn prefix_grant(image: &str) -> Result<String> {
+        let sandbox = sandbox_with(image);
+        artifact_prefix_arn(&sandbox, parsed(image)).map(|arn| sub_text(&arn).to_string())
+    }
+
+    /// A deep key separates the true prefix from both near-misses: the key's first segment would
+    /// hand the role every team's objects under `artifacts/`, and the object's own directory
+    /// would pin the version segment that moves.
+    #[test]
+    fn the_prefix_grant_stops_above_the_segment_that_moves() {
+        assert_eq!(
+            prefix_grant("s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip")
+                .expect("the store layout is grantable"),
+            "arn:${AWS::Partition}:s3:::acme-artifacts/sandbox-bundle/*"
+        );
+        assert_eq!(
+            prefix_grant("s3://acme-releases/artifacts/team-a/sandbox/f00dcafe/bundle.zip")
+                .expect("a deeper layout is grantable too"),
+            "arn:${AWS::Partition}:s3:::acme-releases/artifacts/team-a/sandbox/*",
+            "a deeper key must narrow the grant, never widen it to its first segment"
+        );
+    }
+
+    /// The prefix grant is derived from the same path the URI is, so the region token has to
+    /// survive into it. A grant naming a literal region denies the build in every other one.
+    #[test]
+    fn the_prefix_grant_carries_the_region_the_uri_resolves_to() {
+        assert_eq!(
+            prefix_grant("s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip")
+                .expect("a regional store is grantable"),
+            "arn:${AWS::Partition}:s3:::acme-artifacts-${AWS::Region}/sandbox-bundle/*"
+        );
+    }
+
+    /// A key with nothing above its version segment cannot express a prefix a moved bundle would
+    /// still sit under. Emitting the object grant instead would install a role that denies the
+    /// first rebuild, so the refusal has to land at plan time.
+    #[test]
+    fn a_key_with_no_stable_prefix_is_refused_rather_than_granted_narrowly() {
+        for image in [
+            "s3://acme-artifacts/bundle.zip",
+            "s3://acme-artifacts/agents/bundle.zip",
+        ] {
+            let error = prefix_grant(image)
+                .expect_err("a key with no stable prefix must be refused, not silently granted");
+            assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "for {image}");
+        }
     }
 
     /// The refusal has to land at plan time. A brace reaching S3 verbatim dies ~160s into the

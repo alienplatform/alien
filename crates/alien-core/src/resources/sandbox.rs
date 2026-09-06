@@ -974,6 +974,15 @@ pub enum BundleUri<'a> {
     Regional { before: &'a str, after: &'a str },
 }
 
+/// The prefix a rebuild's new key still sits under: everything above the file name and the
+/// version segment beneath it. `None` when nothing sits there, meaning no prefix can be granted
+/// without also granting objects a rebuild never reads. Shared so both emitters agree on it.
+pub fn stable_bundle_key_prefix(key: &str) -> Option<&str> {
+    let (above_file, _) = key.rsplit_once('/')?;
+    let (above_version, _) = above_file.rsplit_once('/')?;
+    Some(above_version)
+}
+
 /// Reads a sandbox bundle URI, refusing anything an image build would only reject later.
 ///
 /// The token is accepted in the bucket alone. A key-position token would name an object that does
@@ -1022,6 +1031,27 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The rule both package formats grant by, pinned here rather than in either. The
+    /// near-misses the cases separate: the key's first segment grants objects a rebuild never
+    /// reads, and the object's own directory pins the version segment that moves.
+    #[test]
+    fn a_grantable_prefix_stops_above_the_segment_that_moves() {
+        assert_eq!(
+            stable_bundle_key_prefix("sandbox-bundle/f00dcafe/bundle.zip"),
+            Some("sandbox-bundle")
+        );
+        assert_eq!(
+            stable_bundle_key_prefix("artifacts/team-a/sandbox/f00dcafe/bundle.zip"),
+            Some("artifacts/team-a/sandbox"),
+            "a deeper key narrows the prefix, it never widens to the first segment"
+        );
+
+        // Nothing sits above the version segment, so no prefix a moved bundle stays inside
+        // exists. Emitting the object grant instead installs a role that denies the next rebuild.
+        assert_eq!(stable_bundle_key_prefix("agents/bundle.zip"), None);
+        assert_eq!(stable_bundle_key_prefix("bundle.zip"), None);
+    }
 
     fn sandbox_with(egress: SandboxEgress, preview_ports: Vec<u16>) -> Sandbox {
         Sandbox::new("agent-sbx".to_string())
