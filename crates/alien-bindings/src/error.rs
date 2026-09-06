@@ -313,9 +313,32 @@ pub enum ErrorData {
         http_status_code = 400
     )]
     SandboxCommandFailed {
-        /// The agent's own cause, kept as a field so a caller can branch on it
+        /// Diagnostic label from the provider or agent, for logs and support; callers branch on
+        /// the error code
         failure: String,
         /// Human-readable detail from the agent
+        reason: String,
+    },
+
+    /// A sandbox operation was dispatched and never reported its outcome.
+    ///
+    /// The counterpart to `SandboxUnreachable`: there the call did not take effect and repeating it
+    /// is safe, here it may already have taken effect, so a repeat can run the same command twice.
+    /// Visibility is inherited for the reason `SandboxUnreachable` gives below.
+    ///
+    /// 502 rather than the 503 its neighbour carries: the exchange with the sandbox broke down,
+    /// which is not the same invitation to try again later.
+    #[error(
+        code = "SANDBOX_OUTCOME_UNKNOWN",
+        message = "Sandbox operation '{operation}' did not report its outcome and may have taken effect: {reason}",
+        retryable = "false",
+        internal = "inherit",
+        http_status_code = 502
+    )]
+    SandboxOutcomeUnknown {
+        /// Operation that was in flight
+        operation: String,
+        /// What went wrong on the wire
         reason: String,
     },
 

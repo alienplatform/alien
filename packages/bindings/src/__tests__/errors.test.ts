@@ -1,6 +1,6 @@
 import { AlienError } from "@alienplatform/core"
 import { describe, expect, it } from "vitest"
-import { BindingNotConfiguredError, unwrapNapiError } from "../errors.js"
+import { BindingNotConfiguredError, isSandboxOutcomeUnknown, unwrapNapiError } from "../errors.js"
 
 /** Build a napi-style error whose message carries the addon envelope. */
 function napiError(envelope: unknown): Error {
@@ -75,5 +75,33 @@ describe("unwrapNapiError", () => {
     const err = unwrapNapiError("boom")
     expect(err.code).toBe("BINDINGS_ERROR")
     expect(err.message).toBe("boom")
+  })
+})
+
+describe("isSandboxOutcomeUnknown", () => {
+  // Asserted against the envelope the addon actually emits rather than a hand-built AlienError:
+  // the envelope shape is the contract, and a hand-built object cannot break when it changes.
+  const decoded = (code: string) =>
+    unwrapNapiError(napiError({ code, message: "m", retryable: false, internal: false }))
+
+  it("recognizes an operation the sandbox never reported the outcome of", () => {
+    expect(isSandboxOutcomeUnknown(decoded("SANDBOX_OUTCOME_UNKNOWN"))).toBe(true)
+  })
+
+  it("does not recognize a failure the sandbox answered", () => {
+    expect(isSandboxOutcomeUnknown(decoded("SANDBOX_COMMAND_FAILED"))).toBe(false)
+  })
+
+  it("does not recognize a value that is not an alien error", () => {
+    expect(isSandboxOutcomeUnknown(new Error("SANDBOX_OUTCOME_UNKNOWN"))).toBe(false)
+  })
+
+  // A caller that adds its own context before checking must still see the signal; reading only the
+  // outermost code would answer "safe to repeat" and run the command a second time.
+  it("still recognizes it after a caller has wrapped it with context", () => {
+    const wrapped = decoded("SANDBOX_OUTCOME_UNKNOWN").withContext(
+      BindingNotConfiguredError.create({ binding: "files", envVar: "ALIEN_FILES_BINDING" }),
+    )
+    expect(isSandboxOutcomeUnknown(wrapped)).toBe(true)
   })
 })

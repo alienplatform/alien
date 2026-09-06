@@ -23,7 +23,7 @@ use crate::traits::{
 };
 use alien_core::bindings::LocalSandboxBinding;
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -202,14 +202,22 @@ impl LocalSandbox {
         {
             Ok(inner) => inner,
             Err(_) => {
-                self.terminate(session_id).await?;
-                Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                    failure: "deadlineExceeded".to_string(),
+                // Terminating ends the session, not whatever the command already did before the
+                // kill landed, so this is an outcome that was never reported rather than one the
+                // sandbox established. A terminate that itself fails is chained rather than
+                // returned: it leaves the command even more likely to be running, so replacing the
+                // outcome with it would drop the one thing the caller has to know.
+                let outcome = ErrorData::SandboxOutcomeUnknown {
+                    operation: "sandbox.runCommand".to_string(),
                     reason: format!(
-                        "the command exceeded its {}s deadline and the session could not end it, so the session was terminated",
+                        "the command exceeded its {}s deadline and the session could not end it",
                         request.deadline.as_secs()
                     ),
-                }))
+                };
+                Err(match self.terminate(session_id).await {
+                    Ok(()) => AlienError::new(outcome),
+                    Err(error) => error.context(outcome),
+                })
             }
         }
     }
@@ -504,6 +512,9 @@ mod tests {
         execs: Mutex<std::collections::VecDeque<serde_json::Value>>,
         commands: Mutex<Vec<Vec<String>>>,
         deleted: Mutex<Vec<String>>,
+        /// Set to make the session refuse to be deleted, which is the case where the command is
+        /// even more likely to still be running.
+        delete_refuses: std::sync::atomic::AtomicBool,
     }
 
     /// Stands in for the wrapper's kill in a scripted response.
@@ -553,9 +564,15 @@ mod tests {
         async fn delete(
             State(route): State<Arc<Route>>,
             Path(session): Path<String>,
-        ) -> Json<serde_json::Value> {
+        ) -> std::result::Result<Json<serde_json::Value>, axum::http::StatusCode> {
+            if route
+                .delete_refuses
+                .load(std::sync::atomic::Ordering::SeqCst)
+            {
+                return Err(axum::http::StatusCode::INTERNAL_SERVER_ERROR);
+            }
             route.deleted.lock().expect("deleted").push(session);
-            Json(json!({}))
+            Ok(Json(json!({})))
         }
 
         let router = Router::new()
@@ -701,8 +718,33 @@ mod tests {
         ));
     }
 
+    /// A terminate that itself fails leaves the command even more likely to be running, so the
+    /// unknown outcome has to survive it. Returning the terminate's own error instead would tell a
+    /// caller the session could not be deleted and say nothing about the command.
+    #[tokio::test(start_paused = true)]
+    async fn a_terminate_that_fails_does_not_hide_the_unknown_outcome() {
+        let route = Arc::new(Route::default());
+        route
+            .delete_refuses
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let sandbox = serve(route.clone()).await;
+
+        let error = sandbox
+            .run_command("s1", command(30))
+            .await
+            .err()
+            .expect("a command that outran its deadline has not succeeded");
+
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+        assert!(
+            error.to_string().contains("could not end it"),
+            "the deadline stays the headline: {error}"
+        );
+    }
+
     /// When the session cannot end the command — the route never answers — the guard ends the
-    /// session and reports the deadline. Time is paused, so the guard fires instantly.
+    /// session. Ending it does not undo whatever the command did first, so the outcome is
+    /// unreported rather than established. Time is paused, so the guard fires instantly.
     #[tokio::test(start_paused = true)]
     async fn a_command_the_session_cannot_end_takes_the_session_with_it() {
         let route = Arc::new(Route::default());
@@ -714,7 +756,11 @@ mod tests {
             .err()
             .expect("a command that outran its deadline has not succeeded");
 
-        assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+        assert!(
+            !error.retryable,
+            "the command may have run before the kill landed: {error}"
+        );
         assert_eq!(
             route.deleted.lock().expect("deleted").clone(),
             vec!["s1".to_string()],

@@ -118,12 +118,9 @@ impl AzureSandbox {
         }
 
         if operation == RUN_COMMAND || operation == CREATE {
-            return error.context(ErrorData::SandboxCommandFailed {
-                failure: "outcomeUnknown".to_string(),
-                reason: format!(
-                    "{operation} did not complete against the Azure sandbox data plane, so \
-                     whether it took effect is unknown"
-                ),
+            return error.context(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: "the Azure sandbox data plane did not complete the call".to_string(),
             });
         }
 
@@ -362,12 +359,18 @@ impl Sandbox for AzureSandbox {
                 ),
             })));
         } else {
-            frames.push(Ok(CommandOutput::Exit {
-                // A missing exit code is not success. Azure did not report one, so the command's
-                // outcome is unknown, and -1 says that rather than claiming zero.
-                code: result.exit_code.unwrap_or(-1),
-                truncated: false,
-            }));
+            match result.exit_code {
+                Some(code) => frames.push(Ok(CommandOutput::Exit {
+                    code,
+                    truncated: false,
+                })),
+                // Azure reported no exit code, so the command's outcome was never established.
+                // Any invented code is indistinguishable from one the command really exited with.
+                None => frames.push(Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the data plane returned no exit code for the command".to_string(),
+                }))),
+            }
         }
 
         Ok(Box::pin(stream::iter(frames)))
@@ -2164,7 +2167,7 @@ mod tests {
             Ok(_) => panic!("an unavailable data plane is an error"),
             Err(error) => error,
         };
-        assert_eq!(command.code, "SANDBOX_COMMAND_FAILED", "{command}");
+        assert_eq!(command.code, "SANDBOX_OUTCOME_UNKNOWN", "{command}");
         assert!(
             !command.retryable,
             "the command may already be running, so a retry would run it twice: {command}"
