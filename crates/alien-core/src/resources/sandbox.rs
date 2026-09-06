@@ -996,6 +996,16 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
         .split_once('/')
         .ok_or_else(|| format!("'{uri}' names a bucket with no object key"))?;
 
+    // Both emitters interpolate this path into the build role's resource ARN, where `*` and `?`
+    // are IAM wildcards rather than literal characters. S3 accepts them in a key, so a bundle
+    // published under one would silently widen the grant past the bundle it names.
+    if path.contains('*') || path.contains('?') {
+        return Err(format!(
+            "'{uri}' carries an IAM wildcard; the bundle's path is interpolated into the build \
+             role's grant, so '*' and '?' would widen it past the bundle"
+        ));
+    }
+
     if key.contains('{') || key.contains('}') {
         return Err(format!(
             "'{uri}' places a token in the object key; {BUNDLE_REGION_TOKEN} is accepted in the \
@@ -1031,6 +1041,23 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wildcard reaching the grant would widen it past the bundle, and it widens the Frozen
+    /// object grant as readily as the Live prefix — both interpolate the path into the ARN.
+    #[test]
+    fn a_uri_carrying_an_iam_wildcard_is_refused() {
+        for uri in [
+            "s3://acme/team-*/v1/bundle.zip",
+            "s3://acme/sandbox-bundle/f00d/bundle?.zip",
+            "s3://acme-*/sandbox-bundle/f00d/bundle.zip",
+        ] {
+            let error = parse_bundle_uri(uri).expect_err("a wildcard must be refused");
+            assert!(error.contains("IAM wildcard"), "for {uri}: {error}");
+        }
+
+        parse_bundle_uri("s3://acme/sandbox-bundle/f00d/bundle.zip")
+            .expect("an ordinary key still parses");
+    }
 
     /// The rule both package formats grant by, pinned here rather than in either. The
     /// near-misses the cases separate: the key's first segment grants objects a rebuild never
