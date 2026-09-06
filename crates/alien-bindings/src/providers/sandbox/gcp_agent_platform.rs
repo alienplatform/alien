@@ -904,10 +904,22 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                     &cancel_body(&state.job_id),
                 )
                 .await;
+            // A reply arriving is not the cancel succeeding: the agent answers `{}` when it
+            // cancelled the job and its own error text when it did not — `JobNotFound`, say — and
+            // both come back through a successful `:execute`. Only the first proves the command
+            // was stopped, so only the first may name an established outcome.
+            let confirmed = cancelled.as_ref().is_ok_and(|body| {
+                serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+            });
             state.pending.push_back(Err(match cancelled {
-                Ok(_) => AlienError::new(ErrorData::SandboxCommandFailed {
+                Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "deadlineExceeded".to_string(),
                     reason: "the command's deadline elapsed before its job reported an outcome"
+                        .to_string(),
+                }),
+                Ok(_) => AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the command's deadline elapsed and its job did not confirm the cancel"
                         .to_string(),
                 }),
                 Err(error) => error.context(ErrorData::SandboxOutcomeUnknown {
@@ -970,7 +982,15 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             // highest seq seen and the loop never waits for a "missing" one; `max` rather than the
             // last frame's seq so an out-of-order frame cannot walk the cursor backwards.
             state.since_seq = state.since_seq.max(frame.seq());
-            state.pending.push_back(frame.into_output());
+            let output = frame.into_output();
+            // As in the synchronous path: a frame that will not convert ends the poll rather than
+            // being queued ahead of a terminal result that would contradict it.
+            let failed = output.is_err();
+            state.pending.push_back(output);
+            if failed {
+                state.finished = true;
+                break;
+            }
         }
 
         if !poll.running {
@@ -1133,7 +1153,16 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
             Ok(frame) => {
                 saw_any = true;
                 saw_terminal |= frame.is_terminal();
-                frames.push(frame.into_output());
+                let output = frame.into_output();
+                // A frame that will not convert ends the body: letting a later exit follow would
+                // answer the question this item just reported as unanswerable. `saw_terminal`
+                // stops the trailing item below from saying the same thing twice.
+                let failed = output.is_err();
+                frames.push(output);
+                if failed {
+                    saw_terminal = true;
+                    break;
+                }
             }
             Err(error) => {
                 if !saw_any {

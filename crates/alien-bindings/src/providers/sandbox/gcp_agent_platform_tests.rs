@@ -1071,6 +1071,26 @@ fn a_frame_that_does_not_parse_after_output_leaves_the_outcome_unknown() {
     assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
 }
 
+/// A frame that will not convert ends the body. Letting the exit frame after it through would
+/// answer the question the failure just reported as unanswerable, and a caller reading to the end
+/// would believe the wrong one of the two.
+#[test]
+fn a_frame_that_does_not_convert_ends_the_body() {
+    let mut body = ndjson(&[serde_json::json!({
+        "t": "stdout",
+        "seq": 0,
+        "data": "!!not base64!!",
+    })]);
+    body.extend_from_slice(&ndjson(&[exit_frame(0)]));
+
+    let frames = parse_exec_frames(&body).expect("frames parse");
+    assert_eq!(frames.len(), 1, "the exit frame must not follow the failure");
+    assert_eq!(
+        frames[0].as_ref().expect_err("a bad payload is not output").code,
+        "SANDBOX_OUTCOME_UNKNOWN"
+    );
+}
+
 /// A body that is not frames at all is the agent's refusal, not a command's output.
 #[test]
 fn a_non_frame_body_is_reported_as_a_refusal() {
