@@ -327,6 +327,16 @@ impl PreflightRegistry {
     }
 
     /// Create a registry with built-in checks and mutations
+    /// The registered mutations in run order, for a test that depends on one running before
+    /// another. Test-only: the order is an implementation detail everywhere else.
+    #[cfg(test)]
+    pub(crate) fn mutation_descriptions(&self) -> Vec<&'static str> {
+        self.mutations
+            .iter()
+            .map(|mutation| mutation.description())
+            .collect()
+    }
+
     pub fn with_built_ins() -> Self {
         let mut registry = Self::new();
 
