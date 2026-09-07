@@ -310,7 +310,7 @@ Create and terminate sessions in this sandbox, and run arbitrary code inside the
 
 Permission set: `sandbox/remote-execute` (revision 1).
 
-- Create, drive and tear down sessions of the selected sandbox group.
+- Create, drive and tear down sessions of the selected sandbox group. Session image and size come from the create request; this grant does not limit them.
   Scope: `/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}/providers/Microsoft.App/sandboxGroups/${replace(lower("${local.resource_prefix}-agents"), "_", "-")}`
   - `Container Apps SandboxGroup Data Owner` (built-in role)
 

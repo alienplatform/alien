@@ -188,7 +188,8 @@ pub struct RemoteAwsSandboxBinding {
 /// Concrete sandbox-group topology returned to remote clients.
 ///
 /// The ceilings travel because Azure applies them at create and nowhere else, so a remote caller
-/// that does not send them gets the data plane's default rather than the declared size.
+/// that does not send them gets the data plane's default rather than the declared size. They are
+/// not a limit — a holder that ignores them gets whatever the data plane accepts.
 #[derive(Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

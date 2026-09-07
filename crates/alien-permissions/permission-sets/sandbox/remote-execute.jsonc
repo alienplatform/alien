@@ -85,18 +85,19 @@
     "azure": [
       {
         "label": "session-lifecycle-and-exec",
-        "description": "Create, drive and tear down sessions of the selected sandbox group.",
+        "description": "Create, drive and tear down sessions of the selected sandbox group. Session image and size come from the create request; this grant does not limit them.",
         "grant": {
           // The role Microsoft documents as sufficient for the sandbox data plane, and the same
           // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
           // exec without lifecycle. All entries are `dataAction`s: no control-plane rights.
           "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
         },
-        // Resource-scoped only, the same boundary the AWS block draws around one `microvm-image`:
-        // a resource-group scope would reach every sibling sandbox in the deployment. No
-        // `${stackPrefix}` — the emitter already resolves `${resourceName}` to the prefixed name.
+        // Resource-scoped: the only stack-level scope Azure RBAC can express is the resource
+        // group, which would reach every sibling sandbox. The scope bounds which group, not what
+        // runs in it — image and sizing are sent per session and applied at create.
         "binding": {
           "resource": {
+            // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
           }
         }
