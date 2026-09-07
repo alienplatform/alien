@@ -378,6 +378,22 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
         permissions_md.contains("/reasoningEngines/"),
         "the documented scope must be the engine, not the project:\n{permissions_md}"
     );
+    // Whatever the document names, an approver has to be able to find it in the module. Vertex
+    // assigns the engine's id at apply, so the display name is the only identifier that is both
+    // written down here and greppable there.
+    let engine_display_name = module
+        .files
+        .get("agents_engine.tf")
+        .expect("setup declares the engine")
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("display_name = "))
+        .expect("the engine declares a display name")
+        .trim_matches('"')
+        .to_string();
+    assert!(
+        permissions_md.contains(&engine_display_name),
+        "the documented scope names {engine_display_name} nowhere:\n{permissions_md}"
+    );
     for token in [
         "${projectName}",
         "${region}",

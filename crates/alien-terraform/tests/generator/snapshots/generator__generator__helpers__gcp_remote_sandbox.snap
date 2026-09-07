@@ -207,7 +207,8 @@ resource "time_sleep" "gcp_iam_propagation" {
   create_duration = "120s"
   depends_on = [
     google_service_account_iam_member.access_manager_token_creator,
-    google_service_account_iam_member.access_manager_user
+    google_service_account_iam_member.access_manager_user,
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_session_lifecycle_and_exec_agents_engine_access_0
   ]
 }
 
@@ -308,7 +309,7 @@ Create and terminate sessions in this sandbox, and run arbitrary code inside the
 Permission set: `sandbox/remote-execute` (revision 1).
 
 - Create, drive and tear down sessions under the selected sandbox's reasoning engine.
-  Scope: `projects/${var.gcp_project}/locations/${var.gcp_region}/reasoningEngines/${local.resource_prefix}-agents`
+  Scope: `projects/${var.gcp_project}/locations/${var.gcp_region}/reasoningEngines/(the id assigned at apply to ${local.resource_prefix}-agents-engine)`
   - `aiplatform.sandboxEnvironments.create`
   - `aiplatform.sandboxEnvironments.get`
   - `aiplatform.sandboxEnvironments.list`
