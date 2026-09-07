@@ -214,13 +214,9 @@ fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
         .is_some_and(|set| alien_permissions::permission_set_reaches_a_sandbox_session(&set))
 }
 
-/// The global refs this deployment's own management identity keeps.
-///
-/// A set the remote caller claims is dropped: once a sandbox is published remotely the caller
-/// drives those sessions, and leaving the same reach on the deployment's management identity is
-/// the second tenant the single-tenancy gate exists to prevent. The auto-generated profile gives
-/// a Frozen remote sandbox only `sandbox/heartbeat`, which reaches no session — an `extend`-mode
-/// profile is where this matters.
+/// The global refs this deployment's own management identity keeps. A set the remote caller
+/// claims is dropped — leaving the same reach on the management identity would be the second
+/// tenant the single-tenancy gate exists to prevent.
 fn global_permission_refs<'a>(
     ctx: &EmitContext<'_>,
     profile: &'a PermissionProfile,
@@ -512,12 +508,16 @@ fn resolve_permission_set(reference: &&PermissionSetReference) -> Option<Permiss
     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
 
+/// The one set compiled at stack scope onto the management identity.
+///
+/// Matched on a name from the built-in registry, never on `id()`: an inline set carries whatever
+/// id its author typed, so deciding by id would let one named after this set compile here.
 fn resolve_stack_management_permission_set(
     reference: &&PermissionSetReference,
 ) -> Option<PermissionSet> {
-    match reference.id() {
-        "worker/dispatch-command" => {
-            reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    match reference {
+        PermissionSetReference::Name(name) if name == "worker/dispatch-command" => {
+            alien_permissions::get_permission_set(name).cloned()
         }
         _ => None,
     }

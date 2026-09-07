@@ -29,11 +29,9 @@ use alien_permissions::{
 };
 use hcl::expr::Expression;
 
-/// The preview API version the sandbox group is created at.
-///
-/// Pinned rather than floating, and the same version the ARM and data-plane clients use: ARM still
-/// answers older previews, so a version that drifts here fails as a response mismatch rather than
-/// as a rejected request.
+/// The preview API version the sandbox group is created at. Must match the ARM and data-plane
+/// clients: ARM still answers older previews, so a version that drifts here fails as a response
+/// mismatch, not a rejected request.
 const SANDBOX_GROUP_TYPE: &str = "Microsoft.App/sandboxGroups@2026-02-01-preview";
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
@@ -48,15 +46,20 @@ pub struct AzureSandboxEmitter;
 /// replaced by a generated one, so naming from the variable registers a group of `-<id>` while
 /// the management grant is scoped to the real one.
 ///
-/// Normalized the way every other Azure resource names itself, for two reasons: a deployer's
-/// prefix may carry underscores and uppercase Azure rejects, and this is the form `PERMISSIONS.md`
-/// states as the grant's scope. A security team approves the grant from that document, so a name
-/// only the template knows would document a boundary they cannot check.
+/// Normalized the way every other Azure resource names itself: a deployer's prefix may carry
+/// underscores and uppercase Azure rejects, and this is the form `PERMISSIONS.md` states as the
+/// grant's scope, which a security team approves the grant from.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
-    expr::raw(format!(
-        "replace(lower(\"${{local.resource_prefix}}-{}\"), \"_\", \"-\")",
-        ctx.resource_id
-    ))
+    expr::raw(sandbox_group_expression(ctx.resource_id))
+}
+
+/// The same name as an interpolation, for a permission scope built as a string.
+fn sandbox_group_name(ctx: &EmitContext<'_>) -> String {
+    format!("${{{}}}", sandbox_group_expression(ctx.resource_id))
+}
+
+fn sandbox_group_expression(resource_id: &str) -> String {
+    format!("replace(lower(\"${{local.resource_prefix}}-{resource_id}\"), \"_\", \"-\")")
 }
 
 /// The declared outbound policy, in the shape the binding carries.
@@ -109,12 +112,9 @@ impl TfEmitter for AzureSandboxEmitter {
                     expr::object(Vec::<(&str, Expression)>::new()),
                 ),
                 attr("tags", tags(ctx, "sandbox")),
-                // The azapi provider ships a bundled schema index and refuses a type it does not
-                // carry — `Microsoft.App/sandboxGroups can't be found` at validate. The type is
-                // real: the ARM provider manifest lists it at this version and ARM creates one, so
-                // the index lags the service. What is disabled is a client-side pre-check, not
-                // ARM's, which still validates the request at apply. Remove this once the azapi
-                // provider carries the type.
+                // The azapi provider's bundled schema index doesn't carry this type yet, so validate
+                // fails with "can't be found" though ARM creates it fine. Only this client-side
+                // pre-check is disabled; remove once azapi's index catches up.
                 attr("schema_validation_enabled", Expression::Bool(false)),
             ],
         ));
@@ -174,10 +174,9 @@ impl TfEmitter for AzureSandboxEmitter {
 
 /// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
 ///
-/// Scoped to the group this emitter just created, and nothing wider. The role is a data-plane one
-/// covering `sandboxGroups/*` on whatever it is scoped to, so a resource-group scope would hand a
-/// remote caller every sibling sandbox in the deployment — the assignment names the group by
-/// reference so the scope cannot drift from the resource.
+/// Scoped to the group this emitter just created, and nothing wider: the role is a data-plane
+/// one covering `sandboxGroups/*` on whatever it's scoped to, so a resource-group scope would
+/// hand a remote caller every sibling sandbox in the deployment.
 fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
     let (Some(definition), Some(access_label)) = (
         alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
@@ -197,7 +196,7 @@ fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragm
             })
         })?;
 
-    let context = permission_context(label).with_resource_name(ctx.resource_id.to_string());
+    let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
     let plan = AzureRuntimePermissionsGenerator::new()
         .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
         .context(ErrorData::GenericError {
@@ -276,6 +275,41 @@ mod tests {
 
     fn binding_for(egress: SandboxEgress) -> String {
         binding_with(egress, None)
+    }
+
+    fn emit_for(lifecycle: ResourceLifecycle) -> TfFragment {
+        let stack = Stack::new("acme".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                lifecycle,
+            )
+            .build();
+        let resource = stack
+            .resources
+            .get("agents")
+            .expect("the sandbox is in the stack");
+        let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource,
+            resource_id: "agents",
+            platform: alien_core::Platform::Azure,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+        };
+
+        AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders")
     }
 
     fn binding_with(egress: SandboxEgress, idle_suspend_seconds: Option<u32>) -> String {
@@ -379,12 +413,16 @@ mod tests {
         };
         let keys = serde_json::to_value(&binding).expect("the binding serializes");
 
-        for key in keys.as_object().expect("an object").keys() {
-            assert!(
-                rendered.contains(&format!("{key} = ")),
-                "the emitter never writes '{key}': {rendered}"
-            );
-        }
+        let keys = keys.as_object().expect("an object");
+        assert!(!keys.is_empty(), "the binding serializes at least one key");
+        let missing: Vec<&String> = keys
+            .keys()
+            .filter(|key| !rendered.contains(&format!("{key} = ")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the emitter never writes {missing:?}: {rendered}"
+        );
     }
 
     /// The idle-suspend policy travels the same way, and only when it was declared.

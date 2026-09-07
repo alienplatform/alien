@@ -134,18 +134,10 @@ pub const MICROVM_SESSION_LIFECYCLE_ACTIONS: &[&str] = &[
     "lambda:GetMicrovm",
 ];
 
-/// Whether `permission_set` grants anything that addresses a sandbox session, on any cloud that
-/// publishes one.
-///
-/// Bindings are deliberately not consulted. `${stackPrefix}` is uninterpolated this early and an
-/// inline set's ARNs are free-form user strings, so any ARN comparison is either unsound or
-/// widened past by writing `*`. Carrying the verb at all is the answer.
-///
-/// Per-cloud rather than per-verb-list, because the verbs are not comparable: AWS names actions,
-/// Azure grants the same reach through a predefined role or through `dataActions`. A set is
-/// inspected on every cloud it declares — a caller asking "can anything else here reach this
-/// sandbox" is asking about the deployment, and a set carrying an Azure block alone would
-/// otherwise answer no while granting the whole data plane.
+/// Whether `permission_set` grants anything that addresses a sandbox session, on any cloud it
+/// declares. Bindings are skipped — `${stackPrefix}` is uninterpolated this early and ARNs are
+/// free-form, so any comparison is unsound. Checked per-cloud rather than by one verb list: AWS
+/// names actions, Azure grants reach through a role or `dataActions`.
 pub fn permission_set_reaches_a_sandbox_session(
     permission_set: &alien_core::permissions::PermissionSet,
 ) -> bool {
@@ -182,22 +174,19 @@ pub fn permission_set_reaches_a_sandbox_session(
 }
 
 /// The predefined role carrying Azure's whole sandbox data plane, session contents included.
-///
-/// Public because three places have to agree on it — this predicate, the invariant test that keeps
-/// it out of the implicit-management sets, and the allowlist of roles an author may name. A second
-/// sandbox data-plane role added to that allowlist and not here drops silently out of both checks.
+/// Public because four places must agree on it — this predicate, the invariant test, the role
+/// allowlist an author may name from, and the Azure role-id map — or a second data-plane role
+/// added to one silently drops out of the others.
 pub const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Data Owner";
 
 /// Whether one Azure `dataAction`, possibly carrying a `*`, addresses a sandbox session.
 ///
-/// Lifecycle counts as reach for the same reason `RunMicrovm` does on AWS: whoever starts a
-/// session can put whatever it likes inside the one it started.
+/// **Lifecycle.** Counts as reach for the same reason `RunMicrovm` does on AWS: whoever starts a
+/// session can put whatever it likes inside it.
 ///
-/// A wildcard is compared as a prefix in **both** directions, which is what makes it fail closed:
-/// `*` and `Microsoft.App/*` sit above the sandbox namespace and still reach into it, while
-/// `…/sandboxes/*` sits below. Matching only downwards would clear the two that matter most. Every
-/// verb under the namespace counts rather than a suffix allowlist, so a verb Azure adds later is
-/// reach until someone decides otherwise.
+/// **Wildcard, both directions.** `*` and `Microsoft.App/*` sit above the sandbox namespace and
+/// still reach into it; `…/sandboxes/*` sits below. Checking only downwards would clear the two
+/// that matter most, so every verb under the namespace counts rather than a suffix allowlist.
 fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
     const SANDBOX_NAMESPACE: &str = "microsoft.app/sandboxgroups/sandboxes";
     let action = action.to_ascii_lowercase();
@@ -210,17 +199,16 @@ fn data_action_reaches_a_sandbox_session(action: &str) -> bool {
 
 /// Whether one IAM action, possibly carrying a `*`, can authorize an operation on a session.
 ///
-/// Three cases sit together here: a wildcard is cleared against the known verbs *and* the MicroVM
-/// namespace, an exact action is matched on that namespace so a verb AWS adds later fails closed,
-/// and the `MicrovmImage` family is excluded because it addresses the image a session launches
-/// from — `sandbox/provision` and `sandbox/heartbeat` legitimately hold those.
+/// **Wildcard.** Cleared against the known verbs *and* the MicroVM namespace — clearing against
+/// today's names alone would miss `lambda:SomeFutureMicrovmVerb*`, letting the broader grant slip
+/// through.
 ///
-/// The namespace half of the wildcard case is what keeps the two branches agreeing: clearing a
-/// wildcard against today's names alone would answer no for `lambda:SomeFutureMicrovmVerb*` while
-/// the un-wildcarded form answers yes, so the broader grant would be the one that slipped through.
+/// **Exact action.** Matched on the MicroVM namespace, so a verb AWS adds later fails closed.
 ///
-/// Compared lowercased throughout, because AWS matches action names case-insensitively — a set
-/// granting `lambda:runmicrovm` reaches a session exactly as `lambda:RunMicrovm` does.
+/// **`MicrovmImage`.** Excluded: it addresses the image a session launches from, which
+/// `sandbox/provision` and `sandbox/heartbeat` legitimately hold.
+///
+/// Compared lowercased throughout — AWS matches action names case-insensitively.
 fn action_reaches_a_microvm_session(action: &str) -> bool {
     // IAM matches an action name with two wildcards, `*` for many characters and `?` for one.
     // Reading only `*` sends `lambda:CreateMicrov?AuthToken` down the exact branch, where it
@@ -232,12 +220,10 @@ fn action_reaches_a_microvm_session(action: &str) -> bool {
             .iter()
             .chain(MICROVM_SESSION_LIFECYCLE_ACTIONS)
             .any(|known| known.to_ascii_lowercase().starts_with(literal));
-        // Every literal run, not only the one before the first `*`: `lambda:Foo*Microvm` names
-        // the namespace after the wildcard, and reading the head alone would answer no while the
-        // grant authorizes a MicroVM verb. Each run is cleared the same way, so the `MicrovmImage`
-        // exclusion still applies to whichever run carries the name.
-        return covers_a_known_verb
-            || action.split('*').any(reaches_the_microvm_namespace);
+        // Every literal run counts, not only the one before the first `*`: `lambda:Foo*Microvm`
+        // names the namespace after the wildcard. Each run is cleared the same way, so the
+        // `MicrovmImage` exclusion still applies to whichever run carries the name.
+        return covers_a_known_verb || action.split('*').any(reaches_the_microvm_namespace);
     }
     action
         .strip_prefix("lambda:")
@@ -336,9 +322,8 @@ mod tests {
     }
 
     /// The Remote Bindings platform gate refuses a kind whose set does not cover the deployment's
-    /// platform, so this data is what decides where each kind may be published.
-    /// `sandbox/remote-execute` covers AWS and Azure; `alien-manager`'s resolve route carries the
-    /// matching pair of arms.
+    /// platform. `sandbox/remote-execute` covers AWS and Azure; `alien-manager`'s resolve route
+    /// carries the matching pair of arms.
     #[test]
     fn remote_binding_permission_sets_cover_the_platforms_that_support_them() {
         use alien_core::Platform;

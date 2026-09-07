@@ -541,19 +541,11 @@ fn azure_remote_ai_setup_does_not_request_application_vnet_access() {
     assert_terraform_valid(&module, "azure_remote_ai_setup_without_vnet_reader");
 }
 
-
 /// The remote sandbox grant reaches one group and nothing wider, and the group exists to be
-/// granted on.
-///
-/// Both halves matter and neither is provable alone. Azure refuses a role assignment scoped to a
-/// resource that does not exist, so a grant is only placeable because setup creates the group in
-/// the same module — which is why the scope is asserted as a *reference* to that resource rather
-/// than as a rendered path: a literal would render identically today and silently lose the
-/// ordering the reference creates.
-///
-/// The width is the security half. `Container Apps SandboxGroup Data Owner` covers
-/// `sandboxGroups/*` on whatever it is scoped to, so a resource-group or subscription scope would
-/// hand a remote caller every sibling sandbox in the deployment.
+/// granted on. The scope is asserted as a *reference*, not a rendered path — a literal would
+/// render identically today but lose the ordering that makes setup create the group first.
+/// `Container Apps SandboxGroup Data Owner` covers `sandboxGroups/*` on whatever it's scoped to,
+/// so a resource-group or subscription scope would hand a remote caller every sibling sandbox.
 #[test]
 fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wider() {
     let sandbox = Sandbox::new("agents".to_string())
@@ -583,19 +575,23 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .collect::<Vec<_>>()
         .join("\n");
 
-    // The scope PERMISSIONS.md documents has to name the group the module creates. A security
-    // team approves the grant from that document and cannot see the traversal the assignment
-    // actually uses, so a scope that renders to a different name -- or to an unsubstituted
-    // template token -- shows them a boundary the deployment does not have.
+    // The scope PERMISSIONS.md documents must name the group the module creates: a security team
+    // approves the grant from that document and cannot see the traversal the assignment actually
+    // uses, so a name that differs — or an unsubstituted template token — misdocuments the boundary.
     let group_name = module
         .files
         .get("agents.tf")
         .expect("the sandbox group renders into its own file")
         .lines()
         // HCL pads `=` to align an attribute with its siblings, so match on the token.
-        .find_map(|line| line.split_whitespace().collect::<Vec<_>>().split_first().and_then(
-            |(first, rest)| (*first == "name" && rest.first() == Some(&"=")).then(|| rest[1..].join(" ")),
-        ))
+        .find_map(|line| {
+            line.split_whitespace()
+                .collect::<Vec<_>>()
+                .split_first()
+                .and_then(|(first, rest)| {
+                    (*first == "name" && rest.first() == Some(&"=")).then(|| rest[1..].join(" "))
+                })
+        })
         .expect("the group carries a name");
     let documented_scope = module
         .files
@@ -642,10 +638,7 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .expect("block ends");
     // HCL pads `=` to align an attribute with its siblings, so the column an assertion would
     // match on moves whenever a neighbouring attribute is added or renamed.
-    let assignment = assignment
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let assignment = assignment.split_whitespace().collect::<Vec<_>>().join(" ");
     let assignment = assignment.as_str();
 
     // The scope attribute itself, not merely a mention of the group somewhere in the block: the
@@ -659,8 +652,7 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
         .next()
         .expect("the scope is one token");
 
-    // A reference, not a path. This is what orders the assignment after the group Azure refuses
-    // to grant on before it exists.
+    // A reference, not a path — see the test doc for why the ordering matters.
     assert_eq!(
         scope, "azapi_resource.agents.id",
         "the grant must be scoped to the created group by reference, and nothing wider"
@@ -686,7 +678,6 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
     // group's body and tags, the provider block, and the rendered PERMISSIONS.md.
     snapshot_module("azure_remote_sandbox", &module);
 }
-
 
 /// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
 /// would tell that installer to register a provider for a resource their package does not contain.
@@ -728,14 +719,21 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
             expects_group,
             "the README documents the group exactly when the package contains one:\n{readme}"
         );
+        // The document a security team approves the grant from. Naming a data-plane role on a
+        // group the module never creates asks them to approve a scope that does not exist.
+        let permissions = module.get("PERMISSIONS.md").unwrap_or("");
+        assert_eq!(
+            permissions.contains("sandboxGroups"),
+            expects_group,
+            "{target:?} documents the sandbox grant exactly when it installs one:\n{permissions}"
+        );
     }
 }
 
-/// A remote sandbox renders on its own, with no other resource declared.
-///
-/// A bindings-only stack is what makes `parent_id` worth pinning: it must resolve to the
-/// deployer-supplied `var.azure_resource_group_name` rather than to a resource group the module
-/// would have had to declare. `terraform validate` is as far as this reaches — not apply.
+/// A remote sandbox renders on its own, with no other resource declared — which is what makes
+/// `parent_id` worth pinning: it must resolve to the deployer-supplied
+/// `var.azure_resource_group_name`, not a resource group the module would have had to declare.
+/// Reaches `terraform validate` only, not apply.
 #[test]
 fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
     let sandbox = Sandbox::new("agents".to_string())
@@ -758,10 +756,9 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
 
     let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
 
-    // The claim this test is here to pin: with no other resource declared there is no resource
-    // group of Alien's own to parent to, so the group must hang off the one the deployer names.
-    // A reference to a resource this stack does not create would fail `terraform validate` below,
-    // but a *wrong variable* would not — so the attribute is read rather than searched for.
+    // With no other resource declared there's no resource group of this stack's own to parent to,
+    // so the group must hang off the one the deployer names. A wrong reference would fail
+    // `terraform validate` below, but a wrong *variable* would not — so this reads the attribute.
     let parent_id = module
         .files
         .get("agents.tf")

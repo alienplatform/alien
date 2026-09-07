@@ -377,11 +377,9 @@ fn test_azure_wildcard_scope_error() {
 /// The heartbeat's stack binding stops at the resource group, and reads only.
 ///
 /// A resource-group scope enumerates sibling sandbox groups, which the resource binding does not,
-/// so the resource binding is the one to prefer. The stack binding exists for the reason
-/// `provision` is resource-group-scoped: `Microsoft.App/sandboxGroups` has no ARM template
-/// representation, so setup can neither create the group nor scope an assignment to one. What
-/// this pins is how far that concession goes — the resource group and no further, and a read
-/// rather than anything that reaches a session.
+/// so the resource binding is the one to prefer. The stack binding stands because nothing
+/// compiles the resource one for a sandbox yet. What this pins is how far that concession goes —
+/// the resource group and no further, and a read rather than anything that reaches a session.
 #[test]
 fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();

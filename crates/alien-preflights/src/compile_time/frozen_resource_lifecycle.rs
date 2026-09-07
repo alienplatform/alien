@@ -58,9 +58,11 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 ));
             }
 
-            // Only AWS has a runtime sandbox controller that builds the image itself. On the
-            // other backends a Live sandbox would be accepted, emitted nowhere, and provisioned
-            // by nobody.
+            // Two reasons, and the second outlives the first. Only AWS has a runtime sandbox
+            // controller, so elsewhere a Live sandbox is emitted nowhere and provisioned by
+            // nobody. And a remote grant on Azure or GCP names a parent that must exist when the
+            // package applies, which only the package that creates it can do — so publishing a
+            // Live sandbox stays impossible on those clouds even once they gain a controller.
             if resource_entry.config.downcast_ref::<Sandbox>().is_some()
                 && resource_entry.lifecycle == ResourceLifecycle::Live
                 && platform != Platform::Aws

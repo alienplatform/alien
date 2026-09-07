@@ -581,8 +581,11 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
         .resources()
         .filter_map(|(resource_id, entry)| {
             // The document a security team approves the grant from, so it lists only bindings the
-            // module actually installs a policy for.
-            alien_core::remote_bindings::remote_binding_is_deliverable(entry)
+            // module actually installs a policy for. A Kubernetes target skips sandbox emission
+            // altogether, so a sandbox entry here would document a grant it never installs.
+            let skipped = target.is_kubernetes()
+                && entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE;
+            (!skipped && alien_core::remote_bindings::remote_binding_is_deliverable(entry))
                 .then(|| alien_core::remote_bindings::remote_binding_for_entry(entry))
                 .flatten()
                 .map(|definition| (resource_id, definition))
@@ -645,10 +648,9 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     .as_deref()
                     .unwrap_or_default()
                 {
-                    // Roles and data actions together: an Azure grant may carry either, and a
-                    // set granting only a predefined role would otherwise render as a heading
-                    // with nothing under it — the strongest grant in the package documented as
-                    // if it were empty.
+                    // Roles and data actions together: an Azure grant may carry either, and a set
+                    // granting only a predefined role would otherwise render as a heading with
+                    // nothing under it — the strongest grant in the package documented as empty.
                     let mut granted: Vec<String> = entry
                         .grant
                         .predefined_roles
@@ -3282,8 +3284,8 @@ fn readme_md(
         };
         format!(
             "\nA completed apply installs the sandbox's {scaffolding} but not the sandbox image \
-             itself. The image is built after the deployment registers; the deployment's status \
-             in Alien reports when the sandbox can accept sessions.\n"
+             itself. The image is built after the deployment registers, and the deployment's \
+             status reports when the sandbox can accept sessions.\n"
         )
     };
 
@@ -3337,16 +3339,16 @@ fn readme_md(
     } else {
         ""
     };
-    // The two things an Azure platform approver stops on -- a preview API version and a provider
-    // check turned off -- with the reason in the artifact rather than only in Alien's source.
-    // Keyed off what was actually emitted, not off the platform: an AKS target is
-    // `Platform::Azure` but skips sandbox emission entirely, so a platform test would document
-    // an `azapi` resource, a preview API and a provider prerequisite that package does not have.
+    // The two things an Azure approver stops on — a preview API version and a validation check
+    // turned off — documented in the artifact, not only in the source. Keyed off what was
+    // emitted, not the platform: an AKS target is `Platform::Azure` but skips sandbox emission
+    // entirely.
     let azure_sandbox_note = if emits_azapi_resource
-        && stack.resources().any(|(_, entry)| {
-            entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE
-        }) {
-        "## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at `Microsoft.App/sandboxGroups@2026-02-01-preview`, because the AzureRM provider has no typed resource for it. Being a preview API, its shape and regional availability can change.\n\nThat resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered before you apply:\n\n```bash\naz provider register --namespace Microsoft.App\n```\n\nAt teardown the deployment runtime deletes the sandbox group before you run `terraform destroy`, so this resource leaves your state without Terraform removing it.\n\n"
+        && stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE)
+    {
+        "## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at `Microsoft.App/sandboxGroups@2026-02-01-preview`, because the AzureRM provider has no typed resource for it. Being a preview API, its shape and regional availability can change.\n\nThat resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered before you apply:\n\n```bash\naz provider register --namespace Microsoft.App\n```\n\n`terraform destroy` removes the group, and removing it deletes every sandbox inside it.\n\n"
     } else {
         ""
     };
