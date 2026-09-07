@@ -307,9 +307,8 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
 /// by its key, so it can't touch this sandbox from another worker's entry; an **inline** set
 /// carries its own scope and can name this sandbox's group from under any key.
 ///
-/// On GCP a named set is read as inline too: `sandbox/execute` and `sandbox/management` bind there
-/// at `projects/${projectName}`, so the key a set is filed under scopes nothing and a grant on one
-/// sandbox reaches every session in the project.
+/// On GCP a named set is read as inline too: the reach scan reads no binding scope, and GCP has no
+/// counterpart to the `${resourceName}` invariant that lets a key scope an AWS or Azure set.
 fn reaches_this_sandbox(
     reference: &PermissionSetReference,
     target: &str,

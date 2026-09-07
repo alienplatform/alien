@@ -386,9 +386,9 @@ fn names_one_resource(scope: &str) -> bool {
 /// no session are not consulted — `sandbox/remote-execute` binds AWS's own network connector by a
 /// fixed ARN, which names no sandbox and grants nothing inside one.
 ///
-/// Answered for AWS and Azure only. `sandbox/execute` and `sandbox/management` bind GCP at
-/// `projects/${projectName}`, so the key-scoping assumption does not hold there at all and the
-/// gate reads a named GCP set as inline instead.
+/// Consulted for AWS and Azure, the platforms whose named sets the gate scopes by key. GCP has no
+/// counterpart invariant — its session-reaching sets are not all pinned to one resource — so
+/// `reaches_this_sandbox` reads a named GCP set as inline.
 #[cfg(test)]
 fn permission_set_is_resource_scoped_on(
     permission_set: &alien_core::permissions::PermissionSet,
@@ -428,9 +428,23 @@ fn permission_set_is_resource_scoped_on(
                     .as_ref()
                     .is_some_and(|spec| names_one_resource(&spec.scope))
             }),
-        // GCP reaches a session through a project-scoped binding, which this predicate has no
-        // verdict for; every other platform declares no sandbox block at all.
-        _ => unreachable!("only AWS and Azure carry a resource-scoped session-reaching entry"),
+        alien_core::Platform::Gcp => platforms
+            .gcp
+            .iter()
+            .flatten()
+            .filter(|entry| gcp_entry_reaches_a_sandbox_session(entry))
+            .all(|entry| {
+                entry
+                    .binding
+                    .resource
+                    .as_ref()
+                    .is_some_and(|spec| names_one_resource(&spec.scope))
+            }),
+        // A permission set declares no block for these, so it carries no entry to scope.
+        alien_core::Platform::Kubernetes
+        | alien_core::Platform::Machines
+        | alien_core::Platform::Local
+        | alien_core::Platform::Test => true,
     }
 }
 
@@ -590,9 +604,8 @@ mod tests {
     /// A set that reaches a session through a project- or subscription-wide resource binding has
     /// to fall through to the inline treatment instead, so this pins the assumption at the source.
     ///
-    /// GCP is not in the loop because it is the platform that fell through: its session-reaching
-    /// sets bind at `projects/${projectName}`, and `reaches_this_sandbox` reads a named GCP set as
-    /// inline for exactly that reason.
+    /// GCP is out of the loop: its session-reaching sets are not all pinned to one resource, so
+    /// `reaches_this_sandbox` reads a named GCP set as inline rather than scoping it by key.
     #[test]
     fn every_session_reaching_set_is_resource_scoped_by_resource_name() {
         for id in list_permission_set_ids() {
