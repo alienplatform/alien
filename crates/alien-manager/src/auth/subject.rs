@@ -117,6 +117,8 @@ pub enum GatewayLogSource {
     AiGateway,
     /// Encryption Gateway request diagnostics.
     EncryptionGateway,
+    /// Sandbox Gateway request diagnostics.
+    SandboxGateway,
 }
 
 impl GatewayLogSource {
@@ -125,6 +127,7 @@ impl GatewayLogSource {
         match self {
             Self::AiGateway => "ai-gateway",
             Self::EncryptionGateway => "encryption-gateway",
+            Self::SandboxGateway => "sandbox-gateway",
         }
     }
 }
@@ -282,6 +285,26 @@ mod tests {
             role,
             bearer_token: "bearer".to_string(),
         }
+    }
+
+    /// The source is server-controlled and travels inside a `deny_unknown_fields` capability, so
+    /// a gateway that Platform has not minted a token for cannot name itself into the log store.
+    #[test]
+    fn a_gateway_logs_capability_carries_its_source_and_refuses_an_unknown_one() {
+        let capability: TelemetryCapability = serde_json::from_value(serde_json::json!({
+            "type": "gatewayLogs",
+            "source": "sandbox-gateway",
+        }))
+        .expect("a minted sandbox-gateway source deserializes");
+        let TelemetryCapability::GatewayLogs { source } = capability;
+        assert_eq!(source, GatewayLogSource::SandboxGateway);
+        assert_eq!(source.as_str(), "sandbox-gateway");
+
+        serde_json::from_value::<TelemetryCapability>(serde_json::json!({
+            "type": "gatewayLogs",
+            "source": "storage-gateway",
+        }))
+        .expect_err("a source the manager does not know is not a source");
     }
 
     #[test]
