@@ -1084,6 +1084,55 @@ pub enum CommandOutput {
     },
 }
 
+/// The id a started job answers to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobStart {
+    /// Identifier every later poll and cancel addresses
+    pub job_id: String,
+}
+
+/// A job's output so far, and how it ended once it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobPoll {
+    /// Whether the command is still running
+    pub running: bool,
+    /// Output produced after the polled sequence. The ending is `exit` or `error`, never a frame.
+    pub frames: Vec<CommandOutput>,
+    /// How the command exited, once it has
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit: Option<JobExit>,
+    /// Why the command ended without exiting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JobError>,
+}
+
+/// How a job's command exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobExit {
+    /// Process exit code
+    pub code: i32,
+    /// Set when output was cut short by a bound rather than by the command finishing
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Why a job ended without its command exiting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobError {
+    /// Machine-readable cause, e.g. `deadlineExceeded`
+    pub code: String,
+    /// Human-readable detail
+    pub message: String,
+}
+
 /// An authenticated, port-scoped capability to reach a service inside a sandbox.
 ///
 /// Not a URL string: AWS needs a JWE and a port header, Azure an Entra token, and a bare
@@ -1145,6 +1194,28 @@ pub trait Sandbox: Binding {
         session_id: &str,
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
+
+    /// Starts a command as a job, which outlives the call that started it. Requires `jobs`.
+    ///
+    /// A start that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN` and not retryable: the sandbox
+    /// may have taken the command, and repeating it would run it twice.
+    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart>;
+
+    /// Reads a job's output after `since_seq`, and its ending once it has one. Requires `jobs`.
+    ///
+    /// `None` reads from the first frame. Repeating a poll costs nothing and changes nothing, so
+    /// a sandbox that cannot be reached is `SANDBOX_UNREACHABLE` and retryable.
+    async fn poll_job(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
+    ) -> Result<JobPoll>;
+
+    /// Cancels a job, stopping its command. Requires `jobs`.
+    ///
+    /// Classified like `poll_job`: a cancel that is repeated stops nothing a second time.
+    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()>;
 
     /// Reads a file out of the sandbox. Requires `files`. Paths are normalised and may not
     /// escape the root.

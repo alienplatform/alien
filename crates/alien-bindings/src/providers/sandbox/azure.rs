@@ -12,8 +12,8 @@ use futures::stream::{self, BoxStream};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
-    SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
+    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
     CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
@@ -530,6 +530,23 @@ impl Sandbox for AzureSandbox {
             "sandbox.snapshot",
             "this client sends no snapshot request, and nothing owns the artifact once taken",
         ))
+    }
+
+    async fn start_job(&self, _session_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
+        Err(self.unsupported("sandbox.jobStart", NO_JOB_HOST))
+    }
+
+    async fn poll_job(
+        &self,
+        _session_id: &str,
+        _job_id: &str,
+        _since_seq: Option<u64>,
+    ) -> Result<JobPoll> {
+        Err(self.unsupported("sandbox.jobPoll", NO_JOB_HOST))
+    }
+
+    async fn cancel_job(&self, _session_id: &str, _job_id: &str) -> Result<()> {
+        Err(self.unsupported("sandbox.jobCancel", NO_JOB_HOST))
     }
 
     async fn terminate(&self, session_id: &str) -> Result<()> {
@@ -1294,6 +1311,8 @@ const MAX_SESSION_ID: usize = 63;
 const RUN_COMMAND: &str = "sandbox.runCommand";
 const CREATE: &str = "sandbox.create";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
+
+const NO_JOB_HOST: &str = "Azure sandboxes run no in-guest agent to own a job between calls";
 
 /// How long a session has to become able to take work, and how often that is checked.
 const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);

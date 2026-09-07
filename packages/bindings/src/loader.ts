@@ -189,6 +189,14 @@ export interface RawCommandStreamHandle {
   close(): Promise<void>
 }
 
+/** A job's output so far, as the addon returns it. */
+export interface RawJobPoll {
+  running: boolean
+  frames: RawCommandFrame[]
+  exit?: { code: number; truncated: boolean } | null
+  error?: { code: string; message: string } | null
+}
+
 /** A live sandbox session, as the addon returns it. */
 export interface RawSandboxSession {
   sessionId: string
@@ -218,6 +226,15 @@ export interface RawSandboxHandle {
     workingDirectory?: string | null,
     env?: Record<string, string> | null,
   ): Promise<RawCommandStreamHandle>
+  startJob(
+    sessionId: string,
+    command: string[],
+    deadlineMs: number,
+    workingDirectory?: string | null,
+    env?: Record<string, string> | null,
+  ): Promise<string>
+  pollJob(sessionId: string, jobId: string, sinceSeq?: number | null): Promise<RawJobPoll>
+  cancelJob(sessionId: string, jobId: string): Promise<void>
   readFile(sessionId: string, path: string): Promise<Buffer>
   writeFile(sessionId: string, path: string, contents: Buffer): Promise<void>
   mkdir(sessionId: string, path: string): Promise<void>

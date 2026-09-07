@@ -69,6 +69,9 @@ function fakeRemoteAddon() {
     runCommand: async () => {
       throw new Error("unused")
     },
+    startJob: async () => "j1",
+    pollJob: async () => ({ running: false, frames: [], exit: { code: 0, truncated: false } }),
+    cancelJob: async () => {},
     readFile: async (_sessionId, path) => Buffer.from(path),
     writeFile: async () => {},
     mkdir: async () => {},
@@ -285,6 +288,9 @@ describe("Bindings.forRemoteDeployment", () => {
         "getOrCreate",
         "list",
         "runCommand",
+        "startJob",
+        "pollJob",
+        "cancelJob",
         "readFile",
         "writeFiles",
         "mkdir",
