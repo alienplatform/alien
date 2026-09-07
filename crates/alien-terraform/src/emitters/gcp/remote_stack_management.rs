@@ -69,7 +69,7 @@ impl TfEmitter for GcpRemoteStackManagementEmitter {
         let member = service_account_member_for_label(label);
         let context = permission_context(label, ctx.stack.id());
         if let Some(profile) = ctx.stack.management().profile() {
-            for permission_set_ref in global_permission_refs(profile) {
+            for permission_set_ref in global_permission_refs(ctx, profile) {
                 if let Some(permission_set) = permission_set_ref
                     .resolve(|name| alien_permissions::get_permission_set(name).cloned())
                 {
@@ -204,12 +204,11 @@ fn emit_project_management_bindings(
     Ok(())
 }
 
-fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
-    profile
-        .0
-        .get("*")
-        .map(|refs| refs.iter().collect())
-        .unwrap_or_default()
+fn global_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
+) -> Vec<&'a PermissionSetReference> {
+    alien_permissions::management_identity_global_refs(ctx.stack.resources.values(), profile)
 }
 
 fn resource_scoped_permission_refs(

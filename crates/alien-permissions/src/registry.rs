@@ -561,3 +561,37 @@ mod tests {
         }
     }
 }
+
+/// The global management refs this deployment's own identity keeps.
+///
+/// A set the remote caller claims is dropped. Leaving the same reach on the management identity
+/// makes it the second tenant the single-tenancy gate exists to refuse, and the gate runs at plan
+/// time while this runs on every apply and every update — so setup and runtime have to answer the
+/// same way or the first update re-grants what the package withheld.
+pub fn management_identity_global_refs<'p, 'r, I>(
+    resources: I,
+    profile: &'p alien_core::permissions::PermissionProfile,
+) -> Vec<&'p alien_core::permissions::PermissionSetReference>
+where
+    I: IntoIterator<Item = &'r alien_core::ResourceEntry> + Clone,
+{
+    profile
+        .0
+        .get("*")
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_ref| {
+                    !alien_core::remote_bindings::remote_binding_claims_management_set(
+                        resources.clone(),
+                        permission_ref.id(),
+                        || {
+                            permission_ref
+                                .resolve(|name| get_permission_set(name).cloned())
+                                .is_some_and(|set| permission_set_reaches_a_sandbox_session(&set))
+                        },
+                    )
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
