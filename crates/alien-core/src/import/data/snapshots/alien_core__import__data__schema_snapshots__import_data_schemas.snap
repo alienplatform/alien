@@ -1324,14 +1324,14 @@ expression: schemas
   },
   "azure_service_activation": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "Azure ServiceActivation ImportData — registers an Azure resource provider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the stack contains resources that depend on a specific Azure RP (Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).",
+    "description": "Azure ServiceActivation ImportData — names an Azure resource provider the subscription must have registered.\n\nAdded by the `AzureServiceActivationMutation` preflight when the stack contains resources that depend on a specific Azure RP (Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).",
     "properties": {
       "providerNamespace": {
         "description": "Resource provider namespace (e.g. `Microsoft.App`).",
         "type": "string"
       },
       "registered": {
-        "description": "True once the provider is reported `Registered`.",
+        "description": "Whether setup established the registration. False from a Terraform package: it registers nothing, and the runtime reads the real state on its first refresh.",
         "type": "boolean"
       },
       "subscriptionId": {
@@ -1485,6 +1485,21 @@ expression: schemas
       "vaultUri"
     ],
     "title": "AzureVaultImportData",
+    "type": "object"
+  },
+  "gcp_agent_platform_engine": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP Agent Platform reasoning-engine ImportData.\n\nEmitted only for a Frozen engine, which the setup stack creates. Vertex assigns the id, so it is read off the created resource rather than derived: the controller and the template beneath it address the engine by exactly this segment.",
+    "properties": {
+      "engineId": {
+        "description": "The engine's resource name, or the bare id it ends with.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "engineId"
+    ],
+    "title": "GcpAgentPlatformEngineImportData",
     "type": "object"
   },
   "gcp_ai": {
@@ -2076,6 +2091,21 @@ expression: schemas
       "serviceName"
     ],
     "title": "GcpServiceActivationImportData",
+    "type": "object"
+  },
+  "gcp_sandbox": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "description": "GCP Agent Platform sandbox ImportData.\n\nThe sandbox is the environment template, which is release-owned under either lifecycle: setup creates no template, so this carries only the region the stack applied in. The engine registers its own id, and the template controller reads it from that dependency.",
+    "properties": {
+      "region": {
+        "description": "Region the setup stack applied in; selects the regional Agent Platform endpoint.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "region"
+    ],
+    "title": "GcpSandboxImportData",
     "type": "object"
   },
   "gcp_storage": {

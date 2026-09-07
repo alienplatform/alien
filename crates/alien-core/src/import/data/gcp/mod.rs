@@ -1,3 +1,4 @@
+pub mod agent_platform_engine;
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
@@ -9,12 +10,14 @@ pub mod postgres;
 pub mod queue;
 pub mod remote_bindings;
 pub mod remote_stack_management;
+pub mod sandbox;
 pub mod service_account;
 pub mod service_activation;
 pub mod storage;
 pub mod vault;
 pub mod worker;
 
+pub use agent_platform_engine::*;
 pub use ai::*;
 pub use artifact_registry::*;
 pub use build::*;
@@ -26,6 +29,7 @@ pub use postgres::*;
 pub use queue::*;
 pub use remote_bindings::*;
 pub use remote_stack_management::*;
+pub use sandbox::*;
 pub use service_account::*;
 pub use service_activation::*;
 pub use storage::*;

@@ -359,6 +359,12 @@ pub fn generate_terraform_module(
         &per_resource,
         crate::emitters::aws::sandbox::NETWORK_CONNECTOR_RESOURCE,
     );
+    // The reasoning engine is a google-beta-only type. Keyed off the emitted block so a stack
+    // without a Frozen sandbox declares nothing extra.
+    let include_google_beta_provider = has_resource_type(
+        &per_resource,
+        crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
+    );
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
     let include_time_provider = gcp_iam_propagation_barrier.is_some()
@@ -398,6 +404,7 @@ pub fn generate_terraform_module(
             include_helm_provider,
             include_azapi_provider,
             include_awscc_provider,
+            include_google_beta_provider,
         ))?,
     );
     files.insert(
@@ -424,6 +431,7 @@ pub fn generate_terraform_module(
             include_helm_provider,
             include_azapi_provider,
             include_awscc_provider,
+            include_google_beta_provider,
         ))?,
     );
     files.insert(
@@ -1183,6 +1191,7 @@ fn versions_body(
     include_helm_provider: bool,
     include_azapi_provider: bool,
     include_awscc_provider: bool,
+    include_google_beta_provider: bool,
 ) -> Body {
     let required_version = if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
@@ -1212,6 +1221,13 @@ fn versions_body(
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
+        if include_google_beta_provider {
+            // The floor is where `google_vertex_ai_reasoning_engine` exists.
+            provider_attrs.push(attr(
+                "google-beta",
+                provider_decl_attr("hashicorp/google-beta", ">= 6.0"),
+            ));
+        }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         // Upper bound deliberate: an open-ended constraint promises every future
@@ -2330,6 +2346,7 @@ fn providers_body(
     include_helm_provider: bool,
     include_azapi_provider: bool,
     include_awscc_provider: bool,
+    include_google_beta_provider: bool,
 ) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.cloud_platform() {
@@ -2384,6 +2401,18 @@ fn providers_body(
                     attr("region", expr::raw("var.gcp_region")),
                 ]),
             }));
+            // Declared in required_providers without a provider block, google-beta has no
+            // project or credentials to work from and plan refuses the module.
+            if include_google_beta_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("google-beta".to_string())],
+                    body: Body::from(vec![
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("region", expr::raw("var.gcp_region")),
+                    ]),
+                }));
+            }
         }
         alien_core::Platform::Azure => {
             structures.push(Structure::Block(Block {
@@ -3531,6 +3560,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,
