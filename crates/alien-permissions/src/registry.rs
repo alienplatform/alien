@@ -266,26 +266,33 @@ pub fn permission_set_covers_platform(
     entries.is_some_and(|count| count > 0)
 }
 
+/// Whether a scope naming `${resourceName}` is bounded to that one resource.
+///
+/// Either IAM wildcard inside the token's own name segment spans siblings:
+/// `${stackPrefix}-${resourceName}-*` renders `acme-agents-*`, which matches sibling sandbox
+/// `agents-2`'s `acme-agents-2`. Only `/` and `:` end that segment — no id or prefix holds either.
+#[cfg(test)]
+fn names_one_resource(scope: &str) -> bool {
+    const TOKEN: &str = "${resourceName}";
+    scope.split_once(TOKEN).is_some_and(|(_, rest)| {
+        let segment = rest.split(['/', ':']).next().unwrap_or_default();
+        !segment.contains('*') && !segment.contains('?')
+    })
+}
+
 /// Whether the session-reaching part of a set is scoped to the resource it is filed under.
 ///
 /// The single-tenancy gate treats a **named** set as scoped by the profile key it sits under. That
-/// only holds where every entry carrying the session-reaching grant interpolates `${resourceName}`
-/// and stops there: one scoped to a whole project or subscription, or one that appends `*` to the
-/// token, reaches siblings whatever key it is filed under. Entries that reach no session are not
-/// consulted — `sandbox/remote-execute` binds AWS's own network connector by a fixed ARN, which
-/// names no sandbox and grants nothing inside one.
+/// only holds where every entry carrying the session-reaching grant names `${resourceName}` and
+/// bounds the segment it sits in: one scoped to a whole project or subscription, or one whose
+/// wildcard runs past the name, reaches siblings whatever key it is filed under. Entries that reach
+/// no session are not consulted — `sandbox/remote-execute` binds AWS's own network connector by a
+/// fixed ARN, which names no sandbox and grants nothing inside one.
 #[cfg(test)]
 fn permission_set_is_resource_scoped_on(
     permission_set: &alien_core::permissions::PermissionSet,
     platform: alien_core::Platform,
 ) -> bool {
-    fn names_one_resource(scope: &str) -> bool {
-        const TOKEN: &str = "${resourceName}";
-        scope
-            .split_once(TOKEN)
-            .is_some_and(|(_, rest)| !rest.starts_with('*'))
-    }
-
     let platforms = &permission_set.platforms;
     match platform {
         alien_core::Platform::Aws => platforms
@@ -384,6 +391,42 @@ mod tests {
 
         // Should be sorted or at least consistent
         println!("Available permission sets: {:?}", ids);
+    }
+
+    /// A resource id may be another id plus a separator — `agents` and `agents-2` are both valid,
+    /// and both render an image named `{prefix}-{id}` — so a wildcard left in the segment the
+    /// resource name sits in matches the sibling's resource and the gate's key scoping is void.
+    #[test]
+    fn only_a_bounded_resource_name_segment_names_one_resource() {
+        for bounded in [
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}",
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}:*",
+            "arn:aws:s3:::${resourceName}/sandbox/*",
+            "/subscriptions/s/resourceGroups/g/providers/Microsoft.App/sandboxGroups/${resourceName}",
+        ] {
+            assert!(
+                names_one_resource(bounded),
+                "'{bounded}' names one resource and nothing beside it"
+            );
+        }
+
+        for reaches_a_sibling in [
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}*",
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}-*",
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}-?",
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}_*",
+            "arn:aws:lambda:us-east-1:1:microvm-image:acme-${resourceName}-build*",
+        ] {
+            assert!(
+                !names_one_resource(reaches_a_sibling),
+                "'{reaches_a_sibling}' also matches the resource a sibling id renders"
+            );
+        }
+
+        assert!(
+            !names_one_resource("/subscriptions/${subscriptionId}"),
+            "a scope that never names the resource is bounded to no resource"
+        );
     }
 
     /// The single-tenancy gate scopes a **named** session-reaching set by the profile key it sits
