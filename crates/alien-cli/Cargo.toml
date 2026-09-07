@@ -30,6 +30,8 @@ alien-build = { workspace = true }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
 alien-cli-common = { workspace = true }
+alien-operations-sdk = { workspace = true }
+alien-permissions = { workspace = true }
 
 # Local development dependencies (always enabled)
 alien-local = { workspace = true }

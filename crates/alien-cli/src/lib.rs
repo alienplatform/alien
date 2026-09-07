@@ -25,8 +25,6 @@ use crate::commands::access_requests::{access_requests_task, AccessRequestsArgs}
 #[cfg(feature = "platform")]
 use crate::commands::manager::{managers_task, ManagersArgs};
 #[cfg(feature = "platform")]
-use crate::commands::operations::{operations_task, OperationsArgs};
-#[cfg(feature = "platform")]
 use crate::commands::packages::{packages_task, PackagesArgs};
 #[cfg(feature = "platform")]
 use crate::commands::platform::{
@@ -41,12 +39,12 @@ use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task,
+    fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task, operations_task,
     prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
     upgrade_task, vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs,
     BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
-    InitArgs, LogsArgs, OnboardArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs,
-    UpgradeArgs, WhoamiArgs,
+    InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs,
+    StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -142,7 +140,6 @@ impl Cli {
             Some(Commands::Platform(PlatformCommand::Projects(args))) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::Managers(args)) => args.json,
-            #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => args.json,
             #[cfg(feature = "platform")]
             Some(Commands::AccessRequests(args)) => args.json,
@@ -212,8 +209,9 @@ pub enum Commands {
     #[command(alias = "manager")]
     Managers(ManagersArgs),
 
-    /// Manage operations plugins (publish custom bundles, list the catalog)
-    #[cfg(feature = "platform")]
+    /// Build, test, and manage operations plugins (init, check, test,
+    /// permissions, publish, list). `init`/`check`/`test` work fully
+    /// offline; the rest need a linked platform workspace.
     #[command(alias = "operation")]
     Operations(OperationsArgs),
 
@@ -1654,7 +1652,6 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             },
             #[cfg(feature = "platform")]
             Some(Commands::Managers(args)) => managers_task(args, ctx).await?,
-            #[cfg(feature = "platform")]
             Some(Commands::Operations(args)) => operations_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::AccessRequests(args)) => access_requests_task(args, ctx).await?,

@@ -1,12 +1,5 @@
-//! CLI commands for operations plugins.
-//!
-//! Operations plugins package named operations (`plugin/operation`) that run
-//! inside a deployment via the commands interface. `publish` uploads a custom
-//! plugin bundle (a ZIP with `metadata.json` + per-arch binaries) to the
-//! platform so a workspace can use its operations; `list` shows the catalog.
-//!
-//! Platform-gated: these talk to the Alien platform API, not a standalone
-//! manager.
+//! `publish`, `list`, and `invoke` — the operations subcommands that talk to
+//! the Alien platform API. Only available with the `platform` feature.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -14,12 +7,12 @@ use std::time::Duration;
 
 use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_operations_sdk::PluginManifest;
 use alien_platform_api::types::{
     InvokeOperationRequest, InvokeOperationResponseStatus, VerifyOperationCheckRequest,
     VerifyOperationCheckResponseOutcome,
 };
 use alien_platform_api::SdkResultExt as _;
-use clap::{Parser, Subcommand};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -27,89 +20,6 @@ use serde_json::{json, Value};
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::output::print_json;
-
-#[derive(Parser, Debug, Clone)]
-#[command(
-    about = "Manage operations plugins",
-    long_about = "Manage operations plugins.
-
-Operations plugins package named operations you can run inside a deployment via
-the commands interface (`plugin/operation`). Publish a custom bundle to make its
-operations available in your workspace.
-
-EXAMPLES:
-    # Publish a custom plugin bundle
-    alien operations publish ./postgres-operations-1.0.0.zip
-
-    # List available plugins (builtin + custom)
-    alien operations list
-
-    # Invoke an enabled operation without an AI agent
-    alien operations invoke --deployment mycustomer/prod \\
-      --operation kubernetes/get-pods \\
-      --params '{\"namespace\": \"default\", \"maxResults\": 10}'
-"
-)]
-pub struct OperationsArgs {
-    #[command(subcommand)]
-    pub action: OperationsAction,
-
-    /// Project ID or name. Defaults to the linked project.
-    #[arg(long, global = true)]
-    pub project: Option<String>,
-
-    /// Emit machine-readable JSON.
-    #[arg(long, global = true)]
-    pub json: bool,
-}
-
-#[derive(Subcommand, Debug, Clone)]
-pub enum OperationsAction {
-    /// Publish a custom operations plugin bundle (ZIP) to your workspace.
-    Publish {
-        /// Path to the plugin bundle ZIP (contains metadata.json + binaries).
-        bundle: PathBuf,
-    },
-    /// List available operations plugins (builtin + custom).
-    List,
-    /// Invoke an enabled operation and wait for its result.
-    Invoke {
-        /// Deployment ID, or <deployment-group-name>/<deployment-name>.
-        #[arg(long)]
-        deployment: String,
-
-        /// Operation name in <plugin>/<operation> form.
-        #[arg(long)]
-        operation: String,
-
-        /// Operation parameters as JSON.
-        #[arg(long, default_value = "{}")]
-        params: String,
-
-        /// Timeout in seconds.
-        #[arg(long, default_value = "60")]
-        timeout: u64,
-
-        /// If the operation requires approval, automatically create an access
-        /// request instead of printing instructions.
-        #[arg(long = "request-access")]
-        request_access: bool,
-
-        /// Approval duration to request with --request-access, e.g. 1h, 30m.
-        #[arg(long = "access-duration", default_value = "1h")]
-        access_duration: String,
-    },
-}
-
-/// The `metadata.json` fields the CLI reads to describe the bundle. The full
-/// object is forwarded to the platform, which validates it authoritatively.
-#[derive(Debug, Deserialize)]
-struct BundleMetadata {
-    name: String,
-    version: String,
-    #[serde(default)]
-    tier: Option<String>,
-}
 
 /// Step 1: ask the platform for a presigned S3 URL to upload the bundle ZIP to.
 #[derive(Debug, Serialize)]
@@ -139,60 +49,18 @@ struct PublishRequest {
     metadata: Value,
 }
 
-struct InvokeTaskOptions<'a> {
-    deployment: &'a str,
-    operation: &'a str,
-    params: &'a str,
-    timeout_secs: u64,
-    json: bool,
-    request_access: bool,
-    access_duration: &'a str,
+/// Options for [`invoke_task`], grouped to keep the call site readable.
+pub struct InvokeTaskOptions<'a> {
+    pub deployment: &'a str,
+    pub operation: &'a str,
+    pub params: &'a str,
+    pub timeout_secs: u64,
+    pub json: bool,
+    pub request_access: bool,
+    pub access_duration: &'a str,
 }
 
-pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
-    let auth = ctx.auth_http().await?;
-    let workspace = ctx.resolve_workspace_with_bootstrap(!args.json).await?;
-    // The operations catalog is project-scoped: the platform requires a
-    // `project` alongside `workspace`. Resolve the linked project (or the
-    // `--project` override) the same way the other project-scoped commands do.
-    let (_, project_link) = ctx
-        .resolve_project(args.project.as_deref(), !args.json)
-        .await?;
-    let project = project_link.project_id;
-
-    match args.action {
-        OperationsAction::Publish { bundle } => {
-            publish_task(&auth, &workspace, &project, &bundle, args.json).await
-        }
-        OperationsAction::List => list_task(&auth, &workspace, &project, args.json).await,
-        OperationsAction::Invoke {
-            deployment,
-            operation,
-            params,
-            timeout,
-            request_access,
-            access_duration,
-        } => {
-            invoke_task(
-                &ctx,
-                &workspace,
-                &project,
-                InvokeTaskOptions {
-                    deployment: &deployment,
-                    operation: &operation,
-                    params: &params,
-                    timeout_secs: timeout,
-                    json: args.json,
-                    request_access,
-                    access_duration: &access_duration,
-                },
-            )
-            .await
-        }
-    }
-}
-
-async fn invoke_task(
+pub async fn invoke_task(
     ctx: &ExecutionMode,
     workspace: &str,
     project: &str,
@@ -725,7 +593,7 @@ fn parse_operation_reference(reference: &str) -> Option<(&str, &str)> {
 /// Read + validate the bundle, upload the ZIP straight to S3 via a presigned
 /// URL the platform mints, then register the plugin. The bytes never flow
 /// through the API.
-async fn publish_task(
+pub async fn publish_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
     project: &str,
@@ -739,11 +607,8 @@ async fn publish_task(
                 message: format!("could not read bundle '{}'", bundle_path.display()),
             })?;
 
-    let (metadata_value, metadata) = read_bundle_metadata(&bytes, bundle_path)?;
-    let tier = metadata
-        .tier
-        .clone()
-        .unwrap_or_else(|| "destructive".to_string());
+    let (metadata_value, manifest) = read_bundle_metadata(&bytes, bundle_path)?;
+    let tier = manifest.tier.as_str().to_string();
 
     // Step 1: get a presigned S3 PUT URL for this plugin's bundle.
     let upload_url_endpoint = api_url(
@@ -756,7 +621,7 @@ async fn publish_task(
         .reqwest_client()
         .request(Method::POST, upload_url_endpoint.clone())
         .json(&UploadUrlRequest {
-            name: metadata.name.clone(),
+            name: manifest.name.clone(),
         })
         .send()
         .await
@@ -785,8 +650,13 @@ async fn publish_task(
 
     // Step 2: PUT the ZIP directly to S3. The Content-Type MUST match what the
     // presign was signed with, or S3 rejects the signature.
-    let put_response = auth
-        .reqwest_client()
+    //
+    // This must NOT reuse `auth.reqwest_client()` — that client carries the
+    // Alien platform's Authorization bearer header on every request, and S3
+    // rejects a presigned-URL request that also carries an Authorization
+    // header ("Only one auth mechanism allowed"). The presigned URL's query
+    // string IS the auth; a plain, unauthenticated client is required here.
+    let put_response = reqwest::Client::new()
         .request(Method::PUT, &presign.upload_url)
         .header("content-type", &presign.content_type)
         .body(bytes)
@@ -812,8 +682,8 @@ async fn publish_task(
         .reqwest_client()
         .request(Method::POST, publish_endpoint.clone())
         .json(&PublishRequest {
-            name: metadata.name.clone(),
-            version: metadata.version.clone(),
+            name: manifest.name.clone(),
+            version: manifest.version.clone(),
             tier,
             metadata: metadata_value,
         })
@@ -843,13 +713,13 @@ async fn publish_task(
     } else {
         println!(
             "Published plugin '{}' v{} to workspace '{}'.",
-            metadata.name, metadata.version, workspace
+            manifest.name, manifest.version, workspace
         );
     }
     Ok(())
 }
 
-async fn list_task(
+pub async fn list_task(
     auth: &crate::auth::AuthHttp,
     workspace: &str,
     project: &str,
@@ -900,9 +770,13 @@ async fn list_task(
     Ok(())
 }
 
-/// Extract and validate `metadata.json` from the bundle ZIP. Returns the raw
-/// JSON value (forwarded verbatim) plus the fields the CLI needs.
-fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMetadata)> {
+/// Extract and validate `metadata.json` from the bundle ZIP through the same
+/// manifest schema `alien operations check` validates offline — a bundle
+/// with a broken manifest fails here, before spending time uploading it to
+/// S3, rather than only being caught by the platform's own (looser, string
+/// name/version/tier-only) validation after upload. Returns the raw JSON
+/// value (forwarded verbatim) plus the parsed manifest.
+fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, PluginManifest)> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(reader)
@@ -926,12 +800,12 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, BundleMe
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
-    let metadata: BundleMetadata = serde_json::from_value(value.clone())
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "metadata.json is missing required fields (name, version)".to_string(),
-        })?;
-    Ok((value, metadata))
+    let manifest = PluginManifest::parse_and_validate(contents.as_bytes()).context(
+        ErrorData::ConfigurationError {
+            message: format!("bundle '{}' has an invalid manifest", path.display()),
+        },
+    )?;
+    Ok((value, manifest))
 }
 
 fn api_url(base_url: &str, path: &str, workspace: &str, project: &str) -> Result<reqwest::Url> {
@@ -980,7 +854,7 @@ mod tests {
             read_bundle_metadata(&bytes, &PathBuf::from("x.zip")).expect("valid bundle");
         assert_eq!(parsed.name, "postgres-operations");
         assert_eq!(parsed.version, "1.0.0");
-        assert_eq!(parsed.tier.as_deref(), Some("mutating"));
+        assert_eq!(parsed.tier, alien_operations_sdk::RiskTier::Mutating);
         // The full object is forwarded verbatim (operations[] preserved).
         assert!(value.get("operations").is_some());
     }

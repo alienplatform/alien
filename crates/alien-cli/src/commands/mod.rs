@@ -40,9 +40,10 @@ pub mod platform;
 #[cfg(feature = "platform")]
 pub mod manager;
 
-/// Operations plugin commands (publish, list). Talk to the platform API, so
-/// only available when the `platform` feature is enabled.
-#[cfg(feature = "platform")]
+/// Operations plugin commands. `init`, `check`, and `test` are fully local
+/// and need no platform account; `permissions`, `publish`, `list`, and
+/// `invoke` talk to the platform API and are gated on the `platform` feature
+/// inside the module.
 pub mod operations;
 
 #[cfg(feature = "platform")]
@@ -70,6 +71,7 @@ pub use examples::{examples_task, ExamplesArgs};
 pub use init::{init_task, InitArgs};
 pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};
+pub use operations::{operations_task, OperationsArgs};
 #[cfg(feature = "platform")]
 pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};

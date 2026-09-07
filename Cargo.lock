@@ -347,6 +347,8 @@ dependencies = [
  "alien-local",
  "alien-manager",
  "alien-manager-api",
+ "alien-operations-sdk",
+ "alien-permissions",
  "alien-platform-api",
  "alien-preflights",
  "alien-terraform",
@@ -949,6 +951,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "alien-operations-sdk"
+version = "3.3.20"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "async-trait",
+ "schemars 0.8.22",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

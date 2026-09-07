@@ -1,0 +1,18 @@
+[package]
+name = "alien-operations-sdk"
+version.workspace = true
+edition = "2021"
+license-file.workspace = true
+description = "Public SDK for authoring Alien operations plugins: manifest schema, invocation protocol, and the Plugin trait."
+
+[dependencies]
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+async-trait = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+tokio = { workspace = true, features = ["io-util", "io-std", "rt"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
