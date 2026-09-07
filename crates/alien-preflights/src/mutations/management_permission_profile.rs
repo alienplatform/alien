@@ -515,7 +515,10 @@ mod tests {
             .management()
             .profile()
             .expect("auto management profile should be generated");
-        let global = permissions.0.get("*").expect("global management permissions");
+        let global = permissions
+            .0
+            .get("*")
+            .expect("global management permissions");
         assert!(
             global
                 .iter()

@@ -206,10 +206,9 @@ pub struct RemoteAzureSandboxBinding {
     /// Idle seconds after which a session suspends, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub idle_suspend_seconds: Option<u32>,
-    /// Whether the declaration asked for open egress. Always true here, and sent rather than
-    /// implied for the same reason the AWS binding sends it: the remote grant lets its holder
-    /// create sessions the declared policy never reaches, so a client reconstructing the policy
-    /// needs the answer on the wire rather than inferring it from an absent field.
+    /// Whether the declaration asked for open egress. Always true here, sent explicitly because
+    /// the remote grant lets its holder create sessions the declared policy never reaches — a
+    /// client must read this rather than assume it from an absent field.
     pub allow_egress: bool,
     /// Declared session ceilings, where the declaration named them.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1349,10 +1348,9 @@ fn remote_sandbox_binding(
     // resolve into an AWS credential lease for a sandbox that is not on AWS.
     match (deployment.platform, binding) {
         (Platform::Aws, SandboxBinding::Aws(binding)) => {
-            // The connector is unreachable rather than merely ungranted: starting a session on
-            // one is authorized as `lambda:PassNetworkConnector`, which `sandbox/remote-execute`
-            // withholds. Refused here rather than as an AccessDenied inside the caller's own
-            // `create()`; see `alien_core::remote_bindings::remote_binding_undeliverable_reason`.
+            // Unreachable, not merely ungranted: starting a session on a connector needs
+            // `lambda:PassNetworkConnector`, which `sandbox/remote-execute` withholds. Refused
+            // here rather than as an AccessDenied from inside `create()`.
             if !binding.egress_connector_arns.is_empty() {
                 return Err(ErrorData::bad_request(format!(
                     "Sandbox resource '{resource_id}' restricts egress; Remote Bindings can only reach a sandbox declared with open egress"
@@ -1382,13 +1380,14 @@ fn remote_sandbox_binding(
                 )));
             }
 
-            let optional = |value: Option<alien_core::bindings::BindingValue<String>>,
-                            field: &str|
-             -> Result<Option<String>, alien_error::AlienError<ErrorData>> {
-                value
-                    .map(|value| concrete_binding_value(&value, field))
-                    .transpose()
-            };
+            let optional =
+                |value: Option<alien_core::bindings::BindingValue<String>>,
+                 field: &str|
+                 -> Result<Option<String>, alien_error::AlienError<ErrorData>> {
+                    value
+                        .map(|value| concrete_binding_value(&value, field))
+                        .transpose()
+                };
 
             Ok(RemoteSandboxBinding::Azure(RemoteAzureSandboxBinding {
                 sandbox_group: concrete_binding_value(

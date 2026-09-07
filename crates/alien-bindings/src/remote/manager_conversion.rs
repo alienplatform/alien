@@ -305,10 +305,9 @@ impl ResolvedRemoteBinding {
             } => {
                 let manager_types::RemoteAzureCredentials::AccessToken(token) =
                     client_config.credentials;
-                // Read from the wire rather than assumed: the manager refuses to lease a sandbox
-                // declared with anything else, and a client that inferred `Allow` from an absent
-                // field would keep inferring it if that ever changed. Checked before the binding
-                // is consumed so the refusal can still name the group.
+                // Checked rather than assumed, so a future manager change in what it refuses
+                // still gets caught here. Checked before the binding is consumed so the refusal
+                // can still name the group.
                 if !binding.allow_egress {
                     return Err(AlienError::new(ErrorData::RemoteAccessFailed {
                         operation: format!(

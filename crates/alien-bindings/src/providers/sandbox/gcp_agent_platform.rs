@@ -498,12 +498,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
-    /// The platform's row, unnarrowed.
-    ///
-    /// `sessionLifetime` holds whether or not a ttl was declared: `expireTime` is, in the API's own
-    /// words, *always provided on output regardless of what was sent on input*, so a session
-    /// created without one still carries a deadline the platform terminates at. Reporting `false`
-    /// there would tell a caller no lifetime is enforced while one is.
+    /// The platform's row, unnarrowed. `sessionLifetime` stays true even with no declared ttl:
+    /// the API always sets `expireTime` on output, so an undeclared session still carries a
+    /// deadline the platform enforces.
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::gcp_agent_platform()
     }
@@ -524,9 +521,8 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }));
         }
 
-        // Refused rather than dropped, for the same reason as `env` above: `SandboxCreateRequest`
-        // has nowhere to put a tenant key, so accepting one would put a caller's tenants in one
-        // shared sandbox while the call reported success.
+        // Same reason as `env` above: nowhere to carry a tenant key, so accepting one would
+        // silently merge tenants into one sandbox.
         if request.tenant_key.is_some() {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: CREATE.to_string(),

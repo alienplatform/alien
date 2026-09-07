@@ -104,11 +104,9 @@ mod tests {
         }
     }
 
-    /// A ceiling outside the platform's own sizing rule is refused at plan time.
-    ///
-    /// Azure sizes cpu in steps of 250m, so `333m` is a size it will not create. Caught while the
-    /// customer is planning rather than at the first session, where it reads as a runtime fault
-    /// rather than a declaration they can fix.
+    /// A ceiling outside the platform's own sizing rule is refused at plan time: Azure sizes cpu
+    /// in steps of 250m, so `333m` is a size it will not create. Caught while planning rather
+    /// than at the first session, where it reads as a runtime fault, not a fixable declaration.
     #[tokio::test]
     async fn ceilings_outside_the_platform_rule_fail_at_plan_time() {
         let mut limits = ceilings();

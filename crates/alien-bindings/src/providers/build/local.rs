@@ -390,9 +390,8 @@ mod tests {
 
     /// Waits for a build to leave `Running`, or fails saying what it was still doing.
     ///
-    /// Polled rather than slept: a fixed wait is a bet on how long a process takes to spawn and
-    /// exit, and it is lost under load or alongside the other tests in this module rather than
-    /// when the code is wrong. The deadline is generous because it only bounds a hang.
+    /// Polls instead of sleeping a fixed time, which breaks under load or alongside the other
+    /// tests in this module.
     async fn settled_status(local_build: &LocalBuild, id: &str) -> BuildExecution {
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         loop {
@@ -454,8 +453,8 @@ mod tests {
         assert!(!execution.id.is_empty());
         assert_eq!(execution.status, BuildStatus::Running);
 
-        // Succeeded because the local backend reports a clean exit as success; the script's own
-        // failure is not what this pins.
+        // Succeeded because this backend reports any exit as success — it never reads the exit
+        // status. The script's own failure is not what this pins.
         let status = settled_status(&local_build, &execution.id).await;
         assert_eq!(status.status, BuildStatus::Succeeded);
         assert!(status.end_time.is_some());

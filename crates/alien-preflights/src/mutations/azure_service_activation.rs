@@ -247,9 +247,8 @@ mod tests {
     }
 
     /// A sandbox published through a Remote Binding is the whole stack — no worker, no build — so
-    /// nothing else asks for `Microsoft.App`. This pins the payload entry only: the activation
-    /// emitter renders no Terraform resource for it, so the provider is registered out of band
-    /// (the generated README states that as a prerequisite).
+    /// nothing else asks for `Microsoft.App`. Pins the payload entry only: the activation emitter
+    /// renders no Terraform resource for it, so the provider is registered out of band.
     #[test]
     fn an_azure_sandbox_alone_still_registers_the_app_provider() {
         let sandbox = alien_core::Sandbox::new("agent-sbx".to_string())

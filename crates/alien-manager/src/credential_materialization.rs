@@ -20,10 +20,9 @@ const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-pl
 pub(crate) const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 pub(crate) const AZURE_KEY_VAULT_SCOPE: &str = "https://vault.azure.net/.default";
 pub(crate) const AZURE_AI_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
-/// The sandbox data plane is signed for the dynamic-sessions audience while answering at
-/// `azuredevcompute.io`, so neither the endpoint host nor ARM's scope works here — a token minted
-/// for either is refused with a 401 that reads like a missing role assignment. Same constant the
-/// in-cloud client uses (`alien-azure-clients`, `sandbox_data_plane::ADC_SCOPE`).
+/// The sandbox data plane is signed for the dynamic-sessions audience despite answering at
+/// `azuredevcompute.io`, so a token minted for the endpoint host or ARM's scope is refused with a
+/// 401 that reads like a missing role. Same constant `sandbox_data_plane::ADC_SCOPE` uses.
 pub(crate) const AZURE_SANDBOX_SCOPE: &str = "https://dynamicsessions.io/.default";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
 const AZURE_MINT_SCOPES: [&str; 5] = [

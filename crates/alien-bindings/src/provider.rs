@@ -1942,9 +1942,8 @@ impl BindingsProviderApi for BindingsProvider {
                     .into_value(binding_name, "diskImage")
                     .map_err(|_| invalid("diskImage"))?;
 
-                // A binding rendered by an earlier release carries no ceilings, and those
-                // deployments keep running, so an absent value falls back to the platform default
-                // rather than failing to resolve.
+                // Old bindings predate ceilings, and those deployments keep running, so absent
+                // falls back to the platform default rather than failing to resolve.
                 let declared = |value: Option<alien_core::bindings::BindingValue<String>>,
                                 field: &'static str| {
                     value
@@ -2102,10 +2101,9 @@ mod tests {
     use super::*;
     use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
 
-    /// `azure_session_limits` waves through a sandbox that declares nothing because the values
-    /// substituted here take its place. Nothing else couples the two, so changing either constant
-    /// to something the rule refuses would silently move the failure back to create (see
-    /// `azure_session_limits`'s doc for why that matters).
+    /// Pins `DEFAULT_AZURE_CPU`/`DEFAULT_AZURE_MEMORY` as inputs `azure_session_limits` accepts;
+    /// if a constant changes to a value the rule refuses, the failure moves silently from plan
+    /// time to create.
     #[test]
     fn the_substituted_azure_defaults_satisfy_the_plan_time_sizing_rule() {
         let declared_as_default = alien_core::Sandbox::new("agent-sbx".to_string())

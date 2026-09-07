@@ -35,9 +35,8 @@ const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
     // Carries `Microsoft.CognitiveServices/accounts/listkeys/action` and a
     // `Microsoft.CognitiveServices/*` dataAction, so it hands over the account key.
     "Cognitive Services User",
-    // Carries the whole sandbox data plane, session contents included, so it belongs only to the
-    // sets that are meant to reach inside a session — `sandbox/execute` and
-    // `sandbox/remote-execute`. Lifecycle-only callers use the granular actions instead. Named
+    // Carries the whole sandbox data plane, session contents included, so it belongs only to sets
+    // meant to reach inside a session — `sandbox/execute` and `sandbox/remote-execute`. Named
     // from the shared constant so this list and the reach predicate cannot disagree.
     AZURE_SANDBOX_DATA_PLANE_ROLE,
     "Azure Service Bus Data Receiver",
@@ -91,15 +90,10 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
                         !names_a_sensitive_entry(data_action, SENSITIVE_IMPLICIT_DATA_ACTIONS),
                         "{permission_set_id} Azure entry {index} grants sensitive data action {data_action}"
                     );
-                    // A wildcard grants every action it covers while matching none of them by
-                    // string, so the list above cannot catch one on its own.
-                    //
-                    // Deliberately narrower than "reaches a session": creating and deleting
-                    // sandboxes *is* session reach for the single-tenancy gate, because whoever
-                    // starts one decides what runs in it — but it is not access to the contents
-                    // of a session someone else started, which is what this invariant is about.
-                    // `sandbox/management` legitimately carries the lifecycle verbs and must
-                    // keep passing here.
+                    // A wildcard covers every action it grants without matching any by string, so
+                    // the list above alone would miss it. Narrower than "reaches a session":
+                    // creating/deleting is reach for the single-tenancy gate but not another
+                    // session's contents, so `sandbox/management`'s lifecycle verbs still pass.
                     assert!(
                         !wildcard_covers(data_action, SENSITIVE_IMPLICIT_DATA_ACTIONS),
                         "{permission_set_id} Azure entry {index} covers a sensitive data action \
@@ -117,12 +111,9 @@ fn is_implicit_management_set(permission_set_id: &str) -> bool {
         || permission_set_id.ends_with("/provision")
 }
 
-/// Whether a granted action carrying a `*` covers anything on `sensitive`.
-///
-/// Compared as a prefix because that is what a wildcard means: `Microsoft.App/sandboxGroups/*`
-/// grants `…/sandboxes/executeShellCommand/action` while sharing no exact string with it.
-/// Case-insensitively, because Azure matches action names that way and spells the same action
-/// both ways itself — the role definition says `listkeys`, the docs say `listKeys`.
+/// Whether a granted action carrying a `*` covers anything on `sensitive`. Compared as a prefix
+/// — that's what a wildcard means — and case-insensitively, since Azure spells the same action
+/// both ways itself (`listkeys` in role definitions, `listKeys` in docs).
 fn wildcard_covers(granted: &str, sensitive: &[&str]) -> bool {
     let Some((literal, _)) = granted.split_once('*') else {
         return false;

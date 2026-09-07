@@ -199,11 +199,9 @@ fn validate_remote_sandboxes_are_deliverable(stack: &Stack, mutation_name: &str)
 /// Refuses a remotely published sandbox that the deployment's own workloads can also reach.
 ///
 /// Neither cloud that publishes a sandbox remotely can scope the grant to a subset of its
-/// sessions, so the grant reaches every session of the sandbox whoever started it. On AWS one
-/// MicroVM image serves them all and a token mint scopes no finer than the image; on Azure the
-/// `SandboxGroup Data Owner` role covers `sandboxGroups/*` on the one group the sandbox is. Either
-/// way a remote caller holding raw credentials can read, suspend, terminate or reach into sessions
-/// the customer's own compute started, and single tenancy is the only containment available.
+/// sessions: one AWS MicroVM image serves them all, and Azure's `SandboxGroup Data Owner` role
+/// covers every sandbox in the group. So a remote caller can reach sessions the customer's own
+/// compute started; single tenancy is the only containment available.
 fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &str) -> Result<()> {
     for (resource_id, entry) in &stack.resources {
         if !entry.has_remote_bindings() || entry.config.resource_type() != Sandbox::RESOURCE_TYPE {
@@ -226,22 +224,10 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 
 /// How the deployment's own workloads can reach `sandbox_id`, if any can.
 ///
-/// Three routes, none of which the vendor's own `-access` grant travels: a compute link, a
-/// permission profile, and a stack permission set on a user-declared ServiceAccount. Reach is
-/// decided by the resolved set's session-reaching verbs, never by a set id — an inline set an
-/// author names anything defeats a prefix test.
+/// Three routes: a compute link, a permission profile, and a stack permission set on a
+/// user-declared ServiceAccount — never by set id, since an inline set can be named anything.
 ///
-/// Three routes, not every route. The management profile is a fourth and is not scanned, so an
-/// author-written `management: extend` naming this sandbox passes and then compiles onto the
-/// deployment's own management identity — the second tenant this gate exists to refuse. Left open
-/// deliberately: closing it changes production AWS behaviour and depends on a mutation phase order
-/// nothing asserts, so it is tracked separately rather than fixed in a sandbox-parity change.
-///
-/// The three routes are declaration-level — a link, a profile or a stack set is the same edge
-/// whichever cloud renders it — but the verb test two of them reach is not, so this calls
-/// `permission_set_reaches_a_sandbox_session`, which inspects every cloud a set declares (see its
-/// doc). What keeps this honest for GCP is the platform gate refusing a GCP remote sandbox before
-/// this answer is used, not anything this function checks.
+/// The management profile is a fourth route this scan does not cover.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
@@ -285,17 +271,9 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     })
 }
 
-/// Whether a profile entry filed under `target` reaches `sandbox_id`.
-///
-/// The profile key is not the scope. A **named** set is scoped by the key — `${resourceName}`
-/// interpolates to the target, so `{"some-worker": ["sandbox/execute"]}` compiles a grant on a
-/// group belonging to that worker and cannot touch this sandbox. An **inline** set carries its own
-/// scope string, which the author writes, and `${stackPrefix}` interpolates for them — so an
-/// inline set filed under any third resource can name this sandbox's group and be granted on it.
-///
-/// So an inline set that reaches a session counts under every key, and a named one only under this
-/// sandbox or the wildcard. Anything else either misses the reachable case or refuses a legitimate
-/// second sandbox that a worker is meant to drive.
+/// Whether a profile entry filed under `target` reaches `sandbox_id`. A **named** set is scoped
+/// by its key, so it can't touch this sandbox from another worker's entry; an **inline** set
+/// carries its own scope and can name this sandbox's group from under any key.
 fn reaches_this_sandbox(
     reference: &PermissionSetReference,
     target: &str,
@@ -463,14 +441,10 @@ mod tests {
         assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
     }
 
-    /// `sandbox/remote-execute` grants on AWS and Azure and nothing on GCP. Without this gate a
-    /// GCP deployment installs an identity with no sandbox role binding, and the customer's
-    /// security team approves a PERMISSIONS.md heading promising arbitrary code execution and
-    /// listing nothing.
-    ///
-    /// Both directions, because the gate is derived from the permission set rather than a list
-    /// kept here: a covered platform must pass it, or a set gaining a cloud silently stops
-    /// deploying there.
+    /// `sandbox/remote-execute` grants on AWS and Azure, nothing on GCP. Without this gate, a GCP
+    /// deployment's security review approves a PERMISSIONS.md heading promising arbitrary code
+    /// execution while listing nothing. Checked both directions: a covered platform must pass
+    /// too, or a set gaining a cloud silently stops deploying there.
     #[tokio::test]
     async fn a_remote_sandbox_is_refused_where_its_permission_set_grants_nothing() {
         let covered = Stack::new("byo-sandbox".to_string())
@@ -844,13 +818,13 @@ mod tests {
     }
 
     /// The same single-tenancy escape as the AWS case above, in Azure's vocabulary: the reach scan
-    /// has to catch a set granting Azure's whole sandbox data plane the same way it catches an AWS
-    /// one, or the stack deploys with the remote caller and the deployment's own compute both
-    /// holding it. Two shapes, because Azure spells reach two ways — the predefined role and the
-    /// `dataActions` underneath it.
+    /// must catch a set granting Azure's whole sandbox data plane the same way it catches AWS, or
+    /// the remote caller and the deployment's own compute both end up holding it.
     #[tokio::test]
     async fn a_remote_sandbox_reached_by_an_azure_only_service_account_set_is_refused() {
-        let azure_set = |id: &str, grant: serde_json::Value| -> alien_core::permissions::PermissionSet {
+        let azure_set = |id: &str,
+                         grant: serde_json::Value|
+         -> alien_core::permissions::PermissionSet {
             serde_json::from_value(serde_json::json!({
                 "id": id,
                 "description": "custom",
@@ -878,7 +852,10 @@ mod tests {
             // Wildcards above the sandbox namespace reach into it, so they have to fail closed.
             // A predicate that only matches downwards clears exactly the two broadest grants an
             // author can write, which is the wrong way round.
-            ("a bare wildcard", serde_json::json!({ "dataActions": ["*"] })),
+            (
+                "a bare wildcard",
+                serde_json::json!({ "dataActions": ["*"] }),
+            ),
             (
                 "a wildcard on the provider",
                 serde_json::json!({ "dataActions": ["Microsoft.App/*"] }),
@@ -947,9 +924,15 @@ mod tests {
             .mutate(stack, &StackState::new(Platform::Azure), &config())
             .await
         else {
-            panic!("an inline set naming this sandbox's group reaches it, whatever key it sits under")
+            panic!(
+                "an inline set naming this sandbox's group reaches it, whatever key it sits under"
+            )
         };
         assert_eq!(error.code, "STACK_MUTATION_FAILED", "{error}");
+        assert!(
+            error.to_string().contains("permission profile 'execution'"),
+            "the refusal must come from the reach scan, got: {error}"
+        );
     }
 
     /// And a named set under another resource is still allowed, because the key is its scope.
@@ -978,17 +961,16 @@ mod tests {
     /// today's verb names alone would let the broader grant through and refuse the narrower one.
     #[tokio::test]
     async fn a_wildcard_over_an_unknown_microvm_verb_still_reaches_a_session() {
-        let future_verb: alien_core::permissions::PermissionSet = serde_json::from_value(
-            serde_json::json!({
+        let future_verb: alien_core::permissions::PermissionSet =
+            serde_json::from_value(serde_json::json!({
                 "id": "custom/telemetry",
                 "description": "custom",
                 "platforms": { "aws": [{
                     "grant": { "actions": ["lambda:SomeFutureMicrovmVerb*"] },
                     "binding": { "stack": { "resources": ["*"] } }
                 }]}
-            }),
-        )
-        .expect("valid inline permission set");
+            }))
+            .expect("valid inline permission set");
 
         let stack = Stack::new("application".to_string())
             .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
@@ -1002,22 +984,25 @@ mod tests {
             panic!("a wildcard reaching the MicroVM namespace is reach, known verb or not")
         };
         assert_eq!(error.code, "STACK_MUTATION_FAILED", "{error}");
+        assert!(
+            error.to_string().contains("permission profile 'execution'"),
+            "the refusal must come from the reach scan, got: {error}"
+        );
     }
 
     /// And the image family stays out, since `provision` and `heartbeat` legitimately hold it.
     #[tokio::test]
     async fn a_wildcard_over_the_microvm_image_family_is_not_session_reach() {
-        let image_only: alien_core::permissions::PermissionSet = serde_json::from_value(
-            serde_json::json!({
+        let image_only: alien_core::permissions::PermissionSet =
+            serde_json::from_value(serde_json::json!({
                 "id": "custom/images",
                 "description": "custom",
                 "platforms": { "aws": [{
                     "grant": { "actions": ["lambda:GetMicrovmImage*"] },
                     "binding": { "stack": { "resources": ["*"] } }
                 }]}
-            }),
-        )
-        .expect("valid inline permission set");
+            }))
+            .expect("valid inline permission set");
 
         let stack = Stack::new("application".to_string())
             .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)

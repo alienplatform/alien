@@ -969,16 +969,9 @@ pub trait Container: Binding {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
-    /// Session id to reconnect to, for the verbs that take one.
-    ///
-    /// `get_or_create` and `reconnect` read this as the id to look for. On the cloud backends it
-    /// is not a name for a new session: AWS, Azure and GCP all allocate on `create` and answer
-    /// with the id they allocated, so a caller that sets it here is answered with a different one
-    /// rather than silently. Local and Kubernetes do honour it as the new session's id, because
-    /// they own their own namespace and nothing upstream assigns one.
-    ///
-    /// Either way the response carries the truth; a caller must read the id back rather than
-    /// assume the one it sent.
+    /// Session id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
+    /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
+    /// new session's id. Read the id back from the response rather than assume the one sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a
@@ -1002,15 +995,9 @@ pub struct SandboxSession {
     /// Lifecycle generation. A capability from another generation is rejected, which is how
     /// terminate revokes without distributing a revocation list.
     ///
-    /// What it counts differs by backend, because what can be replaced differs. AWS and Azure
-    /// allocate a fresh id per session, so nothing can be swapped underneath one and a constant
-    /// carries the whole meaning. GCP addresses a session by a name that outlives the container
-    /// behind it, so it derives this from the guest's boot id — the only signal that distinguishes
-    /// a replaced container from the one a caller last spoke to.
-    ///
-    /// The boot id has a known limit: a sandbox restored from a snapshot reports its **source's**
-    /// boot id while holding a different filesystem, so it detects replacement and not restore.
-    /// Anything that needs to tell those apart must key on the resource name as well.
+    /// Differs by backend: AWS/Azure allocate a fresh id per session, so a constant carries the
+    /// whole meaning; GCP has none, so this is the guest's boot id — which a snapshot restore
+    /// reports unchanged, so restore and replacement need the resource name too to tell apart.
     pub generation: u64,
 }
 
@@ -1144,10 +1131,9 @@ pub trait Sandbox: Binding {
 
     /// Lists sessions belonging to this sandbox's parent.
     ///
-    /// Offered where the backend has a verb for it and the binding's grant covers it — GCP lists
+    /// Offered only where the backend has a verb for it and the grant covers it — GCP lists
     /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
-    /// account-wide grant the session role deliberately withholds. Reaching a session whose id is
-    /// known is `get`.
+    /// account-wide grant the session role deliberately withholds. Reaching a known id is `get`.
     async fn list(&self) -> Result<Vec<SandboxSession>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.

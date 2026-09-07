@@ -45,11 +45,9 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
     }
 }
 
-/// A ceiling the platform will not allocate has to fail before anything is provisioned, or the
-/// stack reads as bounded while the sandbox is not.
-///
-/// Azure sizes cpu in steps of 250m, so `333m` is a size it refuses to create. The failure has to
-/// arrive at preflight rather than at the first session.
+/// A ceiling the platform will not allocate must fail before anything is provisioned, or the
+/// stack reads as bounded while the sandbox is not. Azure sizes cpu in steps of 250m, so `333m`
+/// is refused here rather than at the first session.
 #[tokio::test]
 async fn declared_ceilings_fail_preflight_when_the_platform_will_not_allocate_them() {
     let stack = stack_with(sandbox(Some(SandboxLimits {

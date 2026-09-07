@@ -36,11 +36,8 @@
           "actions": ["Microsoft.App/sandboxGroups/read"]
         },
         // The stack binding is the resource group, wider than the one group this heartbeat reports
-        // on: it can read the state of every sandbox group there, including one the deployment
-        // did not create — a deployment can be pointed at a resource group its owner already uses,
-        // as `provision` notes. The resource binding is the narrower grant and is not deliverable
-        // for a sandbox today; see the fuller note in `sandbox/management`. What the stack grant
-        // reaches here is provisioning state, and no session contents.
+        // on, as `provision` notes. The resource binding is narrower but not deliverable for a
+        // sandbox today; see `sandbox/management`. The stack grant reaches provisioning state only.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"

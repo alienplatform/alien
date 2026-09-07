@@ -234,11 +234,9 @@ fn open_sandbox_binding() -> SandboxBinding {
     SandboxBinding::Aws(binding)
 }
 
-/// The binding a deployment on `platform` would actually carry.
-///
-/// Per-platform rather than one AWS binding reused: a resolve refusing an AWS binding on an Azure
-/// deployment proves only that the two disagree, which every platform would pass. The question is
-/// whether resolve accepts that platform's own binding exactly when the permission set covers it.
+/// The binding a deployment on `platform` would actually carry. Per-platform rather than one AWS
+/// binding reused, so the test asks whether resolve accepts each platform's own binding exactly
+/// when the permission set covers it — not merely that a mismatched binding disagrees.
 fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
     match platform {
         Platform::Azure => SandboxBinding::azure(
@@ -364,9 +362,9 @@ fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
         assert!(error.message.contains("not supported"), "{platform}");
     }
 
-    // Azure carries the grant, so it clears the platform gate, and is still refused an AWS
-    // binding: without the pairing check that resolves into an AWS credential lease for a sandbox
-    // which is not on AWS.
+    // Azure carries the grant and clears the platform gate, but the binding is still AWS's — the
+    // pairing check must refuse it, or this resolves into an AWS credential lease for a sandbox
+    // that is not on AWS.
     let mismatched = deployment_on_platform(
         sandbox_stack_state(open_sandbox_binding(), Platform::Azure),
         Platform::Azure,
@@ -714,7 +712,11 @@ async fn remote_access_accepts_a_live_sandbox_and_refuses_a_live_bucket() {
         .await
         .expect_err("setup renders nothing for a Live bucket, so no grant exists");
     assert_eq!(error.code, "BAD_REQUEST");
-    assert!(error.message.contains("renders nothing"), "{}", error.message);
+    assert!(
+        error.message.contains("renders nothing"),
+        "{}",
+        error.message
+    );
 }
 
 #[tokio::test]

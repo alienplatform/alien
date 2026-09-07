@@ -2,19 +2,14 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS and Azure: the two clouds whose sandbox parent setup creates, and can therefore scope
-    // a grant to. Both refuse an assignment naming a resource that does not exist, so the parent
-    // and the grant have to come from the same template — an AWS MicroVM image, and an Azure
-    // `Microsoft.App/sandboxGroups` at `2026-02-01-preview`.
+    // AWS and Azure: the two clouds whose sandbox parent setup creates, and can therefore scope a
+    // grant to. Both refuse an assignment naming a resource that doesn't exist yet, so parent and
+    // grant must come from the same template.
     //
-    // GCP is absent for two reasons, and the first is the one that has to hold before the second
-    // is worth solving. `sandbox/execute` binds GCP at `projects/${projectName}` for both stack
-    // and resource, so a grant compiled from this set would reach every sandbox in the project
-    // rather than the one published — a different security proposition from the AWS and Azure
-    // blocks above, and not one worth handing to a remote caller. Second, the reasoning engine a
-    // narrower grant would be scoped to is created by a Live controller after apply rather than by
-    // setup, so there is nothing for the assignment to name. A GCP remote binding is refused by
-    // the remote-bindings preflight.
+    // GCP is absent for two reasons: `sandbox/execute` binds it at `projects/${projectName}` for
+    // both stack and resource, so a grant here would reach every sandbox in the project, not just
+    // the one published; and the engine a narrower grant would scope to is created by a Live
+    // controller after apply, not by setup, so there is nothing to name it against.
     "aws": [
       {
         "label": "session-lifecycle",
@@ -92,29 +87,14 @@
         "label": "session-lifecycle-and-exec",
         "description": "Create, drive and tear down sessions of the selected sandbox group.",
         "grant": {
-          // The one role Microsoft documents as sufficient for the sandbox data plane, and the
-          // same one `sandbox/execute` uses. It carries session lifecycle and exec together, so
-          // this set cannot hand out exec without lifecycle — and it is a data-plane role, which
-          // is why subscription-level management rights do not substitute for it.
-          //
-          // Its `actions` array is empty and every entry is a `dataAction`
-          // (`Microsoft.App/sandboxGroups/*/{read,write,delete,action}`). So the holder drives
-          // sessions inside the group and has no control-plane right over the group itself: it
-          // cannot delete, move or reconfigure the resource setup created, and its `delete`
-          // reaches sandboxes rather than their parent.
+          // The role Microsoft documents as sufficient for the sandbox data plane, and the same
+          // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
+          // exec without lifecycle. All entries are `dataAction`s: no control-plane rights.
           "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
         },
-        // Resource-scoped only, and this is the whole boundary — the same one the AWS block
-        // draws around a single `microvm-image`. The group is created by setup under this exact
-        // name, so the assignment names a resource the same template built. A resource-group
-        // scope would reach every sibling sandbox in the deployment, which is what makes the
-        // stack scope deliberately absent rather than merely unset.
-        //
-        // No `${stackPrefix}`: on Azure the emitter already resolves `${resourceName}` to the
-        // prefixed group name, so naming the prefix again renders a scope matching nothing in
-        // the document a security team approves this grant from. The rendered string reaches
-        // only that document while this entry stays predefined-role-only -- adding actions here
-        // would also render it as a custom role's assignable scope, from a different context.
+        // Resource-scoped only, the same boundary the AWS block draws around one `microvm-image`:
+        // a resource-group scope would reach every sibling sandbox in the deployment. No
+        // `${stackPrefix}` — the emitter already resolves `${resourceName}` to the prefixed name.
         "binding": {
           "resource": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"

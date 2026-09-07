@@ -384,14 +384,9 @@ fn azure_network_byo_vnet_emits_data_lookups() {
     assert_terraform_valid(&module, "azure_network_byo_vnet");
 }
 
-/// The sandbox management grants have to reach the module.
-///
-/// Both are compiled at stack scope: Azure expresses no scope between a sandbox group and its
-/// resource group, and the setup path compiles resource-scoped management only for
-/// `worker/dispatch-command`. Generation
-/// hard-errors if a platform doesn't declare the binding target, so success alone doesn't prove
-/// the actions rendered — a grant compiled to a scope no emitter renders leaves the module valid
-/// and the manager unable to read the sandbox it owns.
+/// The sandbox management grants have to reach the module: both are compiled at stack scope, so
+/// success alone doesn't prove the actions rendered — a grant compiled to a scope no emitter
+/// renders leaves the module valid while the manager can't read the sandbox it owns.
 #[test]
 fn azure_sandbox_management_grants_reach_the_module() {
     let stack = Stack::new("acme-sbx".to_string())

@@ -155,8 +155,8 @@ pub struct CreateSandbox {
     pub cpu: String,
     /// Memory in the data plane's units, such as `2048Mi`.
     pub memory: String,
-    /// Disk in the data plane's units, such as `40960Mi`. Absent lets the data plane derive one
-    /// from the cpu, which is what it does when the key is not sent.
+    /// Disk in the data plane's units, such as `40960Mi`. Absent, the data plane derives one
+    /// from cpu.
     pub disk: Option<String>,
     /// Variables placed in the sandbox. It inherits nothing, so a variable exists only if it is
     /// sent here.
@@ -180,9 +180,8 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
         "resources": { "cpu": request.cpu, "memory": request.memory },
     });
 
-    // Sent only when declared. The data plane derives a disk from the cpu when the key is absent
-    // — `250m` yields `5120Mi` — so sending a placeholder would replace a correct default with a
-    // guess, while omitting a declared one silently ignores the ceiling the customer wrote down.
+    // A placeholder here would override the cpu-derived default; omitting a set value would
+    // silently drop the customer's ceiling. Send only when declared.
     if let Some(disk) = &request.disk {
         body["resources"]["disk"] = serde_json::json!(disk);
     }

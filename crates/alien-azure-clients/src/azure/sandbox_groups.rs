@@ -19,9 +19,8 @@ use mockall::automock;
 
 /// ARM API version for sandbox groups.
 ///
-/// The version the provider manifest lists for `Microsoft.App/sandboxGroups`, and the same one the
-/// data plane and the setup emitter use. ARM still answers older previews, so a mismatch here
-/// fails silently as a response mismatch rather than loudly as a rejected version.
+/// Must match the provider manifest, data plane, and setup emitter. ARM still answers older
+/// previews, so a mismatch fails silently as a response mismatch, not a rejected version.
 const API_VERSION: &str = "2026-02-01-preview";
 
 /// Scope every ARM call is signed for.
