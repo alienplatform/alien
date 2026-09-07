@@ -192,13 +192,9 @@ const GCP_SESSION_REACHING_ROLES: &[&str] = &[
 /// exist yet and this answer decides whether the single-tenancy gate refuses a stack.
 const GCP_AIPLATFORM_ROLES_WITHOUT_SESSION_REACH: &[&str] = &["roles/aiplatform.viewer"];
 
-/// Whether a GCP role can run code in a sandbox session.
-///
-/// Three ways to say yes, because guessing wrong here certifies a stack whose second identity
-/// holds `execute` as single-tenant. A custom role is unbounded by name, a role Vertex AI adds
-/// after this list was written is not on it, and the rest are enumerated above. Roles outside
-/// those cases answer no, so a `roles/datastore.viewer` on a neighbouring resource does not refuse
-/// a deployment that has nothing to do with sandboxes.
+/// Three ways to say yes — a custom role (unbounded by name), an `aiplatform.*` role added after
+/// this list was written, or one of the roles enumerated above — because guessing wrong here lets
+/// a second identity hold `execute` as though single-tenant. Everything else answers no.
 fn gcp_role_reaches_a_sandbox_session(role: &str) -> bool {
     if GCP_AIPLATFORM_ROLES_WITHOUT_SESSION_REACH
         .iter()
@@ -745,7 +741,7 @@ mod tests {
         }
     }
 
-    /// The four predefined roles were read off their definitions, where each carries
+    /// Predefined roles read off their live definitions, each carrying
     /// `aiplatform.sandboxEnvironments.execute`. A management profile naming one holds the reach
     /// the remote caller was published, so the reach scan has to see it through the role name.
     #[test]
@@ -767,8 +763,8 @@ mod tests {
             },
         };
 
-        // Six of these are the ones a list of reaching roles missed. Verified against the live
-        // role definitions, along with `roles/aiplatform.viewer` carrying no session verb.
+        // Verified against the live role definitions, along with `roles/aiplatform.viewer`
+        // carrying no session verb.
         for role in [
             "roles/owner",
             "roles/editor",

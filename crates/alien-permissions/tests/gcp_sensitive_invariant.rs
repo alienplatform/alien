@@ -121,13 +121,10 @@ fn gcp_sandbox_execute_permission_is_confined_to_the_session_reaching_sets() {
     );
 }
 
-/// A heartbeat addresses the sandbox's parent and never a session of it.
-///
-/// Stricter than the reach predicate on purpose, and heartbeat-only: `sandbox/management` names
-/// `aiplatform.sandboxEnvironments.create` and the rest of the session lifecycle because that is
-/// what it is for, while a heartbeat that reads a session has crossed into a resource whose
-/// contents it has no business near. Agent Platform's own health signal is the parent template's
-/// lifecycle state, which is what the controller reads.
+/// A heartbeat addresses the sandbox's parent, never a session of it — stricter than the general
+/// reach predicate on purpose. `sandbox/management` legitimately names the session lifecycle verbs;
+/// a heartbeat reading a session has crossed into content it has no business near, since Agent
+/// Platform's own health signal is the parent template's lifecycle state.
 #[test]
 fn a_gcp_heartbeat_reads_the_parent_and_never_a_session() {
     const SESSION_NAMESPACE: &str = "aiplatform.sandboxEnvironments.";

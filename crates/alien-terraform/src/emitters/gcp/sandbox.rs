@@ -140,11 +140,9 @@ impl TfEmitter for GcpAgentPlatformSandboxEmitter {
     }
 }
 
-/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
-///
-/// Scoped to the engine and nothing wider: IAM on a reasoning engine is enforced on the sessions
-/// hanging under it, while the only scope above it GCP can express is the whole project — which
-/// would hand a remote caller every sibling sandbox in the deployment.
+/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity, scoped to
+/// the engine and nothing wider: engine IAM covers only the sessions under it, while GCP's only
+/// wider scope is the whole project — every sibling sandbox in the deployment.
 fn emit_remote_access(ctx: &EmitContext<'_>, fragment: &mut TfFragment) -> Result<()> {
     let (Some(definition), Some(access_label)) = (
         alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
@@ -328,11 +326,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("the block carries no '{key}': {block:?}"))
         }
 
-        /// The grant names the engine by reading the created block's server-assigned `name`.
-        ///
-        /// A name derived from the setup label would be a scope no engine answers to, so the
-        /// binding would apply to nothing and the remote caller would hold no session access at
-        /// all — while `PERMISSIONS.md` still advertised the grant.
+        /// The grant names the engine by reading the created block's server-assigned `name` — a
+        /// name derived from the setup label would be a scope no engine answers to, so the caller
+        /// would hold no session access at all while `PERMISSIONS.md` still advertised the grant.
         #[test]
         fn the_engine_grant_references_the_created_engine() {
             let stack = stack_with(SandboxEgress::Allow, None, ResourceLifecycle::Frozen, true);

@@ -279,12 +279,10 @@ fn a_live_gcp_sandbox_gets_no_engine_and_no_google_beta_provider() {
     assert_terraform_valid(&module, "gcp live sandbox engine");
 }
 
-/// The remote grant reaches one reasoning engine and nothing wider.
-///
-/// The engine is referenced rather than named: a derived path would render a scope no engine
-/// answers to, and referencing the block is also what orders the binding after the engine GCP
-/// refuses to grant on before it exists. `projects/<project>` is the only scope above the engine
-/// GCP can express, and it would hand a remote caller every sibling sandbox in the deployment.
+/// The remote grant reaches one reasoning engine and nothing wider. The engine is referenced
+/// rather than named — a derived path would render a scope no engine answers to, and referencing
+/// the block also orders the binding after the engine exists. `projects/<project>` is the only
+/// wider scope GCP can express, and it would hand a remote caller every sibling sandbox.
 #[test]
 fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wider() {
     let stack = Stack::new("byo-sandbox".to_string())
@@ -414,11 +412,9 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
 }
 
 /// The management identity reports on a remotely published sandbox without reaching its sessions.
-///
-/// GCP is where this is load-bearing: `sandbox/management` binds at `projects/${projectName}`, so
-/// a grant left on the management identity would reach the published engine's sessions from
-/// anywhere in the project — the second tenant the single-tenancy gate exists to refuse. The
-/// remote binding claims it instead, and this asserts the artifact agrees.
+/// GCP is where this is load-bearing: `sandbox/management` binds at `projects/${projectName}`, so a
+/// grant left there would reach the published engine's sessions from anywhere in the project — the
+/// second tenant the single-tenancy gate exists to refuse.
 #[test]
 fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     let stack = Stack::new("byo-sandbox".to_string())

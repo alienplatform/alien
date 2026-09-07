@@ -741,11 +741,9 @@ async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
     );
 }
 
-/// The GCP arm of the same contract, decoded through the **generated** client.
-///
-/// The `sandbox-gcp-agent-platform` tag is what selects the variant, and both names a session is
-/// addressed by — the engine and the template — must survive the trip: a session created without
-/// the template runs an unpinned image with none of the declared limits or egress applied.
+/// The GCP arm of the same contract, decoded through the **generated** client. Both names a
+/// session is addressed by — engine and template — must survive the trip: created without the
+/// template, a session runs an unpinned image with none of the declared limits or egress applied.
 #[tokio::test]
 async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provider() {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
