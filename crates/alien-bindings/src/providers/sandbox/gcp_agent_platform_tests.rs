@@ -229,10 +229,6 @@ async fn get_does_not_report_a_running_session_whose_agent_is_silent() {
         .await
         .expect_err("a running record with a silent agent is not a healthy session");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
-    assert!(
-        format!("{error}").to_lowercase().contains("denied"),
-        "the refusal must carry why the delete was refused, got: {error}"
-    );
 }
 
 /// Refuse-don't-destroy: `get_or_create` handed a stale id provisions a fresh session and never
@@ -1230,4 +1226,8 @@ async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() 
         .expect_err("a refused delete is not containment");
 
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        format!("{error}").to_lowercase().contains("denied"),
+        "the refusal must carry why the delete was refused, got: {error}"
+    );
 }
