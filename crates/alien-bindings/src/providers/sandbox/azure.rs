@@ -19,7 +19,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
     CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
-use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
+use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
@@ -158,16 +158,11 @@ fn refuse_unsupported_session_fields(
 
 #[async_trait]
 impl Sandbox for AzureSandbox {
-    /// The platform's row, unnarrowed.
-    ///
-    /// `domainEgressRules` answers whether Azure can restrict egress to a hostname allowlist, not
-    /// whether this sandbox was declared with one — a caller reading `false` on an `allow` sandbox
-    /// would conclude the backend cannot do it at all. AWS narrows `preview` for the opposite
-    /// reason: `preview()` hard-refuses every port when none is declared, so a `true` there would
-    /// misdescribe what the call does. Azure has no such call — the egress policy is applied at
-    /// create and there is nothing for a caller to be refused.
+    /// The platform's row, unnarrowed. `domainEgressRules` says what Azure can do, not what this
+    /// sandbox declared — narrowing it (as AWS does for `preview`) would read `false` on an
+    /// `allow` sandbox as "can't do this at all".
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a sandbox backend")
+        SandboxCapabilities::azure()
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
@@ -1353,6 +1348,7 @@ mod tests {
     use alien_azure_clients::azure::sandbox_data_plane::{
         EgressRule, EgressRuleAction, EgressRuleMatch,
     };
+    use alien_core::Platform;
     use futures::StreamExt;
 
     fn http_error(status: u16, body: &str) -> AlienError<ClientErrorData> {
@@ -4083,15 +4079,20 @@ mod tests {
             "2048Mi".to_string(),
             None,
         );
-        assert_eq!(listed.capabilities(), platform, "the declaration is not the row");
-        assert!(platform.domain_egress_rules, "Azure does host-pattern egress");
+        assert_eq!(
+            listed.capabilities(),
+            platform,
+            "the declaration is not the row"
+        );
+        assert!(
+            platform.domain_egress_rules,
+            "Azure does host-pattern egress"
+        );
     }
 
-    /// A tenant key has nowhere to go in the create body, so it is refused rather than dropped.
-    ///
-    /// The code is asserted rather than the prose: a caller branching on the outcome reads the
-    /// code, and the message is free to change. `create_sandbox` is expected never, because the
-    /// failure this pins is a sandbox that starts anyway and serves every tenant from one box.
+    /// Pins the refusal, not the message: a caller branches on `error.code`, and
+    /// `create_sandbox` must never be called — the failure this guards is a sandbox that starts
+    /// anyway and serves every tenant from one box.
     #[tokio::test]
     async fn a_tenant_key_is_refused_rather_than_dropped() {
         let mut client = MockSandboxDataPlaneApi::new();

@@ -263,44 +263,7 @@ impl SandboxCapabilities {
                 // runs under a different identity than the process supervising it.
                 supervisor_isolation: true,
             }),
-            Platform::Azure => Ok(Self {
-                files: true,
-                reconnect: true,
-                // A sandbox port carries a URL and an auth config, and the auth config offers two
-                // things: anonymous, or Entra ID with an allowlist of human email addresses.
-                // Neither is a credential scoped to a port for a fixed time, which is what a
-                // preview capability is. Returning the anonymous URL would publish the port.
-                preview: false,
-                suspend_resume: true,
-                // False for a client reason, not a cloud one: the data plane completes the round
-                // trip — `POST …/snapshot` returns a document, and a sandbox created from
-                // `sourcesRef.snapshot.id` carries the pre-snapshot filesystem and drops the
-                // post-snapshot one. What is missing is on the client side, at both ends: this
-                // client has no snapshot call at all, and
-                // `CreateSessionRequest` has no field to consume an id with. Closing it also
-                // needs an owner for the artifact — Microsoft does not garbage collect snapshots
-                // and `stop` mints one on every suspend, so an id with no owner is a bill that
-                // grows. Declared false because a capability that cannot be reached through the
-                // trait is a claim a caller cannot act on.
-                snapshot: false,
-                domain_egress_rules: true,
-                egress_deny: true,
-                // Enforced inside the session, not at create: an over-allocation raises
-                // `MemoryError` while the sandbox keeps running. There is no tier enum;
-                // `azure_session_limits` checks the sizing rule (see the `AZURE_*` constants)
-                // at plan time instead.
-                enforced_limits: true,
-                process_limit: false,
-                // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
-                // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
-                // to prevent, so this is a decision rather than a gap.
-                session_lifetime: false,
-                // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
-                supervisor_pid_namespace: false,
-                // No Alien process runs the command at all — the platform's own data plane does,
-                // so there is no separate supervisor identity to speak of.
-                supervisor_isolation: false,
-            }),
+            Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
@@ -355,6 +318,40 @@ impl SandboxCapabilities {
         }
     }
 
+    /// What the Azure sandbox backend supports; the body of the `Platform::Azure` arm.
+    pub fn azure() -> Self {
+        Self {
+            files: true,
+            reconnect: true,
+            // A sandbox port carries a URL and an auth config, and the auth config offers two
+            // things: anonymous, or Entra ID with an allowlist of human email addresses.
+            // Neither is a credential scoped to a port for a fixed time, which is what a
+            // preview capability is. Returning the anonymous URL would publish the port.
+            preview: false,
+            suspend_resume: true,
+            // False for a client reason, not a cloud one: this client has no snapshot call, and
+            // `CreateSessionRequest` has no field to consume the id it would return. Also
+            // unclaimed: Microsoft does not garbage-collect snapshots, so an id is a bill that grows.
+            snapshot: false,
+            domain_egress_rules: true,
+            egress_deny: true,
+            // Enforced inside the session, not at create: an over-allocation raises `MemoryError`
+            // while the sandbox keeps running. `azure_session_limits` checks the continuous
+            // sizing rule at plan time instead of matching a tier.
+            enforced_limits: true,
+            process_limit: false,
+            // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
+            // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
+            // to prevent, so this is a decision rather than a gap.
+            session_lifetime: false,
+            // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
+            supervisor_pid_namespace: false,
+            // No Alien process runs the command at all — the platform's own data plane does,
+            // so there is no separate supervisor identity to speak of.
+            supervisor_isolation: false,
+        }
+    }
+
     /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
     pub fn gcp_agent_platform() -> Self {
         Self {
@@ -368,8 +365,9 @@ impl SandboxCapabilities {
             preview: false,
             // `:pause` and `:resume` preserve the running container.
             suspend_resume: true,
-            // A session's state can be captured and used to create another.
-            snapshot: true,
+            // The create path never sends `sandbox_environment_snapshot`, so no session state is
+            // reachable through the trait; declared false until the client carries it.
+            snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
             // A declared `deny` blocks both routed egress and DNS.
@@ -666,13 +664,9 @@ impl Sandbox {
         Ok(image)
     }
 
-    /// Checks the declared ceilings against Azure's sizing rule, quoted at the `AZURE_*` constants
-    /// above.
-    ///
-    /// The surface is continuous, not a tier enum, so Alien's own units map straight through with
-    /// nothing to snap to. Refused here rather than at the first session, for the same reason
-    /// [`Self::microvm_tier`] is: a bad value would otherwise render into the package and fail
-    /// only at create, where it reads as a runtime fault instead of a declaration to fix.
+    /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
+    /// Refused at plan time, like [`Self::microvm_tier`], so a bad value is a declaration to fix
+    /// rather than a runtime fault at create.
     pub fn azure_session_limits(&self) -> Result<()> {
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared means the binding substitutes Alien's own default sizing, which is
@@ -715,8 +709,10 @@ impl Sandbox {
             return Err(refused(
                 "memory",
                 &limits.memory,
-                &format!("Azure allows at most 2Gi of memory per core, or {memory_ceiling_mib}Mi \
-                          at the declared cpu"),
+                &format!(
+                    "Azure allows at most 2Gi of memory per core, or {memory_ceiling_mib}Mi \
+                          at the declared cpu"
+                ),
             ));
         }
 
@@ -726,8 +722,10 @@ impl Sandbox {
             return Err(refused(
                 "disk",
                 &limits.disk,
-                &format!("Azure allows at most 20Gi of disk per core, or {disk_ceiling_mib}Mi at \
-                          the declared cpu"),
+                &format!(
+                    "Azure allows at most 20Gi of disk per core, or {disk_ceiling_mib}Mi at \
+                          the declared cpu"
+                ),
             ));
         }
 
@@ -1363,8 +1361,8 @@ mod tests {
             ":pause and :resume preserve the container"
         );
         assert!(
-            row.snapshot,
-            "session state can be captured and restored into a new session"
+            !row.snapshot,
+            "the create path never sends a snapshot, so none is reachable through the trait"
         );
         assert!(
             !row.domain_egress_rules,
@@ -1494,10 +1492,6 @@ mod tests {
     /// `azure_sizes_follow_the_rule_the_data_plane_states`.
     #[test]
     fn a_sandbox_declaring_no_ceilings_takes_the_platforms_own() {
-        sandbox_with(SandboxEgress::Deny, Vec::new())
-            .validate_for_platform(Platform::Azure)
-            .expect("ceilings inside Azure's rule are accepted");
-
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
@@ -1517,16 +1511,17 @@ mod tests {
         assert_eq!(undeclared.resolved_limits().cpu, "1");
     }
 
-    /// Azure states its own sizing rule when it refuses, and this is that rule.
-    ///
-    /// Azure's published tier table does not match what the API accepts: `250m`, `1500m` and
-    /// `4000m` are valid sizes, `32000m` and `333m` are refused. Checked at plan time because the
-    /// alternative is a package that renders without error and dies at the first session.
+    /// Pins Azure's own sizing rule: `250m`, `1500m` and `4000m` are valid, `32000m` and `333m`
+    /// are refused. Checked at plan time so a bad value is a declaration to fix, not a package
+    /// that renders without error and dies at the first session.
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
             let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
-            let limits = sandbox.limits.as_mut().expect("the fixture declares limits");
+            let limits = sandbox
+                .limits
+                .as_mut()
+                .expect("the fixture declares limits");
             limits.cpu = cpu.to_string();
             limits.memory = memory.to_string();
             limits.disk = disk.to_string();
