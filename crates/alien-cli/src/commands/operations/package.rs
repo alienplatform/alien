@@ -134,23 +134,34 @@ fn linux_target_triple(arch: Arch) -> &'static str {
     }
 }
 
-/// Confirm `target_triple` is installed for the active toolchain, so a
-/// missing cross-compilation target fails with an actionable message up
-/// front instead of a `cargo build` error partway through, or — if some
-/// other default target quietly satisfied the build — a bundle that
-/// silently ships the wrong OS/architecture.
+/// Best-effort check that `target_triple` is installed, so the common case
+/// (rustup-managed toolchain missing the target) fails with an actionable
+/// message up front instead of a `cargo build` error partway through, or —
+/// if some other default target quietly satisfied the build — a bundle
+/// that silently ships the wrong OS/architecture.
+///
+/// `rustup` is not the only way to get a working Rust toolchain (Nix, an OS
+/// package, a corporate toolchain), so its absence isn't itself an error —
+/// `cargo build --target` is the actual source of truth and gets the
+/// chance to prove the target works even when this check can't run.
 fn ensure_target_installed(target_triple: &str) -> Result<()> {
-    let output = Command::new("rustup")
-        .args(["target", "list", "--installed"])
-        .output()
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: "could not run 'rustup target list --installed'".to_string(),
-        })?;
+    ensure_target_installed_via(target_triple, "rustup")
+}
+
+/// [`ensure_target_installed`] with the `rustup` binary name overridable —
+/// so a test can point at a name that can't resolve on `PATH` and exercise
+/// the "rustup unavailable" branch deterministically, without mutating the
+/// process-wide `PATH` other tests in this binary may run concurrently
+/// against.
+fn ensure_target_installed_via(target_triple: &str, rustup_bin: &str) -> Result<()> {
+    let output = match Command::new(rustup_bin).args(["target", "list", "--installed"]).output() {
+        Ok(output) => output,
+        Err(_) => return Ok(()),
+    };
     if !output.status.success() {
-        return Err(AlienError::new(ErrorData::ConfigurationError {
-            message: "'rustup target list --installed' failed".to_string(),
-        }));
+        // rustup exists but couldn't answer (e.g. no default toolchain) —
+        // leave the verdict to `cargo build` rather than blocking on it.
+        return Ok(());
     }
     let installed = String::from_utf8_lossy(&output.stdout);
     if installed.lines().any(|line| line.trim() == target_triple) {
@@ -417,6 +428,19 @@ mod tests {
             .expect_err("a target that isn't installed must fail, not silently proceed");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
         assert!(err.to_string().contains("rustup target add"));
+    }
+
+    #[test]
+    fn ensure_target_installed_defers_to_cargo_when_rustup_is_unavailable() {
+        // A Nix/OS-packaged/corporate Rust toolchain may have no `rustup`
+        // on PATH at all, yet `cargo build --target` can still work (the
+        // target may already be built in, or provided some other way).
+        // This check must not block that toolchain just because rustup
+        // itself couldn't be asked — `cargo build` is the real verdict.
+        // Point at a binary name that cannot resolve, rather than mutating
+        // the process-wide PATH other tests in this binary run against.
+        ensure_target_installed_via("sparc64-unknown-linux-gnu", "definitely-not-a-real-rustup-binary")
+            .expect("an unresolvable rustup binary must not block packaging");
     }
 
     #[test]
