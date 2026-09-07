@@ -859,13 +859,13 @@ fn validate_azure_remote_client_config(config: &alien_core::AzureClientConfig) -
     let alien_core::AzureCredentials::AccessToken { token } = &config.credentials else {
         return Err(invalid_remote_lease(
             "Azure",
-            "a storage-audience access token is required",
+            "an access token is required",
         ));
     };
     if token.is_empty() {
         return Err(invalid_remote_lease(
             "Azure",
-            "the storage-audience access token must be nonempty",
+            "the access token must be nonempty",
         ));
     }
     Ok(())

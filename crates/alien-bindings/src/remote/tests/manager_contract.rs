@@ -635,13 +635,9 @@ fn azure_sandbox_lease_body(expires_at: DateTime<Utc>, allow_egress: bool) -> se
     })
 }
 
-/// The Azure sandbox lease decodes through the **generated** client, which is the only path a real
-/// deployment takes.
-///
-/// This is the test that fails when the manager grows a response variant and the OpenAPI spec is
-/// not regenerated: the hand-written types compile, the crate's own tests pass, and the generated
-/// client has no arm to decode into — so the feature is dead for every real consumer while looking
-/// finished from inside the crate.
+/// Decodes through the **generated** client, the only path a real deployment takes. This catches
+/// a manager response variant added without regenerating the OpenAPI spec: hand-written types and
+/// the crate's own tests would still pass, but the generated client would have no arm to decode into.
 #[tokio::test]
 async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provider() {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
@@ -704,11 +700,9 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     assert_eq!(lease_expires_at.timestamp(), expires_at.timestamp());
 }
 
-/// A lease claiming restricted egress is refused rather than quietly downgraded.
-///
-/// The manager will not mint one, so this pins the client's own half of that contract: the field
-/// is read from the wire rather than assumed, so the day the manager's rule changes the client
-/// refuses instead of silently reporting a restriction that does not exist.
+/// A lease claiming restricted egress is refused rather than quietly downgraded — the field is
+/// read from the wire, not assumed, so a future change to the manager's rule still gets caught
+/// here.
 #[tokio::test]
 async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
@@ -741,4 +735,8 @@ async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
         panic!("a restricted-egress sandbox lease is not usable remotely")
     };
     assert_eq!(error.code, "REMOTE_ACCESS_FAILED", "{error}");
+    assert!(
+        format!("{error}").contains("egress"),
+        "the code is shared with other refusals, so the reason has to be named: {error}"
+    );
 }

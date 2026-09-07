@@ -229,6 +229,10 @@ async fn get_does_not_report_a_running_session_whose_agent_is_silent() {
         .await
         .expect_err("a running record with a silent agent is not a healthy session");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        format!("{error}").to_lowercase().contains("denied"),
+        "the refusal must carry why the delete was refused, got: {error}"
+    );
 }
 
 /// Refuse-don't-destroy: `get_or_create` handed a stale id provisions a fresh session and never
@@ -1127,7 +1131,7 @@ fn the_engine_is_reduced_to_a_bare_segment() {
 
 // ---- capabilities, session fields and terminate idempotency ------------------------------------
 
-/// The client-shaped access denial: what a delete of a sandbox under an engine this deployment was
+/// The access denial in the client's own form: what a delete under an engine this deployment was
 /// not granted returns. The API answers a cross-engine call with `PERMISSION_DENIED` naming the
 /// sandbox environment, so the denial arrives as a refusal rather than as a not-found.
 fn access_denied() -> AlienError<AgentPlatformErrorData> {
@@ -1147,7 +1151,10 @@ fn access_denied() -> AlienError<AgentPlatformErrorData> {
 fn capabilities_describe_the_backend_not_this_declaration() {
     let platform = SandboxCapabilities::gcp_agent_platform();
 
-    assert_eq!(provider(MockAgentPlatformApi::new()).capabilities(), platform);
+    assert_eq!(
+        provider(MockAgentPlatformApi::new()).capabilities(),
+        platform
+    );
 
     let untimed = GcpAgentPlatformSandbox::new(
         Arc::new(MockAgentPlatformApi::new()),
@@ -1160,13 +1167,14 @@ fn capabilities_describe_the_backend_not_this_declaration() {
         platform,
         "a session with no declared ttl still expires, so the row does not change"
     );
-    assert!(platform.session_lifetime, "Agent Platform always sets expireTime");
+    assert!(
+        platform.session_lifetime,
+        "Agent Platform always sets expireTime"
+    );
 }
 
-/// A tenant key has nowhere to go in the create body, so it is refused rather than dropped.
-///
-/// The code is asserted rather than the prose. `create_sandbox` is expected never: the failure
-/// this pins is a sandbox that starts anyway and serves every tenant from one box.
+/// Pins the refusal, not the message: `create_sandbox` must never be called — the failure
+/// this guards is a sandbox that starts anyway and serves every tenant from one box.
 #[tokio::test]
 async fn a_tenant_key_is_refused_rather_than_dropped() {
     let mut client = MockAgentPlatformApi::new();
@@ -1187,10 +1195,8 @@ async fn a_tenant_key_is_refused_rather_than_dropped() {
     );
 }
 
-/// Terminating a session that is already gone succeeds, because gone is the state it asks for.
-///
-/// The poll is expected never: an absent session has nothing to confirm, and reaching the poll at
-/// all would mean the delete's not-found had been treated as a failure.
+/// Terminating an already-gone session succeeds — gone is the state it asks for. The poll is
+/// expected never: reaching it would mean not-found had been treated as a failure.
 #[tokio::test]
 async fn terminate_of_an_absent_session_succeeds() {
     let mut client = MockAgentPlatformApi::new();
@@ -1206,12 +1212,9 @@ async fn terminate_of_an_absent_session_succeeds() {
         .expect("terminating an absent session succeeds");
 }
 
-/// A session this deployment cannot reach is still refused, and this is the half a careless
-/// idempotency fix breaks.
-///
-/// Mapping every delete failure to `Ok` would make `terminate` report containment for a sandbox
-/// under another deployment's engine that was never deleted — the caller would believe untrusted
-/// code had been stopped. Only not-found may pass.
+/// A session this deployment cannot reach stays refused: mapping every delete failure to `Ok`
+/// would report containment for a sandbox under another deployment's engine that was never
+/// deleted. Only not-found may pass.
 #[tokio::test]
 async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() {
     let mut client = MockAgentPlatformApi::new();
