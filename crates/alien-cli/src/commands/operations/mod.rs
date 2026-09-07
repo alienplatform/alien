@@ -184,39 +184,57 @@ pub enum OperationsAction {
     },
 }
 
-#[cfg(feature = "platform")]
-pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
-    match args.action {
+/// Dispatch `args` if its action is fully local (needs no platform account,
+/// no manager URL, and no execution context of any kind) — `init`, `check`,
+/// `test`, `permissions`, `docs`, `package`. Returns `None` for a
+/// platform-only action (`publish`/`list`/`invoke`), so the caller knows to
+/// fall through to context resolution instead.
+///
+/// Call this BEFORE resolving an [`ExecutionMode`] — a build without the
+/// `platform` feature and no `ALIEN_MANAGER_URL` set fails context
+/// resolution outright, which would otherwise make every local action
+/// unusable even though none of them need a manager or platform account.
+pub async fn local_operations_task(args: &OperationsArgs) -> Option<Result<()>> {
+    match &args.action {
         OperationsAction::Init { name, directory } => {
-            init_task(&name, directory.as_deref(), args.json)
+            Some(init_task(name, directory.as_deref(), args.json))
         }
-        OperationsAction::Check { directory } => check_task(directory.as_deref(), args.json),
-        OperationsAction::Test { directory } => test_task(directory.as_deref(), args.json),
+        OperationsAction::Check { directory } => {
+            Some(check_task(directory.as_deref(), args.json))
+        }
+        OperationsAction::Test { directory } => Some(test_task(directory.as_deref(), args.json)),
         OperationsAction::Permissions { directory, cloud } => {
-            permissions_task(directory.as_deref(), cloud, args.json)
+            Some(permissions_task(directory.as_deref(), *cloud, args.json))
         }
-        OperationsAction::Docs { directory } => docs_task(directory.as_deref(), args.json),
-        OperationsAction::Package { directory } => package_task(directory.as_deref(), args.json),
+        OperationsAction::Docs { directory } => Some(docs_task(directory.as_deref(), args.json)),
+        OperationsAction::Package { directory } => {
+            Some(package_task(directory.as_deref(), args.json))
+        }
+        #[cfg(feature = "platform")]
         OperationsAction::Publish { .. } | OperationsAction::List | OperationsAction::Invoke { .. } => {
-            platform_action_task(args, ctx).await
+            None
         }
     }
 }
 
+#[cfg(feature = "platform")]
+pub async fn operations_task(args: OperationsArgs, ctx: ExecutionMode) -> Result<()> {
+    if let Some(result) = local_operations_task(&args).await {
+        return result;
+    }
+    platform_action_task(args, ctx).await
+}
+
+/// Non-platform builds only ever have local actions to dispatch — `run_cli`
+/// intercepts them before context resolution via [`local_operations_task`],
+/// so this is unreachable in practice, but the `Commands::Operations` match
+/// arm still needs a callable target since that variant isn't itself
+/// feature-gated.
 #[cfg(not(feature = "platform"))]
 pub async fn operations_task(args: OperationsArgs, _ctx: ExecutionMode) -> Result<()> {
-    match args.action {
-        OperationsAction::Init { name, directory } => {
-            init_task(&name, directory.as_deref(), args.json)
-        }
-        OperationsAction::Check { directory } => check_task(directory.as_deref(), args.json),
-        OperationsAction::Test { directory } => test_task(directory.as_deref(), args.json),
-        OperationsAction::Permissions { directory, cloud } => {
-            permissions_task(directory.as_deref(), cloud, args.json)
-        }
-        OperationsAction::Docs { directory } => docs_task(directory.as_deref(), args.json),
-        OperationsAction::Package { directory } => package_task(directory.as_deref(), args.json),
-    }
+    local_operations_task(&args)
+        .await
+        .expect("every OperationsAction variant is local without the platform feature")
 }
 
 #[cfg(feature = "platform")]

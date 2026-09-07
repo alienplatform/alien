@@ -28,17 +28,26 @@
 
 use std::process::ExitCode;
 
+use alien_core::commands_types::COMMANDS_INLINE_MAX_BYTES;
 use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::protocol::{PluginInvocation, PluginResult, PROTOCOL_VERSION};
 
 /// Maximum invocation size read from stdin before it is rejected as
-/// malformed, rather than buffered without bound. Matches the cap several
-/// plugins enforced by hand before this became the SDK's responsibility;
-/// large params belong in a storage-backed [`crate::protocol::BodySpec`],
-/// not inline.
-const MAX_INVOCATION_BYTES: usize = 64 * 1024;
+/// malformed, rather than buffered without bound.
+///
+/// `PluginInvocation::params` is a [`crate::protocol::BodySpec`], whose
+/// inline form base64-encodes up to [`COMMANDS_INLINE_MAX_BYTES`] of raw
+/// param bytes. Base64 inflates size by ~4/3, so the cap here must be sized
+/// for the ENCODED body, not the raw one — using
+/// `COMMANDS_INLINE_MAX_BYTES` directly would reject a legitimately
+/// maximum-sized inline invocation as malformed before it's even parsed.
+/// The `/ 3 * 4` accounts for the encoding; the flat allowance covers the
+/// small `protocolVersion`/`operation`/JSON-envelope overhead around the
+/// encoded params. Params too large for this still work via a
+/// storage-backed `BodySpec`, which carries only a reference inline.
+const MAX_INVOCATION_BYTES: usize = COMMANDS_INLINE_MAX_BYTES / 3 * 4 + 4096;
 
 /// Implemented by a plugin binary. `handle` is called once per invocation;
 /// [`run_plugin`] owns everything around it (stdin/stdout, protocol version
@@ -216,5 +225,27 @@ mod tests {
             .await
             .expect_err("malformed params should fail to parse");
         assert!(!err.contains("maximum size"));
+    }
+
+    #[tokio::test]
+    async fn read_invocation_accepts_a_real_invocation_at_the_documented_inline_params_limit() {
+        // A real PluginInvocation carrying the maximum documented inline
+        // params size (COMMANDS_INLINE_MAX_BYTES, 150,000 raw bytes) must
+        // parse — its base64 encoding is larger than the raw bytes, so a
+        // cap sized off the raw limit rather than the encoded size would
+        // wrongly reject this as PLUGIN_PROTOCOL_VIOLATION before
+        // `Plugin::handle` ever runs.
+        let raw_params = vec![b'a'; alien_core::commands_types::COMMANDS_INLINE_MAX_BYTES];
+        let invocation = PluginInvocation::inline_json("health", &raw_params);
+        let bytes = serde_json::to_vec(&invocation).expect("invocation should serialize");
+        assert!(
+            bytes.len() > alien_core::commands_types::COMMANDS_INLINE_MAX_BYTES,
+            "base64 encoding should have inflated the serialized invocation past the raw limit"
+        );
+
+        let parsed = read_invocation(bytes.as_slice())
+            .await
+            .expect("a maximum-sized real invocation must not be rejected as oversized");
+        assert_eq!(parsed, invocation);
     }
 }

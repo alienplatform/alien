@@ -9,13 +9,14 @@ use std::process::Command;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 
-use crate::commands::operations::check_task;
+use crate::commands::operations::check::validate_manifest;
 use crate::error::{ErrorData, Result};
 
 pub fn test_task(directory: Option<&str>, json: bool) -> Result<()> {
     // Fail fast on a broken manifest rather than letting `cargo test` run
-    // against a plugin that can't be loaded at all.
-    check_task(directory, false)?;
+    // against a plugin that can't be loaded at all. Validates silently (no
+    // stdout) so `--json` still emits exactly one parseable document.
+    validate_manifest(directory)?;
 
     let directory = Path::new(directory.unwrap_or("."));
     let status = Command::new("cargo")

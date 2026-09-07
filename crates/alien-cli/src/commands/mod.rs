@@ -71,7 +71,7 @@ pub use examples::{examples_task, ExamplesArgs};
 pub use init::{init_task, InitArgs};
 pub use logs::{logs_task, LogsArgs};
 pub use onboard::{onboard_task, OnboardArgs};
-pub use operations::{operations_task, OperationsArgs};
+pub use operations::{local_operations_task, operations_task, OperationsArgs};
 #[cfg(feature = "platform")]
 pub use packages::{packages_task, PackagesArgs};
 pub use release::{release_command, ReleaseArgs};

@@ -242,12 +242,26 @@ impl PluginManifest {
     }
 
     /// Validate internal consistency of the manifest:
+    /// - the plugin name, version, every declared binary entry, and every
+    ///   operation name are non-empty
     /// - operation names are unique
     /// - every `verification.pollOperation` names a read-only operation
     ///   declared by this same plugin
     pub fn validate(&self) -> Result<()> {
+        require_non_empty(&self.name, "name")?;
+        require_non_empty(&self.version, "version")?;
+        if self.binaries.is_empty() {
+            return Err(AlienError::new(ErrorData::FieldEmpty {
+                field: "binaries".to_string(),
+            }));
+        }
+        for (arch, entry) in &self.binaries {
+            require_non_empty(entry, &format!("binaries.{}", arch.as_str()))?;
+        }
+
         let mut seen = BTreeSet::new();
-        for operation in &self.operations {
+        for (index, operation) in self.operations.iter().enumerate() {
+            require_non_empty(&operation.name, &format!("operations[{index}].name"))?;
             if !seen.insert(operation.name.as_str()) {
                 return Err(AlienError::new(ErrorData::OperationDuplicate {
                     plugin: self.name.clone(),
@@ -275,6 +289,15 @@ impl PluginManifest {
 
         Ok(())
     }
+}
+
+fn require_non_empty(value: &str, field: &str) -> Result<()> {
+    if value.trim().is_empty() {
+        return Err(AlienError::new(ErrorData::FieldEmpty {
+            field: field.to_string(),
+        }));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -365,5 +388,65 @@ mod tests {
             sensitive_output: SensitiveOutputPolicy::None,
         };
         assert_eq!(op.effective_tier(RiskTier::Mutating), RiskTier::Mutating);
+    }
+
+    #[test]
+    fn rejects_an_empty_plugin_name() {
+        let json = r#"{
+            "name": "",
+            "version": "1.0.0",
+            "binaries": { "amd64": "postgres-linux-amd64" },
+            "operations": []
+        }"#;
+        let err = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("empty plugin name must fail validation");
+        assert!(err.to_string().contains("name"));
+    }
+
+    #[test]
+    fn rejects_a_whitespace_only_version() {
+        let json = r#"{
+            "name": "postgres",
+            "version": "   ",
+            "binaries": { "amd64": "postgres-linux-amd64" },
+            "operations": []
+        }"#;
+        let err = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("whitespace-only version must fail validation");
+        assert!(err.to_string().contains("version"));
+    }
+
+    #[test]
+    fn rejects_a_manifest_with_no_binaries() {
+        let json = r#"{
+            "name": "postgres",
+            "version": "1.0.0",
+            "binaries": {},
+            "operations": []
+        }"#;
+        let err = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("empty binaries map must fail validation");
+        assert!(err.to_string().contains("binaries"));
+    }
+
+    #[test]
+    fn rejects_an_empty_binary_entry() {
+        let json = r#"{
+            "name": "postgres",
+            "version": "1.0.0",
+            "binaries": { "amd64": "" },
+            "operations": []
+        }"#;
+        let err = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("empty binary entry must fail validation");
+        assert!(err.to_string().contains("binaries.amd64"));
+    }
+
+    #[test]
+    fn rejects_an_empty_operation_name() {
+        let json = manifest_json(r#"{"name": ""}"#);
+        let err = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("empty operation name must fail validation");
+        assert!(err.to_string().contains("operations[0].name"));
     }
 }

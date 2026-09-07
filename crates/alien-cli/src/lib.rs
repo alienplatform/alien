@@ -39,12 +39,12 @@ use crate::commands::{
     build_and_post_release_simple, build_command, build_dev_status, commands_task,
     commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, logs_task, onboard_task, operations_task,
-    prepare_dev_session_deployment, release_command, releases_task, render_task, status_task,
-    upgrade_task, vault_remote_task, vault_task, whoami_task, write_dev_status, BuildArgs,
-    BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
-    InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs,
-    StatusArgs, UpgradeArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
+    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
+    render_task, status_task, upgrade_task, vault_remote_task, vault_task, whoami_task,
+    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
+    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
+    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -1564,6 +1564,17 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     // Upgrades do not need a project or authentication context.
     if let Some(Commands::Upgrade(args)) = cli.command {
         return upgrade_task(args).await;
+    }
+
+    // Handle local operations subcommands (init/check/test/permissions/docs/
+    // package) early — they need no manager URL, platform account, or
+    // execution context at all. Falls through to normal context resolution
+    // for the platform-only subcommands (publish/list/invoke), which
+    // `local_operations_task` reports by returning `None`.
+    if let Some(Commands::Operations(args)) = &cli.command {
+        if let Some(result) = local_operations_task(args).await {
+            return result;
+        }
     }
 
     // Handle dev command early — it creates its own execution context.

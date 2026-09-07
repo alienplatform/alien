@@ -33,6 +33,24 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// A required identifier field (plugin name, version, operation name, or
+    /// a binary entry) was empty or all whitespace. Downstream commands
+    /// (`package`, `publish`) derive file paths and bundle entries from
+    /// these fields, so an empty one produces a confusing failure far from
+    /// the manifest that caused it — reject it here instead, at the point
+    /// `check` already validates.
+    #[error(
+        code = "PLUGIN_MANIFEST_FIELD_EMPTY",
+        message = "Plugin manifest field '{field}' must not be empty",
+        retryable = "false",
+        internal = "false"
+    )]
+    FieldEmpty {
+        /// A description of which field was empty, e.g. "name",
+        /// "operations[1].name", "binaries.amd64".
+        field: String,
+    },
+
     /// A verification's `pollOperation` does not name a read-only operation
     /// declared by the same plugin.
     #[error(

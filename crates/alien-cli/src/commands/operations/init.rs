@@ -87,12 +87,16 @@ fn write_file(path: &Path, contents: &str) -> Result<()> {
         })
 }
 
-/// `alien-operations-sdk = "*"`: this crate is not yet published to
-/// crates.io as of this writing. Until it is, a scaffolded plugin needs a
-/// path or git dependency instead — see the SDK's own repository for the
-/// current recommended dependency line.
+/// Pins the scaffold's `alien-operations-sdk` dependency to the exact
+/// version of this CLI build — `alien-operations-sdk` publishes to
+/// crates.io alongside every `alien-cli` release (see `.github/workflows
+/// /release.yml`'s crate-publish list), so this is always a version that
+/// exists once the CLI itself has shipped. A bare `"*"` would try to
+/// resolve to whatever the latest published version is, which may be
+/// incompatible with the manifest schema this CLI's `check`/`test` expect.
 fn cargo_toml(name: &str) -> String {
     let lib_name = name.replace('-', "_");
+    let sdk_version = env!("CARGO_PKG_VERSION");
     format!(
         r#"# Marks this crate as its own Cargo workspace root. Without it, scaffolding
 # a plugin inside (or nested under) an existing Cargo workspace — e.g. the
@@ -117,7 +121,7 @@ name = "{name}"
 path = "src/main.rs"
 
 [dependencies]
-alien-operations-sdk = "*"
+alien-operations-sdk = "={sdk_version}"
 async-trait = "0.1"
 serde = {{ version = "1", features = ["derive"] }}
 serde_json = "1"

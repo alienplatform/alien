@@ -565,6 +565,7 @@ jobs:
             alien-manager-api \
             alien-client-config \
             alien-permissions \
+            alien-operations-sdk \
             alien-bindings \
             alien-worker-protocol \
             alien-sdk \
