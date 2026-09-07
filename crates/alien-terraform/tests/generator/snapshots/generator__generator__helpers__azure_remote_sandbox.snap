@@ -352,7 +352,7 @@ The subscription must have the `Microsoft.App` resource provider registered befo
 az provider register --namespace Microsoft.App
 ```
 
-At teardown the deployment runtime deletes the sandbox group before you run `terraform destroy`, so this resource leaves your state without Terraform removing it.
+`terraform destroy` removes the group, and removing it deletes every sandbox inside it.
 
 ## Run
 
