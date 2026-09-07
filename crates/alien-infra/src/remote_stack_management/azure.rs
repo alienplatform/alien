@@ -1077,6 +1077,7 @@ mod tests {
 
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
+            std::iter::empty(),
             &permission_context(),
             &Default::default(),
         )
@@ -1126,6 +1127,71 @@ mod tests {
         );
     }
 
+    /// A remotely published sandbox puts `sandbox/management` under `*` by auto-derivation, and
+    /// that set reaches a session. The setup template strips it so the remote caller is the only
+    /// tenant; before this, the runtime rebuilt the role from the unfiltered profile and the first
+    /// update handed the same reach back to the deployment's own identity.
+    #[test]
+    fn stack_management_grant_plan_drops_a_set_the_remote_caller_claims() {
+        use alien_core::{ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress};
+
+        let sandbox = Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+        let stack = alien_core::Stack::new("byo-sandbox".to_string())
+            .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+            .build();
+        let profile = PermissionProfile::new()
+            .global([PermissionSetReference::from_name("sandbox/management")]);
+
+        let granted = generate_stack_management_grant_plan(
+            &profile,
+            stack.resources.values(),
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(
+            granted.bindings.is_empty() && granted.custom_roles.is_empty(),
+            "the remote caller claims sandbox/management, so the management identity keeps nothing"
+        );
+
+        // Without the remote binding the same set is this identity's, so the drop is not blanket.
+        let own = alien_core::Stack::new("byo-sandbox".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(alien_core::SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        let kept = generate_stack_management_grant_plan(
+            &profile,
+            own.resources.values(),
+            &permission_context(),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(
+            !kept.bindings.is_empty() || !kept.custom_roles.is_empty(),
+            "with no remote binding the management identity keeps sandbox/management"
+        );
+    }
+
     #[test]
     fn stack_management_grant_plan_includes_worker_dispatch_command_once() {
         let profile = PermissionProfile::new()
@@ -1141,8 +1207,13 @@ mod tests {
         let live: std::collections::HashSet<String> = ["api".to_string(), "jobs".to_string()]
             .into_iter()
             .collect();
-        let grant_plan =
-            generate_stack_management_grant_plan(&profile, &permission_context(), &live).unwrap();
+        let grant_plan = generate_stack_management_grant_plan(
+            &profile,
+            std::iter::empty(),
+            &permission_context(),
+            &live,
+        )
+        .unwrap();
 
         assert_eq!(
             grant_plan
@@ -1168,6 +1239,7 @@ mod tests {
 
         let grant_plan = generate_stack_management_grant_plan(
             &profile,
+            std::iter::empty(),
             &permission_context(),
             &Default::default(),
         )
@@ -1252,16 +1324,24 @@ fn existing_azure_vnet_resource_id(ctx: &ResourceControllerContext<'_>) -> Optio
 /// resource the deployer declined. Absence from the desired stack is that
 /// decline, and the grant has to go with it — the setup template withholds it
 /// the same way, and the two must agree.
-fn generate_stack_management_grant_plan(
+fn generate_stack_management_grant_plan<'r, I>(
     management_profile: &PermissionProfile,
+    resources: I,
     permission_context: &PermissionContext,
     live_resource_ids: &std::collections::HashSet<String>,
-) -> Result<AzureGrantPlan> {
+) -> Result<AzureGrantPlan>
+where
+    I: IntoIterator<Item = &'r alien_core::ResourceEntry> + Clone,
+{
     let mut custom_roles = Vec::new();
     let mut bindings = Vec::new();
     let generator = AzureRuntimePermissionsGenerator::new();
 
-    if let Some(global_refs) = management_profile.0.get("*") {
+    // Filtered exactly as the setup emitter filters it: a set the remote caller claims is not
+    // this identity's, and setup and runtime have to answer the same way.
+    {
+        let global_refs =
+            alien_permissions::management_identity_global_refs(resources, management_profile);
         for permission_set_ref in global_refs {
             let Some(permission_set) =
                 permission_set_ref.resolve(|name| get_permission_set(name).cloned())
@@ -1309,7 +1389,15 @@ fn generate_stack_management_grant_plan(
         .filter(|(scope, _)| scope.as_str() != "*")
         .filter(|(resource_id, _)| live_resource_ids.contains(resource_id.as_str()))
         .flat_map(|(_, refs)| refs.iter())
-        .filter(|reference| reference.id() == "worker/dispatch-command")
+        // By registry name, never by `id()`: an inline set carries whatever id its author typed,
+        // so deciding by id would let one named after this set compile at stack scope here.
+        .filter(|reference| {
+            matches!(
+                reference,
+                alien_core::permissions::PermissionSetReference::Name(name)
+                    if name == "worker/dispatch-command"
+            )
+        })
     {
         let Some(permission_set) =
             permission_set_ref.resolve(|name| get_permission_set(name).cloned())
@@ -1459,6 +1547,7 @@ impl AzureRemoteStackManagementController {
         let generator = AzureRuntimePermissionsGenerator::new();
         let grant_plan = generate_stack_management_grant_plan(
             management_profile,
+            ctx.desired_stack.resources.values(),
             &permission_context,
             &ctx.desired_stack.resources.keys().cloned().collect(),
         )?;

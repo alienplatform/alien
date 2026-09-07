@@ -602,7 +602,14 @@ impl AwsRemoteStackManagementController {
         // statement effects and conditions remain intact.
         let generator = AwsRuntimePermissionsGenerator::new();
         let mut all_statements = Vec::new();
-        if let Some(global_permission_set_ids) = management_profile.0.get("*") {
+        // Filtered exactly as the setup emitters filter it: a set the remote caller claims is
+        // not this identity's. Unfiltered, the first update re-grants the reach the package
+        // withheld.
+        let global_permission_set_ids = alien_permissions::management_identity_global_refs(
+            ctx.desired_stack.resources.values(),
+            management_profile,
+        );
+        {
             for permission_set_ref in global_permission_set_ids {
                 let permission_set =
                     permission_set_ref.resolve(|name| get_permission_set(name).cloned());
