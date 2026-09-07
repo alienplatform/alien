@@ -650,6 +650,98 @@ async fn a_long_command_uses_the_job_path() {
     ));
 }
 
+/// A client whose job answers depend only on the cursor it is asked for, so the streaming path and
+/// the trait methods read the same job the same way.
+fn job_client() -> MockAgentPlatformApi {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&match since_of(input) {
+                None => serde_json::json!({
+                    "running": true,
+                    "frames": [stdout_frame(0, b"work")],
+                }),
+                Some(_) => serde_json::json!({
+                    "running": false,
+                    "frames": [],
+                    "exitCode": 0,
+                    "truncated": false,
+                }),
+            })
+            .unwrap()),
+            other => panic!("unexpected op {other}"),
+        });
+    client
+}
+
+fn since_of(input: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<serde_json::Value>(input)
+        .ok()?
+        .get("sinceSeq")?
+        .as_u64()
+}
+
+/// `run_command`'s long path is `start_job` plus a poll loop, so what a caller polls for itself
+/// has to be exactly what the stream would have carried. A job surfaced through the trait that
+/// dropped or reordered a frame would be a second, quieter implementation of the same thing.
+#[tokio::test(start_paused = true)]
+async fn a_polled_job_carries_what_run_command_would_have_streamed() {
+    let streamed: Vec<CommandOutput> = provider(job_client())
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .map(|frame| frame.expect("every frame is output"))
+        .collect()
+        .await;
+
+    let sandbox = provider(job_client());
+    let started = sandbox
+        .start_job("s1", long_command())
+        .await
+        .expect("the job starts");
+    assert_eq!(started.job_id, "j1");
+
+    let first = sandbox
+        .poll_job("s1", &started.job_id, None)
+        .await
+        .expect("the first poll answers");
+    assert!(first.running, "the job has not ended yet");
+    let last = sandbox
+        .poll_job("s1", &started.job_id, Some(0))
+        .await
+        .expect("the second poll answers");
+    assert!(!last.running);
+
+    let exit = last.exit.expect("a job that ended carries its exit");
+    let polled: Vec<CommandOutput> = first
+        .frames
+        .into_iter()
+        .chain(last.frames)
+        .chain([CommandOutput::Exit {
+            code: exit.code,
+            truncated: exit.truncated,
+        }])
+        .collect();
+
+    assert_eq!(polled, streamed);
+    assert_eq!(
+        polled.len(),
+        2,
+        "the fixture produces one output frame and one exit, so an empty match would prove nothing"
+    );
+}
+
+fn long_command() -> RunCommandRequest {
+    RunCommandRequest {
+        command: vec!["/bin/sleep".to_string(), "40".to_string()],
+        working_directory: None,
+        env: BTreeMap::new(),
+        deadline: Duration::from_secs(60),
+    }
+}
+
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
 /// exit code, and the provider surfaces it rather than fabricating a clean exit.
 #[tokio::test(start_paused = true)]

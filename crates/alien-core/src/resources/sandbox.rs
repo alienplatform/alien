@@ -202,6 +202,9 @@ pub struct SandboxCapabilities {
     pub files: bool,
     /// A later call can reach a session created by an earlier one
     pub reconnect: bool,
+    /// A command can be started, polled and cancelled across separate calls, so it outlives the
+    /// one that started it. False where nothing inside the session owns the process in between.
+    pub jobs: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
     pub preview: bool,
     /// Session state can be suspended and resumed
@@ -243,6 +246,7 @@ impl SandboxCapabilities {
             Platform::Aws => Ok(Self {
                 files: true,
                 reconnect: true,
+                jobs: true,
                 preview: true,
                 suspend_resume: true,
                 snapshot: false,
@@ -270,6 +274,7 @@ impl SandboxCapabilities {
             Platform::Kubernetes => Ok(Self {
                 files: true,
                 reconnect: true,
+                jobs: true,
                 preview: false,
                 suspend_resume: false,
                 snapshot: false,
@@ -293,6 +298,8 @@ impl SandboxCapabilities {
             Platform::Local => Ok(Self {
                 files: true,
                 reconnect: true,
+                // Nothing runs inside the session: the manager drives Docker from outside it.
+                jobs: false,
                 preview: true,
                 suspend_resume: false,
                 snapshot: false,
@@ -323,6 +330,8 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
+            // No Alien process runs inside the session to own a command between two calls.
+            jobs: false,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a
@@ -361,6 +370,7 @@ impl SandboxCapabilities {
             // container boot id read through the agent's health op, so a caller detects a container
             // replaced under a stable session name rather than reconnecting to a blank one.
             reconnect: true,
+            jobs: true,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
             // `:pause` and `:resume` preserve the running container.
@@ -393,6 +403,7 @@ impl SandboxCapabilities {
         let available = match capability {
             SandboxCapability::Files => self.files,
             SandboxCapability::Reconnect => self.reconnect,
+            SandboxCapability::Jobs => self.jobs,
             SandboxCapability::Preview => self.preview,
             SandboxCapability::SuspendResume => self.suspend_resume,
             SandboxCapability::Snapshot => self.snapshot,
@@ -425,6 +436,8 @@ pub enum SandboxCapability {
     Files,
     /// Reaching a session created by an earlier call
     Reconnect,
+    /// Starting, polling and cancelling a command across separate calls
+    Jobs,
     /// An authenticated, port-scoped ingress capability
     Preview,
     /// Suspending and resuming session state
@@ -453,6 +466,7 @@ impl SandboxCapability {
         match self {
             Self::Files => "files",
             Self::Reconnect => "reconnect",
+            Self::Jobs => "jobs",
             Self::Preview => "preview",
             Self::SuspendResume => "suspendResume",
             Self::Snapshot => "snapshot",
