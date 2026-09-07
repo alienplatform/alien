@@ -12,7 +12,7 @@
             "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-*"]
           },
           "resource": {
-            "resources": ["arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}"]
+            "resources": ["arn:aws:iam::${awsAccountId}:role/${resourceName}"]
           }
         }
       }
@@ -55,7 +55,7 @@
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${stackPrefix}-${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/${resourceName}"
           }
         }
       }

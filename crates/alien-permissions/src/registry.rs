@@ -155,20 +155,7 @@ pub fn permission_set_reaches_a_sandbox_session(
         .azure
         .iter()
         .flatten()
-        .any(|entry| {
-            entry
-                .grant
-                .predefined_roles
-                .iter()
-                .flatten()
-                .any(|role| role.eq_ignore_ascii_case(AZURE_SANDBOX_DATA_PLANE_ROLE))
-                || entry
-                    .grant
-                    .data_actions
-                    .iter()
-                    .flatten()
-                    .any(|action| data_action_reaches_a_sandbox_session(action))
-        });
+        .any(azure_entry_reaches_a_sandbox_session);
 
     reaches_on_aws || reaches_on_azure
 }
@@ -178,6 +165,24 @@ pub fn permission_set_reaches_a_sandbox_session(
 /// allowlist an author may name from, and the Azure role-id map — or a second data-plane role
 /// added to one silently drops out of the others.
 pub const AZURE_SANDBOX_DATA_PLANE_ROLE: &str = "Container Apps SandboxGroup Data Owner";
+
+/// Whether one Azure permission entry reaches a sandbox session, by role or by data action.
+fn azure_entry_reaches_a_sandbox_session(
+    entry: &alien_core::permissions::AzurePlatformPermission,
+) -> bool {
+    entry
+        .grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .any(|role| role.eq_ignore_ascii_case(AZURE_SANDBOX_DATA_PLANE_ROLE))
+        || entry
+            .grant
+            .data_actions
+            .iter()
+            .flatten()
+            .any(|action| data_action_reaches_a_sandbox_session(action))
+}
 
 /// Whether one Azure `dataAction`, possibly carrying a `*`, addresses a sandbox session.
 ///
@@ -261,6 +266,61 @@ pub fn permission_set_covers_platform(
     entries.is_some_and(|count| count > 0)
 }
 
+/// Whether the session-reaching part of a set is scoped to the resource it is filed under.
+///
+/// The single-tenancy gate treats a **named** set as scoped by the profile key it sits under. That
+/// only holds where the entries carrying the session-reaching grant interpolate `${resourceName}`:
+/// an entry scoped to a whole project or subscription reaches every sibling whatever key it is
+/// filed under, and has to be judged by its scope instead. Entries that reach no session are not
+/// consulted — `sandbox/remote-execute` binds AWS's own network connector by a fixed ARN, which
+/// names no sandbox and grants nothing inside one.
+pub fn permission_set_is_resource_scoped_on(
+    permission_set: &alien_core::permissions::PermissionSet,
+    platform: alien_core::Platform,
+) -> bool {
+    const TOKEN: &str = "${resourceName}";
+    let platforms = &permission_set.platforms;
+    match platform {
+        alien_core::Platform::Aws => platforms
+            .aws
+            .iter()
+            .flatten()
+            .filter(|entry| {
+                entry.effect.is_allow()
+                    && entry
+                        .grant
+                        .actions
+                        .iter()
+                        .flatten()
+                        .any(|action| action_reaches_a_microvm_session(action))
+            })
+            .all(|entry| {
+                entry.binding.resource.as_ref().is_some_and(|spec| {
+                    spec.resources
+                        .iter()
+                        .any(|resource| resource.contains(TOKEN))
+                })
+            }),
+        alien_core::Platform::Azure => platforms
+            .azure
+            .iter()
+            .flatten()
+            .filter(|entry| azure_entry_reaches_a_sandbox_session(entry))
+            .all(|entry| {
+                entry
+                    .binding
+                    .resource
+                    .as_ref()
+                    .is_some_and(|spec| spec.scope.contains(TOKEN))
+            }),
+        alien_core::Platform::Gcp
+        | alien_core::Platform::Kubernetes
+        | alien_core::Platform::Machines
+        | alien_core::Platform::Local
+        | alien_core::Platform::Test => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -319,6 +379,32 @@ mod tests {
 
         // Should be sorted or at least consistent
         println!("Available permission sets: {:?}", ids);
+    }
+
+    /// The single-tenancy gate scopes a **named** session-reaching set by the profile key it sits
+    /// under, which only holds while every such set's resource binding names `${resourceName}`.
+    /// A set that reaches a session through a project- or subscription-wide resource binding has
+    /// to fall through to the inline treatment instead, so this pins the assumption at the source.
+    #[test]
+    fn every_session_reaching_set_is_resource_scoped_by_resource_name() {
+        for id in list_permission_set_ids() {
+            let permission_set = get_permission_set(id).expect("a listed set resolves");
+            if !permission_set_reaches_a_sandbox_session(permission_set) {
+                continue;
+            }
+            for platform in [
+                alien_core::Platform::Aws,
+                alien_core::Platform::Gcp,
+                alien_core::Platform::Azure,
+            ] {
+                assert!(
+                    permission_set_is_resource_scoped_on(permission_set, platform),
+                    "'{}' reaches a session but its {platform} resource binding does not name \
+                     ${{resourceName}}; the reach scan must judge it by scope, not by its key",
+                    permission_set.id
+                );
+            }
+        }
     }
 
     /// The Remote Bindings platform gate refuses a kind whose set does not cover the deployment's
