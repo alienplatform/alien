@@ -5,7 +5,7 @@
 //! more useful failure than a confusing test-time error).
 
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use alien_error::{AlienError, Context, IntoAlienError};
 
@@ -19,9 +19,16 @@ pub fn test_task(directory: Option<&str>, json: bool) -> Result<()> {
     validate_manifest(directory)?;
 
     let directory = Path::new(directory.unwrap_or("."));
+    // In JSON mode stdout must contain exactly one document. `cargo test`'s
+    // own stdout (test results, doctest summaries) would otherwise print
+    // ahead of `{"passed":true}` and break JSON parsing, so redirect the
+    // child's stdout to our stderr instead of inheriting it — the output
+    // stays visible for debugging, just off the JSON channel.
+    let stdout = if json { Stdio::from(std::io::stderr()) } else { Stdio::inherit() };
     let status = Command::new("cargo")
         .arg("test")
         .current_dir(directory)
+        .stdout(stdout)
         .status()
         .into_alien_error()
         .context(ErrorData::ConfigurationError {

@@ -33,6 +33,12 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
             message: format!("could not read '{}'", manifest_path.display()),
         })?;
 
+    // Plugins run inside the operator/worker's Linux runtime regardless of
+    // what OS `alien operations package` itself runs on (per the
+    // `<name>-linux-<arch>` binary naming convention every manifest uses).
+    // Build for an explicit Linux target triple rather than trusting
+    // `std::env::consts::ARCH`/the host OS — otherwise a run on macOS would
+    // silently bundle a Mach-O binary under a name that claims Linux.
     let arch = Arch::host().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "this host's architecture is not amd64 or arm64; `alien operations package` \
@@ -40,6 +46,7 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
                 .to_string(),
         })
     })?;
+    let target_triple = linux_target_triple(arch);
     let binary_entry = manifest.binaries.get(&arch).ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: format!(
@@ -53,7 +60,7 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
     let bundle_name = format!("{}-{}.zip", manifest.name, manifest.version);
     let bundle_path = directory.join(&bundle_name);
 
-    let binary_path = build_release_binary(directory, &manifest.name)?;
+    let binary_path = build_release_binary(directory, &manifest.name, target_triple)?;
     // Advertise only the architecture actually present in this bundle — the
     // source manifest on disk may declare both amd64 and arm64 (e.g. from
     // `init`'s template), but this run only ever builds one, and a bundle
@@ -117,29 +124,79 @@ fn single_arch_manifest_json(manifest_bytes: &[u8], arch: Arch, binary_entry: &s
         })
 }
 
-/// Run `cargo build --release` in `directory` and return the path Cargo
-/// itself reports for the resulting `crate_name` binary.
+/// The Rust target triple for `arch`'s Linux build — the only OS a
+/// published plugin binary ever runs under (see the module-level note in
+/// [`package_task`]).
+fn linux_target_triple(arch: Arch) -> &'static str {
+    match arch {
+        Arch::Amd64 => "x86_64-unknown-linux-gnu",
+        Arch::Arm64 => "aarch64-unknown-linux-gnu",
+    }
+}
+
+/// Confirm `target_triple` is installed for the active toolchain, so a
+/// missing cross-compilation target fails with an actionable message up
+/// front instead of a `cargo build` error partway through, or — if some
+/// other default target quietly satisfied the build — a bundle that
+/// silently ships the wrong OS/architecture.
+fn ensure_target_installed(target_triple: &str) -> Result<()> {
+    let output = Command::new("rustup")
+        .args(["target", "list", "--installed"])
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "could not run 'rustup target list --installed'".to_string(),
+        })?;
+    if !output.status.success() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "'rustup target list --installed' failed".to_string(),
+        }));
+    }
+    let installed = String::from_utf8_lossy(&output.stdout);
+    if installed.lines().any(|line| line.trim() == target_triple) {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "Rust target '{target_triple}' is not installed; plugin binaries must target Linux \
+             regardless of this host's OS. Run `rustup target add {target_triple}` and, on \
+             macOS, install a matching cross-linker (e.g. via `brew install \
+             messense/macos-cross-toolchains/{arch}-unknown-linux-gnu`) before packaging.",
+            arch = target_triple.split('-').next().unwrap_or(target_triple)
+        ),
+    }))
+}
+
+/// Run `cargo build --release --target <target_triple>` in `directory` and
+/// return the path Cargo itself reports for the resulting `crate_name`
+/// binary.
 ///
 /// Reads the artifact path from `--message-format=json` rather than
-/// assuming `<directory>/target/release/<crate_name>` — a plugin built with
-/// `CARGO_TARGET_DIR` set, a `[build] target-dir` in `.cargo/config.toml`,
-/// or as a member of an enclosing Cargo workspace with a shared target
-/// directory would build successfully but land its binary somewhere else,
-/// and the hardcoded path would then report a false "binary missing" after
-/// a build that actually succeeded.
-fn build_release_binary(directory: &Path, crate_name: &str) -> Result<PathBuf> {
+/// assuming `<directory>/target/<target_triple>/release/<crate_name>` — a
+/// plugin built with `CARGO_TARGET_DIR` set, a `[build] target-dir` in
+/// `.cargo/config.toml`, or as a member of an enclosing Cargo workspace
+/// with a shared target directory would build successfully but land its
+/// binary somewhere else, and the hardcoded path would then report a false
+/// "binary missing" after a build that actually succeeded.
+fn build_release_binary(directory: &Path, crate_name: &str, target_triple: &str) -> Result<PathBuf> {
+    ensure_target_installed(target_triple)?;
+
     let output = Command::new("cargo")
-        .args(["build", "--release", "--message-format=json"])
+        .args(["build", "--release", "--target", target_triple, "--message-format=json"])
         .current_dir(directory)
         .output()
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
-            message: format!("could not run 'cargo build --release' in '{}'", directory.display()),
+            message: format!(
+                "could not run 'cargo build --release --target {target_triple}' in '{}'",
+                directory.display()
+            ),
         })?;
     if !output.status.success() {
         return Err(AlienError::new(ErrorData::ConfigurationError {
             message: format!(
-                "plugin build failed in '{}' (cargo build exit code {})",
+                "plugin build failed in '{}' for target '{target_triple}' (cargo build exit code {})",
                 directory.display(),
                 output.status.code().unwrap_or(-1)
             ),
@@ -342,6 +399,24 @@ mod tests {
             r#"{"reason":"build-finished","success":true}"#, "\n",
         );
         assert!(binary_artifact_path(stdout.as_bytes(), "demo-plugin").is_none());
+    }
+
+    #[test]
+    fn linux_target_triple_never_selects_the_build_hosts_own_os() {
+        // Plugins always run inside the Linux operator/worker, so the
+        // packaged target triple must say `-linux-` regardless of what OS
+        // `cargo package` itself runs on (macOS in CI and on most
+        // developers' machines).
+        assert_eq!(linux_target_triple(Arch::Amd64), "x86_64-unknown-linux-gnu");
+        assert_eq!(linux_target_triple(Arch::Arm64), "aarch64-unknown-linux-gnu");
+    }
+
+    #[test]
+    fn ensure_target_installed_rejects_a_target_rustup_does_not_have() {
+        let err = ensure_target_installed("sparc64-unknown-linux-gnu")
+            .expect_err("a target that isn't installed must fail, not silently proceed");
+        assert_eq!(err.code, "CONFIGURATION_ERROR");
+        assert!(err.to_string().contains("rustup target add"));
     }
 
     #[test]
