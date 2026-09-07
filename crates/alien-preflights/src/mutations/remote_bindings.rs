@@ -224,10 +224,16 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 
 /// How the deployment's own workloads can reach `sandbox_id`, if any can.
 ///
-/// Three routes: a compute link, a permission profile, and a stack permission set on a
-/// user-declared ServiceAccount — never by set id, since an inline set can be named anything.
+/// Four routes: a compute link, a permission profile, a stack permission set on a user-declared
+/// ServiceAccount, and a resource-scoped entry in the author's management profile — never by set
+/// id, since an inline set can be named anything.
 ///
-/// The management profile is a fourth route this scan does not cover.
+/// The management profile's `*` entries are deliberately not scanned. A global set that reaches a
+/// session is claimed by the remote binding and stripped from the management identity by setup and
+/// runtime alike, so refusing on it would reject stacks those two make safe. A resource-scoped
+/// entry is stripped by neither. This runs before `ManagementPermissionProfileMutation`, so the
+/// profile here is what the author wrote, not the auto-derived baseline —
+/// `remote_bindings_is_gated_before_the_management_profile_is_derived` pins that order.
 fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
@@ -257,7 +263,7 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
         return by_profile;
     }
 
-    stack.resources().find_map(|(id, entry)| {
+    let by_account = stack.resources().find_map(|(id, entry)| {
         entry
             .config
             .downcast_ref::<ServiceAccount>()
@@ -268,6 +274,27 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
                     .any(permission_set_reaches_a_sandbox_session)
             })
             .map(|_| format!("service account '{id}' can start sessions in it"))
+    });
+    if by_account.is_some() {
+        return by_account;
+    }
+
+    stack.management().profile().and_then(|profile| {
+        profile
+            .0
+            .iter()
+            .filter(|(target, _)| target.as_str() != "*")
+            .find_map(|(target, permission_sets)| {
+                permission_sets
+                    .iter()
+                    .find(|reference| reaches_this_sandbox(reference, target, sandbox_id))
+                    .map(|reference| {
+                        format!(
+                            "the management profile grants '{}' on '{target}', which reaches it",
+                            reference.id()
+                        )
+                    })
+            })
     })
 }
 
@@ -676,6 +703,73 @@ mod tests {
         assert!(
             error.to_string().contains("resource 'processor' links it"),
             "the refusal must name the workload that shares the sandbox, got: {error}"
+        );
+    }
+
+    /// The management profile is the fourth route, and the one the gate read past. An author who
+    /// hands their own management identity `sandbox/execute` on the published sandbox makes it the
+    /// second tenant — resource-scoped entries are stripped by neither the setup emitter nor the
+    /// runtime, unlike the global ones.
+    #[tokio::test]
+    async fn a_remote_sandbox_granted_to_the_management_profile_is_refused() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .management(alien_core::ManagementPermissions::extend(
+                PermissionProfile::new().resource("agents", ["sandbox/execute"]),
+            ))
+            .build();
+
+        let error = RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect_err("the deployment's own management identity is a second tenant");
+
+        assert_eq!(error.code, "STACK_MUTATION_FAILED");
+        assert!(
+            error.to_string().contains("management profile"),
+            "the refusal must name the route, got: {error}"
+        );
+    }
+
+    /// A global entry is not the hole: a session-reaching set under `*` is claimed by the remote
+    /// binding and stripped from the management identity by setup and runtime alike, so refusing
+    /// it here would reject a stack those two make safe.
+    #[tokio::test]
+    async fn a_global_management_entry_is_left_to_the_claim_filter() {
+        let stack = Stack::new("application".to_string())
+            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+            .management(alien_core::ManagementPermissions::extend(
+                PermissionProfile::new().global(["sandbox/execute"]),
+            ))
+            .build();
+
+        RemoteBindingsMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config())
+            .await
+            .expect("a global set the remote binding claims is not a second tenant");
+    }
+
+    /// The fix above reads the author's own profile, which only holds while this mutation runs
+    /// before the one that merges the auto-derived baseline in. That baseline puts
+    /// `sandbox/management` under every Frozen sandbox, and it reaches a session — so moving
+    /// `ManagementPermissionProfileMutation` earlier would refuse every remotely published sandbox.
+    #[test]
+    fn remote_bindings_is_gated_before_the_management_profile_is_derived() {
+        let registry = crate::PreflightRegistry::with_built_ins();
+        let names: Vec<&str> = registry.mutation_descriptions();
+        let remote = names
+            .iter()
+            .position(|name| *name == RemoteBindingsMutation.description())
+            .expect("RemoteBindingsMutation is registered");
+        let management = names
+            .iter()
+            .position(|name| name.contains("management permission profile"))
+            .expect("ManagementPermissionProfileMutation is registered");
+
+        assert!(
+            remote < management,
+            "the single-tenancy gate reads the author's management profile, so it must run before \
+             the auto-derived baseline is merged in: {names:?}"
         );
     }
 

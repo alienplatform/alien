@@ -470,6 +470,16 @@ impl PreflightRegistry {
     }
 
     /// Add a compile-time check
+    /// The registered mutations in run order, for a test that depends on one running before
+    /// another. Test-only: the order is an implementation detail everywhere else.
+    #[cfg(test)]
+    pub(crate) fn mutation_descriptions(&self) -> Vec<&'static str> {
+        self.mutations
+            .iter()
+            .map(|mutation| mutation.description())
+            .collect()
+    }
+
     pub fn add_compile_time_check(&mut self, check: Box<dyn CompileTimeCheck>) {
         self.register_check_code(check.code());
         self.compile_time_checks.push(check);
