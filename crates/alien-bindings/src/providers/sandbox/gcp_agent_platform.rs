@@ -930,7 +930,8 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             // both come back through a successful `:execute`. Only the first proves the command
             // was stopped, so only the first may name an established outcome.
             let confirmed = cancelled.as_ref().is_ok_and(|body| {
-                serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+                serde_json::from_slice::<serde_json::Value>(body)
+                    .is_ok_and(|value| value.is_object())
             });
             state.pending.push_back(Err(match cancelled {
                 Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {

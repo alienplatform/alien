@@ -19,9 +19,7 @@ use crate::{
     },
     expr,
 };
-use alien_core::{
-    import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress,
-};
+use alien_core::{import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress};
 use alien_error::{AlienError, Context};
 use alien_permissions::{
     generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},

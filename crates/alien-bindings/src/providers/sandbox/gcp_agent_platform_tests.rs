@@ -1086,9 +1086,16 @@ fn a_frame_that_does_not_convert_ends_the_body() {
     body.extend_from_slice(&ndjson(&[exit_frame(0)]));
 
     let frames = parse_exec_frames(&body).expect("frames parse");
-    assert_eq!(frames.len(), 1, "the exit frame must not follow the failure");
     assert_eq!(
-        frames[0].as_ref().expect_err("a bad payload is not output").code,
+        frames.len(),
+        1,
+        "the exit frame must not follow the failure"
+    );
+    assert_eq!(
+        frames[0]
+            .as_ref()
+            .expect_err("a bad payload is not output")
+            .code,
         "SANDBOX_OUTCOME_UNKNOWN"
     );
 }

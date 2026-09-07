@@ -857,10 +857,7 @@ fn validate_azure_remote_client_config(config: &alien_core::AzureClientConfig) -
         ));
     }
     let alien_core::AzureCredentials::AccessToken { token } = &config.credentials else {
-        return Err(invalid_remote_lease(
-            "Azure",
-            "an access token is required",
-        ));
+        return Err(invalid_remote_lease("Azure", "an access token is required"));
     };
     if token.is_empty() {
         return Err(invalid_remote_lease(
