@@ -8,9 +8,9 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, GcpAgentPlatformEngine,
-    Platform, Queue, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
-    SandboxSessionPolicy, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
-    WorkerTrigger,
+    Platform, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode,
+    SandboxEgress, SandboxSessionPolicy, ServiceAccount, Stack, StackSettings, Storage, Worker,
+    WorkerCode, WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -277,4 +277,187 @@ fn a_live_gcp_sandbox_gets_no_engine_and_no_google_beta_provider() {
     );
 
     assert_terraform_valid(&module, "gcp live sandbox engine");
+}
+
+/// The remote grant reaches one reasoning engine and nothing wider.
+///
+/// The engine is referenced rather than named: a derived path would render a scope no engine
+/// answers to, and referencing the block is also what orders the binding after the engine GCP
+/// refuses to grant on before it exists. `projects/<project>` is the only scope above the engine
+/// GCP can express, and it would hand a remote caller every sibling sandbox in the deployment.
+#[test]
+fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wider() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add(
+            GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let member = rendered
+        .split(r#"resource "google_vertex_ai_reasoning_engine_iam_member""#)
+        .nth(1)
+        .expect("the remote grant attaches to the Remote Bindings identity")
+        .split("\nresource ")
+        .next()
+        .expect("block ends");
+    // HCL pads `=` to align an attribute with its siblings, so the column an assertion would match
+    // on moves whenever a neighbouring attribute is added or renamed.
+    let member = member.split_whitespace().collect::<Vec<_>>().join(" ");
+
+    let attribute = |key: &str| {
+        member
+            .split(&format!("{key} = "))
+            .nth(1)
+            .unwrap_or_else(|| panic!("the member carries no '{key}': {member}"))
+            .split(' ')
+            .next()
+            .expect("the attribute is one token")
+            .to_string()
+    };
+    assert_eq!(
+        attribute("reasoning_engine"),
+        "google_vertex_ai_reasoning_engine.agents_engine.name",
+        "the grant must name the created engine by reference, and nothing wider"
+    );
+    assert_eq!(
+        attribute("member"),
+        "\"serviceAccount:${google_service_account.access.email}\"",
+        "the grant belongs to the Remote Bindings identity, not the deployment's own"
+    );
+
+    // The role is generated from the `gcp` block rather than a predefined one: every predefined
+    // role carrying the session verbs carries the rest of Vertex AI with it.
+    let role = rendered
+        .split(r#"resource "google_project_iam_custom_role""#)
+        .nth(1)
+        .expect("the remote grant renders its custom role")
+        .split("\nresource ")
+        .next()
+        .expect("block ends");
+    for permission in [
+        "aiplatform.sandboxEnvironments.create",
+        "aiplatform.sandboxEnvironments.execute",
+        "aiplatform.sandboxEnvironments.delete",
+    ] {
+        assert!(role.contains(permission), "{role}");
+    }
+
+    // The document a security team approves the grant from. A permission-set token left behind
+    // renders a scope that resolves to nothing, and this is the only place a reader sees it.
+    let permissions_md = module
+        .files
+        .get("PERMISSIONS.md")
+        .expect("a remote binding publishes a permissions document");
+    assert!(
+        permissions_md.contains("/reasoningEngines/"),
+        "the documented scope must be the engine, not the project:\n{permissions_md}"
+    );
+    for token in [
+        "${projectName}",
+        "${region}",
+        "${resourceName}",
+        "${stackPrefix}",
+    ] {
+        assert!(
+            !permissions_md.contains(token),
+            "{token} reached the approver's document unsubstituted:\n{permissions_md}"
+        );
+    }
+
+    // `terraform init` is what proves the google-beta provider block was emitted: the IAM member
+    // type resolves nowhere else, and a `required_providers` entry without a `provider` block
+    // fails at plan rather than at emit.
+    assert_terraform_valid(&module, "gcp remote sandbox");
+    snapshot_module("gcp_remote_sandbox", &module);
+}
+
+/// The management identity reports on a remotely published sandbox without reaching its sessions.
+///
+/// GCP is where this is load-bearing: `sandbox/management` binds at `projects/${projectName}`, so
+/// a grant left on the management identity would reach the published engine's sessions from
+/// anywhere in the project — the second tenant the single-tenancy gate exists to refuse. The
+/// remote binding claims it instead, and this asserts the artifact agrees.
+#[test]
+fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new()
+                .global(["sandbox/heartbeat", "sandbox/management"]),
+        ))
+        .add(
+            GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add_with_remote_access(
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Gcp, StackSettings::default());
+    // Only the management identity's own files: the access role legitimately carries the session
+    // verbs, so a whole-module grep would assert the opposite of what this pins.
+    let rendered = module
+        .files
+        .iter()
+        .filter(|(name, _)| name.contains("management"))
+        .map(|(_, body)| body.clone())
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    assert!(
+        rendered.contains("aiplatform.sandboxEnvironmentTemplates.get"),
+        "the management identity must be able to read the parent it reports on:\n{rendered}"
+    );
+    // The whole namespace, not a verb list: `sandbox/management` is claimed by the remote binding
+    // and `sandbox/heartbeat` addresses the parent, so nothing the management identity holds may
+    // name a session at all.
+    assert!(
+        !rendered.contains("aiplatform.sandboxEnvironments."),
+        "the management identity names a sandbox session, which belongs to the remote caller \
+         alone:\n{rendered}"
+    );
 }

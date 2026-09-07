@@ -50,7 +50,7 @@ impl StackMutation for RemoteBindingsMutation {
         validate_remote_bindings_cover_the_platform(&stack, platform, self.description())?;
         validate_isolated_remote_resource(&stack, self.description())?;
         validate_remote_sandboxes_are_deliverable(&stack, self.description())?;
-        validate_remote_sandboxes_are_single_tenant(&stack, self.description())?;
+        validate_remote_sandboxes_are_single_tenant(&stack, self.description(), platform)?;
 
         if let Some(existing) = stack.resources.get(REMOTE_BINDINGS_ID) {
             return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -198,16 +198,21 @@ fn validate_remote_sandboxes_are_deliverable(stack: &Stack, mutation_name: &str)
 
 /// Refuses a remotely published sandbox that the deployment's own workloads can also reach.
 ///
-/// Neither cloud that publishes a sandbox remotely can scope the grant to a subset of its
-/// sessions: one AWS MicroVM image serves them all, and Azure's `SandboxGroup Data Owner` role
-/// covers every sandbox in the group. So a remote caller can reach sessions the customer's own
-/// compute started; single tenancy is the only containment available.
-fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &str) -> Result<()> {
+/// No cloud that publishes a sandbox remotely can scope the grant to a subset of its sessions: one
+/// AWS MicroVM image serves them all, Azure's `SandboxGroup Data Owner` role covers every sandbox
+/// in the group, and a GCP grant on the reasoning engine covers every session under it. So a remote
+/// caller can reach sessions the customer's own compute started; single tenancy is the only
+/// containment available.
+fn validate_remote_sandboxes_are_single_tenant(
+    stack: &Stack,
+    mutation_name: &str,
+    platform: Platform,
+) -> Result<()> {
     for (resource_id, entry) in &stack.resources {
         if !entry.has_remote_bindings() || entry.config.resource_type() != Sandbox::RESOURCE_TYPE {
             continue;
         }
-        let Some(reach) = in_cloud_reach_to(stack, resource_id) else {
+        let Some(reach) = in_cloud_reach_to(stack, resource_id, platform) else {
             continue;
         };
         return Err(AlienError::new(ErrorData::StackMutationFailed {
@@ -234,7 +239,7 @@ fn validate_remote_sandboxes_are_single_tenant(stack: &Stack, mutation_name: &st
 /// entry is stripped by neither. This runs before `ManagementPermissionProfileMutation`, so the
 /// profile here is what the author wrote, not the auto-derived baseline —
 /// `remote_bindings_is_gated_before_the_management_profile_is_derived` pins that order.
-fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
+fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Option<String> {
     let linked_by = stack.resources().find(|(_, entry)| {
         links_of(&entry.config)
             .iter()
@@ -253,9 +258,9 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
                 .0
                 .iter()
                 .any(|(target, permission_sets)| {
-                    permission_sets
-                        .iter()
-                        .any(|reference| reaches_this_sandbox(reference, target, sandbox_id))
+                    permission_sets.iter().any(|reference| {
+                        reaches_this_sandbox(reference, target, sandbox_id, platform)
+                    })
                 })
                 .then(|| format!("permission profile '{profile_name}' grants access to it"))
         });
@@ -287,7 +292,7 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
             .find_map(|(target, permission_sets)| {
                 permission_sets
                     .iter()
-                    .find(|reference| reaches_this_sandbox(reference, target, sandbox_id))
+                    .find(|reference| reaches_this_sandbox(reference, target, sandbox_id, platform))
                     .map(|reference| {
                         format!(
                             "the management profile grants '{}' on '{target}', which reaches it",
@@ -301,18 +306,23 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str) -> Option<String> {
 /// Whether a profile entry filed under `target` reaches `sandbox_id`. A **named** set is scoped
 /// by its key, so it can't touch this sandbox from another worker's entry; an **inline** set
 /// carries its own scope and can name this sandbox's group from under any key.
+///
+/// On GCP a named set is read as inline too: `sandbox/execute` and `sandbox/management` bind there
+/// at `projects/${projectName}`, so the key a set is filed under scopes nothing and a grant on one
+/// sandbox reaches every session in the project.
 fn reaches_this_sandbox(
     reference: &PermissionSetReference,
     target: &str,
     sandbox_id: &str,
+    platform: Platform,
 ) -> bool {
     match reference {
         // An unresolvable name is no reach: the manager rejects an unknown set before it grants
         // anything. The key scopes a named set because every session-reaching set interpolates
         // `${resourceName}`, which `every_session_reaching_set_is_resource_scoped_by_resource_name`
-        // pins in the registry.
+        // pins in the registry — for the two platforms it covers.
         PermissionSetReference::Name(name) => {
-            (target == sandbox_id || target == "*")
+            (platform == Platform::Gcp || target == sandbox_id || target == "*")
                 && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
         }
         PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox_session(set),
@@ -470,21 +480,26 @@ mod tests {
         assert_eq!(bindings.grants[0].permission_set, "sandbox/remote-execute");
     }
 
-    /// `sandbox/remote-execute` grants on AWS and Azure, nothing on GCP. Without this gate, a GCP
-    /// deployment's security review approves a PERMISSIONS.md heading promising arbitrary code
-    /// execution while listing nothing. Checked both directions: a covered platform must pass
-    /// too, or a set gaining a cloud silently stops deploying there.
+    /// `sandbox/remote-execute` grants on the three clouds whose setup creates the sandbox's
+    /// parent, and nowhere else. Without this gate a deployment's security review approves a
+    /// PERMISSIONS.md heading promising arbitrary code execution while listing nothing. Checked
+    /// both directions: a covered platform must pass too, or a set gaining a cloud silently stops
+    /// deploying there.
     #[tokio::test]
     async fn a_remote_sandbox_is_refused_where_its_permission_set_grants_nothing() {
-        let covered = Stack::new("byo-sandbox".to_string())
-            .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
-            .build();
-        RemoteBindingsMutation
-            .mutate(covered, &StackState::new(Platform::Azure), &config())
-            .await
-            .expect("Azure carries a remote-execute grant, so the gate must let it through");
+        for platform in [Platform::Azure, Platform::Gcp] {
+            let covered = Stack::new("byo-sandbox".to_string())
+                .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
+                .build();
+            RemoteBindingsMutation
+                .mutate(covered, &StackState::new(platform), &config())
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("{platform} carries a remote-execute grant: {error}")
+                });
+        }
 
-        for platform in [Platform::Gcp] {
+        for platform in [Platform::Kubernetes, Platform::Local] {
             let stack = Stack::new("byo-sandbox".to_string())
                 .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
                 .build();
@@ -514,45 +529,43 @@ mod tests {
             .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
             .build();
         let mut config = config();
-        config.base_platform = Some(Platform::Gcp);
+        config.base_platform = Some(Platform::Kubernetes);
 
         let error = RemoteBindingsMutation
-            .mutate(stack, &StackState::new(Platform::Kubernetes), &config)
+            .mutate(stack, &StackState::new(Platform::Gcp), &config)
             .await
             .expect_err("the base platform is the one the grants are emitted for");
 
         assert_eq!(error.code, "STACK_MUTATION_FAILED");
-        assert!(error.to_string().contains("is not supported on gcp"));
+        assert!(error.to_string().contains("is not supported on kubernetes"));
     }
 
-    /// A GCP remote sandbox's in-cloud reach is not something `in_cloud_reach_to` can see, so
-    /// single tenancy would certify this stack. The platform gate runs first and is what keeps
-    /// that unreachable.
+    /// The same stack `a_named_session_set_targeted_at_another_resource_is_allowed` accepts on
+    /// Azure, refused on GCP.
+    ///
+    /// GCP binds `sandbox/execute` at `projects/${projectName}`, so the key a set is filed under
+    /// scopes nothing: the worker granted it on `some-worker` can run code in the published
+    /// sandbox's sessions too, and that is the second tenant this gate exists to refuse.
     #[tokio::test]
-    async fn a_gcp_remote_sandbox_is_refused_before_single_tenancy_can_certify_it() {
-        let worker = Worker::new("processor".to_string())
-            .permissions("execution".to_string())
-            .code(WorkerCode::Image {
-                image: "example.com/processor:latest".to_string(),
-            })
-            .build();
+    async fn a_named_session_set_under_another_key_still_reaches_the_sandbox_on_gcp() {
         let stack = Stack::new("application".to_string())
             .add_with_remote_access(sandbox(SandboxEgress::Allow), ResourceLifecycle::Frozen)
-            .add(worker, ResourceLifecycle::Live)
+            .permission(
+                "execution",
+                PermissionProfile::new().resource("some-worker", ["sandbox/execute"]),
+            )
             .build();
-
-        assert!(
-            in_cloud_reach_to(&stack, "agents").is_none(),
-            "no link and no profile grant, so the single-tenancy scan finds nobody"
-        );
 
         let error = RemoteBindingsMutation
             .mutate(stack, &StackState::new(Platform::Gcp), &config())
             .await
-            .expect_err("a GCP remote sandbox must be refused whatever the reach scan says");
+            .expect_err("a project-scoped grant reaches the published sandbox from any key");
 
-        assert_eq!(error.code, "STACK_MUTATION_FAILED");
-        assert!(error.to_string().contains("is not supported on gcp"));
+        assert_eq!(error.code, "STACK_MUTATION_FAILED", "{error}");
+        assert!(
+            error.to_string().contains("permission profile 'execution'"),
+            "the refusal must come from the reach scan, got: {error}"
+        );
     }
 
     /// The gate is the permission set's own coverage, so the kinds that carry all three blocks

@@ -2,14 +2,9 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS and Azure: the two clouds whose sandbox parent setup creates, and can therefore scope a
-    // grant to. Both refuse an assignment naming a resource that doesn't exist yet, so parent and
+    // Every cloud here creates the sandbox's parent in setup, and can therefore scope a grant to
+    // it. All three refuse an assignment naming a resource that doesn't exist yet, so parent and
     // grant must come from the same template.
-    //
-    // GCP is absent for two reasons: `sandbox/execute` binds it at `projects/${projectName}` for
-    // both stack and resource, so a grant here would reach every sandbox in the project, not just
-    // the one published; and the engine a narrower grant would scope to is created by a Live
-    // controller after apply, not by setup, so there is nothing to name it against.
     "aws": [
       {
         "label": "session-lifecycle",
@@ -99,6 +94,37 @@
           "resource": {
             // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "session-lifecycle-and-exec",
+        "description": "Create, drive and tear down sessions under the selected sandbox's reasoning engine.",
+        "grant": {
+          // The verbs the Agent Platform provider calls, `execute` included — this set and
+          // `sandbox/execute` are the only two that reach session content. A custom role rather
+          // than a predefined one because none isolates them: `roles/aiplatform.user`,
+          // `roles/aiplatform.admin`, `roles/editor` and `roles/owner` all carry `execute`
+          // alongside the rest of Vertex AI.
+          "permissions": [
+            "aiplatform.sandboxEnvironments.create",
+            "aiplatform.sandboxEnvironments.get",
+            "aiplatform.sandboxEnvironments.list",
+            "aiplatform.sandboxEnvironments.delete",
+            "aiplatform.sandboxEnvironments.execute",
+            "aiplatform.sandboxEnvironments.pause",
+            "aiplatform.sandboxEnvironments.resume"
+          ]
+        },
+        // The engine, and nothing wider — the same boundary the AWS and Azure blocks draw. IAM on
+        // a reasoning engine is enforced on the sessions hanging under it, while a project scope
+        // would hand a remote caller every sibling sandbox in the deployment. No `stack` binding
+        // for that reason: `projects/${projectName}` is the only stack-level scope GCP can express.
+        "binding": {
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
           }
         }
       }

@@ -14621,7 +14621,7 @@
         "properties": {
           "allowEgress": {
             "type": "boolean",
-            "description": "Whether the declaration asked for open egress. Always true here, and sent rather than\nimplied for the same reason the AWS binding sends it: the remote grant lets its holder\ncreate sessions the declared policy never reaches, so a client reconstructing the policy\nneeds the answer on the wire rather than inferring it from an absent field."
+            "description": "Whether the declaration asked for open egress. Always true here, sent explicitly because\nthe remote grant lets its holder create sessions the declared policy never reaches — a\nclient must read this rather than assume it from an absent field."
           },
           "cpu": {
             "type": [
@@ -14760,6 +14760,39 @@
           }
         ],
         "description": "The only GCP credential form remote binding resolution can return."
+      },
+      "RemoteGcpSandboxBinding": {
+        "type": "object",
+        "description": "Concrete Agent Platform topology returned to remote clients.\n\nNo egress field, unlike the other two clouds: the policy lives on the environment template\nnamed below, so it travels with the template rather than as a flag the client must read.",
+        "required": [
+          "engine",
+          "template",
+          "region"
+        ],
+        "properties": {
+          "engine": {
+            "type": "string",
+            "description": "Reasoning engine the credential lease authorizes sessions under."
+          },
+          "region": {
+            "type": "string",
+            "description": "Region selecting the regional aiplatform endpoint."
+          },
+          "sessionTtlSeconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Seconds a session may live, where the declaration asked for one.",
+            "minimum": 0
+          },
+          "template": {
+            "type": "string",
+            "description": "Environment template every session is created from; it carries the image and the ceilings."
+          }
+        },
+        "additionalProperties": false
       },
       "RemoteGcpVertexAiBinding": {
         "type": "object",
@@ -15278,6 +15311,33 @@
                 "type": "string",
                 "enum": [
                   "sandbox-azure"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "GCP Agent Platform reasoning engine and a GCP access token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteGcpSandboxBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteGcpClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sandbox-gcp-agent-platform"
                 ]
               }
             }

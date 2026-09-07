@@ -76,10 +76,16 @@ fn gcp_implicit_management_sets_do_not_grant_sensitive_content() {
     }
 }
 
-/// The execute verb reaches session content, so it must appear in `sandbox/execute` and nowhere
-/// else. Positive and negative in one: the collected set is asserted to equal exactly that id.
+/// The two permission sets that may reach inside a sandbox session on GCP.
+///
+/// `execute` serves a workload in the customer's own cloud; `remote-execute` serves a hosted
+/// caller across the Remote Bindings boundary, and is engine-scoped for that reason.
+const SESSION_REACHING_SANDBOX_SETS: &[&str] = &["sandbox/execute", "sandbox/remote-execute"];
+
+/// The execute verb reaches session content, so it must appear in those two sets and nowhere
+/// else. Positive and negative in one: the collected set is asserted to equal exactly that list.
 #[test]
-fn gcp_sandbox_execute_permission_is_confined_to_the_execute_set() {
+fn gcp_sandbox_execute_permission_is_confined_to_the_session_reaching_sets() {
     const EXECUTE_PERMISSION: &str = "aiplatform.sandboxEnvironments.execute";
 
     let mut sets_granting_execute: Vec<&str> = Vec::new();
@@ -105,11 +111,53 @@ fn gcp_sandbox_execute_permission_is_confined_to_the_execute_set() {
         }
     }
 
+    sets_granting_execute.sort_unstable();
+    let mut expected = SESSION_REACHING_SANDBOX_SETS.to_vec();
+    expected.sort_unstable();
     assert_eq!(
-        sets_granting_execute,
-        vec!["sandbox/execute"],
-        "{EXECUTE_PERMISSION} reaches session content and must appear in sandbox/execute alone"
+        sets_granting_execute, expected,
+        "{EXECUTE_PERMISSION} reaches session content; a new set granting it reaches inside a \
+         session"
     );
+}
+
+/// A heartbeat addresses the sandbox's parent and never a session of it.
+///
+/// Stricter than the reach predicate on purpose, and heartbeat-only: `sandbox/management` names
+/// `aiplatform.sandboxEnvironments.create` and the rest of the session lifecycle because that is
+/// what it is for, while a heartbeat that reads a session has crossed into a resource whose
+/// contents it has no business near. Agent Platform's own health signal is the parent template's
+/// lifecycle state, which is what the controller reads.
+#[test]
+fn a_gcp_heartbeat_reads_the_parent_and_never_a_session() {
+    const SESSION_NAMESPACE: &str = "aiplatform.sandboxEnvironments.";
+
+    for permission_set_id in list_permission_set_ids() {
+        if !permission_set_id.ends_with("/heartbeat") {
+            continue;
+        }
+        let permission_set = alien_permissions::get_permission_set(permission_set_id)
+            .expect("permission set exists");
+        let Some(gcp_entries) = &permission_set.platforms.gcp else {
+            continue;
+        };
+
+        for (index, entry) in gcp_entries.iter().enumerate() {
+            let permissions = entry
+                .grant
+                .permissions
+                .iter()
+                .flatten()
+                .chain(entry.grant.residual_permissions.iter().flatten());
+            for permission in permissions {
+                assert!(
+                    !permission.starts_with(SESSION_NAMESPACE),
+                    "{permission_set_id} GCP entry {index} reads a sandbox session through \
+                     {permission}; a heartbeat reads the parent's state"
+                );
+            }
+        }
+    }
 }
 
 fn is_implicit_management_set(permission_set_id: &str) -> bool {

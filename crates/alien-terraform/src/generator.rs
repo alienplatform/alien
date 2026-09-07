@@ -712,6 +712,7 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
             "${data.aws_caller_identity.current.account_id}",
         )
         .replace("${projectName}", "${var.gcp_project}")
+        .replace("${region}", "${var.gcp_region}")
         .replace("${subscriptionId}", "${var.azure_subscription_id}")
         .replace("${resourceGroup}", "${var.azure_resource_group_name}")
         .replace(
