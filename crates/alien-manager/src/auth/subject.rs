@@ -288,7 +288,7 @@ mod tests {
     }
 
     /// The source is server-controlled and travels inside a `deny_unknown_fields` capability, so
-    /// a gateway that Platform has not minted a token for cannot name itself into the log store.
+    /// a gateway the control plane has not minted a token for cannot name itself into the log store.
     #[test]
     fn a_gateway_logs_capability_carries_its_source_and_refuses_an_unknown_one() {
         let capability: TelemetryCapability = serde_json::from_value(serde_json::json!({
