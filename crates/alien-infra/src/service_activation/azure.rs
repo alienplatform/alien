@@ -256,6 +256,13 @@ impl AzureServiceActivationController {
 
             emit_azure_service_activation_heartbeat(ctx, &config.id, service_name, &provider);
 
+            // What the refresh just read, so the heartbeat reports the subscription rather than
+            // whatever the import payload claimed.
+            self.service_activated = provider
+                .registration_state
+                .as_ref()
+                .is_some_and(|state| state.eq_ignore_ascii_case("registered"));
+
             if let Some(registration_state) = provider.registration_state {
                 if registration_state.to_lowercase() != "registered" {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
