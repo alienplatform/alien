@@ -1117,6 +1117,8 @@ fn operator_deployment_doc(
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
     yaml.push_str("  replicas: 1\n");
+    // Only one process can hold the persisted identity lock at a time.
+    yaml.push_str("  strategy:\n    type: Recreate\n    rollingUpdate: null\n");
     yaml.push_str("  selector:\n");
     yaml.push_str("    matchLabels:\n");
     append_operator_selector_labels(&mut yaml, labels, 6);
@@ -1202,6 +1204,10 @@ fn operator_deployment_doc(
         "SYNC_TOKEN_FILE",
         "/etc/operator/secrets/sync-token",
     );
+    if options.format == OperatorOutputFormat::HelmTemplate {
+        yaml.push_str("            - name: SYNC_TOKEN_REVISION\n");
+        yaml.push_str("              value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}\n");
+    }
     append_env_value(
         &mut yaml,
         "OPERATOR_ENCRYPTION_KEY_FILE",
@@ -4654,6 +4660,11 @@ mod tests {
             .into_iter()
             .next()
             .expect("operator manifest should include Deployment");
+        assert_eq!(
+            deployment["spec"]["strategy"]["type"].as_str(),
+            Some("Recreate"),
+            "the replacement must wait for the persisted identity lock owner to stop"
+        );
         let env = deployment
             .get("spec")
             .and_then(|spec| spec.get("template"))
@@ -4919,6 +4930,42 @@ mod tests {
             manifest.contains("{{- with .Values.remoteOperator.podLabels }}"),
             "AKS workload identity requires a pod label in addition to the ServiceAccount"
         );
+        let files = indexmap::IndexMap::from([
+            (
+                "Chart.yaml".to_string(),
+                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+            ),
+            (
+                "values.yaml".to_string(),
+                "remoteOperator: {}\n".to_string(),
+            ),
+            ("templates/operator.yaml".to_string(), manifest),
+        ]);
+        for (values, revision) in [
+            (None, "0"),
+            (Some("remoteOperator:\n  syncTokenRevision: 7\n"), "7"),
+        ] {
+            let rendered = crate::test_utils::helm_template(&files, values);
+            rendered.assert_ok("credential revision and single identity owner");
+            let docs = parse_manifest_docs(&rendered.stdout);
+            let deployment = docs_by_kind(&docs, "Deployment")
+                .into_iter()
+                .next()
+                .expect("rendered Deployment");
+            assert_eq!(
+                operator_env_value(&deployment, "SYNC_TOKEN_REVISION"),
+                Some(revision)
+            );
+            assert_eq!(
+                deployment["spec"]["strategy"]["type"].as_str(),
+                Some("Recreate")
+            );
+            assert_eq!(
+                deployment["spec"]["strategy"].get("rollingUpdate"),
+                Some(&YamlValue::Null),
+                "clear the previous strategy when upgrading an existing Deployment"
+            );
+        }
     }
 
     #[test]

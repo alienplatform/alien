@@ -49,6 +49,10 @@ pub struct Args {
     #[arg(long, env = "SYNC_TOKEN_FILE")]
     pub sync_token_file: Option<PathBuf>,
 
+    /// Explicit credential replacement revision; zero preserves the stored credential.
+    #[arg(long, env = "SYNC_TOKEN_REVISION", default_value_t = 0)]
+    pub sync_token_revision: u64,
+
     #[arg(long, env = "COLLECTOR_TOKEN_FILE")]
     pub collector_token_file: Option<PathBuf>,
 
@@ -326,16 +330,59 @@ async fn run(
             )? {
                 StartupDeploymentId::Stored(stored_deployment_id) => {
                     info!("   Using stored deployment ID: {}", stored_deployment_id);
+                    if args.sync_token_revision > db.get_sync_token_revision().await? {
+                        // Never consume a registration token as a rotation: initialize would
+                        // otherwise create a new identity before we could reject the response.
+                        if !sync_token.starts_with("ax_dep_") {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: "Credential rotation requires a deployment-scoped token, not a setup token".to_string(),
+                            }));
+                        }
+                        let (verified_id, replacement) = initialize_with_manager(
+                            &sync_url,
+                            &sync_token,
+                            args.platform,
+                            args.operator_name.as_deref(),
+                            operator_scope.as_deref(),
+                            operator_permission.as_deref(),
+                            operator_setup_method.as_deref(),
+                            InitialDesiredReleaseArg::None,
+                        )
+                        .await?;
+                        if verified_id != stored_deployment_id || replacement.is_some() {
+                            return Err(AlienError::new(ErrorData::ConfigurationError {
+                                message: "Replacement credential does not belong to the stored deployment; local credentials were not changed".to_string(),
+                            }));
+                        }
+                        db.rotate_sync_token(&sync_token, args.sync_token_revision)
+                            .await?;
+                        info!(
+                            revision = args.sync_token_revision,
+                            "Stored replacement deployment credential"
+                        );
+                    }
                     if let Some(stored_sync_token) = db.get_sync_token().await? {
                         info!("   Using stored deployment-scoped sync token");
                         sync_token = stored_sync_token;
                     }
                 }
                 StartupDeploymentId::Configured(deployment_id) => {
+                    if args.sync_token_revision > 0 {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: "Credential rotation requires an existing identity volume"
+                                .to_string(),
+                        }));
+                    }
                     info!("   Using configured deployment ID: {}", deployment_id);
                     db.set_deployment_id(&deployment_id).await?;
                 }
                 StartupDeploymentId::Initialize => {
+                    if args.sync_token_revision > 0 {
+                        return Err(AlienError::new(ErrorData::ConfigurationError {
+                            message: "Credential rotation requires an existing identity volume"
+                                .to_string(),
+                        }));
+                    }
                     info!("   First startup, initializing with manager...");
 
                     let (initialized_deployment_id, deployment_token) = initialize_with_manager(
