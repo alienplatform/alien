@@ -13,8 +13,8 @@ pub async fn finish_storage_check(
     let cleanup = async {
         reqwest::Client::new()
             .delete(format!("{url}/storage-object/{binding}/{key}"))
-            // A stalled test app must not prevent the runner from reaching teardown.
-            .timeout(Duration::from_secs(10))
+            // Allow cold starts beyond 10s, but bound stalls so teardown can proceed.
+            .timeout(Duration::from_secs(30))
             .send()
             .await
             .context("Test object cleanup request failed")?
@@ -52,7 +52,7 @@ mod tests {
         let url = format!("http://{}", listener.local_addr().unwrap());
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let results = tokio::time::timeout(Duration::from_secs(15), async {
+        let results = tokio::time::timeout(Duration::from_secs(40), async {
             tokio::join!(
                 finish_storage_check(&url, "files", "test.txt", Ok(())),
                 finish_storage_check(
@@ -74,6 +74,24 @@ mod tests {
         assert!(error.contains("content mismatch"), "{error}");
         assert!(error.contains("cleanup of test.txt also failed"), "{error}");
         assert!(error.contains("timed out"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn cleanup_allows_a_slow_successful_response() {
+        let app = Router::new().route(
+            "/storage-object/files/{key}",
+            delete(|| async {
+                // A valid cold start can exceed the old 10-second deadline.
+                tokio::time::sleep(Duration::from_secs(12)).await;
+                StatusCode::NO_CONTENT
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let result = finish_storage_check(&url, "files", "test.txt", Ok(())).await;
+        server.abort();
+        result.expect("slow successful cleanup must not fail verification");
     }
 
     #[tokio::test]
