@@ -86,14 +86,15 @@ impl KubernetesPermissions {
             return invalid("Kubernetes permission rules must not be empty");
         }
         for rule in &self.rules {
-            if (!rule.api_group.is_empty() && !valid_token(&rule.api_group, false))
-                || !valid_token(&rule.resource, true)
-            {
-                return invalid("Kubernetes API groups and resources must be concrete tokens");
+            if !rule.api_group.is_empty() && !valid_api_group(&rule.api_group) {
+                return invalid("Kubernetes API groups must be DNS subdomains");
             }
             let mut parts = rule.resource.split('/');
             let resource = parts.next().unwrap_or_default();
             let subresource = parts.next();
+            if !valid_resource(resource) {
+                return invalid("Kubernetes resources must be DNS-1035 labels");
+            }
             if resource == "secrets"
                 || parts.next().is_some()
                 || subresource.is_some_and(|sub| !matches!(sub, "log" | "scale" | "status"))
@@ -121,7 +122,7 @@ impl KubernetesPermissions {
             }
             for name in &rule.resource_names {
                 // Concrete path-segment names only; reject Helm expressions too.
-                if !valid_token(name, false) {
+                if !valid_token(name) {
                     return invalid("Kubernetes resourceNames must be concrete names");
                 }
             }
@@ -131,14 +132,27 @@ impl KubernetesPermissions {
     }
 }
 
-fn valid_token(value: &str, allow_slash: bool) -> bool {
+fn valid_api_group(value: &str) -> bool {
+    // Kubernetes DNS-1123 subdomain validation limits the whole name to 253
+    // bytes and checks each label's syntax. Single-label builtins are valid.
+    value.len() <= 253 && value.split('.').all(valid_token)
+}
+
+fn valid_resource(value: &str) -> bool {
+    value.len() <= 63
+        && valid_token(value)
+        && !value.contains('.')
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+}
+
+fn valid_token(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 253
         && value.bytes().all(|byte| {
-            byte.is_ascii_lowercase()
-                || byte.is_ascii_digit()
-                || matches!(byte, b'-' | b'.')
-                || (allow_slash && byte == b'/')
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'.')
         })
         && value
             .bytes()
@@ -200,6 +214,94 @@ mod tests {
             actual["operations"][0]["kubernetesPermissions"],
             value["operations"][0]["kubernetesPermissions"]
         );
+    }
+
+    #[test]
+    fn api_groups_use_dns_subdomain_syntax() {
+        for group in [
+            "".to_owned(),
+            "apps".to_owned(),
+            "batch".to_owned(),
+            "networking.k8s.io".to_owned(),
+            "v2.custom-api.example.com".to_owned(),
+            "1.example.com".to_owned(),
+            "a".repeat(253),
+        ] {
+            let mut input = manifest();
+            input["operations"][0]["kubernetesPermissions"]["rules"][0]["apiGroup"] = json!(group);
+            assert!(
+                PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_ok(),
+                "rejected valid API group: {group}"
+            );
+        }
+        for group in [
+            "example..com".to_owned(),
+            "example.-com".to_owned(),
+            "example-.com".to_owned(),
+            ".example.com".to_owned(),
+            "example.com.".to_owned(),
+            "example_com".to_owned(),
+            "Example.com".to_owned(),
+            "example/com".to_owned(),
+            "a".repeat(254),
+        ] {
+            let mut input = manifest();
+            input["operations"][0]["kubernetesPermissions"]["rules"][0]["apiGroup"] = json!(group);
+            assert!(
+                PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_err(),
+                "accepted invalid API group: {group}"
+            );
+        }
+    }
+
+    #[test]
+    fn resources_use_dns1035_labels_with_only_supported_subresources() {
+        for resource in [
+            "widgets".to_owned(),
+            "widget-v2s".to_owned(),
+            "pods/log".to_owned(),
+            "deployments/scale".to_owned(),
+            "widgets/status".to_owned(),
+            "a".repeat(63),
+        ] {
+            let mut input = manifest();
+            input["operations"][0]["kubernetesPermissions"]["rules"][0]["resource"] =
+                json!(resource);
+            assert!(
+                PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_ok(),
+                "rejected valid resource: {resource}"
+            );
+        }
+        for resource in [
+            "".to_owned(),
+            "1widgets".to_owned(),
+            "custom.widgets".to_owned(),
+            "Widgets".to_owned(),
+            "-widgets".to_owned(),
+            "widgets-".to_owned(),
+            "widgets_v2".to_owned(),
+            "pods/".to_owned(),
+            "/status".to_owned(),
+            "pods//log".to_owned(),
+            "pods/status/scale".to_owned(),
+            "a".repeat(64),
+        ] {
+            let mut input = manifest();
+            input["operations"][0]["kubernetesPermissions"]["rules"][0]["resource"] =
+                json!(resource);
+            assert!(
+                PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_err(),
+                "accepted invalid resource: {resource}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_names_keep_the_existing_concrete_path_token_contract() {
+        let mut input = manifest();
+        input["operations"][0]["kubernetesPermissions"]["rules"][0]["resourceNames"] =
+            json!(["1.widget-v2", "widget..name"]);
+        assert!(PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_ok());
     }
 
     #[test]

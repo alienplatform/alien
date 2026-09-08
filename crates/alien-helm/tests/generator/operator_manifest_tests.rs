@@ -197,6 +197,35 @@ fn custom_rules_obey_ceiling_and_validate_before_filtering() {
 }
 
 #[test]
+fn custom_rules_reject_malformed_identifiers_before_rendering() {
+    for (group, resource) in [
+        ("example..com", "widgets"),
+        ("example.-com", "widgets"),
+        ("example.com", "1widgets"),
+        ("example.com", "custom.widgets"),
+    ] {
+        let mut operation = custom_operation("inspector");
+        operation.permissions.rules[0].api_group = group.to_owned();
+        operation.permissions.rules[0].resource = resource.to_owned();
+        for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+            for format in [
+                OperatorOutputFormat::RawManifest,
+                OperatorOutputFormat::HelmTemplate,
+            ] {
+                assert!(rendered_with_custom(
+                    scope,
+                    OperatorPermission::Diagnostics,
+                    false,
+                    &[operation.clone()],
+                    format,
+                )
+                .is_err());
+            }
+        }
+    }
+}
+
+#[test]
 fn shared_builtin_and_custom_grants_are_deduplicated_and_keep_both_reasons() {
     let mut operation = custom_operation("inspector");
     let rule = &mut operation.permissions.rules[0];
