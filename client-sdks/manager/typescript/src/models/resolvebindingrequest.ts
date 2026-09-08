@@ -3,6 +3,10 @@
  */
 
 import * as z from "zod/v4";
+import {
+  ResolveBindingKind,
+  ResolveBindingKind$outboundSchema,
+} from "./resolvebindingkind.js";
 
 /**
  * Request body for `POST /v1/bindings/resolve`.
@@ -12,16 +16,18 @@ export type ResolveBindingRequest = {
    * Deployment containing the remote-enabled resource.
    */
   deploymentId: string;
+  kind?: ResolveBindingKind | null | undefined;
   /**
-   * Logical Storage resource id in the deployment's stack state.
+   * Logical remote-enabled resource id in the deployment's stack state.
    */
-  resourceId: string;
+  resourceId?: string | null | undefined;
 };
 
 /** @internal */
 export type ResolveBindingRequest$Outbound = {
   deploymentId: string;
-  resourceId: string;
+  kind?: string | null | undefined;
+  resourceId?: string | null | undefined;
 };
 
 /** @internal */
@@ -30,7 +36,8 @@ export const ResolveBindingRequest$outboundSchema: z.ZodType<
   ResolveBindingRequest
 > = z.object({
   deploymentId: z.string(),
-  resourceId: z.string(),
+  kind: z.nullable(ResolveBindingKind$outboundSchema).optional(),
+  resourceId: z.nullable(z.string()).optional(),
 });
 
 export function resolveBindingRequestToJSON(

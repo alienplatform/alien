@@ -72,7 +72,10 @@ export type ConfigSandboxBundle = {
    */
   agentImage: string;
   /**
-   * The vendor's base container image the sandbox filesystem starts from.
+   * The base container image the sandbox filesystem starts from. A release-pushed image
+   *
+   * @remarks
+   * arrives resolved onto the private registry template with its {region} token intact.
    */
   baseImage: string;
   /**
@@ -345,11 +348,14 @@ export type OutputsSandboxBundle = {
    */
   regions: Array<string>;
   /**
-   * SHA256 checksum of the bundle zip.
+   * SHA256 checksum of the region-neutral bundle zip; a region-templated base image makes
+   *
+   * @remarks
+   * each regional object differ from it only in the rendered region.
    */
   sha256: string;
   /**
-   * Bundle zip size in bytes.
+   * Region-neutral bundle zip size in bytes.
    */
   size: number;
   type: OutputsTypeSandboxBundle;

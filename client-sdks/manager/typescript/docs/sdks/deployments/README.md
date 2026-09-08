@@ -289,7 +289,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentsDeleteDeployment failed:", res.error);
   }
@@ -435,7 +435,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentsRedeploy failed:", res.error);
   }
@@ -508,7 +508,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentsRetryDeployment failed:", res.error);
   }

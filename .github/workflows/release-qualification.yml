@@ -55,15 +55,16 @@ jobs:
               echo "::error::Release qualification requires a Linear-derived branch"
               exit 1
             fi
-            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings|ai-gateway)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
+            allowed='^(Cargo.toml|Cargo.lock|packages/(core|commands|sdk|testing|bindings|ai-gateway)/package.json|crates/alien-bindings-node/package.json|client-sdks/(platform|manager)/typescript/(package.json|jsr.json|package-lock.json|src/lib/config.ts|\.speakeasy/(gen.yaml|gen.lock))|packages/bindings/npm/(darwin-arm64|darwin-x64|linux-x64-gnu|linux-arm64-gnu)/package.json)$'
             unexpected=$(git diff --name-only "$BASE_SHA" "$SOURCE_REF" | grep -Ev "$allowed" || true)
             if [ -n "$unexpected" ]; then
               echo "::error::Release PR contains non-version files:"
               echo "$unexpected"
               exit 1
             fi
-            BASE_SHA="$BASE_SHA" SOURCE_REF="$SOURCE_REF" node <<'NODE'
-            const { execFileSync } = require('child_process');
+            BASE_SHA="$BASE_SHA" SOURCE_REF="$SOURCE_REF" node --input-type=module <<'NODE'
+            import { execFileSync } from 'node:child_process';
+            import { withSDKReleaseVersion } from './scripts/sdk-release-metadata.mjs';
 
             const changed = execFileSync(
               'git',
@@ -107,6 +108,9 @@ jobs:
                          path.endsWith('/.speakeasy/gen.lock')) {
                 base = normalizeSpeakeasy(path, fromRef(process.env.BASE_SHA, path));
                 head = normalizeSpeakeasy(path, fromRef(process.env.SOURCE_REF, path));
+              } else if (path.endsWith('/src/lib/config.ts')) {
+                base = withSDKReleaseVersion(fromRef(process.env.BASE_SHA, path), '0.0.0');
+                head = withSDKReleaseVersion(fromRef(process.env.SOURCE_REF, path), '0.0.0');
               } else {
                 continue;
               }

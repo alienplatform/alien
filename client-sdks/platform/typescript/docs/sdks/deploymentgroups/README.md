@@ -622,7 +622,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteDeploymentGroup failed:", res.error);
   }
@@ -1136,7 +1136,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("deploymentGroupsDeleteExternalAIBinding failed:", res.error);
   }

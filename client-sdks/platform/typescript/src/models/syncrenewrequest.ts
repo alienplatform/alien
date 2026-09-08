@@ -4,6 +4,21 @@
 
 import * as z from "zod/v4";
 
+export type Claim = {
+  /**
+   * Unique identifier for the deployment.
+   */
+  deploymentId: string;
+  /**
+   * Unique identifier for the deployment update operation.
+   */
+  operationId: string;
+  /**
+   * Unique identifier for the deployment update attempt.
+   */
+  attemptId: string;
+};
+
 export type SyncRenewRequest = {
   /**
    * Single deployment to renew. Deprecated: use deploymentIds. Retained so a manager built against the previous API keeps renewing during rollout.
@@ -13,13 +28,36 @@ export type SyncRenewRequest = {
    * Deployments to renew or confirm. Renewal is per deployment: the response reports each one independently.
    */
   deploymentIds?: Array<string> | undefined;
+  /**
+   * Claim identities for deployments currently executing an update.
+   */
+  claims?: Array<Claim> | undefined;
   session: string;
 };
+
+/** @internal */
+export type Claim$Outbound = {
+  deploymentId: string;
+  operationId: string;
+  attemptId: string;
+};
+
+/** @internal */
+export const Claim$outboundSchema: z.ZodType<Claim$Outbound, Claim> = z.object({
+  deploymentId: z.string(),
+  operationId: z.string(),
+  attemptId: z.string(),
+});
+
+export function claimToJSON(claim: Claim): string {
+  return JSON.stringify(Claim$outboundSchema.parse(claim));
+}
 
 /** @internal */
 export type SyncRenewRequest$Outbound = {
   deploymentId?: string | undefined;
   deploymentIds?: Array<string> | undefined;
+  claims?: Array<Claim$Outbound> | undefined;
   session: string;
 };
 
@@ -30,6 +68,7 @@ export const SyncRenewRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string().optional(),
   deploymentIds: z.array(z.string()).optional(),
+  claims: z.array(z.lazy(() => Claim$outboundSchema)).optional(),
   session: z.string(),
 });
 

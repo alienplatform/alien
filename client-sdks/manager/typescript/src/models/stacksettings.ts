@@ -96,6 +96,16 @@ export type StackSettings = {
   kubernetes?: KubernetesSettings | null | undefined;
   network?: NetworkSettings | null | undefined;
   /**
+   * Exact externally managed endpoint URLs, keyed by resource ID and endpoint name.
+   *
+   * @remarks
+   *
+   * This is intended for adopted Machines deployments whose DNS and certificates remain
+   * customer-owned. The platform passes these URLs to the runtime without creating or
+   * replacing DNS records or certificates.
+   */
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
+  /**
    * How telemetry (logs, metrics, traces) is handled.
    */
   telemetry?: TelemetryMode | undefined;
@@ -147,6 +157,9 @@ export const StackSettings$inboundSchema: z.ZodType<StackSettings, unknown> = z
     heartbeats: HeartbeatsMode$inboundSchema.optional(),
     kubernetes: z.nullable(KubernetesSettings$inboundSchema).optional(),
     network: z.nullable(NetworkSettings$inboundSchema).optional(),
+    publicEndpoints: z.nullable(
+      z.record(z.string(), z.record(z.string(), z.string())),
+    ).optional(),
     telemetry: TelemetryMode$inboundSchema.optional(),
     updates: UpdatesMode$inboundSchema.optional(),
   });
@@ -159,6 +172,7 @@ export type StackSettings$Outbound = {
   heartbeats?: string | undefined;
   kubernetes?: KubernetesSettings$Outbound | null | undefined;
   network?: NetworkSettings$Outbound | null | undefined;
+  publicEndpoints?: { [k: string]: { [k: string]: string } } | null | undefined;
   telemetry?: string | undefined;
   updates?: string | undefined;
 };
@@ -176,6 +190,9 @@ export const StackSettings$outboundSchema: z.ZodType<
   heartbeats: HeartbeatsMode$outboundSchema.optional(),
   kubernetes: z.nullable(KubernetesSettings$outboundSchema).optional(),
   network: z.nullable(NetworkSettings$outboundSchema).optional(),
+  publicEndpoints: z.nullable(
+    z.record(z.string(), z.record(z.string(), z.string())),
+  ).optional(),
   telemetry: TelemetryMode$outboundSchema.optional(),
   updates: UpdatesMode$outboundSchema.optional(),
 });

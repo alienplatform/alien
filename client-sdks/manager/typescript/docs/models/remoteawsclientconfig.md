@@ -12,7 +12,7 @@ let value: RemoteAwsClientConfig = {
   accountId: "<id>",
   credentials: {
     accessKeyId: "<id>",
-    expiresAt: "1755867390141",
+    expiresAt: "1744601542027",
     secretAccessKey: "<value>",
     sessionToken: "<value>",
     type: "sessionCredentials",

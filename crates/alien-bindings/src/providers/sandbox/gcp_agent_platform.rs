@@ -274,10 +274,16 @@ impl GcpAgentPlatformSandbox {
                 reason: format!("{operation}: the session does not exist"),
             });
         }
-        // Non-retryable across the board: a `:execute` is single-attempt because it may already
-        // have started the command, and the client does not tell a delivered-but-failed call apart
-        // from an undelivered one. The cause stays on the chain rather than in `reason`, keeping a
-        // redacted request body out of an externally visible message.
+        // The client does not tell a delivered-but-failed call apart from an undelivered one, so
+        // a `:execute` carrying a command leaves its outcome unestablished. The cause stays on the
+        // chain rather than in `reason`, keeping a redacted request body out of an externally
+        // visible message.
+        if operation == RUN_COMMAND {
+            return error.context(ErrorData::SandboxOutcomeUnknown {
+                operation: operation.to_string(),
+                reason: "the session did not complete the call".to_string(),
+            });
+        }
         error.context(ErrorData::SandboxCommandFailed {
             failure: "executeFailed".to_string(),
             reason: format!("{operation} could not be completed against the session"),
@@ -452,12 +458,20 @@ impl GcpAgentPlatformSandbox {
         struct JobStart {
             job_id: String,
         }
+        // The `:execute` succeeded, so the job was accepted and is running; only its id could not
+        // be read. Nothing can poll or cancel it after this, and the command's own deadline is what
+        // bounds it — so the outcome is unestablished rather than a bad response shape.
         let started: JobStart = serde_json::from_slice(&body).map_err(|_| {
             AlienError::new(ErrorData::UnexpectedResponseFormat {
                 provider: "gcp-agent-platform".to_string(),
                 binding_name: RUN_COMMAND.to_string(),
                 field: "jobId".to_string(),
                 response_json: truncated(&body),
+            })
+            .context(ErrorData::SandboxOutcomeUnknown {
+                operation: RUN_COMMAND.to_string(),
+                reason: "the job started and its id could not be read, so it cannot be polled"
+                    .to_string(),
             })
         })?;
 
@@ -879,9 +893,10 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
         }
 
         if tokio::time::Instant::now() >= state.deadline_at {
-            // Best-effort: the job is cancelled so its process group is killed, and the caller is
-            // told the deadline was exceeded rather than left reading a stream that never ends.
-            let _ = state
+            // The deadline is this client's decision, so it only names an outcome once the cancel
+            // that makes it true has landed. A cancel that fails leaves the job running, and the
+            // caller has to be told that rather than that the command was stopped.
+            let cancelled = state
                 .client
                 .execute(
                     &state.engine,
@@ -889,13 +904,30 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                     &cancel_body(&state.job_id),
                 )
                 .await;
-            state
-                .pending
-                .push_back(Err(AlienError::new(ErrorData::SandboxCommandFailed {
+            // A reply arriving is not the cancel succeeding: the agent answers `{}` when it
+            // cancelled the job and its own error text when it did not — `JobNotFound`, say — and
+            // both come back through a successful `:execute`. Only the first proves the command
+            // was stopped, so only the first may name an established outcome.
+            let confirmed = cancelled.as_ref().is_ok_and(|body| {
+                serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+            });
+            state.pending.push_back(Err(match cancelled {
+                Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "deadlineExceeded".to_string(),
                     reason: "the command's deadline elapsed before its job reported an outcome"
                         .to_string(),
-                })));
+                }),
+                Ok(_) => AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the command's deadline elapsed and its job did not confirm the cancel"
+                        .to_string(),
+                }),
+                Err(error) => error.context(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the command's deadline elapsed and its job could not be cancelled"
+                        .to_string(),
+                }),
+            }));
             state.finished = true;
             continue;
         }
@@ -925,6 +957,8 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
         let poll: JobPoll = match serde_json::from_slice(&body) {
             Ok(poll) => poll,
             Err(_) => {
+                // The job is still running and this stops watching it, so its outcome is
+                // unestablished — not merely a reply this could not read.
                 state.pending.push_back(Err(AlienError::new(
                     ErrorData::UnexpectedResponseFormat {
                         provider: "gcp-agent-platform".to_string(),
@@ -932,7 +966,12 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                         field: "jobPoll".to_string(),
                         response_json: truncated(&body),
                     },
-                )));
+                )
+                .context(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "the job's reply could not be read, so it is no longer watched"
+                        .to_string(),
+                })));
                 state.finished = true;
                 continue;
             }
@@ -943,7 +982,15 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             // highest seq seen and the loop never waits for a "missing" one; `max` rather than the
             // last frame's seq so an out-of-order frame cannot walk the cursor backwards.
             state.since_seq = state.since_seq.max(frame.seq());
-            state.pending.push_back(frame.into_output());
+            let output = frame.into_output();
+            // As in the synchronous path: a frame that will not convert ends the poll rather than
+            // being queued ahead of a terminal result that would contradict it.
+            let failed = output.is_err();
+            state.pending.push_back(output);
+            if failed {
+                state.finished = true;
+                break;
+            }
         }
 
         if !poll.running {
@@ -954,10 +1001,18 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                     failure: error.code,
                     reason: error.message,
                 })),
-                None => Ok(CommandOutput::Exit {
-                    code: poll.exit_code.unwrap_or(-1),
-                    truncated: poll.truncated.unwrap_or(false),
-                }),
+                // A job that finished without an exit code never established its outcome; an
+                // invented code is indistinguishable from one the command really exited with.
+                None => match poll.exit_code {
+                    Some(code) => Ok(CommandOutput::Exit {
+                        code,
+                        truncated: poll.truncated.unwrap_or(false),
+                    }),
+                    None => Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+                        operation: RUN_COMMAND.to_string(),
+                        reason: "the job finished without reporting an exit code".to_string(),
+                    })),
+                },
             };
             state.pending.push_back(terminal);
             state.finished = true;
@@ -1062,6 +1117,8 @@ impl WireFrame {
     }
 }
 
+/// A frame that arrived is proof the command ran, so a payload that will not decode leaves the
+/// outcome unestablished rather than merely malformed.
 fn decode_frame_data(data: &str) -> Result<Vec<u8>> {
     BASE64.decode(data).map_err(|error| {
         AlienError::new(ErrorData::UnexpectedResponseFormat {
@@ -1069,6 +1126,10 @@ fn decode_frame_data(data: &str) -> Result<Vec<u8>> {
             binding_name: RUN_COMMAND.to_string(),
             field: "data".to_string(),
             response_json: format!("an output frame's data is not base64: {error}"),
+        })
+        .context(ErrorData::SandboxOutcomeUnknown {
+            operation: RUN_COMMAND.to_string(),
+            reason: "an output frame did not decode".to_string(),
         })
     })
 }
@@ -1092,7 +1153,16 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
             Ok(frame) => {
                 saw_any = true;
                 saw_terminal |= frame.is_terminal();
-                frames.push(frame.into_output());
+                let output = frame.into_output();
+                // A frame that will not convert ends the body: letting a later exit follow would
+                // answer the question this item just reported as unanswerable. `saw_terminal`
+                // stops the trailing item below from saying the same thing twice.
+                let failed = output.is_err();
+                frames.push(output);
+                if failed {
+                    saw_terminal = true;
+                    break;
+                }
             }
             Err(error) => {
                 if !saw_any {
@@ -1101,11 +1171,17 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
                         reason: format!("run_command was refused: {}", truncated(body)),
                     }));
                 }
+                // Frames already arrived, so the command ran and this leaves its end unknown.
+                // `saw_terminal` stops the trailing item below from saying the same thing twice.
                 frames.push(Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
                     provider: "gcp-agent-platform".to_string(),
                     binding_name: RUN_COMMAND.to_string(),
                     field: "frame".to_string(),
                     response_json: format!("an output frame did not parse: {error}"),
+                })
+                .context(ErrorData::SandboxOutcomeUnknown {
+                    operation: RUN_COMMAND.to_string(),
+                    reason: "an output frame did not parse".to_string(),
                 })));
                 saw_terminal = true;
                 break;
@@ -1120,11 +1196,9 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
         }));
     }
     if !saw_terminal {
-        frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: "outcomeUnknown".to_string(),
-            reason: "the command's output ended without a terminal frame, so whether it finished \
-                     is unknown"
-                .to_string(),
+        frames.push(Err(AlienError::new(ErrorData::SandboxOutcomeUnknown {
+            operation: RUN_COMMAND.to_string(),
+            reason: "the command's output ended without a terminal frame".to_string(),
         })));
     }
     Ok(frames)

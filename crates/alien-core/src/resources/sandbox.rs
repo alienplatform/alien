@@ -974,6 +974,15 @@ pub enum BundleUri<'a> {
     Regional { before: &'a str, after: &'a str },
 }
 
+/// The prefix a rebuild's new key still sits under: everything above the file name and the
+/// version segment beneath it. `None` when nothing sits there, meaning no prefix can be granted
+/// without also granting objects a rebuild never reads. Shared so both emitters agree on it.
+pub fn stable_bundle_key_prefix(key: &str) -> Option<&str> {
+    let (above_file, _) = key.rsplit_once('/')?;
+    let (above_version, _) = above_file.rsplit_once('/')?;
+    Some(above_version)
+}
+
 /// Reads a sandbox bundle URI, refusing anything an image build would only reject later.
 ///
 /// The token is accepted in the bucket alone. A key-position token would name an object that does
@@ -986,6 +995,16 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
     let (bucket, key) = path
         .split_once('/')
         .ok_or_else(|| format!("'{uri}' names a bucket with no object key"))?;
+
+    // Both emitters interpolate this path into the build role's resource ARN, where `*` and `?`
+    // are IAM wildcards rather than literal characters. S3 accepts them in a key, so a bundle
+    // published under one would silently widen the grant past the bundle it names.
+    if path.contains('*') || path.contains('?') {
+        return Err(format!(
+            "'{uri}' carries an IAM wildcard; the bundle's path is interpolated into the build \
+             role's grant, so '*' and '?' would widen it past the bundle"
+        ));
+    }
 
     if key.contains('{') || key.contains('}') {
         return Err(format!(
@@ -1022,6 +1041,44 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wildcard reaching the grant would widen it past the bundle, and it widens the Frozen
+    /// object grant as readily as the Live prefix — both interpolate the path into the ARN.
+    #[test]
+    fn a_uri_carrying_an_iam_wildcard_is_refused() {
+        for uri in [
+            "s3://acme/team-*/v1/bundle.zip",
+            "s3://acme/sandbox-bundle/f00d/bundle?.zip",
+            "s3://acme-*/sandbox-bundle/f00d/bundle.zip",
+        ] {
+            let error = parse_bundle_uri(uri).expect_err("a wildcard must be refused");
+            assert!(error.contains("IAM wildcard"), "for {uri}: {error}");
+        }
+
+        parse_bundle_uri("s3://acme/sandbox-bundle/f00d/bundle.zip")
+            .expect("an ordinary key still parses");
+    }
+
+    /// The rule both package formats grant by, pinned here rather than in either. The
+    /// near-misses the cases separate: the key's first segment grants objects a rebuild never
+    /// reads, and the object's own directory pins the version segment that moves.
+    #[test]
+    fn a_grantable_prefix_stops_above_the_segment_that_moves() {
+        assert_eq!(
+            stable_bundle_key_prefix("sandbox-bundle/f00dcafe/bundle.zip"),
+            Some("sandbox-bundle")
+        );
+        assert_eq!(
+            stable_bundle_key_prefix("artifacts/team-a/sandbox/f00dcafe/bundle.zip"),
+            Some("artifacts/team-a/sandbox"),
+            "a deeper key narrows the prefix, it never widens to the first segment"
+        );
+
+        // Nothing sits above the version segment, so no prefix a moved bundle stays inside
+        // exists. Emitting the object grant instead installs a role that denies the next rebuild.
+        assert_eq!(stable_bundle_key_prefix("agents/bundle.zip"), None);
+        assert_eq!(stable_bundle_key_prefix("bundle.zip"), None);
+    }
 
     fn sandbox_with(egress: SandboxEgress, preview_ports: Vec<u16>) -> Sandbox {
         Sandbox::new("agent-sbx".to_string())

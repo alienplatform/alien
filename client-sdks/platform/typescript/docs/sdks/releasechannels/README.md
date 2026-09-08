@@ -217,7 +217,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("releaseChannelsDelete failed:", res.error);
   }

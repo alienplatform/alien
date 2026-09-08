@@ -282,6 +282,8 @@ const alien = new Alien({
 async function run() {
   const result = await alien.sync.reconcile({
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+    attemptId: "duat_uve04tou5eoua3q17dar1pz",
     state: {
       platform: "aws",
       protocolVersion: 149716,
@@ -313,6 +315,8 @@ const alien = new AlienCore({
 async function run() {
   const res = await syncReconcile(alien, {
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+    attemptId: "duat_uve04tou5eoua3q17dar1pz",
     state: {
       platform: "aws",
       protocolVersion: 149716,
@@ -370,6 +374,13 @@ async function run() {
     deploymentIds: [
       "dep_0c29fq4a2yjb7kx3smwdgxlc",
     ],
+    claims: [
+      {
+        deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+        operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+        attemptId: "duat_uve04tou5eoua3q17dar1pz",
+      },
+    ],
     session: "<value>",
   });
 
@@ -399,6 +410,13 @@ async function run() {
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     deploymentIds: [
       "dep_0c29fq4a2yjb7kx3smwdgxlc",
+    ],
+    claims: [
+      {
+        deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+        operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+        attemptId: "duat_uve04tou5eoua3q17dar1pz",
+      },
     ],
     session: "<value>",
   });
@@ -453,6 +471,8 @@ async function run() {
   const result = await alien.sync.release({
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     session: "<value>",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+    attemptId: "duat_uve04tou5eoua3q17dar1pz",
   });
 
   console.log(result);
@@ -480,6 +500,8 @@ async function run() {
   const res = await syncRelease(alien, {
     deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
     session: "<value>",
+    operationId: "duop_0vtxpb1sw4sbcdwg2xo37q6",
+    attemptId: "duat_uve04tou5eoua3q17dar1pz",
   });
   if (res.ok) {
     const { value: result } = res;

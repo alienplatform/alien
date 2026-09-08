@@ -4,12 +4,18 @@
 
 import * as z from "zod/v4";
 import {
+  AiAvailabilityObservation,
+  AiAvailabilityObservation$Outbound,
+  AiAvailabilityObservation$outboundSchema,
+} from "./aiavailabilityobservation.js";
+import {
   AiHeartbeatStatus,
   AiHeartbeatStatus$Outbound,
   AiHeartbeatStatus$outboundSchema,
 } from "./aiheartbeatstatus.js";
 
 export type AiHeartbeatDataExternal = {
+  availability?: AiAvailabilityObservation | null | undefined;
   /**
    * The BYO-key provider serving this binding (e.g. "openai"). Used on the Local
    *
@@ -23,6 +29,7 @@ export type AiHeartbeatDataExternal = {
 
 export type AiHeartbeatDataAzureFoundry = {
   accountName: string;
+  availability: AiAvailabilityObservation;
   endpoint?: string | null | undefined;
   location?: string | null | undefined;
   resourceGroup?: string | null | undefined;
@@ -31,6 +38,7 @@ export type AiHeartbeatDataAzureFoundry = {
 };
 
 export type AiHeartbeatDataGcpVertex = {
+  availability: AiAvailabilityObservation;
   location: string;
   project: string;
   status: AiHeartbeatStatus;
@@ -38,6 +46,7 @@ export type AiHeartbeatDataGcpVertex = {
 };
 
 export type AiHeartbeatDataAwsBedrock = {
+  availability: AiAvailabilityObservation;
   region: string;
   status: AiHeartbeatStatus;
   backend: "awsBedrock";
@@ -51,6 +60,7 @@ export type AiHeartbeatData =
 
 /** @internal */
 export type AiHeartbeatDataExternal$Outbound = {
+  availability?: AiAvailabilityObservation$Outbound | null | undefined;
   provider: string;
   status: AiHeartbeatStatus$Outbound;
   backend: "external";
@@ -61,6 +71,7 @@ export const AiHeartbeatDataExternal$outboundSchema: z.ZodType<
   AiHeartbeatDataExternal$Outbound,
   AiHeartbeatDataExternal
 > = z.object({
+  availability: z.nullable(AiAvailabilityObservation$outboundSchema).optional(),
   provider: z.string(),
   status: AiHeartbeatStatus$outboundSchema,
   backend: z.literal("external"),
@@ -77,6 +88,7 @@ export function aiHeartbeatDataExternalToJSON(
 /** @internal */
 export type AiHeartbeatDataAzureFoundry$Outbound = {
   accountName: string;
+  availability: AiAvailabilityObservation$Outbound;
   endpoint?: string | null | undefined;
   location?: string | null | undefined;
   resourceGroup?: string | null | undefined;
@@ -90,6 +102,7 @@ export const AiHeartbeatDataAzureFoundry$outboundSchema: z.ZodType<
   AiHeartbeatDataAzureFoundry
 > = z.object({
   accountName: z.string(),
+  availability: AiAvailabilityObservation$outboundSchema,
   endpoint: z.nullable(z.string()).optional(),
   location: z.nullable(z.string()).optional(),
   resourceGroup: z.nullable(z.string()).optional(),
@@ -109,6 +122,7 @@ export function aiHeartbeatDataAzureFoundryToJSON(
 
 /** @internal */
 export type AiHeartbeatDataGcpVertex$Outbound = {
+  availability: AiAvailabilityObservation$Outbound;
   location: string;
   project: string;
   status: AiHeartbeatStatus$Outbound;
@@ -120,6 +134,7 @@ export const AiHeartbeatDataGcpVertex$outboundSchema: z.ZodType<
   AiHeartbeatDataGcpVertex$Outbound,
   AiHeartbeatDataGcpVertex
 > = z.object({
+  availability: AiAvailabilityObservation$outboundSchema,
   location: z.string(),
   project: z.string(),
   status: AiHeartbeatStatus$outboundSchema,
@@ -136,6 +151,7 @@ export function aiHeartbeatDataGcpVertexToJSON(
 
 /** @internal */
 export type AiHeartbeatDataAwsBedrock$Outbound = {
+  availability: AiAvailabilityObservation$Outbound;
   region: string;
   status: AiHeartbeatStatus$Outbound;
   backend: "awsBedrock";
@@ -146,6 +162,7 @@ export const AiHeartbeatDataAwsBedrock$outboundSchema: z.ZodType<
   AiHeartbeatDataAwsBedrock$Outbound,
   AiHeartbeatDataAwsBedrock
 > = z.object({
+  availability: AiAvailabilityObservation$outboundSchema,
   region: z.string(),
   status: AiHeartbeatStatus$outboundSchema,
   backend: z.literal("awsBedrock"),

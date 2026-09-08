@@ -16,12 +16,22 @@ export type SyncReleaseRequest = {
    * Session identifier to release
    */
   session: string;
+  /**
+   * Operation returned by acquire. Required when the lease carried update work.
+   */
+  operationId?: string | undefined;
+  /**
+   * Attempt returned by acquire. Required when the lease carried update work.
+   */
+  attemptId?: string | undefined;
 };
 
 /** @internal */
 export type SyncReleaseRequest$Outbound = {
   deploymentId: string;
   session: string;
+  operationId?: string | undefined;
+  attemptId?: string | undefined;
 };
 
 /** @internal */
@@ -31,6 +41,8 @@ export const SyncReleaseRequest$outboundSchema: z.ZodType<
 > = z.object({
   deploymentId: z.string(),
   session: z.string(),
+  operationId: z.string().optional(),
+  attemptId: z.string().optional(),
 });
 
 export function syncReleaseRequestToJSON(

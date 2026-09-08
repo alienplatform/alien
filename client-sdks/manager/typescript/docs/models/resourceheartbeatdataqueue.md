@@ -13,9 +13,9 @@ let value: ResourceHeartbeatDataQueue = {
     status: {
       collectionIssues: [],
       health: "healthy",
-      lifecycle: "running",
-      partial: false,
-      stale: true,
+      lifecycle: "deleted",
+      partial: true,
+      stale: false,
     },
     subscriptionLabels: {
       "key": "<value>",
