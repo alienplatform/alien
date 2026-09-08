@@ -552,3 +552,44 @@ fn sandbox_provision_can_manage_its_group_at_stack_scope() {
         "provision must not be able to assign roles: {stack_actions:?}"
     );
 }
+
+/// `${resourceName}` already carries the stack prefix — every Azure emitter builds it as
+/// `<prefix>-<id>` — so a resource scope that also names `${stackPrefix}` renders the prefix twice
+/// and grants on a resource that does not exist. Nothing fails when that happens: the assignment
+/// is well-formed and simply covers nothing, which is why it needs a test rather than a reviewer.
+#[test]
+fn azure_resource_scopes_do_not_repeat_the_stack_prefix() {
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+    let mut checked = 0;
+
+    for id in [
+        "postgres/heartbeat",
+        "postgres/management",
+        "postgres/provision",
+        "service-account/heartbeat",
+        "service-account/management",
+        "service-account/provision",
+        "vault/management",
+        "vault/provision",
+    ] {
+        let permission_set = get_permission_set(id).expect("a declared permission set");
+        let plan = generator
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .unwrap_or_else(|error| panic!("{id} should generate a resource grant plan: {error}"));
+
+        for binding in &plan.bindings {
+            checked += 1;
+            assert!(
+                !binding.scope.contains("my-stack-my-stack"),
+                "{id} names the stack prefix twice: {}",
+                binding.scope
+            );
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no resource-scoped Azure binding rendered, so this test pins nothing"
+    );
+}
