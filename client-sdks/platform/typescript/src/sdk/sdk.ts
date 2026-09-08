@@ -3,6 +3,7 @@
  */
 
 import { acceptWorkspaceInvitation } from "../funcs/acceptWorkspaceInvitation.js";
+import { cancelDeploymentCredentialRotation } from "../funcs/cancelDeploymentCredentialRotation.js";
 import { continueAwsVirtualKey } from "../funcs/continueAwsVirtualKey.js";
 import { createAwsVirtualKey } from "../funcs/createAwsVirtualKey.js";
 import { createWorkspaceInvitation } from "../funcs/createWorkspaceInvitation.js";
@@ -10,10 +11,13 @@ import { createWorkspaceInviteLink } from "../funcs/createWorkspaceInviteLink.js
 import { decommissionAwsVirtualKey } from "../funcs/decommissionAwsVirtualKey.js";
 import { finalizeAwsVirtualKeyDeletion } from "../funcs/finalizeAwsVirtualKeyDeletion.js";
 import { getAwsVirtualKey } from "../funcs/getAwsVirtualKey.js";
+import { getDeploymentCredentialRotation } from "../funcs/getDeploymentCredentialRotation.js";
+import { getDeploymentCredentialRotationValues } from "../funcs/getDeploymentCredentialRotationValues.js";
 import { getWorkspaceInvitationPreview } from "../funcs/getWorkspaceInvitationPreview.js";
 import { getWorkspaceInviteLink } from "../funcs/getWorkspaceInviteLink.js";
 import { listAwsVirtualKeys } from "../funcs/listAwsVirtualKeys.js";
 import { listWorkspaceInvitations } from "../funcs/listWorkspaceInvitations.js";
+import { prepareDeploymentCredentialRotation } from "../funcs/prepareDeploymentCredentialRotation.js";
 import { resendWorkspaceInvitation } from "../funcs/resendWorkspaceInvitation.js";
 import { restoreAwsVirtualKey } from "../funcs/restoreAwsVirtualKey.js";
 import { revokeWorkspaceInvitation } from "../funcs/revokeWorkspaceInvitation.js";
@@ -298,6 +302,50 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<void> {
     return unwrapAsync(revokeWorkspaceInviteLink(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentCredentialRotation(
+    request: operations.GetDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotationStatus> {
+    return unwrapAsync(getDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async prepareDeploymentCredentialRotation(
+    request: operations.PrepareDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotation> {
+    return unwrapAsync(prepareDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async cancelDeploymentCredentialRotation(
+    request: operations.CancelDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotation> {
+    return unwrapAsync(cancelDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentCredentialRotationValues(
+    request: operations.GetDeploymentCredentialRotationValuesRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotationValues> {
+    return unwrapAsync(getDeploymentCredentialRotationValues(
       this,
       request,
       options,

@@ -36,6 +36,10 @@ export type OperationsPluginOperation = {
    * Human-readable description.
    */
   description: string | null;
+  /**
+   * IDs of permission sets (see alien-permissions) this operation requires. Empty when the operation declares none.
+   */
+  requiredPermissions: Array<string>;
 };
 
 /** @internal */
@@ -51,6 +55,7 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   name: z.string(),
   tier: OperationsPluginOperationTier$inboundSchema,
   description: z.nullable(z.string()),
+  requiredPermissions: z.array(z.string()),
 });
 
 export function operationsPluginOperationFromJSON(

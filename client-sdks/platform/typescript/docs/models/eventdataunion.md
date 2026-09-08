@@ -456,3 +456,21 @@ const value: models.EventDataDeploymentDeletionRequested = {
 };
 ```
 
+### `models.DeploymentCredentialRotationEvent`
+
+```typescript
+const value: models.DeploymentCredentialRotationEvent = {
+  type: "DeploymentCredentialRotation",
+  deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  rotationId: "<id>",
+  revision: 519446,
+  status: "cancelled",
+  previousKeyId: "<id>",
+  candidateKeyId: "<id>",
+  actor: {
+    kind: "serviceAccount",
+    id: "<id>",
+  },
+};
+```
+

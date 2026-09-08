@@ -160,6 +160,10 @@ run();
 * [getWorkspaceInviteLink](docs/sdks/alien/README.md#getworkspaceinvitelink)
 * [createWorkspaceInviteLink](docs/sdks/alien/README.md#createworkspaceinvitelink)
 * [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+* [getDeploymentCredentialRotation](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
+* [prepareDeploymentCredentialRotation](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
+* [cancelDeploymentCredentialRotation](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
+* [getDeploymentCredentialRotationValues](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 * [listAwsVirtualKeys](docs/sdks/alien/README.md#listawsvirtualkeys)
 * [createAwsVirtualKey](docs/sdks/alien/README.md#createawsvirtualkey)
 * [rotateAwsVirtualKeyCredential](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
@@ -501,6 +505,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`authWhoami`](docs/sdks/auth/README.md#whoami) - Get the current authenticated principal (user or service account). Works with both session cookies and API keys.
 - [`billingGetEntitlements`](docs/sdks/billing/README.md#getentitlements) - Get the workspace billing entitlements used for product feature gates. Autumn is the source of truth; the response is served through the workspace billing read model with stale-cache fallback.
 - [`billingListAuditLog`](docs/sdks/billing/README.md#listauditlog) - List billing activity entries for the current workspace.
+- [`cancelDeploymentCredentialRotation`](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
 - [`cloudRegionsGet`](docs/sdks/cloudregions/README.md#get) - Get cloud regions supported by this Alien environment.
 - [`commandsBootstrap`](docs/sdks/commands/README.md#bootstrap) - Resolve a deployment's current manager and mint a five-minute command capability. Sender tokens can dispatch and observe commands only for this deployment. Receiver tokens can lease and complete commands only for the resolved Container or Daemon target.
 - [`commandsComplete`](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
@@ -583,6 +588,8 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`finalizeAwsVirtualKeyDeletion`](docs/sdks/alien/README.md#finalizeawsvirtualkeydeletion)
 - [`gatewaysGetWorkspaceOverview`](docs/sdks/gateways/README.md#getworkspaceoverview) - Get compact cross-Project setup and customer status for a workspace Gateway.
 - [`getAwsVirtualKey`](docs/sdks/alien/README.md#getawsvirtualkey)
+- [`getDeploymentCredentialRotation`](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
+- [`getDeploymentCredentialRotationValues`](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 - [`getWorkspaceInvitationPreview`](docs/sdks/alien/README.md#getworkspaceinvitationpreview)
 - [`getWorkspaceInviteLink`](docs/sdks/alien/README.md#getworkspaceinvitelink)
 - [`listAwsVirtualKeys`](docs/sdks/alien/README.md#listawsvirtualkeys)
@@ -635,6 +642,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
 - [`packagesList`](docs/sdks/packages/README.md#list) - List packages with optional filters. Returns packages ordered by creation date (newest first).
 - [`packagesRebuild`](docs/sdks/packages/README.md#rebuild) - Rebuild packages for a project. This will cancel any pending packages and create new ones with auto-incremented versions.
+- [`prepareDeploymentCredentialRotation`](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
 - [`projectsConfigureAiProviderHeaders`](docs/sdks/projects/README.md#configureaiproviderheaders) - Replace the static headers added to AI requests for each provider.
 - [`projectsConfigureBuckets`](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 - [`projectsConfigureDeployments`](docs/sdks/projects/README.md#configuredeployments) - Enable deployments for a Project.
