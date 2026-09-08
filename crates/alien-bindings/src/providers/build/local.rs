@@ -6,8 +6,6 @@ use alien_core::{bindings::BuildBinding, BuildConfig, BuildExecution, BuildStatu
 use alien_error::{AlienError, Context, IntoAlienError};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
-#[cfg(unix)]
-use std::os::unix::fs::OpenOptionsExt;
 use std::{
     process::Stdio,
     time::{SystemTime, UNIX_EPOCH},
@@ -266,31 +264,15 @@ impl Build for LocalBuild {
                 })?;
         }
 
-        // A detached build has no pipe reader. Write to files so verbose commands cannot
-        // block on a full stdout/stderr pipe, and keep their output available for debugging.
-        let log_file = |name: &str| {
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            options.mode(0o600);
-            options
-                .open(build_dir.join(name))
-                .into_alien_error()
-                .context(ErrorData::BuildOperationFailed {
-                    binding_name: self.binding_name.clone(),
-                    operation: format!("create build log {name}"),
-                })
-        };
-        let stdout = log_file("stdout.log")?;
-        let stderr = log_file("stderr.log")?;
-
         // Prepare environment variables
         let mut cmd = Command::new("bash");
         cmd.arg(&script_path)
             .current_dir(&build_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::from(stdout))
-            .stderr(Stdio::from(stderr));
+            // This detached backend has no output consumer or log retrieval API. Discard
+            // output instead of filling unread pipes or accumulating unbounded log files.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
         // Merge build config environment with binding environment variables
         // Build config environment takes precedence over binding environment
@@ -455,7 +437,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn verbose_build_completes_and_preserves_both_output_streams() {
+    async fn verbose_build_completes_without_blocking_on_output() {
         let temp_dir = TempDir::new().unwrap();
         let local_build =
             LocalBuild::new_from_path("test-build".to_string(), temp_dir.path().to_path_buf());
@@ -476,14 +458,6 @@ mod tests {
         let (uuid, _, _) = LocalBuild::decode_build_id(&execution.id).unwrap();
         let build_dir = temp_dir.path().join("builds").join(uuid);
         assert_eq!(std::fs::read(build_dir.join("completed")).unwrap(), b"done");
-        for (name, final_byte) in [("stdout.log", b'x'), ("stderr.log", b'y')] {
-            let output = std::fs::read(build_dir.join(name)).unwrap();
-            // Bash may emit startup diagnostics before the script's output.
-            assert!(output.len() >= 1_048_576);
-            let output = &output[output.len() - 1_048_576..];
-            assert_eq!(output.last(), Some(&final_byte));
-            assert!(output[..output.len() - 1].iter().all(|byte| *byte == b' '));
-        }
     }
 
     #[tokio::test]
