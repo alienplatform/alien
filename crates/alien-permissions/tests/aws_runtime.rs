@@ -90,6 +90,51 @@ fn test_aws_observe_generates_account_wide_read_policy() {
 }
 
 #[test]
+fn compute_cluster_bootstraps_only_the_default_autoscaling_service_role() {
+    // AWS requires this extra authorization when the account has no default
+    // Auto Scaling service role. This grant must not permit arbitrary IAM roles,
+    // other AWS services, custom-suffix roles, or access to workload data.
+    // https://docs.aws.amazon.com/autoscaling/ec2/userguide/ec2-auto-scaling-api-permissions.html
+    for id in ["compute-cluster/provision", "compute-cluster/management"] {
+        for target in [BindingTarget::Stack, BindingTarget::Resource] {
+            let policy = AwsRuntimePermissionsGenerator::new()
+                .generate_policy(
+                    get_permission_set(id).expect("permission set exists"),
+                    target,
+                    &create_test_context(),
+                )
+                .expect("compute permissions should render");
+            let grants = policy
+                .statement
+                .iter()
+                .filter(|statement| {
+                    statement
+                        .action
+                        .iter()
+                        .any(|action| action == "iam:CreateServiceLinkedRole")
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(grants.len(), 1, "{id} / {target}");
+            let grant = grants[0];
+            assert_eq!(grant.effect, "Allow");
+            assert_eq!(grant.action, ["iam:CreateServiceLinkedRole"]);
+            assert_eq!(
+                grant.resource,
+                [
+                    "arn:aws:iam::123456789012:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+                ]
+            );
+            assert_eq!(
+                serde_json::to_value(&grant.condition).unwrap(),
+                serde_json::json!({
+                    "StringEquals": { "iam:AWSServiceName": "autoscaling.amazonaws.com" }
+                })
+            );
+        }
+    }
+}
+
+#[test]
 fn compute_cluster_execute_does_not_read_workload_secrets() {
     let generator = AwsRuntimePermissionsGenerator::new();
     let permission_set =
