@@ -2518,6 +2518,8 @@ mod tests {
             assert_eq!(observed_rollout_state(&resource), "unavailable");
         }
 
+        resource.desired_image = Some("registry.example/api:desired".to_string());
+        resource.observed_image = Some("registry.example/api:previous".to_string());
         resource.stale = true;
         assert_eq!(observed_rollout_state(&resource), "stale");
 
