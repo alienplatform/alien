@@ -336,6 +336,61 @@ fn permission_set_is_resource_scoped_on(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::{
+        permissions::PermissionProfile, Resource, ResourceEntry, ResourceLifecycle, Storage,
+    };
+
+    fn storage(remote_access: bool) -> ResourceEntry {
+        ResourceEntry {
+            enabled_when: None,
+            config: Resource::new(Storage::new("assets".to_string()).build()),
+            dependencies: Vec::new(),
+            lifecycle: ResourceLifecycle::Frozen,
+            remote_access,
+        }
+    }
+
+    /// The filter reaches every remote binding kind, not only sandbox, so this pins the case that
+    /// carries the rest of the product: a deployment that declares no remote binding at all keeps
+    /// exactly the management reach it had.
+    #[test]
+    fn a_deployment_without_remote_bindings_keeps_every_global_management_ref() {
+        let profile =
+            PermissionProfile::new().global(["storage/remote-data-write", "worker/provision"]);
+        let resources = [storage(false)];
+
+        let kept = management_identity_global_refs(resources.iter(), &profile);
+
+        assert_eq!(
+            kept.len(),
+            2,
+            "nothing is claimed when nothing is bound remotely: {:?}",
+            kept.iter().map(|r| r.id()).collect::<Vec<_>>()
+        );
+    }
+
+    /// A remote storage binding carries its own set on the caller's identity. Leaving it on the
+    /// management identity too is the reach setup deliberately withheld.
+    #[test]
+    fn a_remote_storage_binding_claims_its_set_from_the_management_identity() {
+        let profile =
+            PermissionProfile::new().global(["storage/remote-data-write", "worker/provision"]);
+        let resources = [storage(true)];
+
+        let kept = management_identity_global_refs(resources.iter(), &profile);
+
+        let ids = kept.iter().map(|r| r.id()).collect::<Vec<_>>();
+        assert!(
+            !ids.contains(&"storage/remote-data-write"),
+            "the remotely bound set stays off the management identity: {ids:?}"
+        );
+        assert!(
+            ids.contains(&"worker/provision"),
+            "and a set nothing claims is untouched: {ids:?}"
+        );
+    }
+
+    use super::*;
 
     #[test]
     fn test_registry_contains_expected_permission_sets() {
