@@ -355,6 +355,7 @@ impl PreflightRegistry {
             compile_time::sandbox_platform_support::SandboxPlatformSupportCheck,
         ));
         registry.add_compile_time_check(Box::new(compile_time::PermissionProfilesExistCheck));
+        registry.add_compile_time_check(Box::new(compile_time::PermissionSetsExistCheck));
         registry.add_compile_time_check(Box::new(compile_time::SingleExposedPortCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceNameLengthCheck));
         registry.add_compile_time_check(Box::new(compile_time::ResourceIdPatternCheck));
