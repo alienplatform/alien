@@ -1,0 +1,29 @@
+---
+source: crates/alien-terraform/tests/generator/aws_data_layer_tests.rs
+expression: "module.files.get(\"PERMISSIONS.md\").expect(\"permission document\")"
+---
+# Application access permissions
+
+The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive the setup's management permissions.
+
+## `agents` (sandbox)
+
+Create and terminate sessions in this sandbox, and run arbitrary code inside them.
+
+Permission set: `sandbox/remote-execute` (revision 1).
+
+- Start, suspend, resume, and terminate sessions of the selected sandbox.
+  Scope: `arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-agents`
+  - `lambda:RunMicrovm`
+  - `lambda:SuspendMicrovm`
+  - `lambda:ResumeMicrovm`
+  - `lambda:TerminateMicrovm`
+
+- Start a session on the AWS-managed internet egress and HTTP ingress connectors.
+  Scope: `arn:aws:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:*`
+  - `lambda:PassNetworkConnector`
+
+- Read a session's state and mint the token the sandbox agent protocol travels on.
+  Scope: `arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-agents`
+  - `lambda:CreateMicrovmAuthToken`
+  - `lambda:GetMicrovm`

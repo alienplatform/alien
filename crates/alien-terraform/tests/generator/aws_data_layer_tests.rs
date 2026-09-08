@@ -460,6 +460,13 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         );
     }
 
+    insta::assert_snapshot!(
+        "aws_remote_sandbox_permissions",
+        module
+            .files
+            .get("PERMISSIONS.md")
+            .expect("permission document")
+    );
     assert_terraform_valid(&module, "aws_remote_sandbox");
 }
 
