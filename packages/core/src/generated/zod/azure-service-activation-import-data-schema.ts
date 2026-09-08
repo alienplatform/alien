@@ -6,12 +6,12 @@
 import * as z from "zod";
 
 /**
- * @description Azure ServiceActivation ImportData — registers an Azure resource\nprovider on the customer\'s subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).
+ * @description Azure ServiceActivation ImportData — names an Azure resource provider the\nsubscription must have registered.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).
  */
 export const AzureServiceActivationImportDataSchema = z.object({
     "providerNamespace": z.string().describe("Resource provider namespace (e.g. `Microsoft.App`)."),
-"registered": z.boolean().describe("True once the provider is reported `Registered`."),
+"registered": z.boolean().describe("Whether setup established the registration. False from a Terraform package: it registers\nnothing, and the runtime reads the real state on its first refresh."),
 "subscriptionId": z.string().describe("Subscription ID the provider was registered on.")
-    }).describe("Azure ServiceActivation ImportData — registers an Azure resource\nprovider on the customer's subscription.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).")
+    }).describe("Azure ServiceActivation ImportData — names an Azure resource provider the\nsubscription must have registered.\n\nAdded by the `AzureServiceActivationMutation` preflight when the\nstack contains resources that depend on a specific Azure RP\n(Microsoft.App, Microsoft.Storage, Microsoft.KeyVault, …).")
 
 export type AzureServiceActivationImportData = z.infer<typeof AzureServiceActivationImportDataSchema>
