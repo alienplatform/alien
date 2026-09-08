@@ -1,3 +1,4 @@
+import { AlienError } from "@alienplatform/core"
 import { storage } from "@alienplatform/sdk"
 import { Hono } from "hono"
 import { toExternalOperationError } from "../helpers.js"
@@ -55,6 +56,17 @@ app.post("/storage-write/:bindingName", async c => {
     return c.json({ success: true, bindingName, key })
   } catch (error: unknown) {
     const alienError = await toExternalOperationError(error, "storage-write")
+    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+  }
+})
+
+app.delete("/storage-object/:bindingName/:key", async c => {
+  try {
+    await storage(c.req.param("bindingName")).delete(c.req.param("key"))
+    return c.body(null, 204)
+  } catch (error: unknown) {
+    if ((await AlienError.from(error)).httpStatusCode === 404) return c.body(null, 204)
+    const alienError = await toExternalOperationError(error, "storage-delete")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
 })

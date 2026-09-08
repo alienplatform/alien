@@ -398,6 +398,10 @@ fn build_router(app_state: AppState) -> Router {
             post(handlers::storage::write_storage_object),
         )
         .route(
+            "/storage-object/{binding_name}/{key}",
+            axum::routing::delete(handlers::storage_cleanup::delete_storage_object),
+        )
+        .route(
             "/build-test/{binding_name}",
             post(handlers::build::test_build),
         )

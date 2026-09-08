@@ -762,73 +762,83 @@ pub async fn check_wait_until(deployment: &TestDeployment) -> anyhow::Result<()>
 
     let test_id = trigger_data.test_id;
 
-    // Step 2: Wait then verify with retries
-    tokio::time::sleep(std::time::Duration::from_millis(verification_wait_ms)).await;
+    let verification = async {
+        // Step 2: Wait then verify with retries
+        tokio::time::sleep(std::time::Duration::from_millis(verification_wait_ms)).await;
 
-    for attempt in 1..=max_attempts {
-        let verify_resp = reqwest::Client::new()
-            .get(format!(
-                "{}/wait-until-verify/{}/{}",
-                url, test_id, STORAGE_BINDING
-            ))
-            .send()
-            .await
-            .context("Wait-until verification request failed")?;
+        for attempt in 1..=max_attempts {
+            let verify_resp = reqwest::Client::new()
+                .get(format!(
+                    "{}/wait-until-verify/{}/{}",
+                    url, test_id, STORAGE_BINDING
+                ))
+                .send()
+                .await
+                .context("Wait-until verification request failed")?;
 
-        let verify_status = verify_resp.status();
-        if !verify_status.is_success() {
-            let body = verify_resp.text().await.unwrap_or_default();
-            bail!(
-                "Wait-until verification returned {}: {}",
-                verify_status,
-                body
-            );
-        }
-
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct VerifyResponse {
-            success: bool,
-            background_task_completed: bool,
-            file_content: Option<String>,
-            message: String,
-        }
-
-        let verify_data: VerifyResponse = verify_resp
-            .json()
-            .await
-            .context("Failed to parse wait-until verify response")?;
-
-        if verify_data.background_task_completed && verify_data.success {
-            if verify_data.file_content.as_deref() != Some(&test_data) {
+            let verify_status = verify_resp.status();
+            if !verify_status.is_success() {
+                let body = verify_resp.text().await.unwrap_or_default();
                 bail!(
-                    "Wait-until content mismatch: expected {:?}, got {:?}",
-                    test_data,
-                    verify_data.file_content
+                    "Wait-until verification returned {}: {}",
+                    verify_status,
+                    body
                 );
             }
-            info!("WaitUntil binding check passed");
-            return Ok(());
+
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct VerifyResponse {
+                success: bool,
+                background_task_completed: bool,
+                file_content: Option<String>,
+                message: String,
+            }
+
+            let verify_data: VerifyResponse = verify_resp
+                .json()
+                .await
+                .context("Failed to parse wait-until verify response")?;
+
+            if verify_data.background_task_completed && verify_data.success {
+                if verify_data.file_content.as_deref() != Some(&test_data) {
+                    bail!(
+                        "Wait-until content mismatch: expected {:?}, got {:?}",
+                        test_data,
+                        verify_data.file_content
+                    );
+                }
+                info!("WaitUntil binding check passed");
+                return Ok(());
+            }
+
+            if attempt < max_attempts {
+                info!(
+                    attempt,
+                    max_attempts,
+                    message = %verify_data.message,
+                    "Wait-until not completed yet, retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
+            } else {
+                bail!(
+                    "Wait-until background task did not complete after {} attempts (last message: {})",
+                    max_attempts,
+                    verify_data.message
+                );
+            }
         }
 
-        if attempt < max_attempts {
-            info!(
-                attempt,
-                max_attempts,
-                message = %verify_data.message,
-                "Wait-until not completed yet, retrying"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(retry_delay_ms)).await;
-        } else {
-            bail!(
-                "Wait-until background task did not complete after {} attempts (last message: {})",
-                max_attempts,
-                verify_data.message
-            );
-        }
+        unreachable!()
     }
-
-    unreachable!()
+    .await;
+    super::storage_cleanup::finish_storage_check(
+        url,
+        STORAGE_BINDING,
+        &format!("wait_until_test_{test_id}.txt"),
+        verification,
+    )
+    .await
 }
 
 // ---------------------------------------------------------------------------
