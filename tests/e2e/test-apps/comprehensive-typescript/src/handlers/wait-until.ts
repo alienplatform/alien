@@ -6,7 +6,7 @@ const app = new Hono()
 
 app.post("/wait-until-test", async c => {
   const { storageBindingName, testData, delayMs } = await c.req.json()
-  const testId = `test-${Date.now()}`
+  const testId = crypto.randomUUID()
 
   waitUntil(
     (async () => {
