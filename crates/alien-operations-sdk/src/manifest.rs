@@ -37,6 +37,7 @@ use schemars::schema::RootSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
+use crate::kubernetes::KubernetesPermissions;
 use crate::verification::Verification;
 
 /// The `metadata.json` filename conventionally used inside a plugin bundle.
@@ -148,6 +149,14 @@ pub struct RetryPolicy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationManifest {
+    /// Explicit Kubernetes API requirements, compiled by the installer for
+    /// enabled plugins within the chosen scope and permission ceiling.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_kubernetes_permissions"
+    )]
+    pub kubernetes_permissions: Option<KubernetesPermissions>,
     /// Operation name, unique within the plugin (e.g. `vacuum`).
     pub name: String,
     /// Risk tier for this specific operation. Falls back to the plugin's
@@ -195,6 +204,17 @@ impl OperationManifest {
     pub fn effective_tier(&self, plugin_default: RiskTier) -> RiskTier {
         self.tier.unwrap_or(plugin_default)
     }
+}
+
+fn deserialize_kubernetes_permissions<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<KubernetesPermissions>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Missing declarations remain backwards compatible; explicit null is not
+    // a valid versioned declaration and must not silently suppress permissions.
+    KubernetesPermissions::deserialize(deserializer).map(Some)
 }
 
 /// The parsed, validated contents of a plugin manifest.
@@ -262,6 +282,9 @@ impl PluginManifest {
         let mut seen = BTreeSet::new();
         for (index, operation) in self.operations.iter().enumerate() {
             require_non_empty(&operation.name, &format!("operations[{index}].name"))?;
+            if let Some(permissions) = &operation.kubernetes_permissions {
+                permissions.validate(operation.effective_tier(self.tier))?;
+            }
             if !seen.insert(operation.name.as_str()) {
                 return Err(AlienError::new(ErrorData::OperationDuplicate {
                     plugin: self.name.clone(),
@@ -377,6 +400,7 @@ mod tests {
     #[test]
     fn operation_tier_falls_back_to_plugin_default() {
         let op = OperationManifest {
+            kubernetes_permissions: None,
             name: "vacuum".into(),
             tier: None,
             description: None,
