@@ -557,33 +557,50 @@ fn sandbox_provision_can_manage_its_group_at_stack_scope() {
 /// `<prefix>-<id>` — so a resource scope that also names `${stackPrefix}` renders the prefix twice
 /// and grants on a resource that does not exist. Nothing fails when that happens: the assignment
 /// is well-formed and simply covers nothing, which is why it needs a test rather than a reviewer.
+///
+/// Asserted as the whole scope rather than as the absence of a doubled prefix, so any spelling
+/// that changes the resource this grant lands on fails here, not only `${stackPrefix}-`.
 #[test]
-fn azure_resource_scopes_do_not_repeat_the_stack_prefix() {
+fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
+    // `create_test_context` renders `${stackPrefix}` as `my-stack` and `${resourceName}` as
+    // `my-stack-payments-data`, which is the prefixed form every Azure emitter builds.
+    const RESOURCE_GROUP: &str = "/subscriptions/00000000-0000-0000-0000-000000000000\
+/resourceGroups/rg-observability-prod";
     let generator = AzureRuntimePermissionsGenerator::new();
     let context = create_test_context();
     let mut checked = 0;
 
-    for id in [
-        "postgres/heartbeat",
-        "postgres/management",
-        "postgres/provision",
-        "service-account/heartbeat",
-        "service-account/management",
-        "service-account/provision",
-        "vault/management",
-        "vault/provision",
+    for (id, provider_path) in [
+        ("postgres/heartbeat", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        ("postgres/management", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        ("postgres/provision", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        (
+            "service-account/heartbeat",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        (
+            "service-account/management",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        (
+            "service-account/provision",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        ("vault/management", "Microsoft.KeyVault/vaults"),
+        ("vault/provision", "Microsoft.KeyVault/vaults"),
     ] {
         let permission_set = get_permission_set(id).expect("a declared permission set");
         let plan = generator
             .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
             .unwrap_or_else(|error| panic!("{id} should generate a resource grant plan: {error}"));
 
+        let expected =
+            format!("{RESOURCE_GROUP}/providers/{provider_path}/my-stack-payments-data");
         for binding in &plan.bindings {
             checked += 1;
-            assert!(
-                !binding.scope.contains("my-stack-my-stack"),
-                "{id} names the stack prefix twice: {}",
-                binding.scope
+            assert_eq!(
+                binding.scope, expected,
+                "{id} grants on a resource other than the one it is filed under"
             );
         }
     }
