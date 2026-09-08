@@ -12626,6 +12626,65 @@
         },
         "additionalProperties": false
       },
+      "RemoteAzureSandboxBinding": {
+        "type": "object",
+        "description": "Concrete sandbox-group topology returned to remote clients.\n\nThe ceilings travel because Azure applies them at create and nowhere else, so a remote caller\nthat does not send them gets the data plane's default rather than the declared size.",
+        "required": [
+          "sandboxGroup",
+          "dataPlaneEndpoint",
+          "region",
+          "resourceGroup",
+          "diskImage",
+          "allowEgress"
+        ],
+        "properties": {
+          "allowEgress": {
+            "type": "boolean",
+            "description": "Whether the declaration asked for open egress. Always true here, and sent rather than\nimplied for the same reason the AWS binding sends it: the remote grant lets its holder\ncreate sessions the declared policy never reaches, so a client reconstructing the policy\nneeds the answer on the wire rather than inferring it from an absent field."
+          },
+          "cpu": {
+            "type": "string",
+            "description": "Declared session ceilings, where the declaration named them.",
+            "nullable": true
+          },
+          "dataPlaneEndpoint": {
+            "type": "string",
+            "description": "Per-region data-plane host, which is separate from the ARM control plane."
+          },
+          "disk": {
+            "type": "string",
+            "nullable": true
+          },
+          "diskImage": {
+            "type": "string",
+            "description": "Catalog disk image every session is created from."
+          },
+          "idleSuspendSeconds": {
+            "type": "integer",
+            "format": "int32",
+            "description": "Idle seconds after which a session suspends, where the declaration asked for one.",
+            "minimum": 0,
+            "nullable": true
+          },
+          "memory": {
+            "type": "string",
+            "nullable": true
+          },
+          "region": {
+            "type": "string",
+            "description": "Region the sandbox group lives in."
+          },
+          "resourceGroup": {
+            "type": "string",
+            "description": "Resource group the data-plane path is scoped by."
+          },
+          "sandboxGroup": {
+            "type": "string",
+            "description": "Sandbox group the credential lease authorizes sessions against."
+          }
+        },
+        "additionalProperties": false
+      },
       "RemoteBlobStorageBinding": {
         "type": "object",
         "description": "Concrete Azure Blob Storage topology returned to remote clients.",
@@ -13185,6 +13244,33 @@
                 "type": "string",
                 "enum": [
                   "sandbox-aws"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "description": "Azure Container Apps sandbox group and an Azure data-plane token.",
+            "required": [
+              "binding",
+              "clientConfig",
+              "expiresAt",
+              "service"
+            ],
+            "properties": {
+              "binding": {
+                "$ref": "#/components/schemas/RemoteAzureSandboxBinding"
+              },
+              "clientConfig": {
+                "$ref": "#/components/schemas/RemoteAzureClientConfig"
+              },
+              "expiresAt": {
+                "type": "string"
+              },
+              "service": {
+                "type": "string",
+                "enum": [
+                  "sandbox-azure"
                 ]
               }
             }

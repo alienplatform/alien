@@ -498,6 +498,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
+    /// The platform's row, unnarrowed. `sessionLifetime` stays true even with no declared ttl:
+    /// the API always sets `expireTime` on output, so an undeclared session still carries a
+    /// deadline the platform enforces.
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::gcp_agent_platform()
     }
@@ -506,13 +509,26 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // A session inherits no per-session environment: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
+        // `OperationNotSupported`, not `InvalidInput`: the value is fine, the backend has nowhere
+        // to put it. AWS answers the identical condition the same way, and a portable caller
+        // branching on the code must not get two answers for one situation.
         if !request.env.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidInput {
-                operation_context: CREATE.to_string(),
-                details: "Agent Platform carries no per-session environment; pass variables on \
-                          each command instead"
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no session-level env; set env per command \
+                         instead"
                     .to_string(),
-                field_name: Some("env".to_string()),
+            }));
+        }
+
+        // Same reason as `env` above: nowhere to carry a tenant key, so accepting one would
+        // silently merge tenants into one sandbox.
+        if request.tenant_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no tenantKey; create one sandbox per \
+                         tenant instead"
+                    .to_string(),
             }));
         }
 
@@ -849,13 +865,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Accepted, not completed: the client returns before the sandbox is gone. Returning here
         // would report containment while the code may still run, which is the whole point of
         // terminate — so the delete is confirmed by polling to not-found.
-        self.client
-            .delete_sandbox(&self.engine, session_id)
-            .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: TERMINATE.to_string(),
-                reason: format!("the delete of session '{session_id}' was not accepted"),
-            })?;
+        // A session that is already gone is the state terminate exists to reach, so not-found is
+        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
+        // for a session another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await {
+            if !is_not_found(&error) {
+                return Err(error.context(ErrorData::SandboxUnreachable {
+                    operation: TERMINATE.to_string(),
+                    reason: format!("the delete of session '{session_id}' was not accepted"),
+                }));
+            }
+            return Ok(());
+        }
 
         for _ in 0..TERMINATE_POLL_ATTEMPTS {
             match self.client.get_sandbox(&self.engine, session_id).await {
@@ -909,7 +930,8 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             // both come back through a successful `:execute`. Only the first proves the command
             // was stopped, so only the first may name an established outcome.
             let confirmed = cancelled.as_ref().is_ok_and(|body| {
-                serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+                serde_json::from_slice::<serde_json::Value>(body)
+                    .is_ok_and(|value| value.is_object())
             });
             state.pending.push_back(Err(match cancelled {
                 Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {

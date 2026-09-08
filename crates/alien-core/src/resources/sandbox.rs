@@ -87,6 +87,13 @@ pub struct MicrovmTier {
 /// Longest life AWS will run a MicroVM for, from `RunMicrovm`'s `maximumDurationInSeconds`.
 const AWS_MAX_SESSION_LIFETIME_SECONDS: u32 = 28_800;
 
+/// Azure's session sizing rule, quoted from the data plane's own refusal of an oversized request:
+/// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
+const AZURE_CPU_STEP_MILLICORES: i64 = 250;
+const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
+const AZURE_MEMORY_MIB_PER_CORE: i64 = 2 * 1024;
+const AZURE_DISK_MIB_PER_CORE: i64 = 20 * 1024;
+
 const MICROVM_TIERS: &[MicrovmTier] = &[
     MicrovmTier {
         baseline_memory_mib: 512,
@@ -256,35 +263,7 @@ impl SandboxCapabilities {
                 // runs under a different identity than the process supervising it.
                 supervisor_isolation: true,
             }),
-            Platform::Azure => Ok(Self {
-                files: true,
-                reconnect: true,
-                // A sandbox port carries a URL and an auth config, and the auth config offers two
-                // things: anonymous, or Entra ID with an allowlist of human email addresses.
-                // Neither is a credential scoped to a port for a fixed time, which is what a
-                // preview capability is. Returning the anonymous URL would publish the port.
-                preview: false,
-                suspend_resume: true,
-                // The one cloud of the five that could offer this, and the blocker is ours:
-                // `snapshot()` returns an id and `CreateSessionRequest` has no field to consume
-                // one, so no backend can complete the round trip. Nothing in the resource model
-                // owns such an artifact either, and Microsoft states snapshots are not garbage
-                // collected — an id with no owner is a bill that grows.
-                snapshot: false,
-                domain_egress_rules: true,
-                egress_deny: true,
-                enforced_limits: false,
-                process_limit: false,
-                // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
-                // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
-                // to prevent, so this is a decision rather than a gap.
-                session_lifetime: false,
-                // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
-                supervisor_pid_namespace: false,
-                // No Alien process runs the command at all — the platform's own data plane does,
-                // so there is no separate supervisor identity to speak of.
-                supervisor_isolation: false,
-            }),
+            Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
             // Preview needs a gateway that validates a session-and-port capability, and that
             // gateway does not exist yet.
@@ -339,6 +318,40 @@ impl SandboxCapabilities {
         }
     }
 
+    /// What the Azure sandbox backend supports; the body of the `Platform::Azure` arm.
+    pub fn azure() -> Self {
+        Self {
+            files: true,
+            reconnect: true,
+            // A sandbox port carries a URL and an auth config, and the auth config offers two
+            // things: anonymous, or Entra ID with an allowlist of human email addresses.
+            // Neither is a credential scoped to a port for a fixed time, which is what a
+            // preview capability is. Returning the anonymous URL would publish the port.
+            preview: false,
+            suspend_resume: true,
+            // False for a client reason, not a cloud one: this client has no snapshot call, and
+            // `CreateSessionRequest` has no field to consume the id it would return. Also
+            // unclaimed: Microsoft does not garbage-collect snapshots, so an id is a bill that grows.
+            snapshot: false,
+            domain_egress_rules: true,
+            egress_deny: true,
+            // Enforced inside the session, not at create: an over-allocation raises `MemoryError`
+            // while the sandbox keeps running. `azure_session_limits` checks the continuous
+            // sizing rule at plan time instead of matching a tier.
+            enforced_limits: true,
+            process_limit: false,
+            // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
+            // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
+            // to prevent, so this is a decision rather than a gap.
+            session_lifetime: false,
+            // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
+            supervisor_pid_namespace: false,
+            // No Alien process runs the command at all — the platform's own data plane does,
+            // so there is no separate supervisor identity to speak of.
+            supervisor_isolation: false,
+        }
+    }
+
     /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
     pub fn gcp_agent_platform() -> Self {
         Self {
@@ -352,8 +365,9 @@ impl SandboxCapabilities {
             preview: false,
             // `:pause` and `:resume` preserve the running container.
             suspend_resume: true,
-            // A session's state can be captured and used to create another.
-            snapshot: true,
+            // The create path never sends `sandbox_environment_snapshot`, so no session state is
+            // reachable through the trait; declared false until the client carries it.
+            snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
             // A declared `deny` blocks both routed egress and DNS.
@@ -578,6 +592,10 @@ impl Sandbox {
         // as bounded while the sandbox is not.
         capabilities.require(SandboxCapability::EnforcedLimits, platform)?;
 
+        if platform == Platform::Azure {
+            self.azure_session_limits()?;
+        }
+
         if platform == Platform::Aws {
             // Refused here rather than at emit so a customer sees it while planning, and so both
             // package formats inherit the same answer.
@@ -644,6 +662,74 @@ impl Sandbox {
             ));
         }
         Ok(image)
+    }
+
+    /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
+    /// Refused at plan time, like [`Self::microvm_tier`], so a bad value is a declaration to fix
+    /// rather than a runtime fault at create.
+    pub fn azure_session_limits(&self) -> Result<()> {
+        let Some(limits) = self.limits.as_ref() else {
+            // Nothing declared means the binding substitutes Alien's own default sizing, which is
+            // inside the rule — asserted where those constants live, since this cannot see them.
+            return Ok(());
+        };
+
+        let refused = |field: &str, value: &str, reason: &str| {
+            AlienError::new(ErrorData::SandboxLimitInvalid {
+                resource_id: self.id.clone(),
+                field: field.to_string(),
+                value: value.to_string(),
+                reason: reason.to_string(),
+            })
+        };
+
+        let cpu_millicores = millicores(&limits.cpu)
+            .ok_or_else(|| refused("cpu", &limits.cpu, "expected cores or millicores"))?;
+
+        // The multiple is checked, not just the range: `333m` sits inside 0.25–16 cores and is
+        // still refused on the wire, so a bounds-only check would pass a declaration that fails
+        // at create.
+        if cpu_millicores % AZURE_CPU_STEP_MILLICORES != 0
+            || !(AZURE_CPU_STEP_MILLICORES..=AZURE_MAX_CPU_MILLICORES).contains(&cpu_millicores)
+        {
+            return Err(refused(
+                "cpu",
+                &limits.cpu,
+                "Azure allocates cpu in steps of 250m from 250m to 16000m",
+            ));
+        }
+
+        // Both ceilings are derived from the cpu, so they cannot be checked before it is known.
+        let memory_ceiling_mib = cpu_millicores * AZURE_MEMORY_MIB_PER_CORE / 1000;
+        let disk_ceiling_mib = cpu_millicores * AZURE_DISK_MIB_PER_CORE / 1000;
+
+        let memory_mib = quantity_mib(&limits.memory)
+            .ok_or_else(|| refused("memory", &limits.memory, "Azure sizes memory in whole MiB"))?;
+        if memory_mib > memory_ceiling_mib {
+            return Err(refused(
+                "memory",
+                &limits.memory,
+                &format!(
+                    "Azure allows at most 2Gi of memory per core, or {memory_ceiling_mib}Mi \
+                          at the declared cpu"
+                ),
+            ));
+        }
+
+        let disk_mib = quantity_mib(&limits.disk)
+            .ok_or_else(|| refused("disk", &limits.disk, "Azure sizes disk in whole MiB"))?;
+        if disk_mib > disk_ceiling_mib {
+            return Err(refused(
+                "disk",
+                &limits.disk,
+                &format!(
+                    "Azure allows at most 20Gi of disk per core, or {disk_ceiling_mib}Mi at \
+                          the declared cpu"
+                ),
+            ));
+        }
+
+        Ok(())
     }
 
     /// The MicroVM size that keeps every declared ceiling, or why none does.
@@ -1173,9 +1259,9 @@ mod tests {
         // one where `deny` and a hostname list are the same object.
         assert!(azure.domain_egress_rules);
         assert!(azure.egress_deny);
-        // The data plane takes no ceiling, so a declaration of one is refused rather than
-        // accepted and dropped.
-        assert!(!azure.enforced_limits);
+        // The data plane honours a continuous cpu/memory/disk surface and refuses anything
+        // outside `n×250m`, with the rule in the message.
+        assert!(azure.enforced_limits);
         assert!(azure.suspend_resume);
         // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
         // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
@@ -1275,8 +1361,8 @@ mod tests {
             ":pause and :resume preserve the container"
         );
         assert!(
-            row.snapshot,
-            "session state can be captured and restored into a new session"
+            !row.snapshot,
+            "the create path never sends a snapshot, so none is reachable through the trait"
         );
         assert!(
             !row.domain_egress_rules,
@@ -1401,16 +1487,11 @@ mod tests {
             .expect("Azure creates the sandbox under a Deny policy with full inspection");
     }
 
-    /// Ceilings are rejected per-platform where unsupported — rejected when *declared*. With
-    /// limits mandatory that would read as "GCP sandboxes cannot exist", contradicting the
-    /// create, exec, files and terminate GCP does support.
+    /// A sandbox naming no ceilings is valid on every platform and still resolves to a concrete
+    /// set. The rule Azure applies to ceilings that *are* declared is pinned separately, by
+    /// `azure_sizes_follow_the_rule_the_data_plane_states`.
     #[test]
-    fn a_platform_that_cannot_enforce_limits_still_takes_a_sandbox_without_them() {
-        let declared = sandbox_with(SandboxEgress::Deny, Vec::new());
-        declared
-            .validate_for_platform(Platform::Azure)
-            .expect_err("declaring ceilings Azure cannot enforce is rejected");
-
+    fn a_sandbox_declaring_no_ceilings_takes_the_platforms_own() {
         let undeclared = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
                 image: "alpine".to_string(),
@@ -1428,6 +1509,46 @@ mod tests {
 
         // A backend still gets a concrete set, so nothing downstream has to invent one.
         assert_eq!(undeclared.resolved_limits().cpu, "1");
+    }
+
+    /// Pins Azure's own sizing rule: `250m`, `1500m` and `4000m` are valid, `32000m` and `333m`
+    /// are refused. Checked at plan time so a bad value is a declaration to fix, not a package
+    /// that renders without error and dies at the first session.
+    #[test]
+    fn azure_sizes_follow_the_rule_the_data_plane_states() {
+        let sized = |cpu: &str, memory: &str, disk: &str| {
+            let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
+            let limits = sandbox
+                .limits
+                .as_mut()
+                .expect("the fixture declares limits");
+            limits.cpu = cpu.to_string();
+            limits.memory = memory.to_string();
+            limits.disk = disk.to_string();
+            sandbox.validate_for_platform(Platform::Azure)
+        };
+
+        sized("250m", "512Mi", "5120Mi").expect("the smallest step the data plane accepts");
+        sized("4000m", "8192Mi", "40960Mi").expect("cpu, memory and disk are all honoured");
+        sized("16000m", "32Gi", "320Gi").expect("the top of the range");
+
+        // Same off-step case `azure_session_limits` checks the multiple for, not just the range.
+        let off_step = sized("333m", "512Mi", "5120Mi").expect_err("333m is not a step of 250m");
+        assert_eq!(off_step.code, "SANDBOX_LIMIT_INVALID", "{off_step}");
+        assert!(off_step.to_string().contains("cpu"), "{off_step}");
+
+        let too_big = sized("32000m", "64Gi", "640Gi").expect_err("32 cores is over the ceiling");
+        assert_eq!(too_big.code, "SANDBOX_LIMIT_INVALID", "{too_big}");
+
+        // Both ceilings are derived from the cpu, so the same memory passes at one size and fails
+        // at another - which is what makes them worth checking rather than bounding absolutely.
+        sized("1000m", "2Gi", "20Gi").expect("2Gi is exactly one core's worth");
+        let over_memory = sized("250m", "2Gi", "5120Mi").expect_err("2Gi needs a full core");
+        assert_eq!(over_memory.code, "SANDBOX_LIMIT_INVALID", "{over_memory}");
+        assert!(over_memory.to_string().contains("memory"), "{over_memory}");
+
+        let over_disk = sized("250m", "512Mi", "20Gi").expect_err("20Gi needs a full core");
+        assert!(over_disk.to_string().contains("disk"), "{over_disk}");
     }
 
     #[test]

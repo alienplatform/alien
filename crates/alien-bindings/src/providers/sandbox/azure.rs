@@ -19,7 +19,7 @@ use alien_azure_clients::azure::sandbox_data_plane::{
     CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
 };
 use alien_client_core::ErrorData as ClientErrorData;
-use alien_core::{Platform, SandboxCapabilities, SandboxEgress};
+use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
@@ -34,9 +34,11 @@ pub struct AzureSandbox {
     egress: SandboxEgress,
     /// Idle seconds after which a session suspends itself, if the declaration asked for one.
     idle_suspend_seconds: Option<u32>,
-    /// Session ceilings, in the data plane's own units.
+    /// Session ceilings, in the data plane's own units. Disk is optional because the data plane
+    /// derives one from the cpu when it is not sent, and that default is better than a guess.
     cpu: String,
     memory: String,
+    disk: Option<String>,
 }
 
 impl AzureSandbox {
@@ -49,6 +51,7 @@ impl AzureSandbox {
         idle_suspend_seconds: Option<u32>,
         cpu: String,
         memory: String,
+        disk: Option<String>,
     ) -> Self {
         Self {
             client,
@@ -58,6 +61,7 @@ impl AzureSandbox {
             idle_suspend_seconds,
             cpu,
             memory,
+            disk,
         }
     }
 
@@ -94,10 +98,12 @@ impl AzureSandbox {
         }))
     }
 
-    fn unsupported(&self, capability: &str) -> AlienError<ErrorData> {
+    /// A refusal that says why, because "not supported" tells a caller nothing about whether to
+    /// change the declaration, use another verb, or stop asking.
+    fn unsupported(&self, capability: &str, reason: &str) -> AlienError<ErrorData> {
         AlienError::new(ErrorData::OperationNotSupported {
             operation: capability.to_string(),
-            reason: "not supported on azure".to_string(),
+            reason: reason.to_string(),
         })
     }
 
@@ -133,14 +139,35 @@ impl AzureSandbox {
 
 impl Binding for AzureSandbox {}
 
+/// Refused rather than dropped: the create body has nowhere to put a tenant key, so accepting one
+/// would put a caller's tenants in one shared sandbox while the call reported success. Azure does
+/// carry session-level `env`, which is why only this field is refused here.
+fn refuse_unsupported_session_fields(
+    request: &CreateSessionRequest,
+    operation: &str,
+) -> Result<()> {
+    if request.tenant_key.is_some() {
+        return Err(AlienError::new(ErrorData::OperationNotSupported {
+            operation: operation.to_string(),
+            reason: "Azure sandboxes take no tenantKey; create one sandbox per tenant instead"
+                .to_string(),
+        }));
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl Sandbox for AzureSandbox {
+    /// The platform's row, unnarrowed. `domainEgressRules` says what Azure can do, not what this
+    /// sandbox declared — narrowing it (as AWS does for `preview`) would read `false` on an
+    /// `allow` sandbox as "can't do this at all".
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a sandbox backend")
+        SandboxCapabilities::azure()
     }
 
     async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
         checked_session_env(CREATE, &request.env)?;
+        refuse_unsupported_session_fields(&request, CREATE)?;
 
         let asked = egress_policy(&self.egress);
         let sandbox = self
@@ -151,6 +178,7 @@ impl Sandbox for AzureSandbox {
                     disk_image: self.disk_image.clone(),
                     cpu: self.cpu.clone(),
                     memory: self.memory.clone(),
+                    disk: self.disk.clone(),
                     environment: request.env,
                     egress: asked.clone(),
                     idle_suspend_seconds: self.idle_suspend_seconds,
@@ -258,7 +286,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {
-        Err(self.unsupported("list"))
+        Err(self.unsupported(
+            "sandbox.list",
+            "enumerating sandboxes is a control-plane read the data-plane role does not carry; \
+             reach a known session with get",
+        ))
     }
 
     async fn run_command(
@@ -428,7 +460,11 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn preview(&self, _session_id: &str, _port: u16) -> Result<PreviewCapability> {
-        Err(self.unsupported("preview"))
+        Err(self.unsupported(
+            "sandbox.preview",
+            "an Azure sandbox port is either published to the internet or gated on an interactive \
+             Entra login; neither is a port-scoped credential with an expiry",
+        ))
     }
 
     async fn suspend(&self, session_id: &str) -> Result<()> {
@@ -490,7 +526,10 @@ impl Sandbox for AzureSandbox {
     }
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
-        Err(self.unsupported("snapshot"))
+        Err(self.unsupported(
+            "sandbox.snapshot",
+            "this client sends no snapshot request, and nothing owns the artifact once taken",
+        ))
     }
 
     async fn terminate(&self, session_id: &str) -> Result<()> {
@@ -1309,6 +1348,7 @@ mod tests {
     use alien_azure_clients::azure::sandbox_data_plane::{
         EgressRule, EgressRuleAction, EgressRuleMatch,
     };
+    use alien_core::Platform;
     use futures::StreamExt;
 
     fn http_error(status: u16, body: &str) -> AlienError<ClientErrorData> {
@@ -1337,6 +1377,7 @@ mod tests {
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
+            None,
         )
     }
 
@@ -1369,6 +1410,7 @@ mod tests {
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
+            None,
         );
 
         sandbox
@@ -1618,6 +1660,7 @@ mod tests {
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
+            None,
         )
     }
 
@@ -2292,6 +2335,7 @@ mod tests {
             None,
             "1000m".to_string(),
             "2048Mi".to_string(),
+            None,
         )
     }
 
@@ -2748,6 +2792,7 @@ mod tests {
             Some(900),
             "1000m".to_string(),
             "2048Mi".to_string(),
+            None,
         )
         .create(CreateSessionRequest::default())
         .await
@@ -4008,5 +4053,63 @@ mod tests {
         };
 
         assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+    }
+
+    /// Pins `capabilities()`'s doc: `domainEgressRules` must describe the backend even for a
+    /// sandbox declared `allow`, the case a narrowing would get wrong.
+    #[test]
+    fn capabilities_describe_the_backend_not_this_declaration() {
+        let platform =
+            SandboxCapabilities::for_platform(Platform::Azure).expect("Azure has a backend");
+
+        assert_eq!(
+            sandbox_with(MockSandboxDataPlaneApi::new()).capabilities(),
+            platform
+        );
+
+        let listed = AzureSandbox::new(
+            std::sync::Arc::new(MockSandboxDataPlaneApi::new()),
+            "grp".to_string(),
+            "ubuntu".to_string(),
+            SandboxEgress::AllowDomains {
+                domains: vec!["api.example.com".to_string()],
+            },
+            None,
+            "1000m".to_string(),
+            "2048Mi".to_string(),
+            None,
+        );
+        assert_eq!(
+            listed.capabilities(),
+            platform,
+            "the declaration is not the row"
+        );
+        assert!(
+            platform.domain_egress_rules,
+            "Azure does host-pattern egress"
+        );
+    }
+
+    /// Pins the refusal, not the message: a caller branches on `error.code`, and
+    /// `create_sandbox` must never be called — the failure this guards is a sandbox that starts
+    /// anyway and serves every tenant from one box.
+    #[tokio::test]
+    async fn a_tenant_key_is_refused_rather_than_dropped() {
+        let mut client = MockSandboxDataPlaneApi::new();
+        client.expect_create_sandbox().never();
+
+        let error = sandbox_with(client)
+            .create(CreateSessionRequest {
+                tenant_key: Some("tenant-1".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a tenant key Azure cannot honour is refused");
+
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+        assert!(
+            error.to_string().contains("tenantKey"),
+            "the refusal has to name the field a caller must remove: {error}"
+        );
     }
 }

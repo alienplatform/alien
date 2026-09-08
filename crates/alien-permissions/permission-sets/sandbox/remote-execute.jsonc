@@ -2,14 +2,14 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS alone, for a different reason on each of the other two. GCP scopes every sandbox
-    // permission at `projects/${projectName}` and offers nothing narrower, so a remote grant
-    // would reach every sandbox in the project rather than this one. On Azure the name is
-    // knowable (`${stackPrefix}-${resourceName}`) but not grantable: `Microsoft.App/sandboxGroups`
-    // has no ARM template representation, so setup neither creates the group nor can scope a role
-    // assignment to one that does not exist, and the sandbox emitter attaches nothing to the
-    // `-access` identity — see the fuller note in `sandbox/management`.
-    // A remote binding declared on either is refused by the remote-bindings preflight.
+    // AWS and Azure: the two clouds whose sandbox parent setup creates, and can therefore scope a
+    // grant to. Both refuse an assignment naming a resource that doesn't exist yet, so parent and
+    // grant must come from the same template.
+    //
+    // GCP is absent for two reasons: `sandbox/execute` binds it at `projects/${projectName}` for
+    // both stack and resource, so a grant here would reach every sandbox in the project, not just
+    // the one published; and the engine a narrower grant would scope to is created by a Live
+    // controller after apply, not by setup, so there is nothing to name it against.
     "aws": [
       {
         "label": "session-lifecycle",
@@ -78,6 +78,27 @@
             "resources": [
               "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
             ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "session-lifecycle-and-exec",
+        "description": "Create, drive and tear down sessions of the selected sandbox group. Session image and size come from the create request; this grant does not limit them.",
+        "grant": {
+          // The role Microsoft documents as sufficient for the sandbox data plane, and the same
+          // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
+          // exec without lifecycle. All entries are `dataAction`s: no control-plane rights.
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+        },
+        // Resource-scoped: the only stack-level scope Azure RBAC can express is the resource
+        // group, which would reach every sibling sandbox. The scope bounds which group, not what
+        // runs in it — image and sizing are sent per session and applied at create.
+        "binding": {
+          "resource": {
+            // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
           }
         }
       }

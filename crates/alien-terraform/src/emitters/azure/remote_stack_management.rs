@@ -69,7 +69,7 @@ impl TfEmitter for AzureRemoteStackManagementEmitter {
             .stack
             .management()
             .profile()
-            .map(management_permission_refs)
+            .map(|profile| management_permission_refs(ctx, profile))
             .unwrap_or_default();
         let grant_plan =
             generate_management_grant_plan(label, &global_refs, &resource_scoped_refs)?;
@@ -207,23 +207,47 @@ fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &s
     // safely own that shared VNet grant per deployment.
 }
 
-fn global_permission_refs(profile: &PermissionProfile) -> Vec<&PermissionSetReference> {
+/// Session-reaching sets belong to the remote caller's identity alone, whatever their id.
+fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
+    permission_ref
+        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
+        .is_some_and(|set| alien_permissions::permission_set_reaches_a_sandbox_session(&set))
+}
+
+/// The global refs this deployment's own management identity keeps. A set the remote caller
+/// claims is dropped — leaving the same reach on the management identity would be the second
+/// tenant the single-tenancy gate exists to prevent.
+fn global_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
+) -> Vec<&'a PermissionSetReference> {
     profile
         .0
         .get("*")
-        .map(|refs| refs.iter().collect())
+        .map(|refs| {
+            refs.iter()
+                .filter(|permission_ref| {
+                    !alien_core::remote_bindings::remote_binding_claims_management_set(
+                        ctx.stack.resources.values(),
+                        permission_ref.id(),
+                        || reaches_a_session(permission_ref),
+                    )
+                })
+                .collect()
+        })
         .unwrap_or_default()
 }
 
 /// Global refs, plus resource-scoped refs paired with the resource that asked
 /// for them — the pairing is what lets a grant follow that resource's gate.
-fn management_permission_refs(
-    profile: &PermissionProfile,
+fn management_permission_refs<'a>(
+    ctx: &EmitContext<'_>,
+    profile: &'a PermissionProfile,
 ) -> (
-    Vec<&PermissionSetReference>,
-    Vec<(&String, &PermissionSetReference)>,
+    Vec<&'a PermissionSetReference>,
+    Vec<(&'a String, &'a PermissionSetReference)>,
 ) {
-    let global_refs = global_permission_refs(profile);
+    let global_refs = global_permission_refs(ctx, profile);
     let resource_scoped_refs = profile
         .0
         .iter()
@@ -484,12 +508,16 @@ fn resolve_permission_set(reference: &&PermissionSetReference) -> Option<Permiss
     reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
 }
 
+/// The one set compiled at stack scope onto the management identity.
+///
+/// Matched on a name from the built-in registry, never on `id()`: an inline set carries whatever
+/// id its author typed, so deciding by id would let one named after this set compile here.
 fn resolve_stack_management_permission_set(
     reference: &&PermissionSetReference,
 ) -> Option<PermissionSet> {
-    match reference.id() {
-        "worker/dispatch-command" => {
-            reference.resolve(|name| alien_permissions::get_permission_set(name).cloned())
+    match reference {
+        PermissionSetReference::Name(name) if name == "worker/dispatch-command" => {
+            alien_permissions::get_permission_set(name).cloned()
         }
         _ => None,
     }

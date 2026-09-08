@@ -15,7 +15,8 @@ use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
     PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
-    ResourceRef, ServiceAccount, Stack, StackSettings, Storage, Vault,
+    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount, Stack,
+    StackSettings, Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -538,4 +539,245 @@ fn azure_remote_ai_setup_does_not_request_application_vnet_access() {
         "a bindings-only setup must not grant its management identity access to the application VNet"
     );
     assert_terraform_valid(&module, "azure_remote_ai_setup_without_vnet_reader");
+}
+
+/// The remote sandbox grant reaches one group and nothing wider, and the group exists to be
+/// granted on. The scope is asserted as a *reference*, not a rendered path — a literal would
+/// render identically today but lose the ordering that makes setup create the group first.
+/// `Container Apps SandboxGroup Data Owner` covers `sandboxGroups/*` on whatever it's scoped to,
+/// so a resource-group or subscription scope would hand a remote caller every sibling sandbox.
+#[test]
+fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wider() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add(resource_group(), ResourceLifecycle::Frozen)
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+    let rendered = module
+        .files
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    // The scope PERMISSIONS.md documents must name the group the module creates: a security team
+    // approves the grant from that document and cannot see the traversal the assignment actually
+    // uses, so a name that differs — or an unsubstituted template token — misdocuments the boundary.
+    let group_name = module
+        .files
+        .get("agents.tf")
+        .expect("the sandbox group renders into its own file")
+        .lines()
+        // HCL pads `=` to align an attribute with its siblings, so match on the token.
+        .find_map(|line| {
+            line.split_whitespace()
+                .collect::<Vec<_>>()
+                .split_first()
+                .and_then(|(first, rest)| {
+                    (*first == "name" && rest.first() == Some(&"=")).then(|| rest[1..].join(" "))
+                })
+        })
+        .expect("the group carries a name");
+    let documented_scope = module
+        .files
+        .get("PERMISSIONS.md")
+        .expect("a remote binding publishes a permissions document")
+        .lines()
+        .find(|line| line.trim_start().starts_with("Scope:"))
+        .expect("the document states the grant's scope")
+        .to_string();
+    assert!(
+        documented_scope.ends_with(&format!("/Microsoft.App/sandboxGroups/${{{group_name}}}`")),
+        "the documented scope must end at the created group.\n  documented: {documented_scope}\n  \
+         group name: {group_name}"
+    );
+    // Terraform's own interpolations survive into the document by design; a permission-set token
+    // does not. One left behind renders a scope that resolves to nothing, and the document is the
+    // only place a reader would ever see it.
+    let permissions_md = module
+        .files
+        .get("PERMISSIONS.md")
+        .expect("a remote binding publishes a permissions document");
+    for token in [
+        "${stackPrefix}",
+        "${resourceName}",
+        "${subscriptionId}",
+        "${resourceGroup}",
+        "${projectName}",
+        "${awsRegion}",
+        "${awsAccountId}",
+        "${storageAccountName}",
+    ] {
+        assert!(
+            !permissions_md.contains(token),
+            "{token} reached the approver's document unsubstituted:\n{permissions_md}"
+        );
+    }
+
+    let assignment = rendered
+        .split(r#"resource "azurerm_role_assignment" "agents_access_0""#)
+        .nth(1)
+        .expect("the remote grant attaches to the Remote Bindings identity")
+        .split("\nresource ")
+        .next()
+        .expect("block ends");
+    // HCL pads `=` to align an attribute with its siblings, so the column an assertion would
+    // match on moves whenever a neighbouring attribute is added or renamed.
+    let assignment = assignment.split_whitespace().collect::<Vec<_>>().join(" ");
+    let assignment = assignment.as_str();
+
+    // The scope attribute itself, not merely a mention of the group somewhere in the block: the
+    // resource group legitimately appears in `depends_on`, so a substring search over the whole
+    // assignment would pass on a scope that reached the entire group.
+    let scope = assignment
+        .split("scope = ")
+        .nth(1)
+        .expect("the assignment carries a scope")
+        .split(' ')
+        .next()
+        .expect("the scope is one token");
+
+    // A reference, not a path — see the test doc for why the ordering matters.
+    assert_eq!(
+        scope, "azapi_resource.agents.id",
+        "the grant must be scoped to the created group by reference, and nothing wider"
+    );
+    // Extracted like the scope rather than searched for: a `contains` would also pass on an
+    // identity whose name merely starts with this one.
+    let principal_id = assignment
+        .split("principal_id = ")
+        .nth(1)
+        .expect("the assignment names a principal")
+        .split(' ')
+        .next()
+        .expect("the principal is one token");
+    assert_eq!(
+        principal_id, "azurerm_user_assigned_identity.access.principal_id",
+        "the grant belongs to the Remote Bindings identity, not the deployment's own"
+    );
+
+    // `terraform init` is what proves the azapi provider block was emitted: an `azapi_resource`
+    // without one fails at init, not at plan.
+    assert_terraform_valid(&module, "azure remote sandbox");
+    // The module as a whole, so the artifact an approver reads is the thing CI compares — the
+    // group's body and tags, the provider block, and the rendered PERMISSIONS.md.
+    snapshot_module("azure_remote_sandbox", &module);
+}
+
+/// An AKS target is `Platform::Azure` but skips sandbox emission, so a note keyed off the platform
+/// would tell that installer to register a provider for a resource their package does not contain.
+#[test]
+fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    for (target, expects_group) in [
+        (TerraformTarget::Aks, false),
+        (TerraformTarget::Azure, true),
+    ] {
+        let module = render(&stack, target, StackSettings::default());
+        let emitted_group = module
+            .iter()
+            .any(|(_, contents)| contents.contains("azapi_resource\" \"agents\""));
+        let readme = module.get("README.md").expect("every package has a README");
+        assert_eq!(
+            emitted_group, expects_group,
+            "{target:?} emits the sandbox group"
+        );
+        assert_eq!(
+            readme.contains("## The sandbox group"),
+            expects_group,
+            "the README documents the group exactly when the package contains one:\n{readme}"
+        );
+        // The document a security team approves the grant from. Naming a data-plane role on a
+        // group the module never creates asks them to approve a scope that does not exist.
+        let permissions = module.get("PERMISSIONS.md").unwrap_or("");
+        assert_eq!(
+            permissions.contains("sandboxGroups"),
+            expects_group,
+            "{target:?} documents the sandbox grant exactly when it installs one:\n{permissions}"
+        );
+    }
+}
+
+/// A remote sandbox renders on its own, with no other resource declared — which is what makes
+/// `parent_id` worth pinning: it must resolve to the deployer-supplied
+/// `var.azure_resource_group_name`, not a resource group the module would have had to declare.
+/// Reaches `terraform validate` only, not apply.
+#[test]
+fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
+    let sandbox = Sandbox::new("agents".to_string())
+        .code(SandboxCode::Image {
+            image: "ubuntu".to_string(),
+        })
+        .egress(SandboxEgress::Allow)
+        .session(SandboxSessionPolicy {
+            max_lifetime_seconds: None,
+            idle_suspend_seconds: None,
+        })
+        .build();
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(sandbox, ResourceLifecycle::Frozen)
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+
+    let module = render(&stack, TerraformTarget::Azure, StackSettings::default());
+
+    // With no other resource declared there's no resource group of this stack's own to parent to,
+    // so the group must hang off the one the deployer names. A wrong reference would fail
+    // `terraform validate` below, but a wrong *variable* would not — so this reads the attribute.
+    let parent_id = module
+        .files
+        .get("agents.tf")
+        .expect("the sandbox group renders into its own file")
+        .lines()
+        .find_map(|line| {
+            let normalized = line.split_whitespace().collect::<Vec<_>>();
+            match normalized.split_first() {
+                Some((first, rest)) if *first == "parent_id" && rest.first() == Some(&"=") => {
+                    Some(rest[1..].join(" "))
+                }
+                _ => None,
+            }
+        })
+        .expect("the group carries a parent_id");
+    assert_eq!(
+        parent_id,
+        "\"/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}\""
+    );
+
+    assert_terraform_valid(&module, "azure remote sandbox alone");
 }

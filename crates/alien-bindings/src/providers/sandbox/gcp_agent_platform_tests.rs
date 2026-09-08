@@ -189,8 +189,10 @@ async fn create_refuses_a_per_session_environment() {
         })
         .await
         .expect_err("a session environment must be refused");
-    assert_eq!(error.code, "INVALID_INPUT", "{error}");
-    assert!(error.to_string().contains("each command"), "{error}");
+    // Same code AWS answers the identical condition with (see the reasoning above create's check).
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(error.to_string().contains("env"), "{error}");
+    assert!(error.to_string().contains("per command"), "{error}");
 }
 
 // ---- get / get_or_create ----------------------------------------------------------------------
@@ -1084,9 +1086,16 @@ fn a_frame_that_does_not_convert_ends_the_body() {
     body.extend_from_slice(&ndjson(&[exit_frame(0)]));
 
     let frames = parse_exec_frames(&body).expect("frames parse");
-    assert_eq!(frames.len(), 1, "the exit frame must not follow the failure");
     assert_eq!(
-        frames[0].as_ref().expect_err("a bad payload is not output").code,
+        frames.len(),
+        1,
+        "the exit frame must not follow the failure"
+    );
+    assert_eq!(
+        frames[0]
+            .as_ref()
+            .expect_err("a bad payload is not output")
+            .code,
         "SANDBOX_OUTCOME_UNKNOWN"
     );
 }
@@ -1120,5 +1129,112 @@ fn the_engine_is_reduced_to_a_bare_segment() {
         provider.engine(),
         "eng1",
         "the full resource name is reduced to the engine id"
+    );
+}
+
+// ---- capabilities, session fields and terminate idempotency ------------------------------------
+
+/// The access denial in the client's own form: what a delete under an engine this deployment was
+/// not granted returns. The API answers a cross-engine call with `PERMISSION_DENIED` naming the
+/// sandbox environment, so the denial arrives as a refusal rather than as a not-found.
+fn access_denied() -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+        resource_type: "SandboxEnvironment".to_string(),
+        resource_name: "s1".to_string(),
+    })
+    .context(AgentPlatformErrorData::RequestFailed {
+        operation: "delete sandbox".to_string(),
+        message: "s1".to_string(),
+    })
+}
+
+/// Pins `capabilities()`'s doc: `sessionLifetime` must stay true even for a session with no
+/// declared ttl, the case a narrowing would get wrong (Agent Platform always sets `expireTime`).
+#[test]
+fn capabilities_describe_the_backend_not_this_declaration() {
+    let platform = SandboxCapabilities::gcp_agent_platform();
+
+    assert_eq!(
+        provider(MockAgentPlatformApi::new()).capabilities(),
+        platform
+    );
+
+    let untimed = GcpAgentPlatformSandbox::new(
+        Arc::new(MockAgentPlatformApi::new()),
+        ENGINE_FULL.to_string(),
+        TEMPLATE.to_string(),
+        None,
+    );
+    assert_eq!(
+        untimed.capabilities(),
+        platform,
+        "a session with no declared ttl still expires, so the row does not change"
+    );
+    assert!(
+        platform.session_lifetime,
+        "Agent Platform always sets expireTime"
+    );
+}
+
+/// Pins the refusal, not the message: `create_sandbox` must never be called — the failure
+/// this guards is a sandbox that starts anyway and serves every tenant from one box.
+#[tokio::test]
+async fn a_tenant_key_is_refused_rather_than_dropped() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_create_sandbox().never();
+
+    let error = provider(client)
+        .create(CreateSessionRequest {
+            tenant_key: Some("tenant-1".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("a tenant key Agent Platform cannot honour is refused");
+
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(
+        error.to_string().contains("tenantKey"),
+        "the refusal has to name the field a caller must remove: {error}"
+    );
+}
+
+/// Terminating an already-gone session succeeds — gone is the state it asks for. The poll is
+/// expected never: reaching it would mean not-found had been treated as a failure.
+#[tokio::test]
+async fn terminate_of_an_absent_session_succeeds() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(not_found()));
+    client.expect_get_sandbox().never();
+
+    provider(client)
+        .terminate("s1")
+        .await
+        .expect("terminating an absent session succeeds");
+}
+
+/// A session this deployment cannot reach stays refused: mapping every delete failure to `Ok`
+/// would report containment for a sandbox under another deployment's engine that was never
+/// deleted. Only not-found may pass.
+#[tokio::test]
+async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(access_denied()));
+    client.expect_get_sandbox().never();
+
+    let error = provider(client)
+        .terminate("s1")
+        .await
+        .expect_err("a refused delete is not containment");
+
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        format!("{error}").to_lowercase().contains("denied"),
+        "the refusal must carry why the delete was refused, got: {error}"
     );
 }

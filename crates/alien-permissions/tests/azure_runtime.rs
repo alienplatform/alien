@@ -377,11 +377,9 @@ fn test_azure_wildcard_scope_error() {
 /// The heartbeat's stack binding stops at the resource group, and reads only.
 ///
 /// A resource-group scope enumerates sibling sandbox groups, which the resource binding does not,
-/// so the resource binding is the one to prefer. The stack binding exists for the reason
-/// `provision` is resource-group-scoped: `Microsoft.App/sandboxGroups` has no ARM template
-/// representation, so setup can neither create the group nor scope an assignment to one. What
-/// this pins is how far that concession goes — the resource group and no further, and a read
-/// rather than anything that reaches a session.
+/// so the resource binding is the one to prefer. The stack binding stands because nothing
+/// compiles the resource one for a sandbox yet. What this pins is how far that concession goes —
+/// the resource group and no further, and a read rather than anything that reaches a session.
 #[test]
 fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
@@ -390,7 +388,7 @@ fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
 
     let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect("the heartbeat has to reach the manager before the group exists");
+        .expect("the sandbox heartbeat set declares an Azure stack binding");
     assert_eq!(stack_plan.bindings.len(), 1);
     let scope = &stack_plan.bindings[0].scope;
     assert!(
@@ -449,10 +447,10 @@ fn sandbox_execute_grants_nothing_at_stack_scope() {
 /// Management's stack binding stops at the resource group, and never reaches session contents.
 ///
 /// At that scope a holder can terminate sessions in a sibling sandbox group, so the resource
-/// binding is the one to prefer; the stack binding exists only because setup cannot scope an
-/// assignment to a group that `Microsoft.App/sandboxGroups` gives it no way to create. The
-/// boundary this pins is the one `sandbox/execute` exists to hold: session lifecycle here,
-/// never a read or exec that reaches inside a session.
+/// binding is the one to prefer. The stack binding stands because the sandbox management grants
+/// are compiled at stack scope and nothing compiles the resource one. The boundary this pins is
+/// the one `sandbox/execute` exists to hold: session lifecycle here, never a read or exec that
+/// reaches inside a session.
 #[test]
 fn sandbox_management_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
@@ -461,7 +459,7 @@ fn sandbox_management_stack_scope_stops_at_the_resource_group() {
 
     let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect("management has to reach the manager before the group exists");
+        .expect("the sandbox management set declares an Azure stack binding");
     assert_eq!(stack_plan.bindings.len(), 1);
     let scope = &stack_plan.bindings[0].scope;
     assert!(

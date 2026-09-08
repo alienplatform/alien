@@ -20,6 +20,10 @@ const GCP_CLOUD_PLATFORM_SCOPE: &str = "https://www.googleapis.com/auth/cloud-pl
 pub(crate) const AZURE_STORAGE_SCOPE: &str = "https://storage.azure.com/.default";
 pub(crate) const AZURE_KEY_VAULT_SCOPE: &str = "https://vault.azure.net/.default";
 pub(crate) const AZURE_AI_SCOPE: &str = "https://cognitiveservices.azure.com/.default";
+/// The sandbox data plane is signed for the dynamic-sessions audience despite answering at
+/// `azuredevcompute.io`, so a token minted for the endpoint host or ARM's scope is refused with a
+/// 401 that reads like a missing role. Same constant `sandbox_data_plane::ADC_SCOPE` uses.
+pub(crate) const AZURE_SANDBOX_SCOPE: &str = "https://dynamicsessions.io/.default";
 const REMOTE_STORAGE_DURATION_SECONDS: i32 = 3600;
 const AZURE_MINT_SCOPES: [&str; 5] = [
     "https://management.azure.com/.default",
@@ -46,6 +50,7 @@ pub(crate) enum RemoteBindingCredentialScope {
     GcpAi,
     AzureAi,
     AwsSandbox,
+    AzureSandbox,
 }
 
 impl std::fmt::Debug for MaterializedCredentialLease {
@@ -165,6 +170,7 @@ pub(crate) async fn materialize_remote_binding_lease(
                 RemoteBindingCredentialScope::AzureBlob => AZURE_STORAGE_SCOPE,
                 RemoteBindingCredentialScope::AzureKeyVault => AZURE_KEY_VAULT_SCOPE,
                 RemoteBindingCredentialScope::AzureAi => AZURE_AI_SCOPE,
+                RemoteBindingCredentialScope::AzureSandbox => AZURE_SANDBOX_SCOPE,
                 _ => {
                     return Err(ErrorData::internal(
                         "Remote Bindings credential scope does not match Azure",
@@ -228,6 +234,7 @@ fn remote_binding_scope_platform(scope: &RemoteBindingCredentialScope) -> Platfo
         RemoteBindingCredentialScope::AwsKms => Platform::Aws,
         RemoteBindingCredentialScope::AwsAi => Platform::Aws,
         RemoteBindingCredentialScope::AwsSandbox => Platform::Aws,
+        RemoteBindingCredentialScope::AzureSandbox => Platform::Azure,
         RemoteBindingCredentialScope::GcpGcs => Platform::Gcp,
         RemoteBindingCredentialScope::GcpCloudKms => Platform::Gcp,
         RemoteBindingCredentialScope::GcpAi => Platform::Gcp,

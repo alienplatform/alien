@@ -564,6 +564,14 @@ enum ResolvedRemoteBinding {
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
+    #[serde(rename = "sandbox-azure")]
+    SandboxAzure {
+        binding: Box<alien_core::AzureSandboxBinding>,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::AzureClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
     #[cfg(test)]
     #[serde(rename = "local-storage")]
     Local {
@@ -737,6 +745,18 @@ impl ResolvedRemoteBinding {
                     expires_at,
                 )
             }
+            Self::SandboxAzure {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_azure_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Azure(client_config),
+                    serialize_remote_binding(alien_core::SandboxBinding::Azure(*binding))?,
+                    expires_at,
+                )
+            }
             Self::Bedrock { .. } | Self::Vertex { .. } | Self::Foundry { .. } => {
                 return Err(AlienError::new(ErrorData::RemoteAccessFailed {
                     operation: "use an AI lease as a Storage, Key or Sandbox binding".to_string(),
@@ -837,15 +857,12 @@ fn validate_azure_remote_client_config(config: &alien_core::AzureClientConfig) -
         ));
     }
     let alien_core::AzureCredentials::AccessToken { token } = &config.credentials else {
-        return Err(invalid_remote_lease(
-            "Azure",
-            "a storage-audience access token is required",
-        ));
+        return Err(invalid_remote_lease("Azure", "an access token is required"));
     };
     if token.is_empty() {
         return Err(invalid_remote_lease(
             "Azure",
-            "the storage-audience access token must be nonempty",
+            "the access token must be nonempty",
         ));
     }
     Ok(())

@@ -1,21 +1,36 @@
-//! Azure Sandbox — a named group, and nothing built at setup.
+//! Azure Sandbox — the group setup creates, and the remote grant scoped to it.
 //!
-//! No sandbox controller is registered for Azure, and `create_or_update_sandbox_group` has no
-//! caller, so nothing here creates the group a session lives in — it has to exist already. Setup
-//! emits no Azure resource for the same reason it would not be useful to: a group is cheap to
-//! create by name and pointless to hold open while no session wants one.
+//! Setup emits the group because a role assignment cannot name a resource that does not exist:
+//! Azure answers `ResourceNotFound` for a scope whose resource is absent, so a remote grant is
+//! only placeable if the same template that grants also creates. `Microsoft.App/sandboxGroups`
+//! gained an ARM representation at `2026-02-01-preview`, which is what makes that possible; it is
+//! reached through `azapi_resource` because the AzureRM provider has no typed resource for it.
 //!
-//! What this emitter contributes is the three names the data plane is addressed by, which the
-//! Azure client config does not carry: the group, the region that selects the per-region endpoint,
-//! and the resource group the data-plane path is scoped by.
+//! Beside the group this emitter contributes the three names the data plane is addressed by,
+//! which the Azure client config does not carry: the group, the region that selects the
+//! per-region endpoint, and the resource group the data-plane path is scoped by.
 
 use crate::{
+    block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
-    emitters::azure::helpers::{downcast, required_label, resource_prefix_template},
+    emitters::azure::helpers::{
+        downcast, emit_remote_bindings_role_definitions, permission_context,
+        remote_bindings_role_label, required_label, tags,
+    },
     expr,
 };
-use alien_core::{import::EmitContext, Result, Sandbox, SandboxEgress};
+use alien_core::{import::EmitContext, ErrorData, RemoteBindings, Result, Sandbox, SandboxEgress};
+use alien_error::{AlienError, Context};
+use alien_permissions::{
+    generators::{AzureRoleDefinitionRef, AzureRuntimePermissionsGenerator},
+    BindingTarget,
+};
 use hcl::expr::Expression;
+
+/// The preview API version the sandbox group is created at. Must match the ARM and data-plane
+/// clients: ARM still answers older previews, so a version that drifts here fails as a response
+/// mismatch, not a rejected request.
+const SANDBOX_GROUP_TYPE: &str = "Microsoft.App/sandboxGroups@2026-02-01-preview";
 
 /// Emits the Azure sandbox group's identity for the runtime to address.
 #[derive(Debug, Clone, Copy, Default)]
@@ -28,8 +43,21 @@ pub struct AzureSandboxEmitter;
 /// `local.resource_prefix` — the deployer's `var.resource_prefix` defaults to empty and is
 /// replaced by a generated one, so naming from the variable registers a group of `-<id>` while
 /// the management grant is scoped to the real one.
+///
+/// Normalized the way every other Azure resource names itself: a deployer's prefix may carry
+/// underscores and uppercase Azure rejects, and this is the form `PERMISSIONS.md` states as the
+/// grant's scope, which a security team approves the grant from.
 fn sandbox_group(ctx: &EmitContext<'_>) -> Expression {
-    resource_prefix_template(&ctx.resource_id)
+    expr::raw(sandbox_group_expression(ctx.resource_id))
+}
+
+/// The same name as an interpolation, for a permission scope built as a string.
+fn sandbox_group_name(ctx: &EmitContext<'_>) -> String {
+    format!("${{{}}}", sandbox_group_expression(ctx.resource_id))
+}
+
+fn sandbox_group_expression(resource_id: &str) -> String {
+    format!("replace(lower(\"${{local.resource_prefix}}-{resource_id}\"), \"_\", \"-\")")
 }
 
 /// The declared outbound policy, in the shape the binding carries.
@@ -56,10 +84,41 @@ fn egress(sandbox: &Sandbox) -> Expression {
 }
 
 impl TfEmitter for AzureSandboxEmitter {
-    fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // Deliberately empty: see the module note. A group emitted here would sit idle until a
-        // session asked for one, and it is addressed by name rather than by reference.
-        Ok(TfFragment::default())
+    fn emit(&self, ctx: &EmitContext<'_>) -> Result<TfFragment> {
+        let _ = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
+        let label = required_label(ctx)?;
+        let mut fragment = TfFragment::default();
+
+        fragment.resource_blocks.push(resource_block(
+            "azapi_resource",
+            label,
+            [
+                attr("type", Expression::String(SANDBOX_GROUP_TYPE.to_string())),
+                attr("name", sandbox_group(ctx)),
+                attr(
+                    "parent_id",
+                    expr::template(
+                        "/subscriptions/${var.azure_subscription_id}/resourceGroups/${var.azure_resource_group_name}",
+                    ),
+                ),
+                attr("location", expr::raw("var.azure_location")),
+                // The group takes no configuration Alien expresses — sizing, egress and image are
+                // all per-session and travel in the create body — so the body is the empty object
+                // the API requires rather than a field this would have to keep in step.
+                attr(
+                    "body",
+                    expr::object(Vec::<(&str, Expression)>::new()),
+                ),
+                attr("tags", tags(ctx, "sandbox")),
+                // The azapi provider's bundled schema index doesn't carry this type yet, so validate
+                // fails with "can't be found" though ARM creates it fine. Only this client-side
+                // pre-check is disabled; remove once azapi's index catches up.
+                attr("schema_validation_enabled", Expression::Bool(false)),
+            ],
+        ));
+
+        emit_remote_access(ctx, label, &mut fragment)?;
+        Ok(fragment)
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
@@ -98,8 +157,110 @@ impl TfEmitter for AzureSandboxEmitter {
             ));
         }
 
+        // The data plane takes the ceilings at create and nowhere else, so a declaration that
+        // stops here is one the sandbox never hears about. Emitted only when declared: absent
+        // means the data plane's own default, which is not the same as asserting a size.
+        if let Some(limits) = sandbox.limits.as_ref() {
+            fields.push(("cpu", Expression::String(limits.cpu.clone())));
+            fields.push(("memory", Expression::String(limits.memory.clone())));
+            fields.push(("disk", Expression::String(limits.disk.clone())));
+        }
+
         Ok(Some(expr::object(fields)))
     }
+}
+
+/// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
+///
+/// Scoped to the group this emitter just created, and nothing wider: the role is a data-plane
+/// one covering `sandboxGroups/*` on whatever it's scoped to, so a resource-group scope would
+/// hand a remote caller every sibling sandbox in the deployment.
+fn emit_remote_access(ctx: &EmitContext<'_>, label: &str, fragment: &mut TfFragment) -> Result<()> {
+    let (Some(definition), Some(access_label)) = (
+        alien_core::remote_bindings::remote_binding_is_deliverable(ctx.resource)
+            .then(|| alien_core::remote_bindings::remote_binding_for_entry(ctx.resource))
+            .flatten(),
+        remote_bindings_label(ctx),
+    ) else {
+        return Ok(());
+    };
+    let permission_set = alien_permissions::get_permission_set(definition.permission_set)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: format!(
+                    "{} permission set is not registered",
+                    definition.permission_set
+                ),
+            })
+        })?;
+
+    let context = permission_context(label).with_resource_name(sandbox_group_name(ctx));
+    let plan = AzureRuntimePermissionsGenerator::new()
+        .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+        .context(ErrorData::GenericError {
+            message: "failed to generate Azure remote Sandbox permissions".to_string(),
+        })?;
+
+    emit_remote_bindings_role_definitions(fragment, permission_set)?;
+    for (index, binding) in plan.bindings.iter().enumerate() {
+        let role_definition_id = match &binding.role_definition {
+            AzureRoleDefinitionRef::Predefined { role_definition_id } => {
+                expr::template(role_definition_id.clone())
+            }
+            AzureRoleDefinitionRef::Custom { key } => {
+                let custom_index = plan
+                    .custom_roles
+                    .iter()
+                    .position(|role| &role.key == key)
+                    .ok_or_else(|| {
+                        AlienError::new(ErrorData::GenericError {
+                            message: format!("missing generated Azure role '{key}'"),
+                        })
+                    })?;
+                let role_label = remote_bindings_role_label(&binding.role_name, custom_index);
+                expr::traversal([
+                    "azurerm_role_definition",
+                    role_label.as_str(),
+                    "role_definition_resource_id",
+                ])
+            }
+        };
+        fragment.resource_blocks.push(resource_block(
+            "azurerm_role_assignment",
+            &format!("{label}_access_{index}"),
+            [
+                attr(
+                    "name",
+                    expr::raw(format!(
+                        "uuidv5(\"oid\", \"deployment:azure:sandbox-access:${{local.resource_prefix}}:{label}:{index}\")"
+                    )),
+                ),
+                // The created group rather than the rendered scope string: both spell the same
+                // name, and referencing it is what orders the assignment after the group Azure
+                // refuses to grant on before it exists.
+                attr("scope", expr::traversal(["azapi_resource", label, "id"])),
+                attr("role_definition_id", role_definition_id),
+                attr(
+                    "principal_id",
+                    expr::traversal([
+                        "azurerm_user_assigned_identity",
+                        access_label,
+                        "principal_id",
+                    ]),
+                ),
+            ],
+        ));
+    }
+
+    Ok(())
+}
+
+fn remote_bindings_label<'a>(ctx: &'a EmitContext<'_>) -> Option<&'a str> {
+    ctx.stack.resources().find_map(|(id, entry)| {
+        (entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+            .then(|| ctx.name_for(id))
+            .flatten()
+    })
 }
 
 #[cfg(test)]
@@ -114,12 +275,56 @@ mod tests {
         binding_with(egress, None)
     }
 
+    fn emit_for(lifecycle: ResourceLifecycle) -> TfFragment {
+        let stack = Stack::new("acme".to_string())
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: "ubuntu".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .session(SandboxSessionPolicy {
+                        max_lifetime_seconds: None,
+                        idle_suspend_seconds: None,
+                    })
+                    .build(),
+                lifecycle,
+            )
+            .build();
+        let resource = stack
+            .resources
+            .get("agents")
+            .expect("the sandbox is in the stack");
+        let names = IndexMap::from([("agents".to_string(), "agents".to_string())]);
+        let settings = StackSettings::default();
+        let ctx = EmitContext {
+            stack: &stack,
+            resource,
+            resource_id: "agents",
+            platform: alien_core::Platform::Azure,
+            targets_kubernetes: false,
+            stack_settings: &settings,
+            names: &names,
+        };
+
+        AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders")
+    }
+
     fn binding_with(egress: SandboxEgress, idle_suspend_seconds: Option<u32>) -> String {
         let stack = Stack::new("acme".to_string())
             .add(
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
                         image: "ubuntu".to_string(),
+                    })
+                    // Declared, so the ceilings are in the rendered binding: Azure takes them at
+                    // create and nowhere else, and the key-coverage assertion below is what pins
+                    // that they travel under the names the binding deserializes.
+                    .limits(alien_core::SandboxLimits {
+                        cpu: "1000m".to_string(),
+                        memory: "2048Mi".to_string(),
+                        disk: "20480Mi".to_string(),
+                        max_processes: None,
                     })
                     .egress(egress)
                     .session(SandboxSessionPolicy {
@@ -200,15 +405,22 @@ mod tests {
             egress: SandboxEgress::Allow,
             idle_suspend_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
+            cpu: Some(BindingValue::Value("1000m".to_string())),
+            memory: Some(BindingValue::Value("2048Mi".to_string())),
+            disk: Some(BindingValue::Value("20480Mi".to_string())),
         };
         let keys = serde_json::to_value(&binding).expect("the binding serializes");
 
-        for key in keys.as_object().expect("an object").keys() {
-            assert!(
-                rendered.contains(&format!("{key} = ")),
-                "the emitter never writes '{key}': {rendered}"
-            );
-        }
+        let keys = keys.as_object().expect("an object");
+        assert!(!keys.is_empty(), "the binding serializes at least one key");
+        let missing: Vec<&String> = keys
+            .keys()
+            .filter(|key| !rendered.contains(&format!("{key} = ")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "the emitter never writes {missing:?}: {rendered}"
+        );
     }
 
     /// The idle-suspend policy travels the same way, and only when it was declared.
