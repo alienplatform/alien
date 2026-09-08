@@ -688,10 +688,12 @@ impl GcpRemoteStackManagementController {
             None => return Ok(Vec::new()),
         };
 
-        let global_permission_set_refs = match management_profile.0.get("*") {
-            Some(refs) => refs,
-            None => return Ok(Vec::new()),
-        };
+        // Filtered exactly as the setup emitter filters it; see
+        // `alien_permissions::management_identity_global_refs`.
+        let global_permission_set_refs = alien_permissions::management_identity_global_refs(
+            ctx.desired_stack.resources.values(),
+            management_profile,
+        );
 
         let mut permission_sets = Vec::new();
 

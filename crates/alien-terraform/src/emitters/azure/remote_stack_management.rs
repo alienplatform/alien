@@ -207,35 +207,11 @@ fn emit_existing_network_reader_assignments(fragment: &mut TfFragment, label: &s
     // safely own that shared VNet grant per deployment.
 }
 
-/// Session-reaching sets belong to the remote caller's identity alone, whatever their id.
-fn reaches_a_session(permission_ref: &PermissionSetReference) -> bool {
-    permission_ref
-        .resolve(|name| alien_permissions::get_permission_set(name).cloned())
-        .is_some_and(|set| alien_permissions::permission_set_reaches_a_sandbox_session(&set))
-}
-
-/// The global refs this deployment's own management identity keeps. A set the remote caller
-/// claims is dropped — leaving the same reach on the management identity would be the second
-/// tenant the single-tenancy gate exists to prevent.
 fn global_permission_refs<'a>(
     ctx: &EmitContext<'_>,
     profile: &'a PermissionProfile,
 ) -> Vec<&'a PermissionSetReference> {
-    profile
-        .0
-        .get("*")
-        .map(|refs| {
-            refs.iter()
-                .filter(|permission_ref| {
-                    !alien_core::remote_bindings::remote_binding_claims_management_set(
-                        ctx.stack.resources.values(),
-                        permission_ref.id(),
-                        || reaches_a_session(permission_ref),
-                    )
-                })
-                .collect()
-        })
-        .unwrap_or_default()
+    alien_permissions::management_identity_global_refs(ctx.stack.resources.values(), profile)
 }
 
 /// Global refs, plus resource-scoped refs paired with the resource that asked
