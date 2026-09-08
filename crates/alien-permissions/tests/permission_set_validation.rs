@@ -446,6 +446,11 @@ fn validate_gcp_permissions(
 /// fetched at test time and lags a preview service. Exact-match, not a prefix: a sandbox
 /// permission not on this list still fails, and `aiplatform.reasoningEngines.*` is published so a
 /// typo there is caught against the dataset.
+///
+/// Every name here was accepted by live IAM in a throwaway custom role, against a fabricated
+/// control IAM rejected. `gcloud iam list-testable-permissions` and the public permissions
+/// reference both omit them, so neither is evidence a name is wrong — delete one from a grant only
+/// after IAM refuses to create a role naming it.
 const GCP_UNPUBLISHED_PERMISSIONS: &[&str] = &[
     // Agent-platform sandbox environments and their templates, in preview.
     "aiplatform.sandboxEnvironmentTemplates.create",

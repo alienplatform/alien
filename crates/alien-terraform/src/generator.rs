@@ -700,6 +700,15 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
         ),
         _ => format!("${{local.resource_prefix}}-{resource_id}"),
     };
+    // Vertex AI assigns a reasoning engine's id at apply, so no scope can name it. The engine's
+    // display name is what an approver can find in the module, and the path still shows the
+    // boundary: this engine's sessions, not the project's.
+    let scope = match scope.strip_suffix("/reasoningEngines/${resourceName}") {
+        Some(parent) => format!(
+            "{parent}/reasoningEngines/(the id assigned at apply to {resource_name}-engine)"
+        ),
+        None => scope.to_string(),
+    };
     scope
         // Sandbox templates carry the prefix separately; storage templates include it in
         // resourceName. Resolve the pair first so the document matches the installed grant.
@@ -712,6 +721,7 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
             "${data.aws_caller_identity.current.account_id}",
         )
         .replace("${projectName}", "${var.gcp_project}")
+        .replace("${region}", "${var.gcp_region}")
         .replace("${subscriptionId}", "${var.azure_subscription_id}")
         .replace("${resourceGroup}", "${var.azure_resource_group_name}")
         .replace(
@@ -1082,7 +1092,11 @@ fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Ve
             };
             matches!(
                 provider_type,
-                "google_project_iam_member" | "google_service_account_iam_member"
+                "google_project_iam_member"
+                    | "google_service_account_iam_member"
+                    // The grant that admits a remote caller: registration must not report success
+                    // while it is still propagating, or the caller's first call is a 403.
+                    | "google_vertex_ai_reasoning_engine_iam_member"
             )
         })
         .filter_map(resource_address)

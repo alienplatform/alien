@@ -157,7 +157,104 @@ pub fn permission_set_reaches_a_sandbox_session(
         .flatten()
         .any(azure_entry_reaches_a_sandbox_session);
 
-    reaches_on_aws || reaches_on_azure
+    let reaches_on_gcp = permission_set
+        .platforms
+        .gcp
+        .iter()
+        .flatten()
+        .any(gcp_entry_reaches_a_sandbox_session);
+
+    reaches_on_aws || reaches_on_azure || reaches_on_gcp
+}
+
+/// Predefined GCP roles that carry `aiplatform.sandboxEnvironments.execute`, read off the live
+/// role definitions rather than inferred from the names. It is also why `sandbox/remote-execute`
+/// renders a custom role instead of naming one of them.
+///
+/// Re-derive with: describe every `roles/aiplatform.*`, `roles/ml*`, `roles/notebooks*`,
+/// `roles/discoveryengine*` and `roles/geminienterprise*` role plus the basic roles, and keep the
+/// ones whose `includedPermissions` contain that verb.
+const GCP_SESSION_REACHING_ROLES: &[&str] = &[
+    "roles/owner",
+    "roles/editor",
+    "roles/aiplatform.user",
+    "roles/aiplatform.admin",
+    "roles/aiplatform.editor",
+    "roles/aiplatform.expressAdmin",
+    "roles/aiplatform.expressUser",
+    "roles/aiplatform.customCodeServiceAgent",
+    "roles/aiplatform.serviceAgent",
+    "roles/discoveryengine.serviceAgent",
+];
+
+/// The one `roles/aiplatform.*` role proven to carry no session verb. Everything else under that
+/// prefix is treated as reaching, because a list of names cannot answer for a role that does not
+/// exist yet and this answer decides whether the single-tenancy gate refuses a stack.
+const GCP_AIPLATFORM_ROLES_WITHOUT_SESSION_REACH: &[&str] = &["roles/aiplatform.viewer"];
+
+/// Three ways to say yes — a custom role (unbounded by name), an `aiplatform.*` role added after
+/// this list was written, or one of the roles enumerated above — because guessing wrong here lets
+/// a second identity hold `execute` as though single-tenant. Everything else answers no.
+fn gcp_role_reaches_a_sandbox_session(role: &str) -> bool {
+    if GCP_AIPLATFORM_ROLES_WITHOUT_SESSION_REACH
+        .iter()
+        .any(|safe| safe.eq_ignore_ascii_case(role))
+    {
+        return false;
+    }
+    !role.starts_with("roles/")
+        || role.starts_with("roles/aiplatform.")
+        || GCP_SESSION_REACHING_ROLES
+            .iter()
+            .any(|known| known.eq_ignore_ascii_case(role))
+}
+
+/// Whether one GCP permission entry reaches a sandbox session, by role or by permission.
+fn gcp_entry_reaches_a_sandbox_session(
+    entry: &alien_core::permissions::GcpPlatformPermission,
+) -> bool {
+    entry
+        .grant
+        .predefined_roles
+        .iter()
+        .flatten()
+        .any(|role| gcp_role_reaches_a_sandbox_session(role))
+        // Both lists, unconditionally: an entry setting `permissions` and `residualPermissions`
+        // together would otherwise hide the grant in the unscanned one.
+        || entry
+            .grant
+            .permissions
+            .iter()
+            .flatten()
+            .chain(entry.grant.residual_permissions.iter().flatten())
+            .any(|permission| permission_reaches_a_sandbox_session(permission))
+}
+
+/// Whether one GCP permission, possibly carrying a `*`, addresses a sandbox session.
+///
+/// **Lifecycle.** Counts as reach for the same reason `RunMicrovm` does on AWS: whoever creates a
+/// session can put whatever it likes inside it.
+///
+/// **`get` and `list` do not.** They report a session's existence and state and confer nothing
+/// over it or inside it, so a status-only grant stays with the deployment's own identity rather
+/// than being claimed by the remote caller.
+///
+/// **Wildcard, both directions.** `*` and `aiplatform.*` sit above the sandbox namespace and still
+/// reach into it; `aiplatform.sandboxEnvironments.*` sits below. Either way a wildcard covers a
+/// verb past `get`/`list`, so it is answered yes — over-approximating withholds a grant, while
+/// under-approximating leaves reach on an identity a second tenant holds.
+///
+/// Compared lowercased throughout, as the Azure helper is.
+fn permission_reaches_a_sandbox_session(permission: &str) -> bool {
+    const SANDBOX_NAMESPACE: &str = "aiplatform.sandboxenvironments.";
+    let permission = permission.to_ascii_lowercase();
+    if permission.contains('*') {
+        let literal = permission.split('*').next().unwrap_or_default();
+        return SANDBOX_NAMESPACE.starts_with(literal) || literal.starts_with(SANDBOX_NAMESPACE);
+    }
+    permission
+        .strip_prefix(SANDBOX_NAMESPACE)
+        .is_some_and(|verb| !matches!(verb, "get" | "list"))
 }
 
 /// The predefined role carrying Azure's whole sandbox data plane, session contents included.
@@ -288,6 +385,10 @@ fn names_one_resource(scope: &str) -> bool {
 /// wildcard runs past the name, reaches siblings whatever key it is filed under. Entries that reach
 /// no session are not consulted — `sandbox/remote-execute` binds AWS's own network connector by a
 /// fixed ARN, which names no sandbox and grants nothing inside one.
+///
+/// Consulted for AWS and Azure, the platforms whose named sets the gate scopes by key. GCP has no
+/// counterpart invariant — its session-reaching sets are not all pinned to one resource — so
+/// `reaches_this_sandbox` reads a named GCP set as inline.
 #[cfg(test)]
 fn permission_set_is_resource_scoped_on(
     permission_set: &alien_core::permissions::PermissionSet,
@@ -327,9 +428,23 @@ fn permission_set_is_resource_scoped_on(
                     .as_ref()
                     .is_some_and(|spec| names_one_resource(&spec.scope))
             }),
-        // The reach scan behind this predicate reads only the AWS and Azure blocks, so on any
-        // other platform there is no session-reaching entry to judge and nothing to answer.
-        _ => unreachable!("only AWS and Azure carry a session-reaching entry to judge"),
+        alien_core::Platform::Gcp => platforms
+            .gcp
+            .iter()
+            .flatten()
+            .filter(|entry| gcp_entry_reaches_a_sandbox_session(entry))
+            .all(|entry| {
+                entry
+                    .binding
+                    .resource
+                    .as_ref()
+                    .is_some_and(|spec| names_one_resource(&spec.scope))
+            }),
+        // A permission set declares no block for these, so it carries no entry to scope.
+        alien_core::Platform::Kubernetes
+        | alien_core::Platform::Machines
+        | alien_core::Platform::Local
+        | alien_core::Platform::Test => true,
     }
 }
 
@@ -488,6 +603,9 @@ mod tests {
     /// under, which only holds while every such set's resource binding names `${resourceName}`.
     /// A set that reaches a session through a project- or subscription-wide resource binding has
     /// to fall through to the inline treatment instead, so this pins the assumption at the source.
+    ///
+    /// GCP is out of the loop: its session-reaching sets are not all pinned to one resource, so
+    /// `reaches_this_sandbox` reads a named GCP set as inline rather than scoping it by key.
     #[test]
     fn every_session_reaching_set_is_resource_scoped_by_resource_name() {
         for id in list_permission_set_ids() {
@@ -507,7 +625,7 @@ mod tests {
     }
 
     /// The Remote Bindings platform gate refuses a kind whose set does not cover the deployment's
-    /// platform. `sandbox/remote-execute` covers AWS and Azure; `alien-manager`'s resolve route
+    /// platform. `sandbox/remote-execute` covers AWS, Azure and GCP; `alien-manager`'s resolve route
     /// carries the matching pair of arms.
     #[test]
     fn remote_binding_permission_sets_cover_the_platforms_that_support_them() {
@@ -526,16 +644,16 @@ mod tests {
             }
         }
 
-        // Both clouds whose sandbox parent setup can create and then scope a grant to: an AWS
-        // MicroVM image, and an Azure sandbox group.
-        for platform in [Platform::Aws, Platform::Azure] {
+        // Every cloud whose sandbox parent setup can create and then scope a grant to: an AWS
+        // MicroVM image, an Azure sandbox group, a GCP reasoning engine.
+        for platform in [Platform::Aws, Platform::Azure, Platform::Gcp] {
             assert!(permission_set_covers_platform(
                 "sandbox/remote-execute",
                 platform
             ));
         }
 
-        for platform in [Platform::Gcp, Platform::Local] {
+        for platform in [Platform::Local] {
             assert!(
                 !permission_set_covers_platform("sandbox/remote-execute", platform),
                 "widening sandbox/remote-execute to {platform} must be done together with \
@@ -591,6 +709,110 @@ mod tests {
             assert!(
                 !action_reaches_a_microvm_session(action),
                 "{action} does not reach a session"
+            );
+        }
+    }
+
+    /// The same question the AWS wildcard test asks, on the cloud where the namespace is a
+    /// permission prefix rather than an action name. A pattern this misses leaves session reach on
+    /// the deployment's management identity beside a remote caller that also holds it.
+    #[test]
+    fn a_gcp_permission_naming_the_sandbox_namespace_reaches_a_session() {
+        for permission in [
+            "aiplatform.sandboxEnvironments.create",
+            "aiplatform.sandboxEnvironments.delete",
+            "aiplatform.sandboxEnvironments.execute",
+            "aiplatform.sandboxEnvironments.pause",
+            "aiplatform.sandboxEnvironments.resume",
+            "aiplatform.sandboxEnvironments.snapshot",
+            "aiplatform.sandboxenvironments.execute",
+            // Below the namespace, and above it: both cover a verb past get/list.
+            "aiplatform.sandboxEnvironments.*",
+            "aiplatform.*",
+            "*",
+        ] {
+            assert!(
+                permission_reaches_a_sandbox_session(permission),
+                "{permission} authorizes a sandbox session verb"
+            );
+        }
+
+        // Existence and state, conferring nothing over the session or inside it. The parent's own
+        // resources are not the session at all.
+        for permission in [
+            "aiplatform.sandboxEnvironments.get",
+            "aiplatform.sandboxEnvironments.list",
+            "aiplatform.sandboxEnvironmentTemplates.get",
+            "aiplatform.sandboxEnvironmentTemplates.create",
+            "aiplatform.reasoningEngines.create",
+            "storage.objects.get",
+        ] {
+            assert!(
+                !permission_reaches_a_sandbox_session(permission),
+                "{permission} does not reach a session"
+            );
+        }
+    }
+
+    /// Predefined roles read off their live definitions, each carrying
+    /// `aiplatform.sandboxEnvironments.execute`. A management profile naming one holds the reach
+    /// the remote caller was published, so the reach scan has to see it through the role name.
+    #[test]
+    fn a_gcp_predefined_role_carrying_the_execute_verb_reaches_a_session() {
+        use alien_core::permissions::{
+            BindingConfiguration, GcpBindingSpec, GcpPlatformPermission, PermissionGrant,
+        };
+
+        let entry = |roles: &[&str]| GcpPlatformPermission {
+            label: None,
+            description: None,
+            grant: PermissionGrant {
+                predefined_roles: Some(roles.iter().map(|role| (*role).to_string()).collect()),
+                ..PermissionGrant::default()
+            },
+            binding: BindingConfiguration::<GcpBindingSpec> {
+                stack: None,
+                resource: None,
+            },
+        };
+
+        // Verified against the live role definitions, along with `roles/aiplatform.viewer`
+        // carrying no session verb.
+        for role in [
+            "roles/owner",
+            "roles/editor",
+            "roles/aiplatform.user",
+            "roles/aiplatform.admin",
+            "roles/aiplatform.editor",
+            "roles/aiplatform.expressAdmin",
+            "roles/aiplatform.expressUser",
+            "roles/aiplatform.customCodeServiceAgent",
+            "roles/aiplatform.serviceAgent",
+            "roles/discoveryengine.serviceAgent",
+            // Neither enumerable: a role Vertex AI adds later, and a custom role of any name.
+            "roles/aiplatform.someRoleAddedLater",
+            "projects/example/roles/aCustomRole",
+        ] {
+            assert!(
+                gcp_entry_reaches_a_sandbox_session(&entry(&[role])),
+                "{role} must be treated as reaching a sandbox session"
+            );
+        }
+        // A neighbouring resource's grant must not refuse a deployment: these are the GCP roles
+        // shipped permission sets actually name, and none of them reaches a sandbox session.
+        for role in [
+            "roles/aiplatform.viewer",
+            "roles/datastore.viewer",
+            "roles/datastore.user",
+            "roles/storage.objectAdmin",
+            "roles/storage.bucketViewer",
+            "roles/cloudkms.viewer",
+            "roles/cloudkms.cryptoKeyEncrypterDecrypter",
+            "roles/artifactregistry.reader",
+        ] {
+            assert!(
+                !gcp_entry_reaches_a_sandbox_session(&entry(&[role])),
+                "{role} carries no session verb"
             );
         }
     }

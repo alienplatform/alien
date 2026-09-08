@@ -156,6 +156,15 @@ pub enum ResolveBindingResponse {
         #[serde(rename = "expiresAt")]
         expires_at: String,
     },
+    /// GCP Agent Platform reasoning engine and a GCP access token.
+    #[serde(rename = "sandbox-gcp-agent-platform")]
+    SandboxGcpAgentPlatform {
+        binding: RemoteGcpSandboxBinding,
+        #[serde(rename = "clientConfig")]
+        client_config: RemoteGcpClientConfig,
+        #[serde(rename = "expiresAt")]
+        expires_at: String,
+    },
 }
 
 /// Concrete MicroVM sandbox topology returned to remote clients.
@@ -218,6 +227,25 @@ pub struct RemoteAzureSandboxBinding {
     pub memory: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disk: Option<String>,
+}
+
+/// Concrete Agent Platform topology returned to remote clients.
+///
+/// No egress field, unlike the other two clouds: the policy lives on the environment template
+/// named below, so it travels with the template rather than as a flag the client must read.
+#[derive(Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct RemoteGcpSandboxBinding {
+    /// Reasoning engine the credential lease authorizes sessions under.
+    pub engine: String,
+    /// Environment template every session is created from; it carries the image and the ceilings.
+    pub template: String,
+    /// Region selecting the regional aiplatform endpoint.
+    pub region: String,
+    /// Seconds a session may live, where the declaration asked for one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_ttl_seconds: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -420,6 +448,7 @@ enum RemoteAiBinding {
 enum RemoteSandboxBinding {
     Aws(RemoteAwsSandboxBinding),
     Azure(RemoteAzureSandboxBinding),
+    Gcp(RemoteGcpSandboxBinding),
 }
 
 enum ResolvedRemoteBinding {
@@ -445,6 +474,7 @@ impl RemoteSandboxBinding {
         match self {
             Self::Aws(_) => RemoteBindingCredentialScope::AwsSandbox,
             Self::Azure(_) => RemoteBindingCredentialScope::AzureSandbox,
+            Self::Gcp(_) => RemoteBindingCredentialScope::GcpSandbox,
         }
     }
 }
@@ -696,6 +726,13 @@ impl ResolveBindingResponse {
             }
             (RemoteSandboxBinding::Azure(binding), ClientConfig::Azure(client_config)) => {
                 Ok(Self::SandboxAzure {
+                    binding,
+                    client_config: (*client_config).try_into()?,
+                    expires_at,
+                })
+            }
+            (RemoteSandboxBinding::Gcp(binding), ClientConfig::Gcp(client_config)) => {
+                Ok(Self::SandboxGcpAgentPlatform {
                     binding,
                     client_config: (*client_config).try_into()?,
                     expires_at,
@@ -1411,6 +1448,17 @@ fn remote_sandbox_binding(
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,
                 disk: optional(binding.disk, "Azure sandbox disk")?,
+            }))
+        }
+        (Platform::Gcp, SandboxBinding::GcpAgentPlatform(binding)) => {
+            // No egress check here, unlike the two arms above: the binding carries no policy to
+            // re-check, because Agent Platform holds it on the environment template and
+            // `sandbox/remote-execute` grants no template verb to create or replace one.
+            Ok(RemoteSandboxBinding::Gcp(RemoteGcpSandboxBinding {
+                engine: concrete_binding_value(&binding.engine, "GCP sandbox engine")?,
+                template: concrete_binding_value(&binding.template, "GCP sandbox template")?,
+                region: concrete_binding_value(&binding.region, "GCP sandbox region")?,
+                session_ttl_seconds: binding.session_ttl_seconds,
             }))
         }
         _ => Err(ErrorData::bad_request(format!(

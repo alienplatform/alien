@@ -248,9 +248,19 @@ fn open_sandbox_binding_for(platform: Platform) -> SandboxBinding {
             alien_core::SandboxEgress::Allow,
             None,
         ),
+        Platform::Gcp => SandboxBinding::gcp_agent_platform(
+            GCP_ENGINE,
+            format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7"),
+            "us-central1",
+            Some(1800),
+        ),
         _ => open_sandbox_binding(),
     }
 }
+
+/// A reasoning engine's name as Vertex assigns it: the id is server-side, so a test that spelled
+/// it after the sandbox would assert a path no deployment ever carries.
+const GCP_ENGINE: &str = "projects/acme/locations/us-central1/reasoningEngines/4242";
 
 #[test]
 fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
@@ -350,7 +360,7 @@ fn remote_sandbox_resolve_agrees_with_the_permission_set_platform_coverage() {
 /// carries one but is handed a binding belonging to another cloud.
 #[test]
 fn remote_sandbox_validation_refuses_platforms_without_a_durable_parent() {
-    for platform in [Platform::Gcp, Platform::Local] {
+    for platform in [Platform::Local] {
         let deployment = deployment_on_platform(
             sandbox_stack_state(open_sandbox_binding(), platform),
             platform,
@@ -425,6 +435,47 @@ fn remote_sandbox_response_carries_the_service_tag_and_no_extra_credentials() {
         format!("{response:?}"),
         "ResolveBindingResponse { lease: \"<redacted>\" }"
     );
+}
+
+/// The GCP arm of the same wire contract. Both names a session is addressed by have to reach the
+/// caller: a session created without the template runs an unpinned image with none of the declared
+/// ceilings or egress applied.
+#[test]
+fn a_gcp_remote_sandbox_response_carries_the_agent_platform_tag_and_both_names() {
+    let response = ResolveBindingResponse::from_sandbox_parts(
+        match remote_sandbox_binding(
+            &deployment_on_platform(
+                sandbox_stack_state(open_sandbox_binding_for(Platform::Gcp), Platform::Gcp),
+                Platform::Gcp,
+            ),
+            "agents",
+        ) {
+            Ok(binding) => binding,
+            Err(error) => panic!("fixture must resolve: {error}"),
+        },
+        lease(ClientConfig::Gcp(Box::new(alien_core::GcpClientConfig {
+            project_id: "acme".to_string(),
+            region: "us-central1".to_string(),
+            credentials: alien_core::GcpCredentials::AccessToken {
+                token: "token".to_string(),
+            },
+            service_overrides: None,
+            project_number: None,
+        }))),
+        "2026-01-01T00:00:00Z".to_string(),
+    )
+    .expect("a GCP binding pairs with a GCP lease");
+
+    let json = serde_json::to_value(&response).expect("response serializes");
+    assert_eq!(json["service"], "sandbox-gcp-agent-platform");
+    assert_eq!(json["binding"]["engine"], GCP_ENGINE);
+    assert_eq!(
+        json["binding"]["template"],
+        format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7")
+    );
+    assert_eq!(json["binding"]["region"], "us-central1");
+    assert_eq!(json["binding"]["sessionTtlSeconds"], 1800);
+    assert_eq!(json["clientConfig"]["credentials"]["type"], "accessToken");
 }
 
 #[test]

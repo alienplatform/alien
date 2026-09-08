@@ -90,14 +90,15 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 ///
 /// Two cases, both sandbox-only and both about a declared policy the remote grant cannot carry.
 ///
-/// **Egress.** The same refusal on both clouds that publish a sandbox remotely, for mechanisms
+/// **Egress.** The same refusal on every cloud that publishes a sandbox remotely, for mechanisms
 /// that are worth telling apart. On AWS the declared connector is *unreachable*: starting a
 /// session is additionally authorized as `lambda:PassNetworkConnector` and the remote grant
 /// passes only AWS's own connectors. On Azure it is *bypassable*: the grant is the
 /// `SandboxGroup Data Owner` data-plane role, so its holder creates sandboxes against the group
 /// directly and the provider that would have applied the declared policy never runs. The Azure
 /// case is the security-relevant one — it is inherent to handing out a data-plane role, not a
-/// gap in an implementation that could later close it.
+/// gap in an implementation that could later close it. On GCP the policy lives on the environment
+/// template, which the remote grant carries no verb to create or replace.
 ///
 /// **Preview ports.** AWS's `CreateMicrovmAuthToken` has no port condition key, so a declared
 /// list bounds a caller going through the provider but not a holder of the leased credentials —

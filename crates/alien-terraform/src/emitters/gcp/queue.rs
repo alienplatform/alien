@@ -187,7 +187,8 @@ fn emit_queue_iam(ctx: &EmitContext<'_>, fragment: &mut TfFragment, label: &str)
                         );
                         fragment.resource_blocks.push(member_block);
                     }
-                    GcpBindingResourceKind::ArtifactRegistryRepository => {}
+                    GcpBindingResourceKind::ArtifactRegistryRepository
+                    | GcpBindingResourceKind::VertexAiReasoningEngine => {}
                 }
             }
         }

@@ -740,3 +740,76 @@ async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
         "the code is shared with other refusals, so the reason has to be named: {error}"
     );
 }
+
+/// The GCP arm of the same contract, decoded through the **generated** client. Both names a
+/// session is addressed by — engine and template — must survive the trip: created without the
+/// template, a session runs an unpinned image with none of the declared limits or egress applied.
+#[tokio::test]
+async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provider() {
+    let expires_at = Utc::now() + ChronoDuration::minutes(5);
+    let engine = "projects/acme/locations/us-central1/reasoningEngines/4242";
+    let response = Arc::new(StdRwLock::new((
+        StatusCode::OK,
+        json!({
+            "service": "sandbox-gcp-agent-platform",
+            "binding": {
+                "engine": engine,
+                "template": format!("{engine}/sandboxEnvironmentTemplates/7"),
+                "region": "us-central1",
+                "sessionTtlSeconds": 3600,
+            },
+            "clientConfig": {
+                "projectId": "acme",
+                "region": "us-central1",
+                "credentials": { "type": "accessToken", "token": "SENTINEL_GCP_TOKEN" },
+            },
+            "expiresAt": expires_at.to_rfc3339(),
+        }),
+    )));
+    let manager_url = spawn_generated_contract_server(GeneratedContractState {
+        response,
+        requests: Arc::new(StdMutex::new(Vec::new())),
+    })
+    .await;
+
+    let manager = DiscoveredManager {
+        deployment_id: DEPLOYMENT_ID.to_string(),
+        url: reqwest::Url::parse(&manager_url).expect("valid manager URL"),
+        http: authenticated_http_client(GENERATED_MANAGER_TOKEN, "generated manager fixture")
+            .expect("build generated contract client"),
+        refresh_at: expires_at,
+        generation: 0,
+    };
+    let lease = GeneratedManagerBindingResolver
+        .resolve(
+            &manager,
+            DEPLOYMENT_ID,
+            RemoteBindingSelector::Resource("agent"),
+        )
+        .await
+        .expect("generated client should decode a GCP Agent Platform sandbox lease");
+
+    let ResolvedRemoteBinding::SandboxGcpAgentPlatform {
+        binding,
+        client_config,
+        expires_at: lease_expires_at,
+    } = lease
+    else {
+        panic!("generated client returned the wrong lease variant for a GCP sandbox");
+    };
+    let value = |raw: &str| alien_core::BindingValue::Value(raw.to_string());
+    assert_eq!(binding.engine, value(engine));
+    assert_eq!(
+        binding.template,
+        value(&format!("{engine}/sandboxEnvironmentTemplates/7"))
+    );
+    assert_eq!(binding.region, value("us-central1"));
+    assert_eq!(binding.session_ttl_seconds, Some(3600));
+    assert_eq!(client_config.project_id, "acme");
+    assert!(client_config.service_overrides.is_none());
+    let alien_core::GcpCredentials::AccessToken { token } = client_config.credentials else {
+        panic!("a GCP sandbox lease carries an access token");
+    };
+    assert_eq!(token, "SENTINEL_GCP_TOKEN");
+    assert_eq!(lease_expires_at.timestamp(), expires_at.timestamp());
+}

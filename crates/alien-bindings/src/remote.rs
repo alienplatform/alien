@@ -572,6 +572,14 @@ enum ResolvedRemoteBinding {
         #[serde(rename = "expiresAt")]
         expires_at: DateTime<Utc>,
     },
+    #[serde(rename = "sandbox-gcp-agent-platform")]
+    SandboxGcpAgentPlatform {
+        binding: Box<alien_core::GcpAgentPlatformSandboxBinding>,
+        #[serde(rename = "clientConfig")]
+        client_config: Box<alien_core::GcpClientConfig>,
+        #[serde(rename = "expiresAt")]
+        expires_at: DateTime<Utc>,
+    },
     #[cfg(test)]
     #[serde(rename = "local-storage")]
     Local {
@@ -754,6 +762,20 @@ impl ResolvedRemoteBinding {
                 (
                     alien_core::ClientConfig::Azure(client_config),
                     serialize_remote_binding(alien_core::SandboxBinding::Azure(*binding))?,
+                    expires_at,
+                )
+            }
+            Self::SandboxGcpAgentPlatform {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                validate_gcp_remote_client_config(&client_config)?;
+                (
+                    alien_core::ClientConfig::Gcp(client_config),
+                    serialize_remote_binding(alien_core::SandboxBinding::GcpAgentPlatform(
+                        *binding,
+                    ))?,
                     expires_at,
                 )
             }

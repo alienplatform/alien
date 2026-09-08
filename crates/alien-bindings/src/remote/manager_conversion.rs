@@ -347,6 +347,35 @@ impl ResolvedRemoteBinding {
                     expires_at: parse_manager_expiry(expires_at, resource_id)?,
                 }
             }
+            manager_types::ResolveBindingResponse::SandboxGcpAgentPlatform {
+                binding,
+                client_config,
+                expires_at,
+            } => {
+                let manager_types::RemoteGcpCredentials::AccessToken(token) =
+                    client_config.credentials;
+                Self::SandboxGcpAgentPlatform {
+                    binding: Box::new(alien_core::GcpAgentPlatformSandboxBinding {
+                        engine: alien_core::BindingValue::Value(binding.engine),
+                        template: alien_core::BindingValue::Value(binding.template),
+                        region: alien_core::BindingValue::Value(binding.region),
+                        session_ttl_seconds: binding
+                            .session_ttl_seconds
+                            .map(|seconds| {
+                                narrow_manager_number(seconds, "sessionTtlSeconds", resource_id)
+                            })
+                            .transpose()?,
+                    }),
+                    client_config: Box::new(alien_core::GcpClientConfig {
+                        project_id: client_config.project_id,
+                        region: client_config.region,
+                        credentials: alien_core::GcpCredentials::AccessToken { token },
+                        service_overrides: None,
+                        project_number: None,
+                    }),
+                    expires_at: parse_manager_expiry(expires_at, resource_id)?,
+                }
+            }
         };
         Ok(lease)
     }

@@ -50,10 +50,11 @@
     ],
     "gcp": [
       {
-        // Existence and state of the session, nothing inside it. get returns no payload, and the
-        // content-reaching execute verb stays in sandbox/execute alone.
+        // The parent template's lifecycle state, which is what the controller reads and the only
+        // health signal Agent Platform offers. No `sandboxEnvironments` verb at all: a session is
+        // not the parent, and heartbeat must address the parent alone.
         "grant": {
-          "permissions": ["aiplatform.sandboxEnvironments.get"]
+          "permissions": ["aiplatform.sandboxEnvironmentTemplates.get"]
         },
         "binding": {
           "stack": {
