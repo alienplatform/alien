@@ -281,7 +281,9 @@ fn reaches_this_sandbox(
 ) -> bool {
     match reference {
         // An unresolvable name is no reach: the manager rejects an unknown set before it grants
-        // anything.
+        // anything. The key scopes a named set because every session-reaching set interpolates
+        // `${resourceName}`, which `every_session_reaching_set_is_resource_scoped_by_resource_name`
+        // pins in the registry.
         PermissionSetReference::Name(name) => {
             (target == sandbox_id || target == "*")
                 && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
