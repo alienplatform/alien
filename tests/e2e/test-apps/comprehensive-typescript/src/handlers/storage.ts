@@ -68,7 +68,10 @@ app.delete("/storage-object/:bindingName/:key", async c => {
     /^(?:storage-event-test-|wait_until_test_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.txt$/
   if (bindingName !== "alien-storage" || !testKey.test(key)) {
     return c.json(
-      { success: false, error: "Cleanup only accepts generated storage test keys in alien-storage" },
+      {
+        success: false,
+        error: "Cleanup only accepts generated storage test keys in alien-storage",
+      },
       400,
     )
   }
