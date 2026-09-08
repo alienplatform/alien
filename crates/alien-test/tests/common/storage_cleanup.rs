@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use anyhow::{bail, Context};
 
 /// Await cleanup even when verification failed, preserving both errors if necessary.
@@ -11,6 +13,8 @@ pub async fn finish_storage_check(
     let cleanup = async {
         reqwest::Client::new()
             .delete(format!("{url}/storage-object/{binding}/{key}"))
+            // A stalled test app must not prevent the runner from reaching teardown.
+            .timeout(Duration::from_secs(10))
             .send()
             .await
             .context("Test object cleanup request failed")?
@@ -37,6 +41,40 @@ mod tests {
         routing::delete,
         Router,
     };
+
+    #[tokio::test]
+    async fn stalled_cleanup_times_out_and_preserves_verification_failure() {
+        let app = Router::new().route(
+            "/storage-object/files/{key}",
+            delete(|| std::future::pending::<StatusCode>()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let results = tokio::time::timeout(Duration::from_secs(15), async {
+            tokio::join!(
+                finish_storage_check(&url, "files", "test.txt", Ok(())),
+                finish_storage_check(
+                    &url,
+                    "files",
+                    "test.txt",
+                    Err(anyhow::anyhow!("content mismatch")),
+                ),
+            )
+        })
+        .await;
+        server.abort();
+
+        let (successful_verification, failed_verification) =
+            results.expect("cleanup must finish before the test watchdog");
+        let error = successful_verification.unwrap_err();
+        assert!(error.downcast_ref::<reqwest::Error>().unwrap().is_timeout());
+        let error = format!("{:#}", failed_verification.unwrap_err());
+        assert!(error.contains("content mismatch"), "{error}");
+        assert!(error.contains("cleanup of test.txt also failed"), "{error}");
+        assert!(error.contains("timed out"), "{error}");
+    }
 
     #[tokio::test]
     async fn removes_only_the_test_object_even_when_verification_failed() {
