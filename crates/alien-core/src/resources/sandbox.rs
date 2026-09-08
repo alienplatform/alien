@@ -500,22 +500,25 @@ pub struct Sandbox {
 
 /// Whether the artifact being rendered restricts which network modes it accepts.
 ///
-/// A sandbox is not emitted on a Kubernetes target, so nothing there routes egress through a
-/// connector and the default network stays a working answer. Every site that withholds the mode,
-/// explains the restriction, or renders a branch for it has to ask this one question — asking the
-/// stack directly is how they came to disagree.
+/// Cloud setup needs explicit subnets for private databases and restricted sandbox connectors.
+/// Kubernetes targets do not emit these cloud backends.
 pub fn restricts_network_mode(stack: &crate::Stack, targets_kubernetes: bool) -> bool {
     !targets_kubernetes && stack_needs_named_subnets_at_setup(stack)
 }
 
-/// Whether any sandbox in the stack forces setup to name subnets.
+/// Whether any setup-owned resource forces setup to name subnets.
 ///
-/// A restricted sandbox routes session egress through a VPC connector, and neither generator can
-/// enumerate the account default VPC's subnets, so that mode leaves the connector without any and
-/// it fails at create. Callers that render an artifact want [`restricts_network_mode`] instead:
+/// Private databases and restricted sandbox connectors require subnet IDs. Neither generator can
+/// enumerate the account default VPC's subnets. Callers rendering an artifact want
+/// [`restricts_network_mode`] instead:
 /// this one answers for the declaration, which on a Kubernetes target is not what gets emitted.
 pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
     stack.resources().any(|(_resource_id, resource)| {
+        if resource.lifecycle == crate::ResourceLifecycle::Frozen
+            && resource.config.downcast_ref::<crate::Postgres>().is_some()
+        {
+            return true;
+        }
         resource
             .config
             .downcast_ref::<Sandbox>()
@@ -1127,6 +1130,30 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_database_setup_requires_named_subnets() {
+        for lifecycle in [
+            crate::ResourceLifecycle::Frozen,
+            crate::ResourceLifecycle::Live,
+        ] {
+            let stack = crate::Stack::new("database".to_string())
+                .add(
+                    crate::Postgres::new("metadata".to_string()).build(),
+                    lifecycle,
+                )
+                .build();
+            assert_eq!(
+                restricts_network_mode(&stack, false),
+                lifecycle == crate::ResourceLifecycle::Frozen,
+            );
+            assert!(!restricts_network_mode(&stack, true));
+        }
+        assert!(!restricts_network_mode(
+            &crate::Stack::new("empty".to_string()).build(),
+            false,
+        ));
+    }
 
     /// A wildcard reaching the grant would widen it past the bundle, and it widens the Frozen
     /// object grant as readily as the Live prefix — both interpolate the path into the ARN.

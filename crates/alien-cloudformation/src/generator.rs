@@ -1089,9 +1089,9 @@ fn add_network_parameters(
     // parameter is checked before the transform runs, where a template Rule is not yet reached.
     let restricted = restricts_network_mode(stack, target);
     let description = if restricted {
-        "Choose create-new for a managed VPC, or use-existing for your VPC. A sandbox in this \
-         application routes session egress through a VPC connector when enabled, and that connector \
-         must name subnets."
+        "Choose create-new for a managed VPC, or use-existing for your VPC. This application's \
+         private resources require explicit subnet IDs, which setup cannot discover from the \
+         account default VPC."
     } else {
         modes.push(CfExpression::from("use-default"));
         "Choose create-new for a managed VPC, use-existing for your VPC, or use-default for the account default VPC."

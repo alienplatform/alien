@@ -73,7 +73,7 @@ Parameters:
     Default: ''
   NetworkMode:
     Type: String
-    Description: Choose create-new for a managed VPC, or use-existing for your VPC. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets.
+    Description: Choose create-new for a managed VPC, or use-existing for your VPC. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC.
     Default: create-new
     AllowedValues:
     - create-new
