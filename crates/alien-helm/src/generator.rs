@@ -17,6 +17,7 @@ use alien_core::{
     Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_operations_sdk::KubernetesOperationPermissions;
 use indexmap::IndexMap;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,7 +59,7 @@ pub struct ManagerFetchHelmValuesOptions<'a> {
 ///
 /// Renderers expose this value so callers can reject manifests produced by a
 /// generator that predates policy-aware Kubernetes operation permissions.
-pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 1;
+pub const OPERATOR_RBAC_POLICY_VERSION: u32 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatorPermission {
@@ -147,6 +148,9 @@ pub struct OperatorManifestOptions<'a> {
     /// plugin. This gates operation-specific RBAC independently of the
     /// requested permission tier.
     pub kubernetes_operations_enabled: bool,
+    /// Declared requirements from enabled custom operations only. The
+    /// generator validates these before applying the permission ceiling.
+    pub custom_operation_permissions: &'a [KubernetesOperationPermissions],
     pub permission: OperatorPermission,
     pub format: OperatorOutputFormat,
 }
@@ -336,6 +340,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             &crd_names,
             options.kubernetes_operations_enabled,
             options.permission,
+            options.custom_operation_permissions,
         ));
         docs.push(operator_clusterrolebinding_doc(
             namespace,
@@ -350,6 +355,7 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             &crd_names,
             options.kubernetes_operations_enabled,
             options.permission,
+            options.custom_operation_permissions,
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
@@ -545,6 +551,14 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
 }
 
 fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()> {
+    for operation in options.custom_operation_permissions {
+        operation.validate().context(ErrorData::GenericError {
+            message: format!(
+                "invalid Kubernetes permissions for {}/{}",
+                operation.plugin, operation.operation
+            ),
+        })?;
+    }
     let invalid = |message: &str| {
         Err(AlienError::new(ErrorData::GenericError {
             message: message.to_string(),
@@ -622,6 +636,7 @@ fn operator_role_doc(
     crd_names: &AccessRequestCrdNames,
     kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
+    custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
@@ -634,6 +649,7 @@ fn operator_role_doc(
         crd_names,
         kubernetes_operations_enabled,
         permission,
+        custom_operations,
     ));
     yaml
 }
@@ -667,6 +683,19 @@ roleRef:
     yaml
 }
 
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct OperatorRuleScope {
+    api_group: String,
+    resource: String,
+    resource_names: BTreeSet<String>,
+}
+
+#[derive(Default)]
+struct OperatorRuleGrant {
+    verbs: BTreeSet<String>,
+    reasons: BTreeSet<String>,
+}
+
 /// Kubernetes operation rules shared by the namespaced `Role` and cluster-wide
 /// `ClusterRole`.
 ///
@@ -692,54 +721,167 @@ fn operator_rules(
     names: &AccessRequestCrdNames,
     kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
+    custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
-    let mut rules = format!(
-        r#"rules:
-  - apiGroups: [""]
-    resources: ["pods", "services", "configmaps", "persistentvolumeclaims", "events", "endpoints"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["apps"]
-    resources: ["deployments", "statefulsets", "daemonsets", "replicasets"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["batch"]
-    resources: ["jobs", "cronjobs"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["metrics.k8s.io"]
-    resources: ["pods"]
-    verbs: ["get", "list", "watch"]
-  - apiGroups: ["{group}"]
-    resources: ["{plural}"]
-    verbs: ["get", "list", "watch", "create", "update", "patch"]
-  - apiGroups: ["{group}"]
-    resources: ["{plural}/status"]
-    verbs: ["get", "update", "patch"]
-"#,
-        group = names.group,
-        plural = names.plural,
-    );
+    // Normalize builtin and custom grants together. Names are part of the key:
+    // sharing a grant never widens a named requirement to all resources.
+    let mut rules = BTreeMap::<OperatorRuleScope, OperatorRuleGrant>::new();
+    let mut add_rule = |group: &str, resource: &str, resource_names, verbs, reason| {
+        let grant = rules
+            .entry(OperatorRuleScope {
+                api_group: group.to_owned(),
+                resource: resource.to_owned(),
+                resource_names,
+            })
+            .or_default();
+        grant.verbs.extend(verbs);
+        grant.reasons.insert(reason);
+    };
+    let status_resource = format!("{}/status", names.plural);
+    let baseline: &[(&str, &[&str], &[&str], &str)] = &[
+        (
+            "",
+            &[
+                "pods",
+                "services",
+                "configmaps",
+                "persistentvolumeclaims",
+                "events",
+                "endpoints",
+            ],
+            &["get", "list", "watch"],
+            "baseline resource inventory.",
+        ),
+        (
+            "apps",
+            &["deployments", "statefulsets", "daemonsets", "replicasets"],
+            &["get", "list", "watch"],
+            "baseline workload inventory.",
+        ),
+        (
+            "batch",
+            &["jobs", "cronjobs"],
+            &["get", "list", "watch"],
+            "baseline job inventory.",
+        ),
+        (
+            "metrics.k8s.io",
+            &["pods"],
+            &["get", "list", "watch"],
+            "baseline pod metrics.",
+        ),
+        (
+            &names.group,
+            &[&names.plural],
+            &["get", "list", "watch", "create", "update", "patch"],
+            "access-request materialization and approval observation.",
+        ),
+        (
+            &names.group,
+            &[&status_resource],
+            &["get", "update", "patch"],
+            "access-request status reporting.",
+        ),
+    ];
+    for (group, resources, verbs, reason) in baseline {
+        for resource in *resources {
+            add_rule(
+                group,
+                resource,
+                BTreeSet::new(),
+                verbs
+                    .iter()
+                    .map(|verb| (*verb).to_owned())
+                    .collect::<BTreeSet<_>>(),
+                (*reason).to_owned(),
+            );
+        }
+    }
     if kubernetes_operations_enabled {
-        rules.push_str(
-            r#"  # Required by the kubernetes/logs operation.
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
-"#,
+        add_rule(
+            "",
+            "pods/log",
+            BTreeSet::new(),
+            BTreeSet::from(["get".to_owned()]),
+            "the kubernetes/logs operation.".to_owned(),
         );
     }
     if kubernetes_operations_enabled && permission == OperatorPermission::Remediation {
-        rules.push_str(
-            r#"  # Required by the kubernetes/restart-pod operation.
-  - apiGroups: [""]
-    resources: ["pods"]
-    verbs: ["delete"]
-  # Required by the kubernetes/scale operation.
-  - apiGroups: ["apps"]
-    resources: ["deployments/scale", "statefulsets/scale", "replicasets/scale"]
-    verbs: ["patch"]
-"#,
+        add_rule(
+            "",
+            "pods",
+            BTreeSet::new(),
+            BTreeSet::from(["delete".to_owned()]),
+            "the kubernetes/restart-pod operation.".to_owned(),
         );
+        for resource in [
+            "deployments/scale",
+            "statefulsets/scale",
+            "replicasets/scale",
+        ] {
+            add_rule(
+                "apps",
+                resource,
+                BTreeSet::new(),
+                BTreeSet::from(["patch".to_owned()]),
+                "the kubernetes/scale operation.".to_owned(),
+            );
+        }
     }
-    rules
+    for operation in custom_operations {
+        for rule in &operation.permissions.rules {
+            let verbs: BTreeSet<_> = rule
+                .verbs
+                .iter()
+                .filter(|verb| {
+                    permission == OperatorPermission::Remediation
+                        || matches!(verb.as_str(), "get" | "list" | "watch")
+                })
+                .cloned()
+                .collect();
+            if !verbs.is_empty() {
+                add_rule(
+                    &rule.api_group,
+                    &rule.resource,
+                    rule.resource_names.iter().cloned().collect(),
+                    verbs,
+                    format!(
+                        "{}/{}: {}",
+                        operation.plugin, operation.operation, rule.reason
+                    ),
+                );
+            }
+        }
+    }
+    let mut yaml = "rules:\n".to_owned();
+    for (scope, grant) in rules {
+        for reason in grant.reasons {
+            yaml.push_str(&format!("  # Required by {reason}\n"));
+        }
+        yaml.push_str(&format!(
+            "  - apiGroups: [{}]\n    resources: [{}]\n    verbs: [{}]\n",
+            yaml_string(&scope.api_group),
+            yaml_string(&scope.resource),
+            grant
+                .verbs
+                .iter()
+                .map(|verb| yaml_string(verb))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+        if !scope.resource_names.is_empty() {
+            yaml.push_str(&format!(
+                "    resourceNames: [{}]\n",
+                scope
+                    .resource_names
+                    .iter()
+                    .map(|name| yaml_string(name))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ));
+        }
+    }
+    yaml
 }
 
 /// The access-request `CustomResourceDefinition`, white-labeled from `names`.
@@ -882,12 +1024,14 @@ fn operator_clusterrole_doc(
     crd_names: &AccessRequestCrdNames,
     kubernetes_operations_enabled: bool,
     permission: OperatorPermission,
+    custom_operations: &[KubernetesOperationPermissions],
 ) -> String {
     let mut yaml = operator_cluster_metadata_doc("ClusterRole", operator_name, labels);
     yaml.push_str(&operator_rules(
         crd_names,
         kubernetes_operations_enabled,
         permission,
+        custom_operations,
     ));
     yaml
 }
@@ -4123,6 +4267,7 @@ mod tests {
 
     fn operator_test_manifest() -> String {
         generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4144,6 +4289,7 @@ mod tests {
 
     fn operator_test_manifest_with_log_collector() -> String {
         generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4172,6 +4318,7 @@ mod tests {
             ..Default::default()
         };
         generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4349,6 +4496,7 @@ mod tests {
     #[test]
     fn operator_remediation_adds_only_restart_and_scale_writes() {
         let manifest = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4372,33 +4520,45 @@ mod tests {
             .as_sequence()
             .expect("Role should include rules");
 
-        let writes = rules
-            .iter()
-            .filter_map(|rule| {
-                let verbs = rule["verbs"].as_sequence()?;
-                verbs
-                    .iter()
-                    .any(|verb| verb == "delete" || verb == "patch")
-                    .then(|| (rule["resources"].clone(), rule["verbs"].clone()))
-            })
-            .collect::<Vec<_>>();
-
+        let mut writes = BTreeSet::new();
+        for rule in rules {
+            for group in rule["apiGroups"].as_sequence().unwrap() {
+                for resource in rule["resources"].as_sequence().unwrap() {
+                    for verb in rule["verbs"].as_sequence().unwrap() {
+                        let verb = verb.as_str().unwrap();
+                        if !matches!(verb, "get" | "list" | "watch") {
+                            writes.insert((
+                                group.as_str().unwrap(),
+                                resource.as_str().unwrap(),
+                                verb,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         assert_eq!(
-            writes.len(),
-            4,
-            "two access-request rules plus restart and scale"
+            writes,
+            BTreeSet::from([
+                ("", "pods", "delete"),
+                ("apps", "deployments/scale", "patch"),
+                ("apps", "statefulsets/scale", "patch"),
+                ("apps", "replicasets/scale", "patch"),
+                ("accessrequests.alien", "alienaccessrequests", "create"),
+                ("accessrequests.alien", "alienaccessrequests", "update"),
+                ("accessrequests.alien", "alienaccessrequests", "patch"),
+                (
+                    "accessrequests.alien",
+                    "alienaccessrequests/status",
+                    "update"
+                ),
+                (
+                    "accessrequests.alien",
+                    "alienaccessrequests/status",
+                    "patch"
+                ),
+            ])
         );
-        assert!(writes
-            .iter()
-            .any(|(resources, verbs)| { resources[0] == "pods" && verbs[0] == "delete" }));
-        assert!(writes.iter().any(|(resources, verbs)| {
-            resources.as_sequence().is_some_and(|items| {
-                items.iter().all(|item| {
-                    item.as_str()
-                        .is_some_and(|resource| resource.ends_with("/scale"))
-                })
-            }) && verbs[0] == "patch"
-        }));
     }
 
     #[test]
@@ -4409,6 +4569,7 @@ mod tests {
         // is never required — it's slugified into the CRD group, never
         // resolved.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -4668,6 +4829,7 @@ mod tests {
         // Label scope is cluster-wide: emits the selector env and ClusterRole/
         // ClusterRoleBinding instead of a namespaced Role.
         let manifest = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
@@ -4726,6 +4888,7 @@ mod tests {
     #[test]
     fn operator_helm_template_sources_namespace_and_identity_from_helm() {
         let manifest = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
@@ -4761,6 +4924,7 @@ mod tests {
     #[test]
     fn raw_manifest_requires_install_namespace_and_environment_name() {
         let missing_namespace = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
@@ -4783,6 +4947,7 @@ mod tests {
         );
 
         let missing_env = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
@@ -4803,6 +4968,7 @@ mod tests {
 
         // Label scope must carry a non-empty selector.
         let empty_label = generate_operator_manifest(OperatorManifestOptions {
+            custom_operation_permissions: &[],
             manager_url: "https://manager.example.com",
             group_token: "ax_dg_test",
             encryption_key: TEST_RUNTIME_ENCRYPTION_KEY,
