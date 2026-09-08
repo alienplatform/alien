@@ -3325,13 +3325,14 @@ fn terraform_tfvars(
     kubernetes_namespace: Option<&str>,
 ) -> anyhow::Result<Value> {
     let mut vars = serde_json::Map::new();
+    let resource_prefix = crate::config::e2e_resource_prefix()?;
     vars.insert(
         "name".to_string(),
         Value::String(format!("e2e-{}", &uuid::Uuid::new_v4().to_string()[..8])),
     );
     vars.insert(
         "resource_prefix".to_string(),
-        Value::String(crate::config::e2e_resource_prefix()?),
+        Value::String(resource_prefix.clone()),
     );
     vars.insert(
         "token".to_string(),
@@ -3407,12 +3408,15 @@ fn terraform_tfvars(
                 .azure_target
                 .as_ref()
                 .context("Azure target missing")?;
+            // Terraform owns this group. AZURE_TARGET_RESOURCE_GROUP identifies
+            // pre-provisioned shared infrastructure and must not be created or
+            // destroyed by a distribution test. Shared environment bindings keep
+            // their own resource-group reference.
             insert_azure_tfvars(
                 &mut vars,
                 azure_target,
                 prepared.config.azure_mgmt.as_ref(),
-                &std::env::var("AZURE_TARGET_RESOURCE_GROUP")
-                    .context("AZURE_TARGET_RESOURCE_GROUP is required")?,
+                &format!("{resource_prefix}-terraform-rg"),
                 target,
             );
         }
