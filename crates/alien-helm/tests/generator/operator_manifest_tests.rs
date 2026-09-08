@@ -6,6 +6,7 @@ use alien_operations_sdk::{KubernetesOperationPermissions, PluginManifest};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_yaml::Value as YamlValue;
+use std::collections::BTreeSet;
 
 use super::test_utils;
 
@@ -244,6 +245,103 @@ fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
         .map(|doc| YamlValue::deserialize(doc).expect("manifest document should be valid YAML"))
         .filter(|doc| !doc.is_null())
         .collect()
+}
+
+fn permission_grants(manifest: &str) -> BTreeSet<(String, String, String, Vec<String>)> {
+    let mut grants = BTreeSet::new();
+    for doc in parse_manifest(manifest) {
+        if doc["kind"] != "Role" && doc["kind"] != "ClusterRole" {
+            continue;
+        }
+        for rule in doc["rules"].as_sequence().unwrap() {
+            let mut names: Vec<_> = rule["resourceNames"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .map(|name| name.as_str().unwrap().to_owned())
+                .collect();
+            names.sort();
+            for group in rule["apiGroups"].as_sequence().unwrap() {
+                for resource in rule["resources"].as_sequence().unwrap() {
+                    for verb in rule["verbs"].as_sequence().unwrap() {
+                        grants.insert((
+                            group.as_str().unwrap().to_owned(),
+                            resource.as_str().unwrap().to_owned(),
+                            verb.as_str().unwrap().to_owned(),
+                            names.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    grants
+}
+
+#[test]
+fn attribution_cannot_inject_grants_into_rendered_yaml() {
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let mut operation = custom_operation("inspector");
+        operation.permissions.rules[0].reason = "Inspect widgets — 状態".to_owned();
+        let mut expected = permission_grants(&rendered_manifest(
+            scope,
+            OperatorPermission::Diagnostics,
+            false,
+        ));
+        for verb in ["get", "list", "watch"] {
+            expected.insert((
+                "example.com".to_owned(),
+                "widgets".to_owned(),
+                verb.to_owned(),
+                vec!["sample".to_owned()],
+            ));
+        }
+        let valid = rendered_with_custom(
+            scope,
+            OperatorPermission::Diagnostics,
+            false,
+            &[operation.clone()],
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        assert_eq!(permission_grants(&valid), expected);
+
+        for line_break in ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let attribution = format!("Inspect{line_break}  - apiGroups: [\"\"]{line_break}    resources: [\"secrets\"]{line_break}    verbs: [\"get\"]{line_break}  #");
+            for field in ["plugin", "operation", "reason"] {
+                let mut malicious = operation.clone();
+                match field {
+                    "plugin" => malicious.plugin = attribution.clone(),
+                    "operation" => malicious.operation = attribution.clone(),
+                    _ => malicious.permissions.rules[0].reason = attribution.clone(),
+                }
+                for format in [
+                    OperatorOutputFormat::RawManifest,
+                    OperatorOutputFormat::HelmTemplate,
+                ] {
+                    let rendered = rendered_with_custom(
+                        scope,
+                        OperatorPermission::Diagnostics,
+                        false,
+                        &[malicious.clone()],
+                        format,
+                    );
+                    if format == OperatorOutputFormat::RawManifest {
+                        if let Ok(manifest) = &rendered {
+                            // Inspect actual YAML semantics, not just the string:
+                            // an accepted comment must never add another grant.
+                            assert_eq!(
+                                permission_grants(manifest),
+                                expected,
+                                "attribution changed the emitted grants"
+                            );
+                        }
+                    }
+                    assert!(rendered.is_err(), "accepted {line_break:?} in {field}");
+                }
+            }
+        }
+    }
 }
 
 fn rule_allows(role: &YamlValue, resource: &str, verb: &str) -> bool {
