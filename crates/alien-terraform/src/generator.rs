@@ -2004,7 +2004,7 @@ fn string_enum_variable_block(
 /// the account default VPC's cannot be enumerated at setup.
 fn network_mode_description(needs_named_subnets: bool) -> &'static str {
     if needs_named_subnets {
-        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC."
     } else {
         "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
     }
@@ -2040,7 +2040,7 @@ fn network_mode_variable_block(needs_named_subnets: bool) -> Block {
                 attr(
                     "error_message",
                     Expression::String(
-                        "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+                        "network_mode must be create-new or use-existing: this application's private resources must name subnets."
                             .to_string(),
                     ),
                 ),
@@ -3383,7 +3383,7 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
 /// the package contradict itself.
 fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
     match target.cloud_platform() {
-        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
+        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
         _ => String::new(),
