@@ -153,7 +153,11 @@ fn valid_token(value: &str, allow_slash: bool) -> bool {
 fn validate_label(value: &str, field: &str) -> Result<()> {
     if value.trim().is_empty()
         || value.len() > 1024
-        || value.chars().any(char::is_control)
+        // YAML parsers recognize Unicode line/paragraph separators as line
+        // breaks too, although Rust does not classify them as control characters.
+        || value.chars().any(|character| {
+            character.is_control() || matches!(character, '\u{2028}' | '\u{2029}')
+        })
         || value.contains("{{")
         || value.contains("}}")
     {
@@ -172,7 +176,7 @@ fn invalid<T>(reason: &str) -> Result<T> {
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::PluginManifest;
+    use crate::{KubernetesOperationPermissions, PluginManifest, RiskTier};
 
     fn manifest() -> Value {
         json!({
@@ -196,6 +200,35 @@ mod tests {
             actual["operations"][0]["kubernetesPermissions"],
             value["operations"][0]["kubernetesPermissions"]
         );
+    }
+
+    #[test]
+    fn attribution_rejects_all_yaml_line_breaks() {
+        for line_break in ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let text = format!("Inspect{line_break}another line");
+            for field in ["plugin", "operation", "reason"] {
+                let parsed =
+                    PluginManifest::parse_and_validate(manifest().to_string().as_bytes()).unwrap();
+                let mut declaration = KubernetesOperationPermissions {
+                    plugin: parsed.name,
+                    operation: parsed.operations[0].name.clone(),
+                    tier: RiskTier::ReadOnly,
+                    permissions: parsed.operations[0].kubernetes_permissions.clone().unwrap(),
+                };
+                match field {
+                    "plugin" => declaration.plugin = text.clone(),
+                    "operation" => declaration.operation = text.clone(),
+                    _ => declaration.permissions.rules[0].reason = text.clone(),
+                }
+                assert!(
+                    declaration.validate().is_err(),
+                    "accepted {line_break:?} in {field}"
+                );
+            }
+            let mut input = manifest();
+            input["operations"][0]["kubernetesPermissions"]["rules"][0]["reason"] = json!(text);
+            assert!(PluginManifest::parse_and_validate(input.to_string().as_bytes()).is_err());
+        }
     }
 
     #[test]
