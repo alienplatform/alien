@@ -25,3 +25,4 @@ speakeasy generate sdk \
   --out "$sdk_dir"
 
 NODE_OPTIONS=--max-old-space-size=12288 pnpm -C "$sdk_dir" build
+node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
