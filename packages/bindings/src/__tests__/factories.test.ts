@@ -143,6 +143,12 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       let index = 0
       return { next: async () => frames[index++] ?? null, close: async () => {} }
     },
+    startJob: async () => "j1",
+    pollJob: async (_sessionId, _jobId, sinceSeq) =>
+      sinceSeq === undefined || sinceSeq === null
+        ? { running: true, frames: [{ kind: "stdout", seq: 0, data: Buffer.from("working\n") }] }
+        : { running: false, frames: [], exit: { code: 3, truncated: false } },
+    cancelJob: async () => {},
     readFile: async () => Buffer.from("contents"),
     writeFile: async () => {},
     mkdir: async () => {},
@@ -629,6 +635,72 @@ describe("createFactories postgres surface", () => {
     expect((error as AlienError).retryable).toBe(false)
     expect((error as AlienError).message).toContain("prefer")
     expect((error as AlienError).message).toContain("disable, verify-ca, verify-full")
+  })
+})
+
+describe("sandbox jobs", () => {
+  it("returns the job id, forwards the poll cursor, and maps the ending", async () => {
+    const { addon } = fakeAddon()
+    const { sandbox } = createFactories(() => addon)
+    const handle = sandbox("sbx")
+
+    const jobId = await handle.startJob("s1", ["/bin/sleep", "600"], { deadlineMs: 600_000 })
+    expect(jobId).toBe("j1")
+
+    const first = await handle.pollJob("s1", jobId)
+    expect(first.running).toBe(true)
+    expect(first.frames).toEqual([{ kind: "stdout", seq: 0, data: Buffer.from("working\n") }])
+    expect(first.exit).toBeUndefined()
+
+    // The cursor is what makes a repeated poll return only what is new; the fake answers a second
+    // time only when one is forwarded.
+    const second = await handle.pollJob("s1", jobId, 0)
+    expect(second.running).toBe(false)
+    expect(second.frames).toEqual([])
+    expect(second.exit).toEqual({ code: 3, truncated: false })
+
+    await expect(handle.cancelJob("s1", jobId)).resolves.toBeUndefined()
+  })
+
+  it("keeps the addon's code for a start that was never answered", async () => {
+    const { addon } = fakeAddon()
+
+    class UnansweredBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return {
+          ...inner,
+          startJob: async () => {
+            throw new Error(
+              JSON.stringify({
+                code: "SANDBOX_OUTCOME_UNKNOWN",
+                message: "the job may have started",
+                retryable: false,
+                internal: false,
+              }),
+            )
+          },
+        }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: UnansweredBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+
+    const error = await sandbox("sbx")
+      .startJob("s1", ["/bin/sleep", "600"], { deadlineMs: 600_000 })
+      .then(
+        () => null,
+        (caught: unknown) => caught,
+      )
+
+    // A start whose outcome is unknown must not reach the caller as the generic fallback: a
+    // caller that reads it as safe to repeat would run the command twice.
+    expect(error).toBeInstanceOf(AlienError)
+    expect((error as AlienError).code).toBe("SANDBOX_OUTCOME_UNKNOWN")
+    expect((error as AlienError).retryable).toBe(false)
   })
 })
 

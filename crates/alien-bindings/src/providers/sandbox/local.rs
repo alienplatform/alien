@@ -18,8 +18,8 @@ use serde_json::json;
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
-    SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
+    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_core::bindings::LocalSandboxBinding;
 use alien_core::{Platform, SandboxCapabilities};
@@ -478,6 +478,23 @@ impl Sandbox for LocalSandbox {
 
     async fn snapshot(&self, _session_id: &str) -> Result<String> {
         Err(self.unsupported("snapshot"))
+    }
+
+    async fn start_job(&self, _session_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
+        Err(self.unsupported("jobs"))
+    }
+
+    async fn poll_job(
+        &self,
+        _session_id: &str,
+        _job_id: &str,
+        _since_seq: Option<u64>,
+    ) -> Result<JobPoll> {
+        Err(self.unsupported("jobs"))
+    }
+
+    async fn cancel_job(&self, _session_id: &str, _job_id: &str) -> Result<()> {
+        Err(self.unsupported("jobs"))
     }
 
     async fn terminate(&self, session_id: &str) -> Result<()> {

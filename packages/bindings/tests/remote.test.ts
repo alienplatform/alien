@@ -382,15 +382,18 @@ const remoteBindingsFactories: Record<keyof RawRemoteBindingsHandleConstructor, 
 }
 
 const sandboxMembers: Record<keyof RawSandboxHandle, true> = {
+  cancelJob: true,
   capabilities: true,
   create: true,
   get: true,
   getOrCreate: true,
   list: true,
   mkdir: true,
+  pollJob: true,
   readFile: true,
   resume: true,
   runCommand: true,
+  startJob: true,
   suspend: true,
   terminate: true,
   writeFile: true,

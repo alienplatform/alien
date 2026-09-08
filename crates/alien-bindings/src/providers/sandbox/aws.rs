@@ -18,8 +18,8 @@ use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport, AGENT_PORT};
 use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
-    SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
+    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
@@ -496,6 +496,23 @@ impl Sandbox for AwsSandbox {
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         agent_protocol::run_command(self, session_id, request).await
+    }
+
+    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        agent_protocol::start_job(self, session_id, request).await
+    }
+
+    async fn poll_job(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
+    ) -> Result<JobPoll> {
+        agent_protocol::poll_job(self, session_id, job_id, since_seq).await
+    }
+
+    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()> {
+        agent_protocol::cancel_job(self, session_id, job_id).await
     }
 
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {

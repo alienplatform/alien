@@ -409,6 +409,28 @@ export interface RunCommandOptions {
   env?: Record<string, string>
 }
 
+/** How a job's command exited. */
+export interface JobExit {
+  code: number
+  truncated: boolean
+}
+
+/** Why a job ended without its command exiting. */
+export interface JobError {
+  /** Machine-readable cause, e.g. `deadlineExceeded`. */
+  code: string
+  message: string
+}
+
+/** A job's output so far, and how it ended once it has. */
+export interface JobPoll {
+  running: boolean
+  /** Output produced after the polled sequence. The ending is `exit` or `error`, never a frame. */
+  frames: CommandFrame[]
+  exit?: JobExit
+  error?: JobError
+}
+
 /**
  * An isolated environment for running untrusted code.
  *
@@ -457,6 +479,23 @@ export interface Sandbox {
     command: string[],
     options: RunCommandOptions,
   ): AsyncIterable<CommandFrame>
+  /**
+   * Starts a command as a job and resolves with its id. Requires `jobs`.
+   *
+   * For a command that outlives one call: nothing has to hold a stream open, and a caller that
+   * goes away can reach the job again by its id. A start that goes unanswered raises
+   * `SANDBOX_OUTCOME_UNKNOWN` and must not be repeated — the sandbox may have taken the command.
+   */
+  startJob(sessionId: string, command: string[], options: RunCommandOptions): Promise<string>
+  /**
+   * Reads a job's output after `sinceSeq`, and its ending once it has one. Requires `jobs`.
+   *
+   * Omit `sinceSeq` to read from the first frame; afterwards pass the highest `seq` seen, which is
+   * what makes a repeated poll return only what is new.
+   */
+  pollJob(sessionId: string, jobId: string, sinceSeq?: number): Promise<JobPoll>
+  /** Cancels a job, stopping its command. Requires `jobs`. */
+  cancelJob(sessionId: string, jobId: string): Promise<void>
   /** Reads a file out of the sandbox. Requires `files`. */
   readFile(sessionId: string, path: string): Promise<Buffer>
   /** Writes files into the sandbox. Requires `files`. */

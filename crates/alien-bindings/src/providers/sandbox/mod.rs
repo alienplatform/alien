@@ -25,6 +25,17 @@ pub mod local;
 #[cfg(feature = "aws")]
 mod refusal;
 
+#[cfg(all(
+    test,
+    feature = "aws",
+    feature = "azure",
+    feature = "gcp",
+    feature = "kubernetes",
+    feature = "local"
+))]
+#[path = "jobs_capability_tests.rs"]
+mod jobs_capability_tests;
+
 /// The longest command deadline these backends accept.
 ///
 /// A ceiling rather than a guard: a timer takes a point in time, and a duration near

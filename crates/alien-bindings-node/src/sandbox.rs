@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::traits::{
-    CommandOutput, CreateSessionRequest, RunCommandRequest, Sandbox, SandboxSession,
+    CommandOutput, CreateSessionRequest, JobPoll, RunCommandRequest, Sandbox, SandboxSession,
 };
 use futures::channel::oneshot;
 use futures::future::{select, Either, FutureExt, Shared};
@@ -99,6 +99,52 @@ fn frame_to_js(frame: CommandOutput) -> CommandFrameJs {
             exit_code: Some(code),
             truncated: Some(truncated),
         },
+    }
+}
+
+/// A job's output so far, and how it ended once it has.
+#[napi(object)]
+pub struct JobPollJs {
+    /// Whether the command is still running
+    pub running: bool,
+    /// Output produced after the polled sequence. The ending is `exit` or `error`, never a frame.
+    pub frames: Vec<CommandFrameJs>,
+    /// How the command exited, once it has
+    pub exit: Option<JobExitJs>,
+    /// Why the command ended without exiting
+    pub error: Option<JobErrorJs>,
+}
+
+/// How a job's command exited.
+#[napi(object)]
+pub struct JobExitJs {
+    /// Process exit code
+    pub code: i32,
+    /// Set when output was cut short by a bound rather than by the command finishing
+    pub truncated: bool,
+}
+
+/// Why a job ended without its command exiting.
+#[napi(object)]
+pub struct JobErrorJs {
+    /// Machine-readable cause, e.g. `deadlineExceeded`
+    pub code: String,
+    /// Human-readable detail
+    pub message: String,
+}
+
+fn poll_to_js(poll: JobPoll) -> JobPollJs {
+    JobPollJs {
+        running: poll.running,
+        frames: poll.frames.into_iter().map(frame_to_js).collect(),
+        exit: poll.exit.map(|exit| JobExitJs {
+            code: exit.code,
+            truncated: exit.truncated,
+        }),
+        error: poll.error.map(|error| JobErrorJs {
+            code: error.code,
+            message: error.message,
+        }),
     }
 }
 
@@ -213,6 +259,7 @@ impl SandboxHandle {
         let alien_core::SandboxCapabilities {
             files,
             reconnect,
+            jobs,
             preview: _,
             suspend_resume,
             snapshot: _,
@@ -228,6 +275,7 @@ impl SandboxHandle {
         [
             (files, "files"),
             (reconnect, "reconnect"),
+            (jobs, "jobs"),
             (suspend_resume, "suspendResume"),
             (domain_egress_rules, "domainEgressRules"),
             (egress_deny, "egressDeny"),
@@ -329,6 +377,79 @@ impl SandboxHandle {
             .map_err(map_alien_error)?;
 
         Ok(CommandStreamHandle::new(frames))
+    }
+
+    /// Starts a command as a job, returning the id later polls and cancels address.
+    ///
+    /// Use this rather than `runCommand` for a command that outlives one call: nothing has to
+    /// hold the stream open, and a caller that goes away can reach the job again by its id.
+    #[napi]
+    pub async fn start_job(
+        &self,
+        session_id: String,
+        command: Vec<String>,
+        deadline_ms: u32,
+        working_directory: Option<String>,
+        env: Option<std::collections::HashMap<String, String>>,
+    ) -> napi::Result<String> {
+        let sandbox = self.inner.clone();
+        let started = sandbox
+            .start_job(
+                &session_id,
+                RunCommandRequest {
+                    command,
+                    working_directory,
+                    env: into_env(env),
+                    deadline: Duration::from_millis(u64::from(deadline_ms)),
+                },
+            )
+            .await
+            .map_err(map_alien_error)?;
+
+        Ok(started.job_id)
+    }
+
+    /// Reads a job's output after `sinceSeq`, and its ending once it has one.
+    ///
+    /// Omit `sinceSeq` to read from the first frame; afterwards pass the highest `seq` seen, which
+    /// is what makes a repeated poll return only what is new.
+    #[napi]
+    pub async fn poll_job(
+        &self,
+        session_id: String,
+        job_id: String,
+        since_seq: Option<i64>,
+    ) -> napi::Result<JobPollJs> {
+        let since_seq = match since_seq {
+            Some(seq) => Some(u64::try_from(seq).map_err(|_| {
+                map_alien_error(alien_error::AlienError::new(
+                    alien_bindings::error::ErrorData::InvalidInput {
+                        operation_context: "sandbox.pollJob".to_string(),
+                        details: "sinceSeq is a frame sequence and cannot be negative".to_string(),
+                        field_name: Some("sinceSeq".to_string()),
+                    },
+                ))
+            })?),
+            None => None,
+        };
+
+        let sandbox = self.inner.clone();
+        let poll = sandbox
+            .poll_job(&session_id, &job_id, since_seq)
+            .await
+            .map_err(map_alien_error)?;
+
+        Ok(poll_to_js(poll))
+    }
+
+    /// Cancels a job, stopping its command.
+    #[napi]
+    pub async fn cancel_job(&self, session_id: String, job_id: String) -> napi::Result<()> {
+        let sandbox = self.inner.clone();
+        sandbox
+            .cancel_job(&session_id, &job_id)
+            .await
+            .map_err(map_alien_error)
     }
 
     /// Reads a file out of the sandbox.
