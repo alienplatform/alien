@@ -693,7 +693,16 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
         _ => format!("${{local.resource_prefix}}-{resource_id}"),
     };
     scope
+        // Sandbox templates carry the prefix separately; storage templates include it in
+        // resourceName. Resolve the pair first so the document matches the installed grant.
+        .replace("${stackPrefix}-${resourceName}", &resource_name)
         .replace("${resourceName}", &resource_name)
+        .replace("${stackPrefix}", "${local.resource_prefix}")
+        .replace("${awsRegion}", "${data.aws_region.current.region}")
+        .replace(
+            "${awsAccountId}",
+            "${data.aws_caller_identity.current.account_id}",
+        )
         .replace("${projectName}", "${var.gcp_project}")
         .replace("${subscriptionId}", "${var.azure_subscription_id}")
         .replace("${resourceGroup}", "${var.azure_resource_group_name}")
