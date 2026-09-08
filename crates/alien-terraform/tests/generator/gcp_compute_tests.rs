@@ -7,8 +7,9 @@
 
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
-    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, Platform, Queue,
-    ResourceLifecycle, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
+    ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, GcpAgentPlatformEngine,
+    Platform, Queue, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress,
+    SandboxSessionPolicy, ServiceAccount, Stack, StackSettings, Storage, Worker, WorkerCode,
     WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
@@ -173,4 +174,107 @@ fn gcp_container_cluster_without_platform_extension_errors_cleanly() {
         }
         other => panic!("expected ImportRegistrationMissing, got {other:?}"),
     }
+}
+
+/// The stack the `GcpAgentPlatformEngineMutation` produces: one engine per sandbox, carrying the
+/// sandbox's lifecycle, with the sandbox depending on it.
+fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
+    Stack::new("acme-sbx".to_string())
+        .add(
+            GcpAgentPlatformEngine::new("agents-engine".to_string()).build(),
+            lifecycle,
+        )
+        .add_with_dependencies(
+            Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "python:3.12".to_string(),
+                })
+                .egress(SandboxEgress::Deny)
+                .session(SandboxSessionPolicy {
+                    max_lifetime_seconds: None,
+                    idle_suspend_seconds: None,
+                })
+                .build(),
+            lifecycle,
+            vec![ResourceRef::new(
+                GcpAgentPlatformEngine::RESOURCE_TYPE,
+                "agents-engine".to_string(),
+            )],
+        )
+        .build()
+}
+
+/// A Frozen sandbox's engine is created by the stack the customer applies, because a resource-level
+/// IAM binding cannot name an engine that does not exist yet. `terraform validate` is what proves
+/// the `google-beta` provider was declared *and* configured: the type resolves nowhere else, and a
+/// `required_providers` entry without a `provider` block fails at plan rather than at emit.
+#[test]
+fn a_frozen_gcp_sandbox_gets_a_setup_owned_reasoning_engine() {
+    let module = render(
+        &gcp_sandbox_stack(ResourceLifecycle::Frozen),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+
+    let engine_tf = module
+        .get("agents_engine.tf")
+        .expect("the engine renders into its own file");
+    // HCL pads `=` to align an attribute with its siblings, so assertions compare on collapsed
+    // whitespace rather than the rendered columns.
+    let engine_tf = engine_tf.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        engine_tf.contains("resource \"google_vertex_ai_reasoning_engine\" \"agents_engine\""),
+        "{engine_tf}"
+    );
+    assert!(engine_tf.contains("provider = google-beta"), "{engine_tf}");
+
+    // The registered id is read off the created engine. Registering a derived name instead would
+    // hand the controller an engine that does not exist, and every session under it would 404.
+    let locals = module
+        .get("locals.tf")
+        .expect("locals render")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    assert!(
+        locals.contains("engineId = google_vertex_ai_reasoning_engine.agents_engine.name"),
+        "{locals}"
+    );
+    // The sandbox registers no engine or template path of its own. A derived one would be a name
+    // nothing created: the engine's is server-assigned and the template is built after apply.
+    assert!(
+        !locals.contains("reasoningEngines"),
+        "no path is derived from the setup label:\n{locals}"
+    );
+
+    assert_terraform_valid(&module, "gcp frozen sandbox engine");
+    snapshot_module("gcp_frozen_sandbox_engine", &module);
+}
+
+/// A Live engine belongs to its controller. Setup rendering one would create a second engine the
+/// controller never learns about, and `terraform destroy` would then take the parent of sessions
+/// that controller still believes it owns.
+#[test]
+fn a_live_gcp_sandbox_gets_no_engine_and_no_google_beta_provider() {
+    let module = render(
+        &gcp_sandbox_stack(ResourceLifecycle::Live),
+        TerraformTarget::Gcp,
+        StackSettings::default(),
+    );
+
+    let rendered = module
+        .iter()
+        .map(|(_, contents)| contents.to_string())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !rendered.contains("google_vertex_ai_reasoning_engine"),
+        "setup renders nothing for a controller-owned engine:\n{rendered}"
+    );
+    assert!(
+        !rendered.contains("google-beta"),
+        "a stack with no beta resource declares no beta provider:\n{rendered}"
+    );
+
+    assert_terraform_valid(&module, "gcp live sandbox engine");
 }

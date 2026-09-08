@@ -9,9 +9,10 @@
 use super::helpers::{assert_terraform_valid, gate_input, render, snapshot_module};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
-    AzureStorageAccount, Key, Kv, Network, NetworkSettings, PermissionProfile, Platform, Queue,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy,
-    ServiceAccount, Stack, StackBuilder, StackSettings, Storage, Vault, Worker, WorkerCode,
+    AzureStorageAccount, GcpAgentPlatformEngine, Key, Kv, Network, NetworkSettings,
+    PermissionProfile, Platform, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
+    SandboxLimits, SandboxSessionPolicy, ServiceAccount, Stack, StackBuilder, StackSettings,
+    Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
 
@@ -111,6 +112,13 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<(Stack, Stac
                 ResourceLifecycle::Frozen,
                 "fixtureEnabled",
             ),
+        // The engine belongs to exactly one sandbox and carries that sandbox's gate; on its own
+        // it needs nothing else in the stack.
+        "gcp_agent_platform_engine" => base().add_enabled_when(
+            GcpAgentPlatformEngine::new("fixture".to_string()).build(),
+            ResourceLifecycle::Frozen,
+            "fixtureEnabled",
+        ),
         _ => return None,
     };
     let settings = StackSettings {

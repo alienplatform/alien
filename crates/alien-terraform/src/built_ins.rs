@@ -6,9 +6,9 @@
 use crate::registry::TfRegistry;
 use alien_core::{
     Ai, ArtifactRegistry, AzureContainerAppsEnvironment, AzureResourceGroup,
-    AzureServiceBusNamespace, AzureStorageAccount, Build, Key, KubernetesCluster, Kv, Network,
-    Platform, Queue, RemoteBindings, RemoteStackManagement, Sandbox, ServiceAccount,
-    ServiceActivation, Storage, Vault, Worker,
+    AzureServiceBusNamespace, AzureStorageAccount, Build, GcpAgentPlatformEngine, Key,
+    KubernetesCluster, Kv, Network, Platform, Queue, RemoteBindings, RemoteStackManagement,
+    Sandbox, ServiceAccount, ServiceActivation, Storage, Vault, Worker,
 };
 
 pub(crate) fn register_all(registry: &mut TfRegistry) {
@@ -93,6 +93,11 @@ fn register_gcp(registry: &mut TfRegistry) {
         Sandbox::RESOURCE_TYPE,
         p,
         gcp::GcpAgentPlatformSandboxEmitter,
+    );
+    registry.register(
+        GcpAgentPlatformEngine::RESOURCE_TYPE,
+        p,
+        gcp::GcpAgentPlatformEngineEmitter,
     );
     registry.register(
         ServiceActivation::RESOURCE_TYPE,

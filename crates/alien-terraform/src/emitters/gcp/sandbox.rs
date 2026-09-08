@@ -1,7 +1,8 @@
 //! GCP Agent Platform sandbox emitter.
 //!
-//! Emits the Agent Platform sandbox binding — the engine and template resource-name shapes the runtime provider reads
-//! — and refuses domain-scoped egress, which the single internet-access switch cannot express.
+//! The sandbox is the release-owned environment template, which the runtime controller creates
+//! under its engine, so setup emits no resource for it. It refuses domain-scoped egress here
+//! rather than at apply, because the single internet-access switch cannot express a hostname list.
 
 use crate::{
     emitter::{TfEmitter, TfFragment},
@@ -34,12 +35,12 @@ fn refuse_domain_egress(sandbox: &Sandbox) -> Result<()> {
     }))
 }
 
-/// The engine, template, region and ttl fields shared by the import ref and the binding ref.
+/// The engine, template, region and ttl fields a linked worker's environment reads.
 ///
-/// `engine` and `template` carry runtime-assigned ids addressed by a resource-name convention over
-/// the setup label rather than a Terraform resource attribute; the Live path takes the real names
-/// from the controller's binding params. `sessionTtlSeconds` is present only when the declaration
-/// set a lifetime, matching the binding's `skip_serializing_if`.
+/// `engine` and `template` are derived from the setup label rather than read off a resource: the
+/// template is created by the controller after apply and has no Terraform address to reference.
+/// `sessionTtlSeconds` is present only when the declaration set a lifetime, matching the binding's
+/// `skip_serializing_if`.
 fn agent_platform_fields(sandbox: &Sandbox, label: &str) -> Vec<(&'static str, Expression)> {
     let mut fields = vec![
         (
@@ -65,27 +66,23 @@ fn agent_platform_fields(sandbox: &Sandbox, label: &str) -> Vec<(&'static str, E
     fields
 }
 
-/// Emits the GCP Agent Platform sandbox binding: the durable Agent Engine, the release-owned
-/// template, the region and the session ttl.
-///
-/// The engine is a Live resource with its own controller and no Terraform analogue — Vertex
-/// exposes no `google_…reasoning_engine` — so `emit` is empty as in `gcp/ai.rs` and identity
-/// travels in the binding, not a resource block.
+/// Emits the GCP Agent Platform sandbox: nothing of its own, plus the region its registration
+/// records and the binding a linked worker reads.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GcpAgentPlatformSandboxEmitter;
 
 impl TfEmitter for GcpAgentPlatformSandboxEmitter {
     fn emit(&self, _ctx: &EmitContext<'_>) -> Result<TfFragment> {
-        // The engine and template are created by Live controllers after apply and carry
-        // runtime-assigned names, so neither is a Terraform resource block.
+        // The environment template is release-owned: a new image replaces it, so it belongs to the
+        // controller under either lifecycle. Only its engine is ever a setup resource.
         Ok(TfFragment::default())
     }
 
     fn emit_import_ref(&self, ctx: &EmitContext<'_>) -> Result<Expression> {
-        let label = required_label(ctx)?;
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         refuse_domain_egress(sandbox)?;
-        Ok(expr::object(agent_platform_fields(sandbox, label)))
+        // The engine id is not here: it is server-assigned, and the engine registers its own.
+        Ok(expr::object([("region", expr::raw("var.gcp_region"))]))
     }
 
     fn emit_binding_ref(&self, ctx: &EmitContext<'_>) -> Result<Option<Expression>> {
