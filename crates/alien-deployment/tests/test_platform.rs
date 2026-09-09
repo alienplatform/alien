@@ -660,7 +660,7 @@ async fn health_failure_recovers_through_observation_without_retry_or_reprovisio
 }
 
 #[tokio::test]
-async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
+async fn persistent_worker_failure_surfaces_during_provisioning() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
     // Create a function configured to fail persistently

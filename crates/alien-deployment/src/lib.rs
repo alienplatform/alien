@@ -296,14 +296,7 @@ pub async fn step(
             }
         }
         DeploymentStatus::RefreshFailed => {
-            running::handle_refresh_failed(
-                current,
-                require_target_stack()?,
-                config,
-                client_config,
-                service_provider,
-            )
-            .await?
+            running::handle_refresh_failed(current, config, client_config, service_provider).await?
         }
         DeploymentStatus::Deleted => {
             debug!("Deployment is deleted, no action");

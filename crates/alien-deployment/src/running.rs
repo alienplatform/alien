@@ -1,7 +1,6 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::Stack;
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::info;
@@ -133,7 +132,6 @@ pub async fn handle_running(
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_refresh_failed(
     current: DeploymentState,
-    _target_stack: Stack,
     config: DeploymentConfig,
     client_config: alien_core::ClientConfig,
     service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
