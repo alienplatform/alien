@@ -12,5 +12,6 @@ pub mod sandbox;
 pub mod service_account;
 pub mod sse;
 pub mod storage;
+pub mod storage_cleanup;
 pub mod vault;
 pub mod wait_until;

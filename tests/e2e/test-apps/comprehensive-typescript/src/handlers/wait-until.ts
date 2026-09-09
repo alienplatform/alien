@@ -6,14 +6,14 @@ const app = new Hono()
 
 app.post("/wait-until-test", async c => {
   const { storageBindingName, testData, delayMs } = await c.req.json()
-  const testId = `test-${Date.now()}`
+  const testId = crypto.randomUUID()
 
   waitUntil(
     (async () => {
       await new Promise(resolve => setTimeout(resolve, delayMs || 1000))
       const s = storage(storageBindingName || "alien-storage")
       await s.put(
-        `wait-until-${testId}.txt`,
+        `wait_until_test_${testId}.txt`,
         new TextEncoder().encode(testData || "background-task-done"),
       )
     })(),
@@ -29,7 +29,7 @@ app.get("/wait-until-verify/:testId/:storageBindingName", async c => {
     const s = storage(storageBindingName)
     // Storage has no `exists`; a missing object surfaces as a thrown NotFound
     // from `get`, which the catch below maps to "not completed yet".
-    const result = await s.get(`wait-until-${testId}.txt`)
+    const result = await s.get(`wait_until_test_${testId}.txt`)
     const fileContent = new TextDecoder().decode(result.data)
     return c.json({
       success: true,
