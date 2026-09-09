@@ -4,9 +4,9 @@ use alien_bindings::{BindingsProvider, BindingsProviderApi};
 use alien_core::{
     AwsEnvironmentInfo, AzureEnvironmentInfo, ClientConfig, ComputeKind, DeploymentConfig,
     EnvironmentInfo, EnvironmentVariable, EnvironmentVariableType, EnvironmentVariablesSnapshot,
-    GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceStatus, SecretDelivery,
-    Stack, StackState, TestEnvironmentInfo, Vault, Worker, ENV_ALIEN_COMMANDS_TOKEN,
-    ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
+    GcpEnvironmentInfo, LocalEnvironmentInfo, OtlpConfig, Platform, ResourceLifecycle,
+    ResourceStatus, SecretDelivery, Stack, StackState, TestEnvironmentInfo, Vault, Worker,
+    ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_SECRETS,
 };
 use alien_error::{AlienError, Context, IntoAlienError as _};
 use alien_gcp_clients::{ResourceManagerApi, ResourceManagerClient};
@@ -851,9 +851,11 @@ fn secrets_sync_hash(desired_secrets: &BTreeMap<String, String>) -> String {
 /// # Arguments
 /// * `stack_state` - The stack state to modify (mutable)
 /// * `failed_resources` - The resources that actually failed (used to build the error message)
+/// * `lifecycle` - Limit interruption to the resources owned by the failing phase, if specified
 pub fn interrupt_in_progress_resources(
     stack_state: &mut StackState,
     failed_resources: &[(&str, &str)], // (resource_id, resource_type)
+    lifecycle: Option<ResourceLifecycle>,
 ) {
     // Pick the first real failure to reference in the interrupted error message.
     // If there are no failures yet (shouldn't happen), fall back to a generic message.
@@ -869,6 +871,9 @@ pub fn interrupt_in_progress_resources(
     .into_generic();
 
     for resource_state in stack_state.resources.values_mut() {
+        if lifecycle.is_some() && resource_state.lifecycle != lifecycle {
+            continue;
+        }
         let interrupted_status = match resource_state.status {
             // Already terminal — don't touch it.
             ResourceStatus::Running

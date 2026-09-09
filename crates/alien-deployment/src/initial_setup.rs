@@ -5,7 +5,7 @@ use alien_core::{
     InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::StackExecutor;
+use alien_infra::{StackExecutor, StackStateExt};
 use tracing::{debug, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -102,6 +102,8 @@ pub async fn handle_initial_setup(
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .step_running_resources(false)
+        // Resumed setup may contain unfinished Live work; only runtime may advance it.
+        .step_out_of_scope_resources(false)
         .build()
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to create stack executor for initial setup".to_string(),
@@ -188,7 +190,11 @@ pub async fn handle_initial_setup(
             .map(|(id, t)| (id.as_str(), t.as_str()))
             .collect();
 
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
+        crate::helpers::interrupt_in_progress_resources(
+            &mut next_state,
+            &failed_refs,
+            Some(ResourceLifecycle::Frozen),
+        );
 
         let mut next = current_cloned;
         next.status = DeploymentStatus::InitialSetupFailed;
@@ -272,7 +278,7 @@ fn non_running_resources_for_lifecycle(stack: &Stack, stack_state: &StackState) 
 ///
 /// This step:
 /// 1. Checks if retry_requested flag is set
-/// 2. Calls retry_failed() on stack state to recover failed resources
+/// 2. Retries failed Frozen resources without changing Live runtime state
 /// 3. Transitions back to InitialSetup status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_initial_setup_failed(
@@ -308,9 +314,8 @@ pub async fn handle_initial_setup_failed(
     })?;
 
     // Retry failed resources using alien-infra
-    use alien_infra::state_utils::StackStateExt;
     let retried = stack_state
-        .retry_failed()
+        .retry_failed_with_lifecycle_filter(&[ResourceLifecycle::Frozen])
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to retry failed resources".to_string(),
         })?;
@@ -330,4 +335,216 @@ pub async fn handle_initial_setup_failed(
         heartbeats: vec![],
         observed_inventory_batches: vec![],
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::{
+        ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, StackSettings,
+        Storage,
+    };
+    use alien_infra::{DefaultPlatformServiceProvider, StackResourceStateExt};
+    use std::sync::Arc;
+
+    fn config() -> DeploymentConfig {
+        DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build()
+    }
+
+    async fn setup_with_unfinished_live(status: ResourceStatus) -> DeploymentState {
+        let live = Storage::new("live".to_string()).build();
+        let stack = Stack::new("test".to_string())
+            .add(live.clone(), ResourceLifecycle::Live)
+            .build();
+        let config = config();
+        let executor = StackExecutor::builder(&stack, ClientConfig::Test)
+            .deployment_config(&config)
+            .build()
+            .unwrap();
+        let mut state = executor
+            .step(StackState::new(Platform::Test))
+            .await
+            .unwrap()
+            .next_state;
+        assert_eq!(state.resources["live"].status, ResourceStatus::Provisioning);
+        if status != ResourceStatus::Provisioning {
+            for _ in 0..4 {
+                state = executor.step(state).await.unwrap().next_state;
+            }
+            assert_eq!(state.resources["live"].status, ResourceStatus::Running);
+            let resource = state.resources.get_mut("live").unwrap();
+            let mut controller = resource.get_internal_controller().unwrap().unwrap();
+            match status {
+                ResourceStatus::Updating => controller.transition_to_update().unwrap(),
+                ResourceStatus::Deleting => controller.transition_to_delete_start().unwrap(),
+                _ => panic!("unsupported fixture status"),
+            }
+            resource.status = controller.get_status();
+            resource.set_internal_controller(Some(controller)).unwrap();
+        }
+        assert_eq!(state.resources["live"].status, status);
+        let mut target = Stack::new("test".to_string())
+            .add(
+                Storage::new("frozen".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        if status != ResourceStatus::Deleting {
+            target
+                .resources
+                .insert("live".to_string(), stack.resources["live"].clone());
+        }
+        DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(state),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(target),
+                initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }),
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_preserves_unfinished_live_work_until_runtime_handoff() {
+        for status in [
+            ResourceStatus::Provisioning,
+            ResourceStatus::Updating,
+            ResourceStatus::Deleting,
+        ] {
+            let mut state = setup_with_unfinished_live(status).await;
+            let before =
+                serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["live"])
+                    .unwrap();
+            for _ in 0..8 {
+                if state.status == DeploymentStatus::Provisioning {
+                    break;
+                }
+                state = handle_initial_setup(
+                    state,
+                    config(),
+                    ClientConfig::Test,
+                    Arc::new(DefaultPlatformServiceProvider::default()),
+                )
+                .await
+                .unwrap()
+                .state;
+                assert_eq!(
+                    serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["live"])
+                        .unwrap(),
+                    before,
+                    "setup advanced {status:?} Live work"
+                );
+            }
+            assert_eq!(state.status, DeploymentStatus::Provisioning);
+            assert_eq!(
+                state.stack_state.as_ref().unwrap().resources["frozen"].status,
+                ResourceStatus::Running
+            );
+            let after = crate::provisioning::handle_provisioning(
+                state,
+                config(),
+                ClientConfig::Test,
+                Arc::new(DefaultPlatformServiceProvider::default()),
+            )
+            .await
+            .unwrap()
+            .state;
+            assert_ne!(
+                serde_json::to_value(&after.stack_state.as_ref().unwrap().resources["live"])
+                    .unwrap(),
+                before,
+                "runtime did not resume {status:?} Live work"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn setup_failure_and_retry_preserve_live_resource_state() {
+        let mut state = setup_with_unfinished_live(ResourceStatus::Provisioning).await;
+        let target = state
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .clone()
+            .unwrap();
+        let mut frozen = alien_core::StackResourceState::new_pending(
+            "storage".to_string(),
+            target.resources["frozen"].config.clone(),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        frozen.status = ResourceStatus::ProvisionFailed;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("frozen".to_string(), frozen);
+        let before =
+            serde_json::to_value(&state.stack_state.as_ref().unwrap().resources["live"]).unwrap();
+        let mut failed = handle_initial_setup(
+            state,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(failed.status, DeploymentStatus::InitialSetupFailed);
+        assert_eq!(
+            serde_json::to_value(&failed.stack_state.as_ref().unwrap().resources["live"]).unwrap(),
+            before
+        );
+
+        // An unrelated runtime failure must retain its controller checkpoint and error through setup retry.
+        let live = failed
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("live")
+            .unwrap();
+        live.last_failed_state = live.internal_state.clone();
+        live.status = ResourceStatus::ProvisionFailed;
+        let before_retry = serde_json::to_value(&*live).unwrap();
+        failed.retry_requested = true;
+        let retried = handle_initial_setup_failed(
+            failed,
+            target,
+            config(),
+            ClientConfig::Test,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(retried.status, DeploymentStatus::InitialSetup);
+        assert_eq!(
+            retried.stack_state.as_ref().unwrap().resources["frozen"].status,
+            ResourceStatus::Pending
+        );
+        assert_eq!(
+            serde_json::to_value(&retried.stack_state.as_ref().unwrap().resources["live"]).unwrap(),
+            before_retry
+        );
+    }
 }
