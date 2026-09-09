@@ -500,6 +500,27 @@ mod tests {
         assert!(validate_push_environment_identity(&azure, &wrong_azure).is_err());
     }
 
+    #[tokio::test]
+    async fn setup_update_never_initializes_an_untracked_deployment() {
+        let name = format!("missing-setup-{}", uuid::Uuid::new_v4());
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--setup-update",
+            "--platform",
+            "local",
+            "--name",
+            &name,
+            "--token",
+            "test-setup-token",
+            "--manager-url",
+            "http://127.0.0.1:1",
+        ]);
+        let error = up_command(args, None)
+            .await
+            .expect_err("untracked update must fail before contacting a manager");
+        assert!(error.to_string().contains("No tracked deployment named"));
+    }
+
     #[test]
     fn failed_setup_states_are_prepared_before_retrying() {
         for status in [
@@ -1450,6 +1471,44 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     })?;
     let print_progress = should_print_deploy_progress(platform);
     let base_platform = parse_base_platform(platform, base_platform_str.as_deref())?;
+    if args.setup_update {
+        // An update must address an installed identity. Never initialize a new
+        // deployment or resolve today's default manager for this command.
+        let tracker = DeploymentTracker::new()?;
+        let tracked = tracker.get(&name).ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: format!("No tracked deployment named '{name}'. Run --setup-update from the original installation directory with its setup token."),
+            })
+        })?;
+        if platform.as_str() != tracked.platform {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: "A setup update must use the tracked deployment's original platform."
+                    .to_string(),
+            }));
+        }
+        output::info("Updating setup for the existing deployment...");
+        let manager_url = resolved
+            .manager_url
+            .as_deref()
+            .unwrap_or(&tracked.manager_url);
+        let setup_client = create_manager_client(&token, manager_url)?;
+        run_push_model(
+            &setup_client,
+            &tracked.deployment_id,
+            platform,
+            base_platform,
+            manager_url,
+            &tracked.token,
+            None,
+            &args.network,
+            None,
+            embedded_config.and_then(|config| config.setup_revision.as_deref()),
+        )
+        .await?;
+        output::success("Setup applied. The existing runtime will continue the requested update.");
+        return Ok(());
+    }
     let public_endpoints = load_public_endpoints(&args, platform, deploy_config.as_ref())?;
     let deployer_inputs = match fetch_deployment_info(
         &resolved.base_url,
@@ -1637,15 +1696,14 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .await?;
         }
     }
-    if args.setup_update
-        || (init.deployment_model == DeploymentModel::Push
-            && hosted_platform
-            && requires_install_context(platform)
-            && hosted_setup_reconcile_required(
-                &current_deployment.status,
-                setup_revision,
-                applied_setup_revision.as_deref(),
-            ))
+    if init.deployment_model == DeploymentModel::Push
+        && hosted_platform
+        && requires_install_context(platform)
+        && hosted_setup_reconcile_required(
+            &current_deployment.status,
+            setup_revision,
+            applied_setup_revision.as_deref(),
+        )
     {
         output::info("Refreshing setup-owned infrastructure for this CLI revision...");
         // Keep setup authority on the client; the separate deployment token
@@ -1664,12 +1722,6 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             setup_revision,
         )
         .await?;
-        if args.setup_update {
-            output::success(
-                "Setup applied. The existing runtime will continue the requested update.",
-            );
-            return Ok(());
-        }
         current_deployment = client
             .get_deployment()
             .id(&deployment_id)
@@ -4313,6 +4365,11 @@ pub async fn push_initial_setup(
                 .context(ErrorData::DeploymentFailed {
                     operation: "target environment-info collection".to_string(),
                 })?;
+        if deployment.current_release_id.is_some() {
+            if let Some(existing) = state.environment_info.as_ref() {
+                validate_push_environment_identity(existing, &env_info)?;
+            }
+        }
         state.environment_info = Some(env_info);
     } else {
         state.environment_info = None;
@@ -4415,7 +4472,9 @@ pub async fn push_initial_setup(
 
             config.manager_url = Some(manager_base_url.to_string());
             config.deployment_token = Some(deployment_token.to_string());
-            config.management_config = setup_management_config.clone();
+            if let Some(management_config) = &setup_management_config {
+                config.management_config = Some(management_config.clone());
+            }
             config.base_platform = base_platform.or(config.base_platform);
             let acquired_stack_settings = config.stack_settings.clone();
             apply_external_bindings_from_stack_settings(&mut config, &acquired_stack_settings);
