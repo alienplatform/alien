@@ -326,6 +326,8 @@ export {
   ComputeCapacityRecommendationSchema,
   ComputeClusterHeartbeatDataSchema,
   ComputeClusterHeartbeatStatusSchema,
+  ComputePoolSelectionSchema,
+  ComputeSettingsSchema,
   ComputeTypeSchema,
   ContainerHeartbeatDataSchema,
   CreateCommandRequestSchema,
@@ -443,8 +445,6 @@ export {
   // Stack resource state types
   StackResourceStateSchema,
   StackSettingsSchema,
-  ComputePoolSelectionSchema,
-  ComputeSettingsSchema,
   StackStateSchema,
   StorageEventSchema,
   StorageEventsSchema,
