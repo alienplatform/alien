@@ -609,6 +609,57 @@ async fn test_running_updates_heartbeat_when_healthy() {
 }
 
 #[tokio::test]
+async fn health_failure_recovers_through_observation_without_retry_or_reprovisioning() {
+    let mut stack = create_test_stack("health-stack", "health-worker");
+    let worker = Worker::new("health-worker".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .environment(HashMap::from([
+            (
+                "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".to_string(),
+                "true".to_string(),
+            ),
+        ]))
+        .build();
+    stack.resources.get_mut("health-worker").unwrap().config = alien_core::Resource::new(worker);
+    let config = create_test_config("health", false);
+    let state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    assert_eq!(state.status, DeploymentStatus::Running);
+    let release = state.current_release.clone();
+    let failed = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(failed.state.status, DeploymentStatus::RefreshFailed);
+    assert!(!failed.state.retry_requested);
+    let recovered = alien_deployment::step(failed.state, config, ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(recovered.state.status, DeploymentStatus::Running);
+    assert!(recovered.update_heartbeat);
+    assert!(!recovered.state.retry_requested);
+    assert_eq!(recovered.state.current_release, release);
+    let worker = &recovered.state.stack_state.as_ref().unwrap().resources["health-worker"];
+    let outputs = worker
+        .outputs
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<alien_core::WorkerOutputs>()
+        .unwrap();
+    // The second observation proves the existing controller survived; recreating
+    // it would reset the observation counter and repeat the first failure.
+    assert_eq!(
+        outputs.public_endpoints["default"].url,
+        "https://observed-2.test"
+    );
+}
+
+#[tokio::test]
 async fn test_running_transitions_to_refresh_failed_on_health_check_failure() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 

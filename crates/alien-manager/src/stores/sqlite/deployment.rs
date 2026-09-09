@@ -90,6 +90,10 @@ impl SqliteDeploymentStore {
                     Self::WORK_STATUSES.contains(status)
                         || Self::SETUP_TEARDOWN_STATUSES.contains(status)
                         || *status == Self::RUNNING_STATUS
+                        // The heartbeat loop requests Running alongside RefreshFailed.
+                        // Work-only acquisition must still require an explicit retry.
+                        || (*status == "refresh-failed"
+                            && statuses.iter().any(|status| status == Self::RUNNING_STATUS))
                 })
                 .collect();
             let requested_failed: Vec<&str> = statuses
