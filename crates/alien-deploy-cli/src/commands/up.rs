@@ -1477,7 +1477,7 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
         let tracker = DeploymentTracker::new()?;
         let tracked = tracker.get(&name).ok_or_else(|| {
             AlienError::new(ErrorData::ConfigurationError {
-                message: format!("No tracked deployment named '{name}'. Run --setup-update from the original installation directory with its setup token."),
+                message: format!("No tracked deployment named '{name}'. Use the machine and user account that originally tracked this deployment, and supply its setup token."),
             })
         })?;
         if platform.as_str() != tracked.platform {
