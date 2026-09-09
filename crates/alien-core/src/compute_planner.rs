@@ -171,18 +171,6 @@ fn collect_workload_groups(stack: &Stack) -> Result<HashMap<String, PlannedGroup
             },
         );
     }
-    if planned.is_empty() {
-        let requirements = default_requirements();
-        planned.insert(
-            "general".to_string(),
-            PlannedGroup {
-                workloads: Vec::new(),
-                scale: CapacityGroupScalePolicy::from_selected_bounds(1, 1),
-                requirements,
-                requires_failure_domain: false,
-            },
-        );
-    }
     Ok(planned)
 }
 
@@ -720,7 +708,7 @@ mod tests {
     use crate::{
         instance_catalog::Architecture, CapacityGroup, CapacityGroupScalePolicy,
         ComputeChoiceRange, ComputeCluster, ComputeSettings, ContainerCode, DaemonCode, Resource,
-        ResourceEntry, ResourceLifecycle, Stack,
+        ResourceEntry, ResourceLifecycle, Stack, Storage, Worker, WorkerCode,
     };
 
     fn stack_with_container() -> Stack {
@@ -756,6 +744,85 @@ mod tests {
             supported_platforms: None,
             inputs: vec![],
         }
+    }
+
+    #[test]
+    fn serverless_workers_and_storage_do_not_allocate_machine_pools() {
+        let mut stack = stack_with_container();
+        stack.resources.clear();
+        for (id, resource) in [
+            (
+                "api",
+                Resource::new(
+                    Worker::new("api".to_string())
+                        .code(WorkerCode::Image {
+                            image: "example/worker:v1".to_string(),
+                        })
+                        .permissions("execution".to_string())
+                        .build(),
+                ),
+            ),
+            (
+                "data",
+                Resource::new(Storage::new("data".to_string()).build()),
+            ),
+        ] {
+            stack.resources.insert(
+                id.to_string(),
+                ResourceEntry {
+                    config: resource,
+                    lifecycle: ResourceLifecycle::Frozen,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+        }
+
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let plan = plan_compute(&stack, platform, None).expect("plan should build");
+            assert!(plan.pools.is_empty(), "serverless plan allocated {plan:?}");
+        }
+    }
+
+    #[test]
+    fn empty_stack_does_not_allocate_machine_pools() {
+        let mut stack = stack_with_container();
+        stack.resources.clear();
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        assert!(plan.pools.is_empty());
+    }
+
+    #[test]
+    fn explicit_cluster_without_workloads_only_plans_declared_pools() {
+        let mut stack = stack_with_container();
+        stack.resources.clear();
+        let cluster = ComputeCluster::new("compute".to_string())
+            .capacity_group(CapacityGroup {
+                group_id: "batch".to_string(),
+                instance_type: Some("t4g.medium".to_string()),
+                profile: None,
+                min_size: 1,
+                max_size: 1,
+                scale_policy: None,
+                nested_virtualization: None,
+            })
+            .build();
+        stack.resources.insert(
+            "compute".to_string(),
+            ResourceEntry {
+                config: Resource::new(cluster),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+
+        let plan = plan_compute(&stack, Platform::Aws, None).expect("plan should build");
+        assert_eq!(plan.pools.len(), 1);
+        assert_eq!(plan.pools[0].pool_id, "batch");
+        assert!(plan.pools[0].errors.is_empty());
     }
 
     #[test]
