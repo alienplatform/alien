@@ -269,8 +269,10 @@ impl Build for LocalBuild {
         cmd.arg(&script_path)
             .current_dir(&build_dir)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+            // This detached backend has no output consumer or log retrieval API. Discard
+            // output instead of filling unread pipes or accumulating unbounded log files.
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
         // Merge build config environment with binding environment variables
         // Build config environment takes precedence over binding environment
@@ -432,6 +434,30 @@ mod tests {
         let status = settled_status(&local_build, &execution.id).await;
         assert_eq!(status.status, BuildStatus::Succeeded);
         assert!(status.end_time.is_some());
+    }
+
+    #[tokio::test]
+    async fn verbose_build_completes_without_blocking_on_output() {
+        let temp_dir = TempDir::new().unwrap();
+        let local_build =
+            LocalBuild::new_from_path("test-build".to_string(), temp_dir.path().to_path_buf());
+        let config = BuildConfig {
+            image: "unused".to_string(),
+            // Each stream exceeds pipe capacity. The marker proves the script ran past both
+            // writes, rather than relying on the backend's current PID-based success check.
+            script: "printf '%1048576s' x; printf '%1048576s' y >&2; printf done > completed"
+                .to_string(),
+            environment: HashMap::new(),
+            timeout_seconds: 30,
+            compute_type: alien_core::ComputeType::Small,
+            monitoring: None,
+        };
+
+        let execution = local_build.start_build(config).await.unwrap();
+        settled_status(&local_build, &execution.id).await;
+        let (uuid, _, _) = LocalBuild::decode_build_id(&execution.id).unwrap();
+        let build_dir = temp_dir.path().join("builds").join(uuid);
+        assert_eq!(std::fs::read(build_dir.join("completed")).unwrap(), b"done");
     }
 
     #[tokio::test]
