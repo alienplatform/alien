@@ -525,6 +525,7 @@ mod tests {
     fn failed_setup_states_are_prepared_before_retrying() {
         for status in [
             DeploymentStatus::UpdatePending,
+            DeploymentStatus::ProvisioningFailed,
             DeploymentStatus::Running,
             DeploymentStatus::UpdateFailed,
             DeploymentStatus::RefreshFailed,
@@ -4686,6 +4687,7 @@ fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
     matches!(
         status,
         DeploymentStatus::Running
+            | DeploymentStatus::ProvisioningFailed
             | DeploymentStatus::UpdatePending
             | DeploymentStatus::UpdateFailed
             | DeploymentStatus::RefreshFailed
