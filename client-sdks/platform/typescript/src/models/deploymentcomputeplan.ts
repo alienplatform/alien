@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { remap as remap$ } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
@@ -60,34 +61,150 @@ export type ScaleFixed = {
 
 export type Scale = ScaleFixed | ScaleAutoscale;
 
-export type SelectedAutoscale = {
-  mode: "autoscale";
-  min: number;
-  max: number;
-  machine?: string | undefined;
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type SelectedFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
 };
+
+export type SelectedFailureDomainsUnion2 = SelectedFailureDomains2 | any;
+
+export type SelectedAutoscale = {
+  failureDomains?: SelectedFailureDomains2 | any | null | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type SelectedFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type SelectedFailureDomainsUnion1 = SelectedFailureDomains1 | any;
 
 export type SelectedFixed = {
-  mode: "fixed";
+  failureDomains?: SelectedFailureDomains1 | any | null | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
   machines: number;
-  machine?: string | undefined;
+  mode: "fixed";
 };
 
+/**
+ * User-selected deployment settings for one compute pool.
+ */
 export type Selected = SelectedFixed | SelectedAutoscale;
 
-export type RecommendedAutoscale = {
-  mode: "autoscale";
-  min: number;
-  max: number;
-  machine?: string | undefined;
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type RecommendedFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
 };
+
+export type RecommendedFailureDomainsUnion2 = RecommendedFailureDomains2 | any;
+
+export type RecommendedAutoscale = {
+  failureDomains?: RecommendedFailureDomains2 | any | null | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type RecommendedFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type RecommendedFailureDomainsUnion1 = RecommendedFailureDomains1 | any;
 
 export type RecommendedFixed = {
-  mode: "fixed";
+  failureDomains?: RecommendedFailureDomains1 | any | null | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
   machines: number;
-  machine?: string | undefined;
+  mode: "fixed";
 };
 
+/**
+ * User-selected deployment settings for one compute pool.
+ */
 export type Recommended = RecommendedFixed | RecommendedAutoscale;
 
 export const ProfileArchitecture = {
@@ -120,7 +237,13 @@ export type Pool = {
   workloads: Array<string>;
   requirements: Requirements;
   scale: ScaleFixed | ScaleAutoscale;
+  /**
+   * User-selected deployment settings for one compute pool.
+   */
   selected: SelectedFixed | SelectedAutoscale;
+  /**
+   * User-selected deployment settings for one compute pool.
+   */
   recommended: RecommendedFixed | RecommendedAutoscale;
   machines: Array<DeploymentComputePlanMachine>;
   errors?: Array<string> | undefined;
@@ -277,14 +400,56 @@ export function scaleFromJSON(
 }
 
 /** @internal */
+export const SelectedFailureDomains2$inboundSchema: z.ZodType<
+  SelectedFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function selectedFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<SelectedFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SelectedFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SelectedFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const SelectedFailureDomainsUnion2$inboundSchema: z.ZodType<
+  SelectedFailureDomainsUnion2,
+  unknown
+> = z.union([z.lazy(() => SelectedFailureDomains2$inboundSchema), z.any()]);
+
+export function selectedFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<SelectedFailureDomainsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SelectedFailureDomainsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SelectedFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const SelectedAutoscale$inboundSchema: z.ZodType<
   SelectedAutoscale,
   unknown
 > = z.object({
-  mode: z.literal("autoscale"),
-  min: z.int(),
+  failure_domains: z.nullable(
+    z.union([z.lazy(() => SelectedFailureDomains2$inboundSchema), z.any()]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
   max: z.int(),
-  machine: z.string().optional(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function selectedAutoscaleFromJSON(
@@ -298,11 +463,53 @@ export function selectedAutoscaleFromJSON(
 }
 
 /** @internal */
+export const SelectedFailureDomains1$inboundSchema: z.ZodType<
+  SelectedFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function selectedFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<SelectedFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SelectedFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SelectedFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const SelectedFailureDomainsUnion1$inboundSchema: z.ZodType<
+  SelectedFailureDomainsUnion1,
+  unknown
+> = z.union([z.lazy(() => SelectedFailureDomains1$inboundSchema), z.any()]);
+
+export function selectedFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<SelectedFailureDomainsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => SelectedFailureDomainsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'SelectedFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const SelectedFixed$inboundSchema: z.ZodType<SelectedFixed, unknown> = z
   .object({
-    mode: z.literal("fixed"),
+    failure_domains: z.nullable(
+      z.union([z.lazy(() => SelectedFailureDomains1$inboundSchema), z.any()]),
+    ).optional(),
+    machine: z.nullable(z.string()).optional(),
     machines: z.int(),
-    machine: z.string().optional(),
+    mode: z.literal("fixed"),
+  }).transform((v) => {
+    return remap$(v, {
+      "failure_domains": "failureDomains",
+    });
   });
 
 export function selectedFixedFromJSON(
@@ -332,14 +539,56 @@ export function selectedFromJSON(
 }
 
 /** @internal */
+export const RecommendedFailureDomains2$inboundSchema: z.ZodType<
+  RecommendedFailureDomains2,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function recommendedFailureDomains2FromJSON(
+  jsonString: string,
+): SafeParseResult<RecommendedFailureDomains2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RecommendedFailureDomains2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RecommendedFailureDomains2' from JSON`,
+  );
+}
+
+/** @internal */
+export const RecommendedFailureDomainsUnion2$inboundSchema: z.ZodType<
+  RecommendedFailureDomainsUnion2,
+  unknown
+> = z.union([z.lazy(() => RecommendedFailureDomains2$inboundSchema), z.any()]);
+
+export function recommendedFailureDomainsUnion2FromJSON(
+  jsonString: string,
+): SafeParseResult<RecommendedFailureDomainsUnion2, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RecommendedFailureDomainsUnion2$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RecommendedFailureDomainsUnion2' from JSON`,
+  );
+}
+
+/** @internal */
 export const RecommendedAutoscale$inboundSchema: z.ZodType<
   RecommendedAutoscale,
   unknown
 > = z.object({
-  mode: z.literal("autoscale"),
-  min: z.int(),
+  failure_domains: z.nullable(
+    z.union([z.lazy(() => RecommendedFailureDomains2$inboundSchema), z.any()]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
   max: z.int(),
-  machine: z.string().optional(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function recommendedAutoscaleFromJSON(
@@ -353,13 +602,55 @@ export function recommendedAutoscaleFromJSON(
 }
 
 /** @internal */
+export const RecommendedFailureDomains1$inboundSchema: z.ZodType<
+  RecommendedFailureDomains1,
+  unknown
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function recommendedFailureDomains1FromJSON(
+  jsonString: string,
+): SafeParseResult<RecommendedFailureDomains1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RecommendedFailureDomains1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RecommendedFailureDomains1' from JSON`,
+  );
+}
+
+/** @internal */
+export const RecommendedFailureDomainsUnion1$inboundSchema: z.ZodType<
+  RecommendedFailureDomainsUnion1,
+  unknown
+> = z.union([z.lazy(() => RecommendedFailureDomains1$inboundSchema), z.any()]);
+
+export function recommendedFailureDomainsUnion1FromJSON(
+  jsonString: string,
+): SafeParseResult<RecommendedFailureDomainsUnion1, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => RecommendedFailureDomainsUnion1$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'RecommendedFailureDomainsUnion1' from JSON`,
+  );
+}
+
+/** @internal */
 export const RecommendedFixed$inboundSchema: z.ZodType<
   RecommendedFixed,
   unknown
 > = z.object({
-  mode: z.literal("fixed"),
+  failure_domains: z.nullable(
+    z.union([z.lazy(() => RecommendedFailureDomains1$inboundSchema), z.any()]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
   machines: z.int(),
-  machine: z.string().optional(),
+  mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    "failure_domains": "failureDomains",
+  });
 });
 
 export function recommendedFixedFromJSON(

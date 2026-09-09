@@ -32,14 +32,14 @@ let value: DeploymentComputePlan = {
         },
       },
       selected: {
+        max: 509604,
+        min: 214763,
         mode: "autoscale",
-        min: 509604,
-        max: 214763,
       },
       recommended: {
+        max: 526675,
+        min: 32921,
         mode: "autoscale",
-        min: 526675,
-        max: 32921,
       },
       machines: [
         {

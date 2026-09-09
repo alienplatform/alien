@@ -106,6 +106,10 @@ pub struct UpArgs {
     #[arg(long, env = "OPERATOR_ENCRYPTION_KEY")]
     pub encryption_key: Option<String>,
 
+    /// Rerun setup for the existing deployment's requested release, using setup credentials.
+    #[arg(long)]
+    pub setup_update: bool,
+
     /// Skip confirmation prompt
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -499,6 +503,7 @@ mod tests {
     #[test]
     fn failed_setup_states_are_prepared_before_retrying() {
         for status in [
+            DeploymentStatus::UpdatePending,
             DeploymentStatus::Running,
             DeploymentStatus::UpdateFailed,
             DeploymentStatus::RefreshFailed,
@@ -1632,18 +1637,22 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             .await?;
         }
     }
-    if init.deployment_model == DeploymentModel::Push
-        && hosted_platform
-        && requires_install_context(platform)
-        && hosted_setup_reconcile_required(
-            &current_deployment.status,
-            setup_revision,
-            applied_setup_revision.as_deref(),
-        )
+    if args.setup_update
+        || (init.deployment_model == DeploymentModel::Push
+            && hosted_platform
+            && requires_install_context(platform)
+            && hosted_setup_reconcile_required(
+                &current_deployment.status,
+                setup_revision,
+                applied_setup_revision.as_deref(),
+            ))
     {
         output::info("Refreshing setup-owned infrastructure for this CLI revision...");
+        // Keep setup authority on the client; the separate deployment token
+        // configures the installed runtime's limited access.
+        let setup_client = create_manager_client(&token, &manager_url)?;
         run_push_model(
-            &client,
+            &setup_client,
             &deployment_id,
             platform,
             base_platform,
@@ -1655,6 +1664,12 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             setup_revision,
         )
         .await?;
+        if args.setup_update {
+            output::success(
+                "Setup applied. The existing runtime will continue the requested update.",
+            );
+            return Ok(());
+        }
         current_deployment = client
             .get_deployment()
             .id(&deployment_id)
@@ -4612,6 +4627,7 @@ fn requires_direct_setup_preparation(status: &DeploymentStatus) -> bool {
     matches!(
         status,
         DeploymentStatus::Running
+            | DeploymentStatus::UpdatePending
             | DeploymentStatus::UpdateFailed
             | DeploymentStatus::RefreshFailed
             | DeploymentStatus::InitialSetupFailed

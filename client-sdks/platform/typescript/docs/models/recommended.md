@@ -1,5 +1,7 @@
 # Recommended
 
+User-selected deployment settings for one compute pool.
+
 
 ## Supported Types
 
@@ -7,8 +9,8 @@
 
 ```typescript
 const value: models.RecommendedFixed = {
-  mode: "fixed",
   machines: 33712,
+  mode: "fixed",
 };
 ```
 
@@ -16,9 +18,9 @@ const value: models.RecommendedFixed = {
 
 ```typescript
 const value: models.RecommendedAutoscale = {
+  max: 286657,
+  min: 30048,
   mode: "autoscale",
-  min: 286657,
-  max: 30048,
 };
 ```
 

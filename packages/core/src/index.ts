@@ -443,6 +443,8 @@ export {
   // Stack resource state types
   StackResourceStateSchema,
   StackSettingsSchema,
+  ComputePoolSelectionSchema,
+  ComputeSettingsSchema,
   StackStateSchema,
   StorageEventSchema,
   StorageEventsSchema,

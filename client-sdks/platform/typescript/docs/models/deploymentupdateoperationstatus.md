@@ -11,5 +11,5 @@ let value: DeploymentUpdateOperationStatus = "superseded";
 ## Values
 
 ```typescript
-"queued" | "applying" | "succeeded" | "failed" | "superseded"
+"blocked" | "queued" | "applying" | "succeeded" | "failed" | "superseded"
 ```

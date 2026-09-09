@@ -1,5 +1,7 @@
 # Selected
 
+User-selected deployment settings for one compute pool.
+
 
 ## Supported Types
 
@@ -7,8 +9,8 @@
 
 ```typescript
 const value: models.SelectedFixed = {
-  mode: "fixed",
   machines: 460135,
+  mode: "fixed",
 };
 ```
 
@@ -16,9 +18,9 @@ const value: models.SelectedFixed = {
 
 ```typescript
 const value: models.SelectedAutoscale = {
+  max: 214430,
+  min: 358785,
   mode: "autoscale",
-  min: 214430,
-  max: 358785,
 };
 ```
 

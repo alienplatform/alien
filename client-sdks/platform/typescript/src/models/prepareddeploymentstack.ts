@@ -1494,6 +1494,7 @@ export type PreparedDeploymentStackStack = {
 };
 
 export type PreparedDeploymentStack = {
+  updateOperationId?: string | undefined;
   platform: PreparedDeploymentStackPlatform;
   /**
    * A bag of resources, unaware of any cloud.
@@ -3648,6 +3649,7 @@ export const PreparedDeploymentStack$inboundSchema: z.ZodType<
   PreparedDeploymentStack,
   unknown
 > = z.object({
+  updateOperationId: z.string().optional(),
   platform: PreparedDeploymentStackPlatform$inboundSchema,
   stack: z.lazy(() => PreparedDeploymentStackStack$inboundSchema),
   setup: SetupFingerprintInfo$inboundSchema,

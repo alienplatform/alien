@@ -49,6 +49,8 @@ export type GetDeploymentInfoRequest = {
    */
   platform?: GetDeploymentInfoPlatform | undefined;
   setupItem?: GetDeploymentInfoSetupItem | undefined;
+  deploymentId?: string | undefined;
+  updateOperationId?: string | undefined;
 };
 
 /** @internal */
@@ -65,6 +67,8 @@ export const GetDeploymentInfoSetupItem$outboundSchema: z.ZodEnum<
 export type GetDeploymentInfoRequest$Outbound = {
   platform?: string | undefined;
   setupItem?: string | undefined;
+  deploymentId?: string | undefined;
+  updateOperationId?: string | undefined;
 };
 
 /** @internal */
@@ -74,6 +78,8 @@ export const GetDeploymentInfoRequest$outboundSchema: z.ZodType<
 > = z.object({
   platform: GetDeploymentInfoPlatform$outboundSchema.optional(),
   setupItem: GetDeploymentInfoSetupItem$outboundSchema.optional(),
+  deploymentId: z.string().optional(),
+  updateOperationId: z.string().optional(),
 });
 
 export function getDeploymentInfoRequestToJSON(
