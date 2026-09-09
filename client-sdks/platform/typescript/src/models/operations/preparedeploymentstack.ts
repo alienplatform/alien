@@ -35,30 +35,116 @@ export type PrepareDeploymentStackPlatform = ClosedEnum<
   typeof PrepareDeploymentStackPlatform
 >;
 
-export type PrepareDeploymentStackPoolsAutoscale = {
-  mode: "autoscale";
-  min: number;
-  max: number;
-  machine?: string | undefined;
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type PrepareDeploymentStackFailureDomains2 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
 };
+
+export type PrepareDeploymentStackFailureDomainsUnion2 =
+  | PrepareDeploymentStackFailureDomains2
+  | any;
+
+export type PrepareDeploymentStackPoolsAutoscale = {
+  failureDomains?:
+    | PrepareDeploymentStackFailureDomains2
+    | any
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Maximum machine count.
+   */
+  max: number;
+  /**
+   * Minimum machine count.
+   */
+  min: number;
+  mode: "autoscale";
+};
+
+/**
+ * Failure-domain policy selected for a compute pool.
+ */
+export type PrepareDeploymentStackFailureDomains1 = {
+  /**
+   * Concrete provider domains selected during setup.
+   *
+   * @remarks
+   * Empty delegates deterministic selection to the provider setup implementation.
+   */
+  selectedFailureDomains?: Array<string> | undefined;
+  /**
+   * Number of distinct failure domains across which new stateful replicas may be spread.
+   */
+  spread: number;
+};
+
+export type PrepareDeploymentStackFailureDomainsUnion1 =
+  | PrepareDeploymentStackFailureDomains1
+  | any;
 
 export type PrepareDeploymentStackPoolsFixed = {
-  mode: "fixed";
+  failureDomains?:
+    | PrepareDeploymentStackFailureDomains1
+    | any
+    | null
+    | undefined;
+  /**
+   * Provider machine type selected for this deployment.
+   */
+  machine?: string | null | undefined;
+  /**
+   * Number of machines to run.
+   */
   machines: number;
-  machine?: string | undefined;
+  mode: "fixed";
 };
 
+/**
+ * User-selected deployment settings for one compute pool.
+ */
 export type PrepareDeploymentStackPoolsUnion =
   | PrepareDeploymentStackPoolsFixed
   | PrepareDeploymentStackPoolsAutoscale;
 
+/**
+ * Deployment-time compute choices for Alien-managed compute pools.
+ *
+ * @remarks
+ *
+ * Application source declares portable pool requirements. This settings
+ * object stores the concrete choices made for one deployment, such as the
+ * provider machine type and selected machine counts.
+ */
 export type PrepareDeploymentStackCompute = {
+  /**
+   * Selected compute choices keyed by pool ID.
+   */
   pools?: {
     [k: string]:
       | PrepareDeploymentStackPoolsFixed
       | PrepareDeploymentStackPoolsAutoscale;
   } | undefined;
 };
+
+export type PrepareDeploymentStackComputeUnion =
+  | PrepareDeploymentStackCompute
+  | any;
 
 /**
  * Deployment model: how updates are delivered to the remote environment.
@@ -1093,8 +1179,20 @@ export type PrepareDeploymentStackUpdates = ClosedEnum<
   typeof PrepareDeploymentStackUpdates
 >;
 
+/**
+ * User-customizable deployment settings specified at deploy time.
+ *
+ * @remarks
+ *
+ * These settings are provided by the customer via CloudFormation parameters,
+ * Terraform attributes, CLI flags, or Helm values. They customize how the
+ * deployment runs and what capabilities are enabled.
+ *
+ * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+ * is platform-derived (from the Manager's ServiceAccount).
+ */
 export type PrepareDeploymentStackStackSettings = {
-  compute?: PrepareDeploymentStackCompute | undefined;
+  compute?: PrepareDeploymentStackCompute | any | null | undefined;
   /**
    * Deployment model: how updates are delivered to the remote environment.
    */
@@ -1144,10 +1242,28 @@ export type PrepareDeploymentStackStackSettings = {
 };
 
 export type PrepareDeploymentStackRequest = {
+  /**
+   * Persist validated choices for the exact blocked update; does not apply cloud changes.
+   */
+  saveForSetup?: boolean | undefined;
   setupItem?: PrepareDeploymentStackSetupItem | undefined;
+  deploymentId?: string | undefined;
+  updateOperationId?: string | undefined;
   platform: PrepareDeploymentStackPlatform;
   setupMethod: models.DeploymentSetupMethod;
   region?: string | undefined;
+  /**
+   * User-customizable deployment settings specified at deploy time.
+   *
+   * @remarks
+   *
+   * These settings are provided by the customer via CloudFormation parameters,
+   * Terraform attributes, CLI flags, or Helm values. They customize how the
+   * deployment runs and what capabilities are enabled.
+   *
+   * **Key distinction**: StackSettings is user-customizable, while ManagementConfig
+   * is platform-derived (from the Manager's ServiceAccount).
+   */
   stackSettings: PrepareDeploymentStackStackSettings;
 };
 
@@ -1162,11 +1278,67 @@ export const PrepareDeploymentStackPlatform$outboundSchema: z.ZodEnum<
 > = z.enum(PrepareDeploymentStackPlatform);
 
 /** @internal */
+export type PrepareDeploymentStackFailureDomains2$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const PrepareDeploymentStackFailureDomains2$outboundSchema: z.ZodType<
+  PrepareDeploymentStackFailureDomains2$Outbound,
+  PrepareDeploymentStackFailureDomains2
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function prepareDeploymentStackFailureDomains2ToJSON(
+  prepareDeploymentStackFailureDomains2: PrepareDeploymentStackFailureDomains2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackFailureDomains2$outboundSchema.parse(
+      prepareDeploymentStackFailureDomains2,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackFailureDomainsUnion2$Outbound =
+  | PrepareDeploymentStackFailureDomains2$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackFailureDomainsUnion2$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackFailureDomainsUnion2$Outbound,
+    PrepareDeploymentStackFailureDomainsUnion2
+  > = z.union([
+    z.lazy(() => PrepareDeploymentStackFailureDomains2$outboundSchema),
+    z.any(),
+  ]);
+
+export function prepareDeploymentStackFailureDomainsUnion2ToJSON(
+  prepareDeploymentStackFailureDomainsUnion2:
+    PrepareDeploymentStackFailureDomainsUnion2,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackFailureDomainsUnion2$outboundSchema.parse(
+      prepareDeploymentStackFailureDomainsUnion2,
+    ),
+  );
+}
+
+/** @internal */
 export type PrepareDeploymentStackPoolsAutoscale$Outbound = {
-  mode: "autoscale";
-  min: number;
+  failure_domains?:
+    | PrepareDeploymentStackFailureDomains2$Outbound
+    | any
+    | null
+    | undefined;
+  machine?: string | null | undefined;
   max: number;
-  machine?: string | undefined;
+  min: number;
+  mode: "autoscale";
 };
 
 /** @internal */
@@ -1174,10 +1346,20 @@ export const PrepareDeploymentStackPoolsAutoscale$outboundSchema: z.ZodType<
   PrepareDeploymentStackPoolsAutoscale$Outbound,
   PrepareDeploymentStackPoolsAutoscale
 > = z.object({
-  mode: z.literal("autoscale"),
-  min: z.int(),
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackFailureDomains2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
   max: z.int(),
-  machine: z.string().optional(),
+  min: z.int(),
+  mode: z.literal("autoscale"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function prepareDeploymentStackPoolsAutoscaleToJSON(
@@ -1191,10 +1373,66 @@ export function prepareDeploymentStackPoolsAutoscaleToJSON(
 }
 
 /** @internal */
+export type PrepareDeploymentStackFailureDomains1$Outbound = {
+  selectedFailureDomains?: Array<string> | undefined;
+  spread: number;
+};
+
+/** @internal */
+export const PrepareDeploymentStackFailureDomains1$outboundSchema: z.ZodType<
+  PrepareDeploymentStackFailureDomains1$Outbound,
+  PrepareDeploymentStackFailureDomains1
+> = z.object({
+  selectedFailureDomains: z.array(z.string()).optional(),
+  spread: z.int(),
+});
+
+export function prepareDeploymentStackFailureDomains1ToJSON(
+  prepareDeploymentStackFailureDomains1: PrepareDeploymentStackFailureDomains1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackFailureDomains1$outboundSchema.parse(
+      prepareDeploymentStackFailureDomains1,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackFailureDomainsUnion1$Outbound =
+  | PrepareDeploymentStackFailureDomains1$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackFailureDomainsUnion1$outboundSchema:
+  z.ZodType<
+    PrepareDeploymentStackFailureDomainsUnion1$Outbound,
+    PrepareDeploymentStackFailureDomainsUnion1
+  > = z.union([
+    z.lazy(() => PrepareDeploymentStackFailureDomains1$outboundSchema),
+    z.any(),
+  ]);
+
+export function prepareDeploymentStackFailureDomainsUnion1ToJSON(
+  prepareDeploymentStackFailureDomainsUnion1:
+    PrepareDeploymentStackFailureDomainsUnion1,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackFailureDomainsUnion1$outboundSchema.parse(
+      prepareDeploymentStackFailureDomainsUnion1,
+    ),
+  );
+}
+
+/** @internal */
 export type PrepareDeploymentStackPoolsFixed$Outbound = {
-  mode: "fixed";
+  failure_domains?:
+    | PrepareDeploymentStackFailureDomains1$Outbound
+    | any
+    | null
+    | undefined;
+  machine?: string | null | undefined;
   machines: number;
-  machine?: string | undefined;
+  mode: "fixed";
 };
 
 /** @internal */
@@ -1202,9 +1440,19 @@ export const PrepareDeploymentStackPoolsFixed$outboundSchema: z.ZodType<
   PrepareDeploymentStackPoolsFixed$Outbound,
   PrepareDeploymentStackPoolsFixed
 > = z.object({
-  mode: z.literal("fixed"),
+  failureDomains: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackFailureDomains1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
+  machine: z.nullable(z.string()).optional(),
   machines: z.int(),
-  machine: z.string().optional(),
+  mode: z.literal("fixed"),
+}).transform((v) => {
+  return remap$(v, {
+    failureDomains: "failure_domains",
+  });
 });
 
 export function prepareDeploymentStackPoolsFixedToJSON(
@@ -1270,6 +1518,30 @@ export function prepareDeploymentStackComputeToJSON(
   return JSON.stringify(
     PrepareDeploymentStackCompute$outboundSchema.parse(
       prepareDeploymentStackCompute,
+    ),
+  );
+}
+
+/** @internal */
+export type PrepareDeploymentStackComputeUnion$Outbound =
+  | PrepareDeploymentStackCompute$Outbound
+  | any;
+
+/** @internal */
+export const PrepareDeploymentStackComputeUnion$outboundSchema: z.ZodType<
+  PrepareDeploymentStackComputeUnion$Outbound,
+  PrepareDeploymentStackComputeUnion
+> = z.union([
+  z.lazy(() => PrepareDeploymentStackCompute$outboundSchema),
+  z.any(),
+]);
+
+export function prepareDeploymentStackComputeUnionToJSON(
+  prepareDeploymentStackComputeUnion: PrepareDeploymentStackComputeUnion,
+): string {
+  return JSON.stringify(
+    PrepareDeploymentStackComputeUnion$outboundSchema.parse(
+      prepareDeploymentStackComputeUnion,
     ),
   );
 }
@@ -3500,7 +3772,7 @@ export const PrepareDeploymentStackUpdates$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type PrepareDeploymentStackStackSettings$Outbound = {
-  compute?: PrepareDeploymentStackCompute$Outbound | undefined;
+  compute?: PrepareDeploymentStackCompute$Outbound | any | null | undefined;
   deploymentModel?: string | undefined;
   domains?: PrepareDeploymentStackDomains$Outbound | any | null | undefined;
   externalBindings?:
@@ -3532,8 +3804,12 @@ export const PrepareDeploymentStackStackSettings$outboundSchema: z.ZodType<
   PrepareDeploymentStackStackSettings$Outbound,
   PrepareDeploymentStackStackSettings
 > = z.object({
-  compute: z.lazy(() => PrepareDeploymentStackCompute$outboundSchema)
-    .optional(),
+  compute: z.nullable(
+    z.union([
+      z.lazy(() => PrepareDeploymentStackCompute$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   deploymentModel: PrepareDeploymentStackDeploymentModel$outboundSchema
     .optional(),
   domains: z.nullable(
@@ -3581,7 +3857,10 @@ export function prepareDeploymentStackStackSettingsToJSON(
 
 /** @internal */
 export type PrepareDeploymentStackRequest$Outbound = {
+  saveForSetup?: boolean | undefined;
   setupItem?: string | undefined;
+  deploymentId?: string | undefined;
+  updateOperationId?: string | undefined;
   platform: string;
   setupMethod: string;
   region?: string | undefined;
@@ -3593,7 +3872,10 @@ export const PrepareDeploymentStackRequest$outboundSchema: z.ZodType<
   PrepareDeploymentStackRequest$Outbound,
   PrepareDeploymentStackRequest
 > = z.object({
+  saveForSetup: z.boolean().optional(),
   setupItem: PrepareDeploymentStackSetupItem$outboundSchema.optional(),
+  deploymentId: z.string().optional(),
+  updateOperationId: z.string().optional(),
   platform: PrepareDeploymentStackPlatform$outboundSchema,
   setupMethod: models.DeploymentSetupMethod$outboundSchema,
   region: z.string().optional(),

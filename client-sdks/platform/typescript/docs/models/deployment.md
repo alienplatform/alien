@@ -23,7 +23,7 @@ let value: Deployment = {
   updateState: {
     active: {
       id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-      status: "applying",
+      status: "queued",
       reasons: [],
       targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       changedKeys: [],
@@ -31,7 +31,7 @@ let value: Deployment = {
     },
     next: {
       id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-      status: "queued",
+      status: "blocked",
       reasons: [],
       targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
       changedKeys: [

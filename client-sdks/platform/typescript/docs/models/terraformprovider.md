@@ -1,27 +1,18 @@
-# DeploymentInfoProvider
+# TerraformProvider
 
 Terraform provider registry outputs.
 
 ## Example Usage
 
 ```typescript
-import { DeploymentInfoProvider } from "@alienplatform/platform-api/models";
+import { TerraformProvider } from "@alienplatform/platform-api/models";
 
-let value: DeploymentInfoProvider = {
+let value: TerraformProvider = {
   gpgPublicKey: {
     asciiArmor: "<value>",
     keyId: "<id>",
   },
-  platforms: {
-    "key": {
-      downloadUrl: "https://scornful-bonnet.net",
-      filename: "example.file",
-      shasum: "<value>",
-      shasumsSignatureUrl: "https://our-soybean.biz/",
-      shasumsUrl: "https://passionate-pop.org/",
-      size: 227657,
-    },
-  },
+  platforms: {},
   source: "<value>",
 };
 ```

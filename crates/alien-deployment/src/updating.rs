@@ -441,7 +441,7 @@ pub async fn handle_updating(
             .map(|(id, t)| (id.as_str(), t.as_str()))
             .collect();
 
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
 
         next.status = DeploymentStatus::UpdateFailed;
         next.stack_state = Some(next_state);
