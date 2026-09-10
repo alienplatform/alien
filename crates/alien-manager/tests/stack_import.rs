@@ -669,6 +669,55 @@ async fn happy_path_creates_imported_deployment() {
 }
 
 #[tokio::test]
+async fn deployment_token_reimports_only_its_own_setup_without_bootstrap_token() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let first: StackImportResponse = serde_json::from_value(json).unwrap();
+    let token = first
+        .deployment_token
+        .as_deref()
+        .expect("deployment credential");
+
+    let hash = format!("{:x}", Sha256::digest(fixture.dg_token.as_bytes()));
+    let bootstrap = fixture
+        .token_store
+        .validate_token(&hash)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .token_store
+        .delete_token(&bootstrap.id)
+        .await
+        .unwrap();
+    let (status, _) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, json) = post_import(&fixture, Some(token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let replay: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(replay.deployment_id, first.deployment_id);
+    assert_eq!(replay.deployment_token, first.deployment_token);
+
+    let mut other = body;
+    other.deployment_name = "another-deployment".to_string();
+    let (status, json) = post_import(&fixture, Some(token), &other).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json:#}");
+    assert!(fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            "another-deployment"
+        )
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn incomplete_setup_handoff_is_rejected_before_deployment_creation() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");

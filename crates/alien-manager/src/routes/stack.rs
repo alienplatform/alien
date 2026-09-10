@@ -98,20 +98,36 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    // The import endpoint is intentionally narrow: a deployment-group token is
-    // the only credential class that has a meaningful "import into this group"
-    // semantic. Workspace/admin tokens could be allowed here too, but every
-    // existing call-site (CloudFormation custom resource, Terraform provider,
-    // Helm bootstrap) mints a DG token at setup time, so widening would only weaken
-    // the audit trail without adding new flows.
+    // Bootstrap may create in a group. A deployment credential may only
+    // re-register its own existing setup; it must never fall through to create.
     let deployment_group_id = match &subject.scope {
         Scope::DeploymentGroup {
             deployment_group_id,
             ..
         } => deployment_group_id.clone(),
+        Scope::Deployment { deployment_id, .. } => {
+            let existing = match state
+                .deployment_store
+                .get_deployment(&subject, deployment_id)
+                .await
+            {
+                Ok(Some(deployment)) => deployment,
+                Ok(None) => return ErrorData::not_found_deployment(deployment_id).into_response(),
+                Err(error) => return error.into_response(),
+            };
+            if existing.name != req.deployment_name.trim()
+                || !state.authz.can_update_deployment(&subject, &existing)
+            {
+                return ErrorData::forbidden("Cannot register setup for another deployment")
+                    .into_response();
+            }
+            existing.deployment_group_id.clone()
+        }
         _ => {
-            return ErrorData::forbidden("Stack import requires a deployment-group-scoped token")
-                .into_response();
+            return ErrorData::forbidden(
+                "Stack import requires a deployment-group or deployment token",
+            )
+            .into_response();
         }
     };
 
@@ -139,16 +155,6 @@ pub async fn stack_import(
     let setup_metadata = match setup_metadata_for_persistence(&req) {
         Ok(metadata) => metadata,
         Err(error) => return error.into_response(),
-    };
-
-    let dg = match state
-        .deployment_store
-        .get_deployment_group(&subject, &deployment_group_id)
-        .await
-    {
-        Ok(Some(dg)) => dg,
-        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
-        Err(e) => return e.into_response(),
     };
 
     let release = match req.release_id.as_deref() {
@@ -419,6 +425,21 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
+    // The deployment could have been deleted during preparation. Do not turn
+    // a re-registration into a new deployment or issue a replacement credential.
+    if matches!(subject.scope, Scope::Deployment { .. }) {
+        return ErrorData::forbidden("A deployment token cannot create a deployment")
+            .into_response();
+    }
+    let dg = match state
+        .deployment_store
+        .get_deployment_group(&subject, &deployment_group_id)
+        .await
+    {
+        Ok(Some(dg)) => dg,
+        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
+        Err(error) => return error.into_response(),
+    };
     let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
