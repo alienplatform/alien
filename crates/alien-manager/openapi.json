@@ -1555,6 +1555,17 @@
               "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
           },
+          "operationsReport": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/OperationsReport",
+                "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`."
+              }
+            ]
+          },
           "operatorVersion": {
             "type": [
               "string",
@@ -1599,7 +1610,18 @@
               }
             ]
           },
-          "target": {}
+          "target": {},
+          "targetOperationsBundleSet": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/TargetOperationsBundleSet",
+                "description": "Bundles the Operator should download to catch up to the target\nenabled-plugin-set hash. Opaque passthrough from the embedder's\n`DeploymentStore::reconcile`; `None` in OSS."
+              }
+            ]
+          }
         }
       },
       "AiAccessTest": {
@@ -13646,6 +13668,49 @@
           }
         }
       },
+      "OperationsBundleDownload": {
+        "type": "object",
+        "description": "One bundle the Operator needs to download to reach `targetBundleHash`.\nThe manager mints a short-lived presigned GET URL per bundle — the\nOperator never holds real cloud storage credentials, mirroring the OCI\nregistry proxy's credential-injection pattern.",
+        "required": [
+          "plugin",
+          "pluginVersion",
+          "url"
+        ],
+        "properties": {
+          "plugin": {
+            "type": "string",
+            "description": "Plugin name this bundle provides."
+          },
+          "pluginVersion": {
+            "type": "string",
+            "description": "Plugin version this bundle provides."
+          },
+          "url": {
+            "type": "string",
+            "description": "Presigned URL to GET the bundle ZIP from. Short-lived."
+          }
+        }
+      },
+      "OperationsReport": {
+        "type": "object",
+        "description": "Report-only summary of the operations the Operator has loaded, used to\nconfirm a bundle sync actually took effect.",
+        "properties": {
+          "loadedBundleHash": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Hash of the enabled-plugin bundle set the Operator currently has\nloaded. Compared against the platform's target hash to detect drift."
+          },
+          "operations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ReportedOperation"
+            },
+            "description": "Operations currently loaded and executable by the Operator."
+          }
+        }
+      },
       "OperatorCapabilityReport": {
         "type": "object",
         "description": "Report-only Operator capability status.",
@@ -14863,6 +14928,29 @@
           },
           "session": {
             "type": "string"
+          }
+        }
+      },
+      "ReportedOperation": {
+        "type": "object",
+        "description": "A single operation the Operator currently has loaded. Opaque identifiers\nonly — no tier, description, or other plugin business logic crosses into\nthis public crate.",
+        "required": [
+          "plugin",
+          "pluginVersion",
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Name of the operation within the plugin."
+          },
+          "plugin": {
+            "type": "string",
+            "description": "Name of the plugin that owns this operation."
+          },
+          "pluginVersion": {
+            "type": "string",
+            "description": "Version of the plugin that owns this operation."
           }
         }
       },
@@ -16701,6 +16789,26 @@
           }
         ],
         "description": "Request to submit a command response (from deployment)"
+      },
+      "TargetOperationsBundleSet": {
+        "type": "object",
+        "description": "Target operations-bundle set for the Operator to converge its loaded\nplugin registry toward, independent of any release/config target — a\nplugin can be enabled with no release change, so this is not nested under\n`TargetDeployment`.",
+        "required": [
+          "hash"
+        ],
+        "properties": {
+          "bundles": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OperationsBundleDownload"
+            },
+            "description": "Presigned downloads for every bundle in the target set. The Operator\nfetches only the ones it doesn't already have loaded at the right\nversion; already-loaded bundles are harmless to re-download."
+          },
+          "hash": {
+            "type": "string",
+            "description": "Hash identifying this exact enabled-plugin set. Compare against\n`OperationsReport.loadedBundleHash` to detect drift."
+          }
+        }
       },
       "TelemetryMode": {
         "type": "string",
