@@ -1,5 +1,7 @@
 use alien_azure_clients::load_balancers::{AzureLoadBalancerClient, LoadBalancerApi};
-use alien_azure_clients::long_running_operation::LongRunningOperationClient;
+use alien_azure_clients::long_running_operation::{
+    LongRunningOperationApi, LongRunningOperationClient,
+};
 use alien_azure_clients::models::load_balancer::{
     BackendAddressPool, BackendAddressPoolPropertiesFormat, FrontendIpConfiguration,
     FrontendIpConfigurationPropertiesFormat, LoadBalancer, LoadBalancerPropertiesFormat,
@@ -576,6 +578,28 @@ async fn test_comprehensive_load_balancer_lifecycle(
     }
 
     info!("✅ Step 3/5: Load balancer verified successfully");
+
+    let health_result = ctx
+        .client
+        .get_load_balancing_rule_health(&ctx.resource_group_name, &lb_name, lb_rule_name)
+        .await?;
+    let health = match health_result {
+        alien_azure_clients::long_running_operation::OperationResult::Completed(value) => value,
+        alien_azure_clients::long_running_operation::OperationResult::LongRunning(operation) => {
+            let body = ctx
+                .long_running_operation_client
+                .wait_for_completion(&operation, "GetLoadBalancingRuleHealth", lb_rule_name)
+                .await?;
+            serde_json::from_str(&body)?
+        }
+    };
+    assert_eq!(
+        health
+            .pointer("/properties/output/up")
+            .and_then(serde_json::Value::as_u64),
+        Some(0)
+    );
+    info!("✅ Load-balancing rule health API verified");
 
     // -------------------------------------------------------------------------
     // Step 4: Delete the load balancer

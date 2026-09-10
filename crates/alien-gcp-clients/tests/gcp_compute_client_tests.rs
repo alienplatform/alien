@@ -1851,7 +1851,7 @@ async fn test_comprehensive_load_balancing_lifecycle(ctx: &mut ComputeTestContex
         .health_checks(vec![health_check_url])
         .load_balancing_scheme(LoadBalancingScheme::External)
         .backends(vec![Backend::builder()
-            .group(neg_url)
+            .group(neg_url.clone())
             .balancing_mode(BalancingMode::Rate)
             .max_rate_per_endpoint(100.0)
             .build()])
@@ -1884,6 +1884,17 @@ async fn test_comprehensive_load_balancing_lifecycle(ctx: &mut ComputeTestContex
     assert_eq!(fetched_bs.name.as_ref().unwrap(), &backend_service_name);
     assert_eq!(fetched_bs.protocol, Some(BackendServiceProtocol::Http));
     println!("✅ Backend service verified: {}", backend_service_name);
+
+    let backend_health = ctx
+        .client
+        .get_backend_service_health(backend_service_name.clone(), neg_url.clone())
+        .await
+        .expect("Failed to get backend service health");
+    assert!(
+        backend_health.health_status.is_empty(),
+        "A newly created empty NEG must not report healthy endpoints"
+    );
+    println!("✅ Backend service health API verified");
 
     // =========================================================================
     // Step 5: Create URL Map
