@@ -110,6 +110,15 @@ pub struct AzureSandboxBinding {
     /// that knows it, and a sandbox running an image its author did not choose is the one Azure
     /// gap that fails without an error.
     pub disk_image: BindingValue<String>,
+    /// Session ceilings in the data plane's own units, from the declaration. Optional because a
+    /// binding from an earlier release carries none — a required field would fail to deserialize
+    /// on an already-running deployment. Absent takes the data plane's own default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu: Option<BindingValue<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory: Option<BindingValue<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk: Option<BindingValue<String>>,
 }
 
 /// GCP Agent Platform sandbox binding configuration.
@@ -206,6 +215,11 @@ impl SandboxBinding {
             egress,
             idle_suspend_seconds,
             disk_image: disk_image.into(),
+            // Ceilings are set on the struct where a caller has them; a positional argument each
+            // would make this constructor ten wide for the case that rarely carries them.
+            cpu: None,
+            memory: None,
+            disk: None,
         })
     }
 

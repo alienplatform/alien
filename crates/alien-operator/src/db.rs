@@ -1093,6 +1093,57 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Monotonic credential revision. Older manifests must not restore a revoked token.
+    pub async fn get_sync_token_revision(&self) -> Result<u64> {
+        let conn = self.conn.lock().await;
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'sync_token_revision'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query sync token revision".to_string(),
+            })?;
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to read sync token revision".to_string(),
+            })?
+        else {
+            return Ok(0);
+        };
+        let value: String = row
+            .get(0)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Invalid sync token revision value".to_string(),
+            })?;
+        value
+            .parse()
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Invalid stored sync token revision".to_string(),
+            })
+    }
+
+    /// One statement replaces the credential and its revision atomically in the encrypted DB.
+    pub async fn rotate_sync_token(&self, token: &str, revision: u64) -> Result<()> {
+        let conn = self.conn.lock().await;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES
+             ('sync_token', ?, datetime('now')), ('sync_token_revision', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (token.to_string(), revision.to_string()),
+        ).await.into_alien_error().context(ErrorData::DatabaseError {
+            message: "Failed to persist rotated sync token".to_string(),
+        })?;
+        Ok(())
+    }
+
     /// Get the commands URL used by the operator relay and app-owned receivers.
     pub async fn get_commands_url(&self) -> Result<Option<String>> {
         let conn = self.conn.lock().await;
@@ -1242,8 +1293,14 @@ mod tests {
                 db.get_sync_token().await.expect("read sync token"),
                 Some("deployment-token-1".to_string())
             );
+            assert_eq!(
+                db.get_sync_token_revision()
+                    .await
+                    .expect("initial revision"),
+                0
+            );
 
-            db.set_sync_token("deployment-token-2")
+            db.rotate_sync_token("deployment-token-2", 3)
                 .await
                 .expect("overwrite sync token");
         }
@@ -1256,6 +1313,21 @@ mod tests {
                 .await
                 .expect("read persisted sync token"),
             Some("deployment-token-2".to_string())
+        );
+        assert_eq!(
+            db.get_sync_token_revision()
+                .await
+                .expect("persisted revision"),
+            3
+        );
+        assert!(
+            OperatorDb::new(
+                data_dir,
+                "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+            )
+            .await
+            .is_err(),
+            "rotation must retain encryption-key protection"
         );
     }
 

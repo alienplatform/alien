@@ -2,14 +2,9 @@
   "id": "sandbox/remote-execute",
   "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
   "platforms": {
-    // AWS alone, for a different reason on each of the other two. GCP scopes every sandbox
-    // permission at `projects/${projectName}` and offers nothing narrower, so a remote grant
-    // would reach every sandbox in the project rather than this one. On Azure the name is
-    // knowable (`${stackPrefix}-${resourceName}`) but not grantable: `Microsoft.App/sandboxGroups`
-    // has no ARM template representation, so setup neither creates the group nor can scope a role
-    // assignment to one that does not exist, and the sandbox emitter attaches nothing to the
-    // `-access` identity — see the fuller note in `sandbox/management`.
-    // A remote binding declared on either is refused by the remote-bindings preflight.
+    // Every cloud here creates the sandbox's parent in setup, and can therefore scope a grant to
+    // it. All three refuse an assignment naming a resource that doesn't exist yet, so parent and
+    // grant must come from the same template.
     "aws": [
       {
         "label": "session-lifecycle",
@@ -78,6 +73,57 @@
             "resources": [
               "arn:aws:lambda:${awsRegion}:${awsAccountId}:microvm-image:${stackPrefix}-${resourceName}"
             ]
+          }
+        }
+      }
+    ],
+    "azure": [
+      {
+        "label": "session-lifecycle-and-exec",
+        "description": "Create, drive and tear down sessions of the selected sandbox group. Session image and size come from the create request; this grant does not limit them.",
+        "grant": {
+          // The role Microsoft documents as sufficient for the sandbox data plane, and the same
+          // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
+          // exec without lifecycle. All entries are `dataAction`s: no control-plane rights.
+          "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
+        },
+        // Resource-scoped: the only stack-level scope Azure RBAC can express is the resource
+        // group, which would reach every sibling sandbox. The scope bounds which group, not what
+        // runs in it — image and sizing are sent per session and applied at create.
+        "binding": {
+          "resource": {
+            // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
+          }
+        }
+      }
+    ],
+    "gcp": [
+      {
+        "label": "session-lifecycle-and-exec",
+        "description": "Create, drive and tear down sessions under the selected sandbox's reasoning engine.",
+        "grant": {
+          // The verbs the Agent Platform provider calls, `execute` included — this set and
+          // `sandbox/execute` are the only two that reach session content. Custom role: no
+          // predefined one isolates `execute` from the rest of Vertex AI, and ten carry it,
+          // `roles/owner` and `roles/editor` included.
+          "permissions": [
+            "aiplatform.sandboxEnvironments.create",
+            "aiplatform.sandboxEnvironments.get",
+            "aiplatform.sandboxEnvironments.list",
+            "aiplatform.sandboxEnvironments.delete",
+            "aiplatform.sandboxEnvironments.execute",
+            "aiplatform.sandboxEnvironments.pause",
+            "aiplatform.sandboxEnvironments.resume"
+          ]
+        },
+        // The engine, and nothing wider — same boundary the AWS and Azure blocks draw. Reasoning-
+        // engine IAM is enforced on the sessions under it; project scope would hand a remote caller
+        // every sibling sandbox. No `stack` binding: `projects/${projectName}` is the only GCP
+        // stack-level scope.
+        "binding": {
+          "resource": {
+            "scope": "projects/${projectName}/locations/${region}/reasoningEngines/${resourceName}"
           }
         }
       }

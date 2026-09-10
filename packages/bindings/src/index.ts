@@ -54,6 +54,9 @@ export {
 export type {
   CommandFrame,
   Container,
+  JobError,
+  JobExit,
+  JobPoll,
   Key,
   KeyOptions,
   Kv,

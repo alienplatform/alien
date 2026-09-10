@@ -10,6 +10,7 @@ pub mod live_provision_permissions;
 pub mod machines_resources;
 pub mod network_required;
 pub mod permission_profiles_exist;
+pub mod permission_sets_exist;
 pub mod public_worker_lifecycle;
 pub mod resource_enabled_valid;
 pub mod resource_id_pattern;
@@ -37,6 +38,7 @@ pub use network_required::{
     stack_requires_network, NetworkSettingsPlatformCheck, PublicSubnetsRequiredCheck,
 };
 pub use permission_profiles_exist::PermissionProfilesExistCheck;
+pub use permission_sets_exist::PermissionSetsExistCheck;
 pub use public_worker_lifecycle::PublicWorkerLifecycleCheck;
 pub use resource_enabled_valid::ResourceEnabledValidCheck;
 pub use resource_id_pattern::ResourceIdPatternCheck;

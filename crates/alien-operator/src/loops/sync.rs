@@ -449,6 +449,13 @@ fn single_observed_version(batches: &[ObservedInventoryBatch]) -> Option<String>
 
 fn report_operator_capabilities(state: &OperatorState) -> Vec<OperatorCapabilityReport> {
     let mut capabilities = Vec::new();
+    capabilities.push(OperatorCapabilityReport {
+        key: "credential.rotation-v1".to_string(),
+        state: OperatorCapabilityState::Granted,
+        detail: Some(
+            "Persisted deployment credential replacement with monotonic revisions".to_string(),
+        ),
+    });
 
     let workload_state = if state.config.platform == Platform::Kubernetes {
         OperatorCapabilityState::Granted

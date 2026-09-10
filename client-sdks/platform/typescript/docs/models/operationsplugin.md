@@ -17,6 +17,10 @@ let value: OperationsPlugin = {
       tier: "destructive",
       description:
         "vision save across override pluck gurn lampoon since briskly drat",
+      requiredPermissions: [
+        "<value 1>",
+        "<value 2>",
+      ],
     },
   ],
 };

@@ -100,9 +100,8 @@ pub async fn check_queue_event_delivery(deployment: &TestDeployment) -> anyhow::
     Ok(())
 }
 
-/// Check storage trigger delivery: write an object with a unique key (write
-/// only — no delete), then verify the app's `on_storage_event` handler
-/// processed the `created` event for exactly that key.
+/// Check storage trigger delivery, then remove the object only after checking
+/// that the handler processed its creation event.
 ///
 /// Fails if the platform's storage trigger stops delivering events to the
 /// registered handler.
@@ -111,6 +110,11 @@ pub async fn check_storage_event_delivery(deployment: &TestDeployment) -> anyhow
     info!("Checking storage trigger delivery");
 
     let key = format!("storage-event-test-{}.txt", uuid::Uuid::new_v4());
+    let verification = verify_storage_event(url, &key).await;
+    super::storage_cleanup::finish_storage_check(url, STORAGE_BINDING, &key, verification).await
+}
+
+async fn verify_storage_event(url: &str, key: &str) -> anyhow::Result<()> {
     let resp = reqwest::Client::new()
         .post(format!("{}/storage-write/{}", url, STORAGE_BINDING))
         .json(&serde_json::json!({

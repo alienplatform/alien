@@ -1308,13 +1308,13 @@ fn observed_rollout_state(resource: &ObservedRolloutResource) -> &'static str {
         "unavailable"
     } else if resource.stale {
         "stale"
-    } else if resource.desired_image.is_some()
-        && resource.observed_image.is_some()
-        && resource.desired_image != resource.observed_image
-    {
-        "rollout pending"
     } else {
-        "converged"
+        // Missing image identity is not evidence that the rollout reached its target.
+        match (&resource.desired_image, &resource.observed_image) {
+            (Some(desired), Some(observed)) if desired == observed => "converged",
+            (Some(_), Some(_)) => "rollout pending",
+            _ => "unavailable",
+        }
     }
 }
 
@@ -2508,6 +2508,18 @@ mod tests {
         resource.observed_image = resource.desired_image.clone();
         assert_eq!(observed_rollout_state(&resource), "converged");
 
+        for (desired_image, observed_image) in [
+            (Some("registry.example/api:desired"), None),
+            (None, Some("registry.example/api:desired")),
+            (None, None),
+        ] {
+            resource.desired_image = desired_image.map(str::to_string);
+            resource.observed_image = observed_image.map(str::to_string);
+            assert_eq!(observed_rollout_state(&resource), "unavailable");
+        }
+
+        resource.desired_image = Some("registry.example/api:desired".to_string());
+        resource.observed_image = Some("registry.example/api:previous".to_string());
         resource.stale = true;
         assert_eq!(observed_rollout_state(&resource), "stale");
 

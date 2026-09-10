@@ -6,6 +6,7 @@ import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
 export const DeploymentUpdateOperationStatus = {
+  Blocked: "blocked",
   Queued: "queued",
   Applying: "applying",
   Succeeded: "succeeded",

@@ -11,7 +11,7 @@ let value: DeploymentUpdateState = {
   active: null,
   next: {
     id: "duop_0vtxpb1sw4sbcdwg2xo37q6",
-    status: "queued",
+    status: "blocked",
     reasons: [],
     targetReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
     changedKeys: [

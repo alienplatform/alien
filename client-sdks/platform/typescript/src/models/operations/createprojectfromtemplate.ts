@@ -490,13 +490,13 @@ export type CreateProjectFromTemplateMethod = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateDeployments = {
-  enabled: boolean;
+  enabled: true;
   methods?: Array<CreateProjectFromTemplateMethod> | undefined;
 };
 
 export type CreateProjectFromTemplateKeys = {
-  enabled: boolean;
-  applicationEncryption: boolean;
+  enabled: true;
+  applicationEncryption: true;
 };
 
 export const CreateProjectFromTemplateAllowedProvider = {
@@ -527,7 +527,7 @@ export type CreateProjectFromTemplateRequirement = {
 };
 
 export type CreateProjectFromTemplateModels = {
-  enabled: boolean;
+  enabled: true;
   allowedProviders: Array<CreateProjectFromTemplateAllowedProvider>;
   requirements: Array<CreateProjectFromTemplateRequirement>;
 };
@@ -540,7 +540,7 @@ export type CreateProjectFromTemplateAccess = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateBuckets = {
-  enabled: boolean;
+  enabled: true;
   access: CreateProjectFromTemplateAccess;
 };
 
@@ -553,13 +553,13 @@ export type CreateProjectFromTemplateCredentialPolicy = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateRegistry = {
-  enabled: boolean;
+  enabled: true;
   repositories: Array<string>;
   credentialPolicy: CreateProjectFromTemplateCredentialPolicy;
 };
 
 export type CreateProjectFromTemplateRemoteSandbox = {
-  enabled: boolean;
+  enabled: true;
   baseImage?: string | undefined;
   imageBundleUri?: string | undefined;
   maxSessionLifetimeSeconds: number;
@@ -1209,7 +1209,7 @@ export const CreateProjectFromTemplateDeployments$inboundSchema: z.ZodType<
   CreateProjectFromTemplateDeployments,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   methods: z.array(CreateProjectFromTemplateMethod$inboundSchema).optional(),
 });
 
@@ -1229,8 +1229,8 @@ export const CreateProjectFromTemplateKeys$inboundSchema: z.ZodType<
   CreateProjectFromTemplateKeys,
   unknown
 > = z.object({
-  enabled: z.boolean(),
-  applicationEncryption: z.boolean(),
+  enabled: z.literal(true),
+  applicationEncryption: z.literal(true),
 });
 
 export function createProjectFromTemplateKeysFromJSON(
@@ -1279,7 +1279,7 @@ export const CreateProjectFromTemplateModels$inboundSchema: z.ZodType<
   CreateProjectFromTemplateModels,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   allowedProviders: z.array(
     CreateProjectFromTemplateAllowedProvider$inboundSchema,
   ),
@@ -1308,7 +1308,7 @@ export const CreateProjectFromTemplateBuckets$inboundSchema: z.ZodType<
   CreateProjectFromTemplateBuckets,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   access: CreateProjectFromTemplateAccess$inboundSchema,
 });
 
@@ -1332,7 +1332,7 @@ export const CreateProjectFromTemplateRegistry$inboundSchema: z.ZodType<
   CreateProjectFromTemplateRegistry,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   repositories: z.array(z.string()),
   credentialPolicy: CreateProjectFromTemplateCredentialPolicy$inboundSchema,
 });
@@ -1352,7 +1352,7 @@ export const CreateProjectFromTemplateRemoteSandbox$inboundSchema: z.ZodType<
   CreateProjectFromTemplateRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   baseImage: z.string().optional(),
   imageBundleUri: z.string().optional(),
   maxSessionLifetimeSeconds: z.int(),

@@ -11,9 +11,60 @@
 
 Retrieve all events.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listEvents" method="get" path="/v1/events" -->
+<!-- UsageSnippet language="typescript" operationID="listEvents" method="get" path="/v1/events" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.events.list({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { eventsList } from "@alienplatform/platform-api/funcs/eventsList.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await eventsList(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("eventsList failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listEvents" method="get" path="/v1/events" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 

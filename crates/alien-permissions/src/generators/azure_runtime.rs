@@ -604,7 +604,9 @@ pub fn azure_predefined_role_id(role_name: &str) -> Option<&'static str> {
         "Cognitive Services User" => Some("a97b65f3-24c7-4388-baec-2e87135dc908"),
         // Gates the whole ACA Sandboxes data plane. Subscription Owner is refused against it,
         // so this assignment is required for any sandbox operation, not merely convenient.
-        "Container Apps SandboxGroup Data Owner" => Some("c24cf47c-5077-412d-a19c-45202126392c"),
+        // The constant, not the literal: the reach predicate and the sensitive-content invariant
+        // both key off it, and a copy here could drift out of all three silently.
+        crate::AZURE_SANDBOX_DATA_PLANE_ROLE => Some("c24cf47c-5077-412d-a19c-45202126392c"),
         "Key Vault Contributor" => Some("f25e0fa2-a7c8-4377-a976-54943a77a395"),
         "Key Vault Reader" => Some("21090545-7ca7-4776-b22c-e363652d74d2"),
         "Key Vault Secrets User" => Some("4633458b-17de-408a-b874-0445c86b69e6"),

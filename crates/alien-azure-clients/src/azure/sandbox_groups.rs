@@ -18,7 +18,10 @@ use serde::{Deserialize, Serialize};
 use mockall::automock;
 
 /// ARM API version for sandbox groups.
-const API_VERSION: &str = "2025-02-02-preview";
+///
+/// Must match the provider manifest, data plane, and setup emitter. ARM still answers older
+/// previews, so a mismatch fails silently as a response mismatch, not a rejected version.
+const API_VERSION: &str = "2026-02-01-preview";
 
 /// Scope every ARM call is signed for.
 const ARM_SCOPE: &str = "https://management.azure.com/.default";

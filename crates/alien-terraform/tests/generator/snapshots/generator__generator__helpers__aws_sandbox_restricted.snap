@@ -133,12 +133,12 @@ variable "managing_account_id" {
 
 variable "network_mode" {
   type        = string
-  description = "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+  description = "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC."
   default     = "create-new"
 
   validation {
     condition     = contains(["create-new", "use-existing"], var.network_mode)
-    error_message = "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+    error_message = "network_mode must be create-new or use-existing: this application's private resources must name subnets."
   }
 }
 
@@ -647,7 +647,7 @@ AWS settings:
 
 Network settings:
 
-- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.
+- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.
 - `vpc_cidr`, `availability_zones`: used with `create-new`.
 - `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.
 

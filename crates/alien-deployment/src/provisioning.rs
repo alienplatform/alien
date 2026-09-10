@@ -199,7 +199,7 @@ pub async fn handle_provisioning(
             .collect();
 
         // Interrupt all in-progress resources so every resource reflects its true status.
-        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs);
+        crate::helpers::interrupt_in_progress_resources(&mut next_state, &failed_refs, None);
 
         next.status = DeploymentStatus::ProvisioningFailed;
         next.stack_state = Some(next_state);

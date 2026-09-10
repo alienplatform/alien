@@ -6,8 +6,8 @@
 import { CreateProjectFromTemplateRemoteSandbox } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateRemoteSandbox = {
-  enabled: false,
-  maxSessionLifetimeSeconds: 293103,
+  enabled: true,
+  maxSessionLifetimeSeconds: 601651,
 };
 ```
 
@@ -15,7 +15,7 @@ let value: CreateProjectFromTemplateRemoteSandbox = {
 
 | Field                       | Type                        | Required                    | Description                 |
 | --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `enabled`                   | *boolean*                   | :heavy_check_mark:          | N/A                         |
+| `enabled`                   | *true*                      | :heavy_check_mark:          | N/A                         |
 | `baseImage`                 | *string*                    | :heavy_minus_sign:          | N/A                         |
 | `imageBundleUri`            | *string*                    | :heavy_minus_sign:          | N/A                         |
 | `maxSessionLifetimeSeconds` | *number*                    | :heavy_check_mark:          | N/A                         |

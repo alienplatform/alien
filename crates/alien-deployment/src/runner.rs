@@ -138,7 +138,7 @@ pub async fn run_step_loop(
     .await
 }
 
-/// Run one refresh step for a deployment whose initial status is already Running.
+/// Run one observation step for a Running or RefreshFailed deployment.
 ///
 /// Normal deployment loops treat Running as already synced and stop before
 /// calling [`crate::step()`]. Heartbeat loops use this entry point to execute the
@@ -324,7 +324,10 @@ async fn run_step_loop_body(
         if !should_step_retryable_failure(state) {
             let should_run_initial_running_refresh = allow_initial_running_step
                 && step_count == 1
-                && state.status == DeploymentStatus::Running;
+                && matches!(
+                    state.status,
+                    DeploymentStatus::Running | DeploymentStatus::RefreshFailed
+                );
             if let Some(result) = classify_status(&state.status, policy.operation) {
                 if !should_run_initial_running_refresh {
                     return Ok(RunnerResult {
@@ -963,44 +966,46 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn initial_running_runs_one_step_when_policy_allows_running_start() {
-        let transport = FailFirstCheckpointTransport::default();
-        let mut state = test_state();
-        state.status = DeploymentStatus::Running;
-        state.current_release = state.target_release.take();
-        state.stack_state = Some(StackState::new(Platform::Test));
-        let mut config = test_config();
-        let policy = RunnerPolicy {
-            max_steps: 1,
-            operation: LoopOperation::Deploy,
-            delay_strategy: DelayStrategy::Inline,
-        };
+    async fn heartbeat_runs_one_step_from_running_or_refresh_failed() {
+        for initial_status in [DeploymentStatus::Running, DeploymentStatus::RefreshFailed] {
+            let transport = FailFirstCheckpointTransport::default();
+            let mut state = test_state();
+            state.status = initial_status;
+            state.current_release = state.target_release.take();
+            state.stack_state = Some(StackState::new(Platform::Test));
+            let mut config = test_config();
+            let policy = RunnerPolicy {
+                max_steps: 1,
+                operation: LoopOperation::Deploy,
+                delay_strategy: DelayStrategy::Inline,
+            };
 
-        let result = run_running_refresh_step_loop(
-            &mut state,
-            &mut config,
-            &ClientConfig::Test,
-            "dep_test",
-            &policy,
-            &transport,
-            None,
-            None,
-        )
-        .await
-        .expect("runner should run one heartbeat step for an initially running deployment");
+            let result = run_running_refresh_step_loop(
+                &mut state,
+                &mut config,
+                &ClientConfig::Test,
+                "dep_test",
+                &policy,
+                &transport,
+                None,
+                None,
+            )
+            .await
+            .expect("runner should run one heartbeat step even after a health failure");
 
-        assert_eq!(result.steps_executed, 1);
-        assert_eq!(state.status, DeploymentStatus::RefreshFailed);
-        assert_eq!(
-            transport
-                .checkpointed_statuses
-                .lock()
-                .expect("statuses lock poisoned")
-                .as_slice(),
-            &[
-                DeploymentStatus::RefreshFailed,
-                DeploymentStatus::RefreshFailed
-            ],
-        );
+            assert_eq!(result.steps_executed, 1);
+            assert_eq!(state.status, DeploymentStatus::RefreshFailed);
+            assert_eq!(
+                transport
+                    .checkpointed_statuses
+                    .lock()
+                    .expect("statuses lock poisoned")
+                    .as_slice(),
+                &[
+                    DeploymentStatus::RefreshFailed,
+                    DeploymentStatus::RefreshFailed
+                ],
+            );
+        }
     }
 }

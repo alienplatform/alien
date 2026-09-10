@@ -1,7 +1,11 @@
-use alien_permissions::list_permission_set_ids;
+use alien_permissions::{list_permission_set_ids, AZURE_SANDBOX_DATA_PLANE_ROLE};
 
 const SENSITIVE_IMPLICIT_ACTIONS: &[&str] = &[
     "Microsoft.Storage/storageAccounts/listKeys/action",
+    // The account API key, which is the whole inference surface. Azure spells it `listkeys` in
+    // the role definition and `listKeys` in its docs, which is why every comparison below is
+    // case-insensitive.
+    "Microsoft.CognitiveServices/accounts/listKeys/action",
     "Microsoft.App/containerApps/listSecrets/action",
     "Microsoft.App/managedEnvironments/listSecrets/action",
 ];
@@ -28,9 +32,13 @@ const SENSITIVE_IMPLICIT_DATA_ACTIONS: &[&str] = &[
 const SENSITIVE_IMPLICIT_ROLES: &[&str] = &[
     "AcrPull",
     "AcrPush",
-    // Carries the whole sandbox data plane, session contents included, so it belongs to
-    // sandbox/execute alone. Lifecycle-only callers use the granular actions instead.
-    "Container Apps SandboxGroup Data Owner",
+    // Carries `Microsoft.CognitiveServices/accounts/listkeys/action` and a
+    // `Microsoft.CognitiveServices/*` dataAction, so it hands over the account key.
+    "Cognitive Services User",
+    // Carries the whole sandbox data plane, session contents included, so it belongs only to sets
+    // meant to reach inside a session — `sandbox/execute` and `sandbox/remote-execute`. Named
+    // from the shared constant so this list and the reach predicate cannot disagree.
+    AZURE_SANDBOX_DATA_PLANE_ROLE,
     "Azure Service Bus Data Receiver",
     "Key Vault Secrets User",
     "Storage Blob Data Contributor",
@@ -56,7 +64,7 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
             if let Some(roles) = &entry.grant.predefined_roles {
                 for role in roles {
                     assert!(
-                        !SENSITIVE_IMPLICIT_ROLES.contains(&role.as_str()),
+                        !names_a_sensitive_entry(role, SENSITIVE_IMPLICIT_ROLES),
                         "{permission_set_id} Azure entry {index} uses sensitive predefined role {role}"
                     );
                 }
@@ -65,8 +73,13 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
             if let Some(actions) = &entry.grant.actions {
                 for action in actions {
                     assert!(
-                        !SENSITIVE_IMPLICIT_ACTIONS.contains(&action.as_str()),
+                        !names_a_sensitive_entry(action, SENSITIVE_IMPLICIT_ACTIONS),
                         "{permission_set_id} Azure entry {index} grants sensitive action {action}"
+                    );
+                    assert!(
+                        !wildcard_covers(action, SENSITIVE_IMPLICIT_ACTIONS),
+                        "{permission_set_id} Azure entry {index} covers a sensitive action \
+                         through the wildcard {action}"
                     );
                 }
             }
@@ -74,8 +87,17 @@ fn azure_implicit_management_sets_do_not_grant_sensitive_content() {
             if let Some(data_actions) = &entry.grant.data_actions {
                 for data_action in data_actions {
                     assert!(
-                        !SENSITIVE_IMPLICIT_DATA_ACTIONS.contains(&data_action.as_str()),
+                        !names_a_sensitive_entry(data_action, SENSITIVE_IMPLICIT_DATA_ACTIONS),
                         "{permission_set_id} Azure entry {index} grants sensitive data action {data_action}"
+                    );
+                    // A wildcard covers every action it grants without matching any by string, so
+                    // the list above alone would miss it. Narrower than "reaches a session":
+                    // creating/deleting is reach for the single-tenancy gate but not another
+                    // session's contents, so `sandbox/management`'s lifecycle verbs still pass.
+                    assert!(
+                        !wildcard_covers(data_action, SENSITIVE_IMPLICIT_DATA_ACTIONS),
+                        "{permission_set_id} Azure entry {index} covers a sensitive data action \
+                         through the wildcard {data_action}"
                     );
                 }
             }
@@ -87,4 +109,24 @@ fn is_implicit_management_set(permission_set_id: &str) -> bool {
     permission_set_id.ends_with("/heartbeat")
         || permission_set_id.ends_with("/management")
         || permission_set_id.ends_with("/provision")
+}
+
+/// Whether a granted action carrying a `*` covers anything on `sensitive`. Compared as a prefix
+/// — that's what a wildcard means — and case-insensitively, since Azure spells the same action
+/// both ways itself (`listkeys` in role definitions, `listKeys` in docs).
+fn wildcard_covers(granted: &str, sensitive: &[&str]) -> bool {
+    let Some((literal, _)) = granted.split_once('*') else {
+        return false;
+    };
+    let literal = literal.to_ascii_lowercase();
+    sensitive
+        .iter()
+        .any(|entry| entry.to_ascii_lowercase().starts_with(&literal))
+}
+
+/// Whether `granted` names something on `sensitive`, ignoring case for the same reason.
+fn names_a_sensitive_entry(granted: &str, sensitive: &[&str]) -> bool {
+    sensitive
+        .iter()
+        .any(|entry| entry.eq_ignore_ascii_case(granted))
 }

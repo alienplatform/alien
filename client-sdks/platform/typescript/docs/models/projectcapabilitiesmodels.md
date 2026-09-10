@@ -7,9 +7,7 @@ import { ProjectCapabilitiesModels } from "@alienplatform/platform-api/models";
 
 let value: ProjectCapabilitiesModels = {
   enabled: true,
-  allowedProviders: [
-    "azure-foundry",
-  ],
+  allowedProviders: [],
   requirements: [
     {
       publicModelId: "<id>",
@@ -24,6 +22,6 @@ let value: ProjectCapabilitiesModels = {
 
 | Field                                                                                          | Type                                                                                           | Required                                                                                       | Description                                                                                    |
 | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                      | *boolean*                                                                                      | :heavy_check_mark:                                                                             | N/A                                                                                            |
+| `enabled`                                                                                      | *true*                                                                                         | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `allowedProviders`                                                                             | [models.ProjectCapabilitiesAllowedProvider](../models/projectcapabilitiesallowedprovider.md)[] | :heavy_check_mark:                                                                             | N/A                                                                                            |
 | `requirements`                                                                                 | [models.ProjectCapabilitiesRequirement](../models/projectcapabilitiesrequirement.md)[]         | :heavy_check_mark:                                                                             | N/A                                                                                            |

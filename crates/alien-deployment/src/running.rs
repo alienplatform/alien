@@ -1,7 +1,6 @@
 use crate::{
     DeploymentConfig, DeploymentState, DeploymentStatus, DeploymentStepResult, ErrorData, Result,
 };
-use alien_core::Stack;
 use alien_error::{AlienError, Context};
 use alien_infra::StackExecutor;
 use tracing::info;
@@ -110,6 +109,7 @@ pub async fn handle_running(
     } else {
         info!("Health check passed for all resources");
 
+        next.status = DeploymentStatus::Running;
         next.stack_state = Some(step_result.next_state);
         next.error = None;
 
@@ -123,19 +123,18 @@ pub async fn handle_running(
     }
 }
 
-/// Handle RefreshFailed status - retry failed resources and transition back to Running
+/// Observe recovery after a health failure, or honor an explicit resource retry.
 ///
 /// This step:
-/// 1. Checks if retry_requested flag is set
+/// 1. Continues observation when no retry is requested, preserving controller state
 /// 2. Calls retry_failed() on stack state to recover failed resources
 /// 3. Transitions back to Running status
 /// 4. Sets clear_retry_requested flag to clear the retry marker
 pub async fn handle_refresh_failed(
     current: DeploymentState,
-    _target_stack: Stack,
-    _config: DeploymentConfig,
-    _client_config: alien_core::ClientConfig,
-    _service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
+    config: DeploymentConfig,
+    client_config: alien_core::ClientConfig,
+    service_provider: std::sync::Arc<dyn alien_infra::PlatformServiceProvider>,
 ) -> Result<DeploymentStepResult> {
     info!("Handling RefreshFailed status");
 
@@ -144,14 +143,9 @@ pub async fn handle_refresh_failed(
 
     // Check if retry was requested
     if !current.retry_requested {
-        info!("No retry requested, staying in RefreshFailed status");
-        return Ok(DeploymentStepResult {
-            state: current,
-            suggested_delay_ms: None,
-            update_heartbeat: false,
-            heartbeats: vec![],
-            observed_inventory_batches: vec![],
-        });
+        // Observation must continue after a transient health failure. Do not
+        // reset controller state or enter a create/update retry flow here.
+        return handle_running(current, config, client_config, service_provider).await;
     }
 
     info!("Retrying failed resources");

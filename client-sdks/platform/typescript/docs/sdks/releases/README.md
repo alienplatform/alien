@@ -16,9 +16,60 @@
 
 Retrieve all releases.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listReleases" method="get" path="/v1/releases" -->
+<!-- UsageSnippet language="typescript" operationID="listReleases" method="get" path="/v1/releases" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releases.list({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesList } from "@alienplatform/platform-api/funcs/releasesList.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releasesList(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesList failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listReleases" method="get" path="/v1/releases" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -193,9 +244,60 @@ run();
 
 List distinct git branches across releases. Used for filter dropdowns.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listReleaseBranches" method="get" path="/v1/releases/branches" -->
+<!-- UsageSnippet language="typescript" operationID="listReleaseBranches" method="get" path="/v1/releases/branches" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releases.listBranches({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesListBranches } from "@alienplatform/platform-api/funcs/releasesListBranches.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releasesListBranches(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesListBranches failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listReleaseBranches" method="get" path="/v1/releases/branches" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -269,9 +371,60 @@ run();
 
 List distinct commit authors across releases. Used for filter dropdowns.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listReleaseAuthors" method="get" path="/v1/releases/authors" -->
+<!-- UsageSnippet language="typescript" operationID="listReleaseAuthors" method="get" path="/v1/releases/authors" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releases.listAuthors({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesListAuthors } from "@alienplatform/platform-api/funcs/releasesListAuthors.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releasesListAuthors(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesListAuthors failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listReleaseAuthors" method="get" path="/v1/releases/authors" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -497,9 +650,70 @@ run();
 
 ## promote
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="promoteRelease" method="post" path="/v1/release-channels/{name}/promote" -->
+<!-- UsageSnippet language="typescript" operationID="promoteRelease" method="post" path="/v1/release-channels/{name}/promote" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.releases.promote({
+    name: "<value>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      expectedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { releasesPromote } from "@alienplatform/platform-api/funcs/releasesPromote.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await releasesPromote(alien, {
+    name: "<value>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      expectedReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("releasesPromote failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="promoteRelease" method="post" path="/v1/release-channels/{name}/promote" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 

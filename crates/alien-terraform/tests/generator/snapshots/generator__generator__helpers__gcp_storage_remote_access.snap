@@ -374,7 +374,7 @@ output "deployment_resources" {
 === PERMISSIONS.md ===
 # Application access permissions
 
-The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.
+The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive the setup's management permissions.
 
 ## `uploads` (storage)
 

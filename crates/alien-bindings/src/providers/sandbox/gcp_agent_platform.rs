@@ -20,8 +20,8 @@ use tracing::warn;
 
 use crate::error::{ErrorData, Result};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, PreviewCapability, RunCommandRequest, Sandbox,
-    SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSessionRequest, JobError, JobExit, JobPoll, JobStart,
+    PreviewCapability, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
@@ -71,6 +71,9 @@ const CREATE: &str = "sandbox.create";
 const GET: &str = "sandbox.get";
 const GET_OR_CREATE: &str = "sandbox.getOrCreate";
 const RUN_COMMAND: &str = "sandbox.runCommand";
+const JOB_START: &str = "sandbox.jobStart";
+const JOB_POLL: &str = "sandbox.jobPoll";
+const JOB_CANCEL: &str = "sandbox.jobCancel";
 const TERMINATE: &str = "sandbox.terminate";
 
 /// The generation of a session whose live container identity was not established: a state with no
@@ -278,7 +281,7 @@ impl GcpAgentPlatformSandbox {
         // a `:execute` carrying a command leaves its outcome unestablished. The cause stays on the
         // chain rather than in `reason`, keeping a redacted request body out of an externally
         // visible message.
-        if operation == RUN_COMMAND {
+        if operation == RUN_COMMAND || operation == JOB_START {
             return error.context(ErrorData::SandboxOutcomeUnknown {
                 operation: operation.to_string(),
                 reason: "the session did not complete the call".to_string(),
@@ -448,32 +451,10 @@ impl GcpAgentPlatformSandbox {
     async fn run_detached(
         &self,
         session_id: &str,
-        request: &RunCommandRequest,
+        request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        let envelope = exec_envelope("jobStart", session_id, request);
-        let body = self.execute_op(session_id, RUN_COMMAND, envelope).await?;
-
-        #[derive(Deserialize)]
-        #[serde(rename_all = "camelCase")]
-        struct JobStart {
-            job_id: String,
-        }
-        // The `:execute` succeeded, so the job was accepted and is running; only its id could not
-        // be read. Nothing can poll or cancel it after this, and the command's own deadline is what
-        // bounds it — so the outcome is unestablished rather than a bad response shape.
-        let started: JobStart = serde_json::from_slice(&body).map_err(|_| {
-            AlienError::new(ErrorData::UnexpectedResponseFormat {
-                provider: "gcp-agent-platform".to_string(),
-                binding_name: RUN_COMMAND.to_string(),
-                field: "jobId".to_string(),
-                response_json: truncated(&body),
-            })
-            .context(ErrorData::SandboxOutcomeUnknown {
-                operation: RUN_COMMAND.to_string(),
-                reason: "the job started and its id could not be read, so it cannot be polled"
-                    .to_string(),
-            })
-        })?;
+        let deadline = request.deadline;
+        let started = self.start_job(session_id, request).await?;
 
         let state = JobPollState {
             client: self.client.clone(),
@@ -483,10 +464,31 @@ impl GcpAgentPlatformSandbox {
             since_seq: None,
             pending: VecDeque::new(),
             finished: false,
-            deadline_at: tokio::time::Instant::now() + request.deadline + JOB_POLL_GRACE,
+            deadline_at: tokio::time::Instant::now() + deadline + JOB_POLL_GRACE,
         };
 
         Ok(Box::pin(stream::unfold(state, job_poll_step)))
+    }
+
+    /// Refuses a command the agent would refuse anyway, before a call is spent on it.
+    fn checked_command(operation: &str, request: &RunCommandRequest) -> Result<()> {
+        if request.command.is_empty() {
+            return Err(AlienError::new(ErrorData::InvalidInput {
+                operation_context: operation.to_string(),
+                details: "a command must name a program to run".to_string(),
+                field_name: Some("command".to_string()),
+            }));
+        }
+        // Refused rather than defaulted, and refused where it floors to zero milliseconds too: the
+        // agent rejects a `deadlineMs` of 0, and a defaulted deadline is a hang waiting for a slow
+        // day in a session running code the caller does not control.
+        if deadline_millis(request.deadline) == 0 {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "invalidRequest".to_string(),
+                reason: "a command must carry a deadline of at least one millisecond".to_string(),
+            }));
+        }
+        Ok(())
     }
 }
 
@@ -498,6 +500,9 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
+    /// The platform's row, unnarrowed. `sessionLifetime` stays true even with no declared ttl:
+    /// the API always sets `expireTime` on output, so an undeclared session still carries a
+    /// deadline the platform enforces.
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::gcp_agent_platform()
     }
@@ -506,13 +511,26 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // A session inherits no per-session environment: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
+        // `OperationNotSupported`, not `InvalidInput`: the value is fine, the backend has nowhere
+        // to put it. AWS answers the identical condition the same way, and a portable caller
+        // branching on the code must not get two answers for one situation.
         if !request.env.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidInput {
-                operation_context: CREATE.to_string(),
-                details: "Agent Platform carries no per-session environment; pass variables on \
-                          each command instead"
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no session-level env; set env per command \
+                         instead"
                     .to_string(),
-                field_name: Some("env".to_string()),
+            }));
+        }
+
+        // Same reason as `env` above: nowhere to carry a tenant key, so accepting one would
+        // silently merge tenants into one sandbox.
+        if request.tenant_key.is_some() {
+            return Err(AlienError::new(ErrorData::OperationNotSupported {
+                operation: CREATE.to_string(),
+                reason: "Agent Platform sandboxes take no tenantKey; create one sandbox per \
+                         tenant instead"
+                    .to_string(),
             }));
         }
 
@@ -680,30 +698,96 @@ impl Sandbox for GcpAgentPlatformSandbox {
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
         Self::checked_session_id(RUN_COMMAND, session_id)?;
-        if request.command.is_empty() {
-            return Err(AlienError::new(ErrorData::InvalidInput {
-                operation_context: RUN_COMMAND.to_string(),
-                details: "a command must name a program to run".to_string(),
-                field_name: Some("command".to_string()),
-            }));
-        }
-        // Refused rather than defaulted, and refused where it floors to zero milliseconds too: the
-        // agent rejects a `deadlineMs` of 0, and a defaulted deadline is a hang waiting for a slow
-        // day in a session running code the caller does not control.
-        if deadline_millis(request.deadline) == 0 {
-            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "invalidRequest".to_string(),
-                reason: "a command must carry a deadline of at least one millisecond".to_string(),
-            }));
-        }
+        Self::checked_command(RUN_COMMAND, &request)?;
 
         // The synchronous window is the proxy's, not the command's: a command that outlives one
         // `:execute` is detached as a job so a later poll can still reach its output.
         if request.deadline <= MAX_SYNCHRONOUS_DEADLINE {
             self.run_synchronous(session_id, &request).await
         } else {
-            self.run_detached(session_id, &request).await
+            self.run_detached(session_id, request).await
         }
+    }
+
+    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        Self::checked_session_id(JOB_START, session_id)?;
+        Self::checked_command(JOB_START, &request)?;
+
+        let envelope = exec_envelope("jobStart", session_id, &request);
+        let body = self.execute_op(session_id, JOB_START, envelope).await?;
+
+        // The `:execute` succeeded, so the job was accepted and is running; only its id could not
+        // be read. Nothing can poll or cancel it after this, and the command's own deadline is
+        // what bounds it — so the outcome is unestablished rather than a reply that failed to read.
+        let started: JobStartReply = serde_json::from_slice(&body).map_err(|_| {
+            AlienError::new(ErrorData::UnexpectedResponseFormat {
+                provider: "gcp-agent-platform".to_string(),
+                binding_name: JOB_START.to_string(),
+                field: "jobId".to_string(),
+                response_json: truncated(&body),
+            })
+            .context(ErrorData::SandboxOutcomeUnknown {
+                operation: JOB_START.to_string(),
+                reason: "the job started and its id could not be read, so it cannot be polled"
+                    .to_string(),
+            })
+        })?;
+
+        Ok(JobStart {
+            job_id: started.job_id,
+        })
+    }
+
+    async fn poll_job(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
+    ) -> Result<JobPoll> {
+        Self::checked_session_id(JOB_POLL, session_id)?;
+        let reply = poll_once(
+            self.client.as_ref(),
+            &self.engine,
+            session_id,
+            job_id,
+            since_seq,
+        )
+        .await?;
+
+        Ok(JobPoll {
+            running: reply.running,
+            frames: reply
+                .frames
+                .into_iter()
+                .map(WireFrame::into_output)
+                .collect::<Result<Vec<_>>>()?,
+            exit: reply.exit_code.map(|code| JobExit {
+                code,
+                truncated: reply.truncated.unwrap_or(false),
+            }),
+            error: reply.error.map(|error| JobError {
+                code: error.code,
+                message: error.message,
+            }),
+        })
+    }
+
+    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()> {
+        Self::checked_session_id(JOB_CANCEL, session_id)?;
+        let body = self
+            .client
+            .execute(&self.engine, session_id, &cancel_body(job_id))
+            .await
+            .map_err(|error| unanswered_job(JOB_CANCEL, error))?;
+
+        if !cancel_confirmed(&body) {
+            return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                failure: "agentRefused".to_string(),
+                reason: format!("{JOB_CANCEL}: {}", truncated(&body)),
+            }));
+        }
+
+        Ok(())
     }
 
     async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
@@ -849,13 +933,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // Accepted, not completed: the client returns before the sandbox is gone. Returning here
         // would report containment while the code may still run, which is the whole point of
         // terminate — so the delete is confirmed by polling to not-found.
-        self.client
-            .delete_sandbox(&self.engine, session_id)
-            .await
-            .context(ErrorData::SandboxUnreachable {
-                operation: TERMINATE.to_string(),
-                reason: format!("the delete of session '{session_id}' was not accepted"),
-            })?;
+        // A session that is already gone is the state terminate exists to reach, so not-found is
+        // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
+        // for a session another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await {
+            if !is_not_found(&error) {
+                return Err(error.context(ErrorData::SandboxUnreachable {
+                    operation: TERMINATE.to_string(),
+                    reason: format!("the delete of session '{session_id}' was not accepted"),
+                }));
+            }
+            return Ok(());
+        }
 
         for _ in 0..TERMINATE_POLL_ATTEMPTS {
             match self.client.get_sandbox(&self.engine, session_id).await {
@@ -904,13 +993,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                     &cancel_body(&state.job_id),
                 )
                 .await;
-            // A reply arriving is not the cancel succeeding: the agent answers `{}` when it
-            // cancelled the job and its own error text when it did not — `JobNotFound`, say — and
-            // both come back through a successful `:execute`. Only the first proves the command
-            // was stopped, so only the first may name an established outcome.
-            let confirmed = cancelled.as_ref().is_ok_and(|body| {
-                serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
-            });
+            let confirmed = cancelled.as_ref().is_ok_and(|body| cancel_confirmed(body));
             state.pending.push_back(Err(match cancelled {
                 Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "deadlineExceeded".to_string(),
@@ -932,46 +1015,25 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             continue;
         }
 
-        let body = match state
-            .client
-            .execute(
-                &state.engine,
-                &state.session_id,
-                &poll_body(&state.job_id, state.since_seq),
-            )
-            .await
+        let poll = match poll_once(
+            state.client.as_ref(),
+            &state.engine,
+            &state.session_id,
+            &state.job_id,
+            state.since_seq,
+        )
+        .await
         {
-            Ok(body) => body,
+            Ok(poll) => poll,
+            // A standalone poll is repeatable, but this one watches a running command, and giving
+            // up on it leaves that command's outcome unestablished.
             Err(error) => {
                 state
                     .pending
-                    .push_back(Err(GcpAgentPlatformSandbox::execute_failed(
-                        RUN_COMMAND,
-                        error,
-                    )));
-                state.finished = true;
-                continue;
-            }
-        };
-
-        let poll: JobPoll = match serde_json::from_slice(&body) {
-            Ok(poll) => poll,
-            Err(_) => {
-                // The job is still running and this stops watching it, so its outcome is
-                // unestablished — not merely a reply this could not read.
-                state.pending.push_back(Err(AlienError::new(
-                    ErrorData::UnexpectedResponseFormat {
-                        provider: "gcp-agent-platform".to_string(),
-                        binding_name: RUN_COMMAND.to_string(),
-                        field: "jobPoll".to_string(),
-                        response_json: truncated(&body),
-                    },
-                )
-                .context(ErrorData::SandboxOutcomeUnknown {
-                    operation: RUN_COMMAND.to_string(),
-                    reason: "the job's reply could not be read, so it is no longer watched"
-                        .to_string(),
-                })));
+                    .push_back(Err(error.context(ErrorData::SandboxOutcomeUnknown {
+                        operation: RUN_COMMAND.to_string(),
+                        reason: "the job is no longer watched".to_string(),
+                    })));
                 state.finished = true;
                 continue;
             }
@@ -1025,6 +1087,64 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
     }
 }
 
+/// One `jobPoll` against a session, classified as a standalone poll: nothing about the job
+/// changes, so a call that fails is worth repeating. `run_command`'s loop re-contexts it.
+async fn poll_once(
+    client: &dyn AgentPlatformApi,
+    engine: &str,
+    session_id: &str,
+    job_id: &str,
+    since_seq: Option<u64>,
+) -> Result<JobPollReply> {
+    let body = client
+        .execute(engine, session_id, &poll_body(job_id, since_seq))
+        .await
+        .map_err(|error| unanswered_job(JOB_POLL, error))?;
+
+    serde_json::from_slice(&body).map_err(|_| {
+        AlienError::new(ErrorData::UnexpectedResponseFormat {
+            provider: "gcp-agent-platform".to_string(),
+            binding_name: JOB_POLL.to_string(),
+            field: "jobPoll".to_string(),
+            response_json: truncated(&body),
+        })
+    })
+}
+
+/// A poll or cancel that did not complete. Both leave the job exactly as it was, so unlike a
+/// command they carry the retry signal; a session that is gone is an answer rather than a failure.
+fn unanswered_job(
+    operation: &str,
+    error: AlienError<AgentPlatformErrorData>,
+) -> AlienError<ErrorData> {
+    if is_not_found(&error) {
+        return error.context(ErrorData::SandboxCommandFailed {
+            failure: "sessionGone".to_string(),
+            reason: format!("{operation}: the session does not exist"),
+        });
+    }
+    error.context(ErrorData::SandboxUnreachable {
+        operation: operation.to_string(),
+        reason: "the session did not complete the call".to_string(),
+    })
+}
+
+/// Whether a `jobCancel` reply is the cancel landing.
+///
+/// A reply arriving is not the cancel succeeding: the agent answers `{}` when it cancelled the job
+/// and its own error text when it did not — `JobNotFound`, say — and both come back through a
+/// successful `:execute`.
+fn cancel_confirmed(body: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+}
+
+/// The id a started job answers to, as the agent's `jobStart` returns it.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobStartReply {
+    job_id: String,
+}
+
 /// The bookkeeping a detached job's poll loop carries between steps.
 struct JobPollState {
     client: Arc<dyn AgentPlatformApi>,
@@ -1040,7 +1160,7 @@ struct JobPollState {
 /// A job's output so far, and how it ended once it has. Mirrors the agent's `jobPoll` reply.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JobPoll {
+struct JobPollReply {
     running: bool,
     #[serde(default)]
     frames: Vec<WireFrame>,
@@ -1049,12 +1169,12 @@ struct JobPoll {
     #[serde(default)]
     truncated: Option<bool>,
     #[serde(default)]
-    error: Option<JobError>,
+    error: Option<JobErrorReply>,
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct JobError {
+struct JobErrorReply {
     code: String,
     message: String,
 }

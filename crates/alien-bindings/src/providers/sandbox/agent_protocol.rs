@@ -21,13 +21,17 @@ use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{ErrorData, Result};
-use crate::traits::{CommandOutput, RunCommandRequest};
+use crate::traits::{CommandOutput, JobError, JobExit, JobPoll, JobStart, RunCommandRequest};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 pub use alien_core::sandbox_process::AGENT_PORT;
 
 /// Named once: `send` treats it as the one operation a 5xx must not be retried for.
 const RUN_COMMAND: &str = "sandbox.runCommand";
+
+const JOB_START: &str = "sandbox.jobStart";
+const JOB_POLL: &str = "sandbox.jobPoll";
+const JOB_CANCEL: &str = "sandbox.jobCancel";
 
 /// How long a request to the agent may take to answer with its headers.
 ///
@@ -88,27 +92,40 @@ struct ReadFileResponse {
     contents_base64: String,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobStartResponse {
+    job_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobPollResponse {
+    running: bool,
+    #[serde(default)]
+    frames: Vec<AgentFrame>,
+    #[serde(default)]
+    exit_code: Option<i32>,
+    #[serde(default)]
+    truncated: Option<bool>,
+    #[serde(default)]
+    error: Option<JobErrorResponse>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JobErrorResponse {
+    code: String,
+    message: String,
+}
+
 /// Runs a command, streaming frames as the agent produces them.
 pub async fn run_command<T: AgentTransport + ?Sized>(
     transport: &T,
     session_id: &str,
     request: RunCommandRequest,
 ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-    // Checked after conversion, not on the Duration: a sub-millisecond deadline is non-zero here
-    // and floors to `deadlineMs: 0`, which the agent then refuses as invalid.
-    if deadline_millis(request.deadline) == 0 {
-        return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-            failure: "invalidRequest".to_string(),
-            reason: "a command must carry a non-zero deadline".to_string(),
-        }));
-    }
-
-    let body = json!({
-        "command": request.command,
-        "deadlineMs": deadline_millis(request.deadline),
-        "workingDirectory": request.working_directory,
-        "env": request.env,
-    });
+    let body = exec_body(&request)?;
 
     let response = send(
         transport
@@ -120,6 +137,127 @@ pub async fn run_command<T: AgentTransport + ?Sized>(
     .await?;
 
     Ok(frame_stream(response, transport.provider()))
+}
+
+/// Starts a command as a job the agent owns until it is polled to its end or cancelled.
+pub async fn start_job<T: AgentTransport + ?Sized>(
+    transport: &T,
+    session_id: &str,
+    request: RunCommandRequest,
+) -> Result<JobStart> {
+    let body = exec_body(&request)?;
+
+    let response = send(
+        transport
+            .request(session_id, reqwest::Method::POST, "/v1/jobs/start")
+            .await?
+            .json(&body),
+        JOB_START,
+    )
+    .await?;
+
+    let started: JobStartResponse = response
+        .json()
+        .await
+        .into_alien_error()
+        .context(ErrorData::UnexpectedResponseFormat {
+            provider: transport.provider().to_string(),
+            binding_name: JOB_START.to_string(),
+            field: "jobId".to_string(),
+            response_json: "the agent returned a body this provider cannot parse".to_string(),
+        })
+        // The job is running and nothing can now poll or cancel it, so its end is unestablished
+        // rather than merely unreadable.
+        .context(unanswered(
+            JOB_START,
+            "the job started and its id could not be read",
+        ))?;
+
+    Ok(JobStart {
+        job_id: started.job_id,
+    })
+}
+
+/// Reads a job's output after `since_seq`, and its ending once it has one.
+pub async fn poll_job<T: AgentTransport + ?Sized>(
+    transport: &T,
+    session_id: &str,
+    job_id: &str,
+    since_seq: Option<u64>,
+) -> Result<JobPoll> {
+    let response = send(
+        transport
+            .request(session_id, reqwest::Method::POST, "/v1/jobs/poll")
+            .await?
+            .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
+        JOB_POLL,
+    )
+    .await?;
+
+    let JobPollResponse {
+        running,
+        frames,
+        exit_code,
+        truncated,
+        error,
+    } = response
+        .json()
+        .await
+        .into_alien_error()
+        .context(unanswered(JOB_POLL, "the poll's body could not be read"))?;
+
+    Ok(JobPoll {
+        running,
+        frames: frames
+            .into_iter()
+            .map(|frame| frame.into_output(transport.provider()))
+            .collect::<Result<Vec<_>>>()?,
+        exit: exit_code.map(|code| JobExit {
+            code,
+            truncated: truncated.unwrap_or(false),
+        }),
+        error: error.map(|error| JobError {
+            code: error.code,
+            message: error.message,
+        }),
+    })
+}
+
+/// Cancels a job, stopping the command it runs.
+pub async fn cancel_job<T: AgentTransport + ?Sized>(
+    transport: &T,
+    session_id: &str,
+    job_id: &str,
+) -> Result<()> {
+    send(
+        transport
+            .request(session_id, reqwest::Method::POST, "/v1/jobs/cancel")
+            .await?
+            .json(&json!({ "jobId": job_id })),
+        JOB_CANCEL,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// The body `/v1/exec` and `/v1/jobs/start` both take.
+fn exec_body(request: &RunCommandRequest) -> Result<serde_json::Value> {
+    // Checked after conversion, not on the Duration: a sub-millisecond deadline is non-zero here
+    // and floors to `deadlineMs: 0`, which the agent then refuses as invalid.
+    if deadline_millis(request.deadline) == 0 {
+        return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+            failure: "invalidRequest".to_string(),
+            reason: "a command must carry a non-zero deadline".to_string(),
+        }));
+    }
+
+    Ok(json!({
+        "command": request.command,
+        "deadlineMs": deadline_millis(request.deadline),
+        "workingDirectory": request.working_directory,
+        "env": request.env,
+    }))
 }
 
 /// Reads a file out of the sandbox.
@@ -213,7 +351,9 @@ fn deadline_millis(deadline: Duration) -> u64 {
 /// have started the command — and past the headers it certainly did — so a repeat could run it
 /// twice, and the refusal must not carry the retry signal.
 fn unanswered(operation: &str, reason: &str) -> ErrorData {
-    if operation == RUN_COMMAND {
+    // Both take a command the agent may already be running, so an unanswered one leaves the
+    // outcome unestablished. Every other operation is idempotent and safe to send again.
+    if operation == RUN_COMMAND || operation == JOB_START {
         return ErrorData::SandboxOutcomeUnknown {
             operation: operation.to_string(),
             reason: reason.to_string(),
@@ -438,11 +578,13 @@ fn malformed(reason: &str, provider: &'static str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use crate::traits::CommandOutput;
+    use axum::extract::State;
     use axum::http::StatusCode;
     use axum::response::IntoResponse;
     use axum::routing::post;
-    use axum::Router;
+    use axum::{Json, Router};
     use std::net::SocketAddr;
+    use std::sync::{Arc, Mutex};
 
     async fn serve_frames(chunks: Vec<&'static str>) -> String {
         let handler = move || {
@@ -824,7 +966,10 @@ mod tests {
     /// repeat would be a second execution.
     #[tokio::test]
     async fn a_frame_that_arrives_but_does_not_decode_leaves_the_outcome_unknown() {
-        let outputs = frames_from(vec!["{\"t\":\"stdout\",\"seq\":0,\"data\":\"!!not base64!!\"}\n"]).await;
+        let outputs = frames_from(vec![
+            "{\"t\":\"stdout\",\"seq\":0,\"data\":\"!!not base64!!\"}\n",
+        ])
+        .await;
 
         let error = outputs[0]
             .as_ref()
@@ -846,7 +991,9 @@ mod tests {
     async fn a_frame_that_does_not_parse_leaves_the_outcome_unknown() {
         let outputs = frames_from(vec!["{not json at all}\n"]).await;
 
-        let error = outputs[0].as_ref().expect_err("a malformed frame is not output");
+        let error = outputs[0]
+            .as_ref()
+            .expect_err("a malformed frame is not output");
         assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
         assert!(!error.retryable, "the command ran: {error}");
         assert!(
@@ -866,8 +1013,14 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(outputs.len(), 1, "the exit frame must not follow the failure");
-        let error = outputs[0].as_ref().expect_err("a malformed frame is not output");
+        assert_eq!(
+            outputs.len(),
+            1,
+            "the exit frame must not follow the failure"
+        );
+        let error = outputs[0]
+            .as_ref()
+            .expect_err("a malformed frame is not output");
         assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
     }
 
@@ -879,9 +1032,16 @@ mod tests {
         ])
         .await;
 
-        assert_eq!(outputs.len(), 1, "the exit frame must not follow the failure");
         assert_eq!(
-            outputs[0].as_ref().expect_err("a bad payload is not output").code,
+            outputs.len(),
+            1,
+            "the exit frame must not follow the failure"
+        );
+        assert_eq!(
+            outputs[0]
+                .as_ref()
+                .expect_err("a bad payload is not output")
+                .code,
             "SANDBOX_OUTCOME_UNKNOWN"
         );
     }
@@ -921,5 +1081,223 @@ mod tests {
             .as_ref()
             .expect_err("an error frame is a failure");
         assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+    }
+
+    /// A transport that authorizes nothing, so the tests exercise the protocol rather than a
+    /// backend's credentials.
+    #[derive(Debug)]
+    struct TestTransport(String);
+
+    #[async_trait]
+    impl AgentTransport for TestTransport {
+        async fn request(
+            &self,
+            _session_id: &str,
+            method: reqwest::Method,
+            path: &str,
+        ) -> Result<reqwest::RequestBuilder> {
+            Ok(reqwest::Client::new().request(method, format!("{}{path}", self.0)))
+        }
+
+        fn provider(&self) -> &'static str {
+            "test-sandbox"
+        }
+    }
+
+    async fn serve(router: Router) -> TestTransport {
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move { axum::serve(listener, router).await.expect("serve") });
+        TestTransport(format!("http://{address}"))
+    }
+
+    /// What the agent was asked for, so a test can assert the cursor it received rather than only
+    /// the frames it chose to send back.
+    type Cursors = Arc<Mutex<Vec<Option<u64>>>>;
+
+    /// An agent running one job: it reports a frame while running, then its exit.
+    async fn job_agent(cursors: Cursors) -> TestTransport {
+        async fn poll(
+            State(cursors): State<Cursors>,
+            Json(body): Json<serde_json::Value>,
+        ) -> impl IntoResponse {
+            let since = body.get("sinceSeq").and_then(serde_json::Value::as_u64);
+            cursors.lock().expect("cursors").push(since);
+            match since {
+                None => Json(json!({
+                    "running": true,
+                    "frames": [{ "t": "stdout", "seq": 0, "data": "aGk=" }],
+                })),
+                Some(_) => Json(json!({
+                    "running": false,
+                    "frames": [],
+                    "exitCode": 7,
+                    "truncated": false,
+                })),
+            }
+        }
+
+        serve(
+            Router::new()
+                .route(
+                    "/v1/jobs/start",
+                    post(|| async { Json(json!({"jobId": "j1"})) }),
+                )
+                .route("/v1/jobs/poll", post(poll))
+                .route("/v1/jobs/cancel", post(|| async { Json(json!({})) }))
+                .with_state(cursors),
+        )
+        .await
+    }
+
+    /// The whole job round trip: a start that names the job, a first poll that reads from the
+    /// beginning, a second that asks only for what is new, and a cancel the agent accepts.
+    #[tokio::test]
+    async fn a_job_starts_polls_from_its_cursor_and_cancels() {
+        let cursors: Cursors = Arc::new(Mutex::new(Vec::new()));
+        let transport = job_agent(Arc::clone(&cursors)).await;
+
+        let started = start_job(&transport, "s1", command(Duration::from_secs(600)))
+            .await
+            .expect("the job starts");
+        assert_eq!(started.job_id, "j1");
+
+        let first = poll_job(&transport, "s1", &started.job_id, None)
+            .await
+            .expect("the first poll answers");
+        assert!(first.running, "the job is still running: {first:?}");
+        assert_eq!(
+            first.frames,
+            vec![CommandOutput::Stdout {
+                seq: 0,
+                data: b"hi".to_vec()
+            }],
+            "the agent's base64 frame is decoded"
+        );
+        assert!(first.exit.is_none() && first.error.is_none());
+
+        let second = poll_job(&transport, "s1", &started.job_id, Some(0))
+            .await
+            .expect("the second poll answers");
+        assert!(!second.running);
+        assert!(second.frames.is_empty(), "nothing follows the last frame");
+        assert_eq!(
+            second.exit,
+            Some(crate::traits::JobExit {
+                code: 7,
+                truncated: false
+            }),
+            "the ending is the envelope's, not a frame's"
+        );
+
+        cancel_job(&transport, "s1", &started.job_id)
+            .await
+            .expect("the cancel is accepted");
+
+        assert_eq!(
+            *cursors.lock().expect("cursors"),
+            vec![None, Some(0)],
+            "the cursor a caller passes has to reach the agent, or every poll replays the whole \
+             output and a caller sees each frame twice"
+        );
+    }
+
+    /// A start the agent may have taken is the one job call that must not invite a retry.
+    #[tokio::test]
+    async fn a_server_error_on_a_start_leaves_the_outcome_unknown() {
+        let transport = serve(Router::new().route(
+            "/v1/jobs/start",
+            post(|| async { (StatusCode::INTERNAL_SERVER_ERROR, "spawn failed").into_response() }),
+        ))
+        .await;
+
+        let error = start_job(&transport, "s1", command(Duration::from_secs(600)))
+            .await
+            .expect_err("a 5xx is not a job that started");
+
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+        assert!(
+            !error.retryable,
+            "the agent may have taken the command, and a repeat would run it twice: {error}"
+        );
+        assert!(
+            error.to_string().contains("sandbox.jobStart"),
+            "the operation reaches callers and telemetry, so a failed start has to be tellable \
+             apart from a failed streaming command: {error}"
+        );
+    }
+
+    /// A poll changes nothing about the job, so a failed one is worth repeating — the opposite of
+    /// the rule above, and the reason the two carry different operation names.
+    #[tokio::test]
+    async fn a_server_error_on_a_poll_stays_retryable() {
+        let transport = serve(Router::new().route(
+            "/v1/jobs/poll",
+            post(|| async { (StatusCode::SERVICE_UNAVAILABLE, "").into_response() }),
+        ))
+        .await;
+
+        let error = poll_job(&transport, "s1", "j1", Some(4))
+            .await
+            .expect_err("a 5xx is not a poll that answered");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "got: {error}");
+        assert!(error.retryable, "the job is untouched: {error}");
+    }
+
+    /// A body that stops half way is indistinguishable from a poll that never answered, and the
+    /// job is still there to be polled again.
+    #[tokio::test]
+    async fn a_poll_body_that_ends_early_is_retryable() {
+        let transport = serve(Router::new().route(
+            "/v1/jobs/poll",
+            post(|| async {
+                axum::body::Body::from_stream(futures::stream::iter(vec![
+                    Ok::<_, std::io::Error>(bytes::Bytes::from_static(b"{\"running\":tr")),
+                    Err(std::io::Error::other("the connection went")),
+                ]))
+                .into_response()
+            }),
+        ))
+        .await;
+
+        let error = poll_job(&transport, "s1", "j1", None)
+            .await
+            .expect_err("a truncated body is not a poll");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE", "got: {error}");
+        assert!(error.retryable, "polling again costs nothing: {error}");
+    }
+
+    /// A cancel the agent refuses — an unknown job, say — is an answer, so it reaches the caller
+    /// as the agent's refusal rather than as a sandbox that could not be reached.
+    #[tokio::test]
+    async fn a_refused_cancel_is_the_agent_answering() {
+        let transport = serve(Router::new().route(
+            "/v1/jobs/cancel",
+            post(|| async { (StatusCode::NOT_FOUND, "JOB_NOT_FOUND").into_response() }),
+        ))
+        .await;
+
+        let error = cancel_job(&transport, "s1", "j1")
+            .await
+            .expect_err("a 404 is not a cancel that landed");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "got: {error}");
+        assert!(
+            error.to_string().contains("JOB_NOT_FOUND"),
+            "the agent's own reason has to survive: {error}"
+        );
+    }
+
+    fn command(deadline: Duration) -> RunCommandRequest {
+        RunCommandRequest {
+            command: vec!["/bin/sleep".to_string(), "600".to_string()],
+            working_directory: None,
+            env: BTreeMap::new(),
+            deadline,
+        }
     }
 }

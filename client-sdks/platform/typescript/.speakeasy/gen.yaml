@@ -16,6 +16,8 @@ generation:
     requestResponseComponentNamesFeb2024: true
     securityFeb2025: true
     sharedErrorComponentsApr2025: true
+    sharedNestedComponentsJan2026: false
+    nameOverrideFeb2026: false
   auth:
     oAuth2ClientCredentialsEnabled: false
     oAuth2PasswordEnabled: false
@@ -25,15 +27,15 @@ generation:
   schemas:
     allOfMergeStrategy: shallowMerge
   requestBodyFieldName: ""
+  versioningStrategy: manual
   persistentEdits:
     enabled: never
   tests:
     generateTests: false
     generateNewTests: true
     skipResponseBodyAssertions: false
-  versioningStrategy: manual
 typescript:
-  version: 3.3.20
+  version: 3.3.21
   acceptHeaderEnum: true
   additionalDependencies:
     dependencies: {}
@@ -48,6 +50,7 @@ typescript:
       url: https://github.com/alienplatform/alien.git
   additionalScripts: {}
   alwaysIncludeInboundAndOutbound: false
+  apiPromiseHelpers: false
   author: Alien Software, Inc. <hi@alien.dev>
   baseErrorName: AlienError
   clientServerStatusCodesAsErrors: true
@@ -62,7 +65,10 @@ typescript:
   enableReactQuery: true
   enumFormat: union
   envVarPrefix: ALIEN
+  eventStreamClassName: EventStream
   exportZodModelNamespace: false
+  fixEnumNameSanitization: false
+  flatAdditionalProperties: false
   flattenGlobalSecurity: true
   flatteningOrder: parameters-first
   formStringArrayEncodeMode: encoded-string
@@ -81,6 +87,7 @@ typescript:
   inputModelSuffix: input
   jsonpath: rfc9535
   laxMode: strict
+  legacyFileNaming: true
   maxMethodParams: 0
   methodArguments: infer-optional-args
   modelPropertyCasing: camel
@@ -89,10 +96,15 @@ typescript:
   outputModelSuffix: output
   packageName: '@alienplatform/platform-api'
   preApplyUnionDiscriminators: true
+  preserveModelFieldNames: false
+  privateIdentifierPrefix: '#'
+  requestExtras: false
   responseFormat: flat
   sseFlatResponse: true
   templateVersion: v2
   unionStrategy: left-to-right
   usageSDKInitImports: []
   useIndexModules: true
+  useOxlint: false
+  useTsgo: false
   zodVersion: v4

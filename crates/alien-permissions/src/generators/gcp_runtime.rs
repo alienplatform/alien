@@ -62,6 +62,8 @@ pub enum GcpBindingResourceKind {
     PubsubSubscription,
     /// Artifact Registry repository IAM policy.
     ArtifactRegistryRepository,
+    /// Vertex AI reasoning engine IAM policy.
+    VertexAiReasoningEngine,
 }
 
 /// GCP IAM policy binding.
@@ -720,6 +722,9 @@ fn binding_resource_kind(binding_spec: &GcpBindingSpec) -> Option<GcpBindingReso
     }
     if scope.contains("/repositories/") {
         return Some(GcpBindingResourceKind::ArtifactRegistryRepository);
+    }
+    if scope.contains("/reasoningEngines/") {
+        return Some(GcpBindingResourceKind::VertexAiReasoningEngine);
     }
     None
 }

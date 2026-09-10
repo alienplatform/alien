@@ -5,6 +5,7 @@
 //! (downcast, labels, IAM member binding, service-account email
 //! resolution) live in [`helpers`].
 
+pub mod agent_platform_engine;
 pub mod ai;
 pub mod artifact_registry;
 pub mod build;
@@ -22,6 +23,7 @@ pub mod storage;
 pub mod vault;
 pub mod worker;
 
+pub use agent_platform_engine::GcpAgentPlatformEngineEmitter;
 pub use ai::GcpAiEmitter;
 pub use artifact_registry::GcpArtifactRegistryEmitter;
 pub use build::GcpBuildEmitter;

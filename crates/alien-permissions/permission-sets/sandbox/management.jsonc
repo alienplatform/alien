@@ -85,21 +85,15 @@
           ]
         },
         // The stack binding is the resource group, and at that scope a holder can terminate
-        // sessions in every sandbox group there — including one the deployment did not create,
-        // since a deployment can be pointed at a resource group its owner already uses, as
-        // `provision` notes. It exists for the same reason `provision` is resource-group-scoped:
-        // the target does not exist yet. `Microsoft.App/sandboxGroups` has no ARM template
-        // representation, so setup can neither create the group nor scope an assignment to one,
-        // and Azure has no scope between a group and its resource group. The resource binding is
-        // the narrower grant, but on Azure it is not deliverable for a sandbox today — the setup
-        // path compiles resource-scoped management only for `worker/dispatch-command`, the runtime
-        // path only for a Kubernetes cluster — so it stays declared for when one of them can.
+        // sessions in every sandbox group there, as `provision` notes. The resource binding is
+        // narrower but undeliverable today: neither the setup path (`worker/dispatch-command`
+        // only) nor the runtime path (Kubernetes only) compiles resource-scoped management for it.
         "binding": {
           "stack": {
             "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}"
           },
           "resource": {
-            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${stackPrefix}-${resourceName}"
+            "scope": "/subscriptions/${subscriptionId}/resourceGroups/${resourceGroup}/providers/Microsoft.App/sandboxGroups/${resourceName}"
           }
         }
       }

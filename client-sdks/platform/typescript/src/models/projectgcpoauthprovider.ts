@@ -13,7 +13,7 @@ export type ProjectGcpOAuthProviderCustom = {
    * Google OAuth web client ID.
    */
   clientId: string;
-  hasClientSecret: boolean;
+  hasClientSecret: true;
   /**
    * Authorized redirect URIs that must be configured on the Google OAuth client.
    */
@@ -39,7 +39,7 @@ export const ProjectGcpOAuthProviderCustom$inboundSchema: z.ZodType<
 > = z.object({
   mode: z.literal("custom"),
   clientId: z.string(),
-  hasClientSecret: z.boolean(),
+  hasClientSecret: z.literal(true),
   redirectUris: z.array(z.string()),
 });
 

@@ -27,6 +27,10 @@ export type DeploymentUpdateOperationSummary = {
    */
   targetReleaseId: string;
   changedKeys: Array<string>;
+  /**
+   * Action needed before this update can execute; the current release remains installed.
+   */
+  actionRequired?: string | null | undefined;
   requestedAt: Date;
   startedAt?: Date | null | undefined;
   completedAt?: Date | null | undefined;
@@ -42,6 +46,7 @@ export const DeploymentUpdateOperationSummary$inboundSchema: z.ZodType<
   reasons: z.array(DeploymentUpdateReason$inboundSchema),
   targetReleaseId: z.string(),
   changedKeys: z.array(z.string()),
+  actionRequired: z.nullable(z.string()).optional(),
   requestedAt: z.iso.datetime({ offset: true }).transform(v => new Date(v)),
   startedAt: z.nullable(
     z.iso.datetime({ offset: true }).transform(v => new Date(v)),

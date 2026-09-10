@@ -628,26 +628,19 @@ fn materialize_group(
     platform: Platform,
     config: &DeploymentConfig,
 ) -> Result<()> {
-    let settings = config.stack_settings.compute.as_ref().ok_or_else(|| {
-        AlienError::new(crate::error::ErrorData::StackMutationFailed {
-            mutation_name: "ComputeClusterMutation".to_string(),
-            message: format!(
-                "Compute selection is required for {} capacity group '{}'",
-                platform, group.group_id
-            ),
-            resource_id: None,
-        })
-    })?;
-    let selection = settings.pools.get(&group.group_id).ok_or_else(|| {
-        AlienError::new(crate::error::ErrorData::StackMutationFailed {
-            mutation_name: "ComputeClusterMutation".to_string(),
-            message: format!(
-                "Missing compute selection for capacity group '{}'",
-                group.group_id
-            ),
-            resource_id: None,
-        })
-    })?;
+    let selection = config
+        .stack_settings
+        .compute
+        .as_ref()
+        .and_then(|settings| settings.pools.get(&group.group_id))
+        .ok_or_else(|| {
+            AlienError::new(crate::error::ErrorData::SetupRequired {
+                message: format!(
+                    "Select compute for {} capacity group '{}' in the installation setup.",
+                    platform, group.group_id
+                ),
+            })
+        })?;
     selection.validate().map_err(|message| {
         AlienError::new(crate::error::ErrorData::StackMutationFailed {
             mutation_name: "ComputeClusterMutation".to_string(),

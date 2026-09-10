@@ -30,9 +30,60 @@
 
 Retrieve all deployments.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listDeployments" method="get" path="/v1/deployments" -->
+<!-- UsageSnippet language="typescript" operationID="listDeployments" method="get" path="/v1/deployments" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.list({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsList } from "@alienplatform/platform-api/funcs/deploymentsList.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsList(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsList failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listDeployments" method="get" path="/v1/deployments" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -192,9 +243,60 @@ run();
 
 Get aggregated deployment statistics. Returns total count and breakdown by status.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getDeploymentStats" method="get" path="/v1/deployments/stats" -->
+<!-- UsageSnippet language="typescript" operationID="getDeploymentStats" method="get" path="/v1/deployments/stats" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.getStats({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsGetStats } from "@alienplatform/platform-api/funcs/deploymentsGetStats.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsGetStats(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsGetStats failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getDeploymentStats" method="get" path="/v1/deployments/stats" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -268,9 +370,60 @@ run();
 
 List distinct effective environments used by deployments. Used for filter dropdowns.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterEnvironments" method="get" path="/v1/deployments/filter-environments" -->
+<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterEnvironments" method="get" path="/v1/deployments/filter-environments" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.listFilterEnvironments({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsListFilterEnvironments } from "@alienplatform/platform-api/funcs/deploymentsListFilterEnvironments.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsListFilterEnvironments(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsListFilterEnvironments failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterEnvironments" method="get" path="/v1/deployments/filter-environments" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -344,9 +497,60 @@ run();
 
 List deployment groups with deployment counts. Used for filter dropdowns.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterDeploymentGroups" method="get" path="/v1/deployments/filter-deployment-groups" -->
+<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterDeploymentGroups" method="get" path="/v1/deployments/filter-deployment-groups" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.deployments.listFilterDeploymentGroups({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { deploymentsListFilterDeploymentGroups } from "@alienplatform/platform-api/funcs/deploymentsListFilterDeploymentGroups.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await deploymentsListFilterDeploymentGroups(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("deploymentsListFilterDeploymentGroups failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listDeploymentFilterDeploymentGroups" method="get" path="/v1/deployments/filter-deployment-groups" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -858,7 +1062,7 @@ async function run() {
           id: "<id>",
           type: "<value>",
           importData: {
-
+  
           },
         },
       ],

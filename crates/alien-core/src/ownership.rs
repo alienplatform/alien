@@ -278,32 +278,29 @@ mod tests {
     /// behaviour.
     #[test]
     fn only_the_sandbox_separates_ownership_from_scaffolding() {
-        let types = crate::gateability::MANIFEST_TYPES
-            .iter()
-            .copied()
-            .chain([
-                "function",
-                "container-cluster",
-                "compute-cluster",
-                "artifact-registry",
-                "key",
-                "build",
-                "network",
-                "remote-stack-management",
-                "resource-access",
-                "service-account",
-                "service_activation",
-                "service-activation",
-                "azure_resource_group",
-                "azure-resource-group",
-                "azure_storage_account",
-                "azure-storage-account",
-                "azure_container_apps_environment",
-                "azure-container-apps-environment",
-                "azure_service_bus_namespace",
-                "azure-service-bus-namespace",
-                "an-unregistered-extension-type",
-            ]);
+        let types = crate::gateability::MANIFEST_TYPES.iter().copied().chain([
+            "function",
+            "container-cluster",
+            "compute-cluster",
+            "artifact-registry",
+            "key",
+            "build",
+            "network",
+            "remote-stack-management",
+            "resource-access",
+            "service-account",
+            "service_activation",
+            "service-activation",
+            "azure_resource_group",
+            "azure-resource-group",
+            "azure_storage_account",
+            "azure-storage-account",
+            "azure_container_apps_environment",
+            "azure-container-apps-environment",
+            "azure_service_bus_namespace",
+            "azure-service-bus-namespace",
+            "an-unregistered-extension-type",
+        ]);
 
         for resource_type in types {
             if resource_type == "sandbox" {

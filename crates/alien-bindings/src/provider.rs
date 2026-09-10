@@ -1942,17 +1942,28 @@ impl BindingsProviderApi for BindingsProvider {
                     .into_value(binding_name, "diskImage")
                     .map_err(|_| invalid("diskImage"))?;
 
-                // Ceilings stay the service defaults: `.limits()` is refused on Azure at plan
-                // time, so nothing declares them and there is no value to carry. They move into
-                // the binding when `enforcedLimits` flips, not before.
+                // Old bindings predate ceilings, and those deployments keep running, so absent
+                // falls back to the platform default rather than failing to resolve.
+                let declared = |value: Option<alien_core::bindings::BindingValue<String>>,
+                                field: &'static str| {
+                    value
+                        .map(|value| value.into_value(binding_name, field))
+                        .transpose()
+                        .map_err(|_| invalid(field))
+                };
+                let cpu = declared(azure_binding.cpu, "cpu")?;
+                let memory = declared(azure_binding.memory, "memory")?;
+                let disk = declared(azure_binding.disk, "disk")?;
+
                 let sandbox: Arc<dyn crate::traits::Sandbox> = Arc::new(AzureSandbox::new(
                     Arc::new(client),
                     group,
                     disk_image,
                     azure_binding.egress,
                     azure_binding.idle_suspend_seconds,
-                    DEFAULT_AZURE_CPU.to_string(),
-                    DEFAULT_AZURE_MEMORY.to_string(),
+                    cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
+                    memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
+                    disk,
                 ));
                 Ok(sandbox)
             }
@@ -2089,6 +2100,34 @@ fn not_built(backend: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
     use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
+
+    /// Pins `DEFAULT_AZURE_CPU`/`DEFAULT_AZURE_MEMORY` as inputs `azure_session_limits` accepts;
+    /// if a constant changes to a value the rule refuses, the failure moves silently from plan
+    /// time to create.
+    #[test]
+    fn the_substituted_azure_defaults_satisfy_the_plan_time_sizing_rule() {
+        let declared_as_default = alien_core::Sandbox::new("agent-sbx".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "ubuntu".to_string(),
+            })
+            .limits(alien_core::SandboxLimits {
+                cpu: DEFAULT_AZURE_CPU.to_string(),
+                memory: DEFAULT_AZURE_MEMORY.to_string(),
+                disk: "20Gi".to_string(),
+                max_processes: None,
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .session(alien_core::SandboxSessionPolicy {
+                max_lifetime_seconds: None,
+                idle_suspend_seconds: None,
+            })
+            .build();
+
+        declared_as_default.azure_session_limits().expect(
+            "a sandbox declaring nothing is created with these values, so the rule that would \
+             have refused them at plan time must accept them",
+        );
+    }
 
     fn kubernetes_aws_env() -> HashMap<String, String> {
         HashMap::from([

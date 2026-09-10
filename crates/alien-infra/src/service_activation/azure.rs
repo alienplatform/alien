@@ -256,8 +256,11 @@ impl AzureServiceActivationController {
 
             emit_azure_service_activation_heartbeat(ctx, &config.id, service_name, &provider);
 
+            // Only where Azure answered. No answer is not a negative answer, and recording it as
+            // one publishes `activated: false` for a subscription that may well be registered.
             if let Some(registration_state) = provider.registration_state {
-                if registration_state.to_lowercase() != "registered" {
+                self.service_activated = registration_state.eq_ignore_ascii_case("registered");
+                if !self.service_activated {
                     return Err(AlienError::new(ErrorData::ResourceDrift {
                         resource_id: config.id.clone(),
                         message: format!(

@@ -1,4 +1,5 @@
 {
-  "triggerOnUpdates": true,
+  "triggerOnUpdates": false,
+  "excludeAuthors": ["renovate[bot]", "dependabot[bot]", "posthog[bot]"],
   "ignorePatterns": "packages/core/openapi.json\npackages/core/src/generated/**\npackages/sdk/src/generated/**\npackages/sdk/src/worker-runtime/generated/**\npackages/sdk/dist/generated/**"
 }

@@ -89,20 +89,34 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 /// Why a declaration's remote binding is one a deployment cannot deliver, if it cannot.
 ///
 /// Two cases, both sandbox-only and both about a declared policy the remote grant cannot carry.
-/// Egress: starting a session is additionally authorized as `lambda:PassNetworkConnector`, and the
-/// remote grant passes only AWS's own connectors, so a customer-declared one is unreachable.
-/// Preview ports: `CreateMicrovmAuthToken` has no port condition key, so the list bounds a caller
-/// going through the provider but not a holder of the leased credentials — a bound that only looks
-/// like one. Preflight refuses either; emitters and generated docs read this so nothing advertises
-/// a grant that cannot be used.
+///
+/// **Egress.** The same refusal on every cloud that publishes a sandbox remotely, for mechanisms
+/// that are worth telling apart. On AWS the declared connector is *unreachable*: starting a
+/// session is additionally authorized as `lambda:PassNetworkConnector` and the remote grant
+/// passes only AWS's own connectors. On Azure it is *bypassable*: the grant is the
+/// `SandboxGroup Data Owner` data-plane role, so its holder creates sandboxes against the group
+/// directly and the provider that would have applied the declared policy never runs. The Azure
+/// case is the security-relevant one — it is inherent to handing out a data-plane role, not a
+/// gap in an implementation that could later close it. On GCP the policy lives on the environment
+/// template, which the remote grant carries no verb to create or replace.
+///
+/// **Preview ports.** AWS's `CreateMicrovmAuthToken` has no port condition key, so a declared
+/// list bounds a caller going through the provider but not a holder of the leased credentials —
+/// a bound that only looks like one. On Azure and GCP this branch is unreachable rather than
+/// merely unused: `preview` is false for both, so `validate_capabilities` refuses a non-empty
+/// list at plan time before a stack gets this far.
+///
+/// Preflight refuses either; emitters and generated docs read this so nothing advertises a grant
+/// that cannot be used.
 pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'static str> {
     remote_binding_for_entry(entry)?;
     let sandbox = entry.config.downcast_ref::<Sandbox>()?;
 
     if !matches!(sandbox.egress, SandboxEgress::Allow) {
         return Some(
-            "a remotely published sandbox must declare egress 'allow'; a sandbox that routes its \
-             traffic through an egress connector cannot be reached remotely",
+            "a remotely published sandbox must declare egress 'allow'; the remote grant either \
+             cannot pass a declared connector or lets its holder create sessions that ignore the \
+             declared policy, so the declaration would not bound the remote caller",
         );
     }
 
