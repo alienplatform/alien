@@ -97,7 +97,7 @@ Parameters:
     Description: Only used with use-existing. Existing private subnet IDs.
     Default: ''
   SecurityGroupIds:
-    Type: CommaDelimitedList
+    Type: List<AWS::EC2::SecurityGroup::Id>
     Description: Only used with use-existing. Existing security group IDs.
     Default: ''
   UpdatesMode:

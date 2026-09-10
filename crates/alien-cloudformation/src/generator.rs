@@ -1165,9 +1165,10 @@ fn add_network_parameters(
             );
             template.parameters.insert(
                 PARAM_SECURITY_GROUP_IDS.to_string(),
-                comma_list_parameter(
+                aws_id_list_parameter(
                     "Only used with use-existing. Existing security group IDs.",
                     defaults.security_group_ids,
+                    "AWS::EC2::SecurityGroup::Id",
                 ),
             );
         }
@@ -1338,6 +1339,24 @@ fn add_standard_conditions(
                 CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
                 equals_ref(PARAM_NETWORK_MODE, "use-existing"),
             );
+            if has_created_network
+                && stack.resources().any(|(_id, entry)| {
+                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                        && entry
+                            .config
+                            .downcast_ref::<alien_core::Postgres>()
+                            .is_some()
+                })
+            {
+                template.conditions.insert(
+                    crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS
+                        .to_string(),
+                    CfExpression::or([
+                        equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                        equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+                    ]),
+                );
+            }
         }
     }
     if has_created_network {
@@ -2453,6 +2472,25 @@ fn number_parameter(
 fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter {
     CfParameter {
         parameter_type: "CommaDelimitedList".to_string(),
+        description: Some(description.to_string()),
+        default: Some(CfExpression::from(default.join(","))),
+        allowed_values: None,
+        allowed_pattern: None,
+        min_length: None,
+        max_length: None,
+        min_value: None,
+        max_value: None,
+        no_echo: None,
+    }
+}
+
+fn aws_id_list_parameter(
+    description: &str,
+    default: Vec<String>,
+    aws_id_type: &str,
+) -> CfParameter {
+    CfParameter {
+        parameter_type: format!("List<{aws_id_type}>"),
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
