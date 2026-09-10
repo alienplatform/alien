@@ -188,7 +188,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             )?),
             description: None,
             entry_point: None,
-            recovery_deployment_group_id: None,
             expires_at: None,
             external_id: external_id.clone().try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
