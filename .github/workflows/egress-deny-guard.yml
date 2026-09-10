@@ -131,7 +131,7 @@ jobs:
         # binaries, and doing that after the assume spends the session on compilation.
         run: cargo nextest run -p alien-aws-clients --lib --no-run
 
-      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
           aws-region: ${{ vars.EGRESS_GUARD_AWS_REGION }}
@@ -231,7 +231,7 @@ jobs:
 
       - name: Refresh credentials for teardown
         if: always()
-        uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+        uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         with:
           role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
           aws-region: ${{ vars.EGRESS_GUARD_AWS_REGION }}
@@ -270,7 +270,7 @@ jobs:
     timeout-minutes: 45
     environment: egress-deny-guard
     steps:
-      - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
+      - uses: aws-actions/configure-aws-credentials@cbe3b392738ccf3f987d68400dafcf4b0624a56c # v6
         id: creds
         with:
           role-to-assume: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
