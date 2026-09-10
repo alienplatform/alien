@@ -18,6 +18,7 @@
 
 pub mod docs;
 pub mod error;
+pub mod kubernetes;
 pub mod manifest;
 pub mod mcp;
 pub mod plugin;
@@ -26,6 +27,9 @@ pub mod verification;
 
 pub use docs::generate_docs;
 pub use error::{ErrorData, Result};
+pub use kubernetes::{
+    KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
+};
 pub use manifest::{
     Arch, OperationManifest, PluginManifest, RetryPolicy, RiskTier, SensitiveOutputPolicy,
 };

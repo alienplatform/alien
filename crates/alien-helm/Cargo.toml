@@ -13,6 +13,7 @@ test-utils = ["dep:tempfile"]
 [dependencies]
 alien-core = { workspace = true, features = ["sandbox-process"] }
 alien-error = { workspace = true }
+alien-operations-sdk = { workspace = true }
 indexmap = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
