@@ -275,6 +275,7 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
+            let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
             match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
                 SetupRegistrationReplay::Exact => {
                     let Some(stack_settings) = existing.stack_settings else {
@@ -305,19 +306,47 @@ pub async fn stack_import(
                 }
                 SetupRegistrationReplay::None => {}
             }
-            if let Some(existing_stack_state) = existing.stack_state.as_ref() {
-                stack_state = match merge_reimported_stack_state(
-                    &state,
-                    &req,
-                    &prepared_stack,
-                    existing_stack_state,
-                    stack_state,
-                ) {
-                    Ok(state) => state,
-                    Err(error) => return error.into_response(),
+            let has_registration_operation = setup_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(SETUP_REGISTRATION_OPERATION_ID))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|operation_id| !operation_id.is_empty());
+            if !has_registration_operation
+                && is_idempotent_import(&existing, &stack_state, &release.id, &req)
+            {
+                let Some(stack_settings) = existing.stack_settings else {
+                    return ErrorData::internal("imported deployment is missing stack_settings")
+                        .into_response();
                 };
+                let stack_state = existing.stack_state.unwrap_or(stack_state);
+                return (
+                    StatusCode::OK,
+                    Json(StackImportResponse {
+                        deployment_id: existing.id,
+                        deployment_token: existing.deployment_token,
+                        stack_settings,
+                        stack_state,
+                    }),
+                )
+                    .into_response();
             }
-            if !can_accept_reimport(&existing, &stack_state, &release.id, &req) {
+            if !activates_setup_reservation {
+                if let Some(existing_stack_state) = existing.stack_state.as_ref() {
+                    stack_state = match merge_reimported_stack_state(
+                        &state,
+                        &req,
+                        &prepared_stack,
+                        existing_stack_state,
+                        stack_state,
+                    ) {
+                        Ok(state) => state,
+                        Err(error) => return error.into_response(),
+                    };
+                }
+            }
+            if !activates_setup_reservation
+                && !can_accept_reimport(&existing, &stack_state, &release.id, &req)
+            {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
                         "Imported deployment '{}' is not in a re-importable state and the payload is not idempotent",
@@ -326,7 +355,7 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
-            if !can_reconcile_after_import(&existing) {
+            if !activates_setup_reservation && !can_reconcile_after_import(&existing) {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
                         "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
@@ -360,24 +389,31 @@ pub async fn stack_import(
                     }
                 }
             }
-            let runtime_metadata = match reimport_runtime_metadata(
-                &existing,
-                &prepared_stack,
-                &release.id,
-                &req,
-                imported_gate_answers,
-            ) {
-                Ok(metadata) => metadata,
-                Err(error) => return error.into_response(),
+            let runtime_metadata = if activates_setup_reservation {
+                import_runtime_metadata(&prepared_stack, imported_gate_answers)
+            } else {
+                match reimport_runtime_metadata(
+                    &existing,
+                    &prepared_stack,
+                    &release.id,
+                    &req,
+                    imported_gate_answers,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(error) => return error.into_response(),
+                }
             };
-            let should_reconcile = import_changes_deployment(
-                &existing,
-                &stack_state,
-                &environment_info,
-                &runtime_metadata,
-                &release.id,
-                &req,
-            );
+            let should_reconcile = !activates_setup_reservation
+                && import_changes_deployment(
+                    &existing,
+                    &stack_state,
+                    &environment_info,
+                    &runtime_metadata,
+                    &release.id,
+                    &req,
+                );
+            let activation_status = activates_setup_reservation
+                .then(|| initial_import_status(&prepared_stack, &stack_state));
             let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
             let updated = match state
                 .deployment_store
@@ -393,6 +429,7 @@ pub async fn stack_import(
                         setup_target: req.setup_target.clone(),
                         setup_fingerprint: req.setup_fingerprint.clone(),
                         setup_fingerprint_version: req.setup_fingerprint_version,
+                        activation_status,
                         schedule_reconciliation: should_reconcile,
                         input_values: req.input_values.clone(),
                     },
@@ -909,14 +946,38 @@ fn can_accept_reimport(
     release_id: &str,
     req: &StackImportRequest,
 ) -> bool {
-    let idempotent = existing.current_release_id.as_deref() == Some(release_id)
-        && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
-        && imported_resources_are_unchanged(existing, imported_stack_state);
-
     matches!(
         existing.status.as_str(),
         "running" | "update-failed" | "refresh-failed"
-    ) || idempotent
+    ) || is_idempotent_import(existing, imported_stack_state, release_id, req)
+}
+
+fn is_idempotent_import(
+    existing: &DeploymentRecord,
+    imported_stack_state: &StackState,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> bool {
+    existing
+        .desired_release_id
+        .as_deref()
+        .or(existing.current_release_id.as_deref())
+        == Some(release_id)
+        && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
+        && existing.input_values == req.input_values
+        && imported_resources_are_unchanged(existing, imported_stack_state)
+}
+
+fn is_pending_setup_reservation(existing: &DeploymentRecord, release_id: &str) -> bool {
+    existing.status == "pending"
+        && existing.current_release_id.is_none()
+        && existing
+            .setup_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("setupReservation"))
+            .and_then(|reservation| reservation.get("releaseId"))
+            .and_then(serde_json::Value::as_str)
+            == Some(release_id)
 }
 
 fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
@@ -998,6 +1059,22 @@ fn imported_resources_are_unchanged(
     let Some(existing_stack_state) = existing.stack_state.as_ref() else {
         return false;
     };
+
+    let existing_resource_ids = existing_stack_state
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.lifecycle == Some(ResourceLifecycle::Frozen))
+        .map(|(id, _)| id)
+        .collect::<std::collections::HashSet<_>>();
+    let imported_resource_ids = imported_stack_state
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.lifecycle == Some(ResourceLifecycle::Frozen))
+        .map(|(id, _)| id)
+        .collect::<std::collections::HashSet<_>>();
+    if existing_resource_ids != imported_resource_ids {
+        return false;
+    }
 
     imported_stack_state.resources.iter().all(|(id, imported)| {
         existing_stack_state

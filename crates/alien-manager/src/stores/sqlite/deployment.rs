@@ -715,6 +715,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_target,
             setup_fingerprint,
             setup_fingerprint_version,
+            activation_status,
             schedule_reconciliation,
             input_values,
         } = params;
@@ -774,6 +775,9 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             if let Some(release_id) = current_release_id {
                 update.value(Deployments::CurrentReleaseId, release_id);
+            }
+            if let Some(status) = activation_status {
+                update.value(Deployments::Status, status);
             }
             if schedule_reconciliation {
                 update

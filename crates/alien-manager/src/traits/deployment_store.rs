@@ -194,6 +194,9 @@ pub struct UpdateImportedDeploymentParams {
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
+    /// Initial status when this import activates a launch-time reservation.
+    /// Ordinary re-imports leave this unset and preserve their current status.
+    pub activation_status: Option<String>,
     /// Move the deployment to `update-pending` in the same write as the import data.
     pub schedule_reconciliation: bool,
     /// Deployer stack input values carried by the re-import; they overwrite

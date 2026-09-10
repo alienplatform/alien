@@ -317,6 +317,7 @@ async fn input_values_survive_create_import_and_reimport() {
                 setup_target: "test".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                activation_status: None,
                 schedule_reconciliation: false,
                 input_values: edited.clone(),
             },

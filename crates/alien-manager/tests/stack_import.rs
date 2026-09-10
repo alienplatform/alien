@@ -33,8 +33,8 @@ use alien_core::{
     AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
     GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
     KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
-    RemoteStackManagement, ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackSettings,
-    Storage, Worker, WorkerCode,
+    RemoteStackManagement, ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount,
+    Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -47,9 +47,9 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams,
-    CreateTokenParams, CredentialResolver, DeploymentStore, ReconcileData, ReleaseStore,
-    TelemetryBackend, TokenStore, TokenType,
+    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
+    CreateImportedDeploymentParams, CreateReleaseParams, CreateTokenParams, CredentialResolver,
+    DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend, TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -715,6 +715,68 @@ async fn deployment_token_reimports_only_its_own_setup_without_bootstrap_token()
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn deployment_token_activates_its_pending_setup_reservation() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let release_id = fixture.release_id.clone().expect("fixture has a release");
+    let reserved = fixture
+        .deployment_store
+        .create_with_state(
+            &alien_manager::auth::Subject::system(),
+            CreateImportedDeploymentParams {
+                name: "acme-reserved".to_string(),
+                deployment_group_id: fixture.deployment_group_id.clone(),
+                platform: Platform::Aws,
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "pending".to_string(),
+                current_release_id: None,
+                desired_release_id: None,
+                import_source: Some(ImportSourceKind::CloudFormation),
+                setup_metadata: Some(serde_json::json!({
+                    "setupReservation": { "releaseId": release_id.clone() }
+                })),
+                setup_target: "aws".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                deployment_token: None,
+                management_config: None,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let deployment_token = mint_token(
+        &fixture.token_store,
+        TokenType::Deployment,
+        "ax_dep_",
+        None,
+        Some(reserved.id.clone()),
+    )
+    .await;
+
+    let body = aws_s3_import_request("acme-reserved", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&deployment_token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+
+    let activated = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+        .await
+        .unwrap()
+        .expect("reservation remains the same deployment");
+    assert_eq!(activated.status, "provisioning");
+    assert_eq!(
+        activated.current_release_id.as_deref(),
+        Some(release_id.as_str())
+    );
+    assert!(activated.stack_state.is_some());
 }
 
 #[tokio::test]
