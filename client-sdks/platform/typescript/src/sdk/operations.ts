@@ -151,20 +151,6 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
-   */
-  async createAccessRequest(
-    request?: models.CreateAccessRequest | undefined,
-    options?: RequestOptions,
-  ): Promise<operations.CreateAccessRequestResponse> {
-    return unwrapAsync(operationsCreateAccessRequest(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * List a project's access requests, newest first.
    */
   async listAccessRequests(
@@ -172,6 +158,20 @@ export class Operations extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.ListAccessRequestsResponse> {
     return unwrapAsync(operationsListAccessRequests(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+   */
+  async createAccessRequest(
+    request?: models.CreateAccessRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<operations.CreateAccessRequestResponse> {
+    return unwrapAsync(operationsCreateAccessRequest(
       this,
       request,
       options,

@@ -6,8 +6,10 @@
 import { ProjectModels } from "@alienplatform/platform-api/models";
 
 let value: ProjectModels = {
-  enabled: false,
-  allowedProviders: [],
+  enabled: true,
+  allowedProviders: [
+    "azure-foundry",
+  ],
   requirements: [
     {
       publicModelId: "<id>",
@@ -24,6 +26,6 @@ let value: ProjectModels = {
 
 | Field                                                                  | Type                                                                   | Required                                                               | Description                                                            |
 | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `enabled`                                                              | *boolean*                                                              | :heavy_check_mark:                                                     | N/A                                                                    |
+| `enabled`                                                              | *true*                                                                 | :heavy_check_mark:                                                     | N/A                                                                    |
 | `allowedProviders`                                                     | [models.ProjectAllowedProvider](../models/projectallowedprovider.md)[] | :heavy_check_mark:                                                     | N/A                                                                    |
 | `requirements`                                                         | [models.ProjectRequirement](../models/projectrequirement.md)[]         | :heavy_check_mark:                                                     | N/A                                                                    |

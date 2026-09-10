@@ -7,8 +7,8 @@
 * [list](#list) - Retrieve all projects.
 * [create](#create) - Create a new project.
 * [get](#get) - Retrieve a project by ID or name.
-* [update](#update) - Update a project.
 * [delete](#delete) - Delete a project. The project must have no deployments.
+* [update](#update) - Update a project.
 * [getGcpOAuthProvider](#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [configureSource](#configuresource) - Connect a GitHub repository or Alien template to an existing project.
@@ -192,9 +192,60 @@ run();
 
 Retrieve a project by ID or name.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProject" method="get" path="/v1/projects/{idOrName}" -->
+<!-- UsageSnippet language="typescript" operationID="getProject" method="get" path="/v1/projects/{idOrName}" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.get({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGet } from "@alienplatform/platform-api/funcs/projectsGet.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGet(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGet failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProject" method="get" path="/v1/projects/{idOrName}" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -265,93 +316,6 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
-## update
-
-Update a project.
-
-### Example Usage
-
-<!-- UsageSnippet language="typescript" operationID="updateProject" method="patch" path="/v1/projects/{idOrName}" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.projects.update({
-    idOrName: "my-project",
-    updateProject: {
-      gitRepository: null,
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-      defaultManagers: null,
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { projectsUpdate } from "@alienplatform/platform-api/funcs/projectsUpdate.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await projectsUpdate(alien, {
-    idOrName: "my-project",
-    updateProject: {
-      gitRepository: null,
-      domainId: "dom_469m0agk8luj4s16sakmmpdd",
-      defaultManagers: null,
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("projectsUpdate failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.UpdateProjectRequest](../../models/operations/updateprojectrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[models.Project](../../models/project.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
 ## delete
 
 Delete a project. The project must have no deployments.
@@ -399,7 +363,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    
   } else {
     console.log("projectsDelete failed:", res.error);
   }
@@ -429,13 +393,240 @@ run();
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
+## update
+
+Update a project.
+
+### Example Usage: projectId
+
+<!-- UsageSnippet language="typescript" operationID="updateProject" method="patch" path="/v1/projects/{idOrName}" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.update({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    updateProject: {
+      gitRepository: null,
+      domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: {
+        aws: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        local: "mgr_enxscjrqiiu2lrc672hwwuc5",
+      },
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsUpdate } from "@alienplatform/platform-api/funcs/projectsUpdate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsUpdate(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    updateProject: {
+      gitRepository: null,
+      domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: {
+        aws: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        local: "mgr_enxscjrqiiu2lrc672hwwuc5",
+      },
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsUpdate failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="updateProject" method="patch" path="/v1/projects/{idOrName}" example="projectName" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.update({
+    idOrName: "my-project",
+    updateProject: {
+      gitRepository: null,
+      domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: {
+        aws: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        local: "mgr_enxscjrqiiu2lrc672hwwuc5",
+      },
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsUpdate } from "@alienplatform/platform-api/funcs/projectsUpdate.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsUpdate(alien, {
+    idOrName: "my-project",
+    updateProject: {
+      gitRepository: null,
+      domainId: "dom_469m0agk8luj4s16sakmmpdd",
+      defaultManagers: {
+        aws: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        gcp: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        azure: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        kubernetes: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        machines: "mgr_enxscjrqiiu2lrc672hwwuc5",
+        local: "mgr_enxscjrqiiu2lrc672hwwuc5",
+      },
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsUpdate failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.UpdateProjectRequest](../../models/operations/updateprojectrequest.md)                                                                                             | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[models.Project](../../models/project.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
 ## getGcpOAuthProvider
 
 Retrieve redacted project-level Google Cloud OAuth provider settings.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectGcpOAuthProvider" method="get" path="/v1/projects/{idOrName}/gcp-oauth-provider" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectGcpOAuthProvider" method="get" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getGcpOAuthProvider({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetGcpOAuthProvider } from "@alienplatform/platform-api/funcs/projectsGetGcpOAuthProvider.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetGcpOAuthProvider(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetGcpOAuthProvider failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectGcpOAuthProvider" method="get" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -510,9 +701,66 @@ run();
 
 Update project-level Google Cloud OAuth provider settings.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="updateProjectGcpOAuthProvider" method="put" path="/v1/projects/{idOrName}/gcp-oauth-provider" -->
+<!-- UsageSnippet language="typescript" operationID="updateProjectGcpOAuthProvider" method="put" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.updateGcpOAuthProvider({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    updateProjectGcpOAuthProvider: {
+      mode: "alien-managed",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsUpdateGcpOAuthProvider } from "@alienplatform/platform-api/funcs/projectsUpdateGcpOAuthProvider.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsUpdateGcpOAuthProvider(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    updateProjectGcpOAuthProvider: {
+      mode: "alien-managed",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsUpdateGcpOAuthProvider failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="updateProjectGcpOAuthProvider" method="put" path="/v1/projects/{idOrName}/gcp-oauth-provider" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -595,9 +843,70 @@ run();
 
 Connect a GitHub repository or Alien template to an existing project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectSource" method="post" path="/v1/projects/{idOrName}/source" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectSource" method="post" path="/v1/projects/{idOrName}/source" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureSource({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      mode: "template",
+      targetNamespace: "<value>",
+      templatePath: "examples/github-agent/packages/remote-agent",
+    },
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureSource } from "@alienplatform/platform-api/funcs/projectsConfigureSource.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureSource(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+    requestBody: {
+      mode: "template",
+      targetNamespace: "<value>",
+      templatePath: "examples/github-agent/packages/remote-agent",
+    },
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureSource failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectSource" method="post" path="/v1/projects/{idOrName}/source" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -686,9 +995,60 @@ run();
 
 Get the deployment portal domain binding for a project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentPortalDomain" method="get" path="/v1/projects/{idOrName}/deployment-portal-domain" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentPortalDomain" method="get" path="/v1/projects/{idOrName}/deployment-portal-domain" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getDeploymentPortalDomain({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetDeploymentPortalDomain } from "@alienplatform/platform-api/funcs/projectsGetDeploymentPortalDomain.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetDeploymentPortalDomain(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetDeploymentPortalDomain failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentPortalDomain" method="get" path="/v1/projects/{idOrName}/deployment-portal-domain" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -844,9 +1204,60 @@ run();
 
 Get template URLs for deploying setup stacks in this project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectTemplateUrls" method="get" path="/v1/projects/{idOrName}/template-urls" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectTemplateUrls" method="get" path="/v1/projects/{idOrName}/template-urls" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getTemplateUrls({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetTemplateUrls } from "@alienplatform/platform-api/funcs/projectsGetTemplateUrls.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetTemplateUrls(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetTemplateUrls failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectTemplateUrls" method="get" path="/v1/projects/{idOrName}/template-urls" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -921,9 +1332,60 @@ run();
 
 Get the active release stack and portal-visible setup availability for deployment-link configuration.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentLinkSetup" method="get" path="/v1/projects/{idOrName}/deployment-link-setup" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentLinkSetup" method="get" path="/v1/projects/{idOrName}/deployment-link-setup" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getDeploymentLinkSetup({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetDeploymentLinkSetup } from "@alienplatform/platform-api/funcs/projectsGetDeploymentLinkSetup.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetDeploymentLinkSetup(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetDeploymentLinkSetup failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectDeploymentLinkSetup" method="get" path="/v1/projects/{idOrName}/deployment-link-setup" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -998,9 +1460,60 @@ run();
 
 Get the production channel's current release. When deploymentId is provided, returns that deployment's effective release: its pin, or its followed channel's current release.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectActiveRelease" method="get" path="/v1/projects/{idOrName}/active-release" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectActiveRelease" method="get" path="/v1/projects/{idOrName}/active-release" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getActiveRelease({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetActiveRelease } from "@alienplatform/platform-api/funcs/projectsGetActiveRelease.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetActiveRelease(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetActiveRelease failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectActiveRelease" method="get" path="/v1/projects/{idOrName}/active-release" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1075,9 +1588,60 @@ run();
 
 Preview which customer model connections a configuration change may affect.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="previewProjectModelsImpact" method="post" path="/v1/projects/{idOrName}/project-capabilities/models/impact" -->
+<!-- UsageSnippet language="typescript" operationID="previewProjectModelsImpact" method="post" path="/v1/projects/{idOrName}/project-capabilities/models/impact" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.previewModelsImpact({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsPreviewModelsImpact } from "@alienplatform/platform-api/funcs/projectsPreviewModelsImpact.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsPreviewModelsImpact(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsPreviewModelsImpact failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="previewProjectModelsImpact" method="post" path="/v1/projects/{idOrName}/project-capabilities/models/impact" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1151,9 +1715,60 @@ run();
 
 Set the capabilities offered by a Project. Removing a capability prevents new setup without deleting existing customer resources.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="setProjectCapabilities" method="put" path="/v1/projects/{idOrName}/project-capabilities" -->
+<!-- UsageSnippet language="typescript" operationID="setProjectCapabilities" method="put" path="/v1/projects/{idOrName}/project-capabilities" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.setCapabilities({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsSetCapabilities } from "@alienplatform/platform-api/funcs/projectsSetCapabilities.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsSetCapabilities(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsSetCapabilities failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="setProjectCapabilities" method="put" path="/v1/projects/{idOrName}/project-capabilities" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1228,9 +1843,60 @@ run();
 
 Enable deployments for a Project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectDeployments" method="put" path="/v1/projects/{idOrName}/project-capabilities/deployments" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectDeployments" method="put" path="/v1/projects/{idOrName}/project-capabilities/deployments" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureDeployments({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureDeployments } from "@alienplatform/platform-api/funcs/projectsConfigureDeployments.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureDeployments(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureDeployments failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectDeployments" method="put" path="/v1/projects/{idOrName}/project-capabilities/deployments" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1305,9 +1971,60 @@ run();
 
 Get static headers added to AI requests for each provider.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectAiProviderHeaders" method="get" path="/v1/projects/{idOrName}/ai-provider-headers" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectAiProviderHeaders" method="get" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getAiProviderHeaders({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetAiProviderHeaders } from "@alienplatform/platform-api/funcs/projectsGetAiProviderHeaders.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetAiProviderHeaders(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetAiProviderHeaders failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectAiProviderHeaders" method="get" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1382,9 +2099,60 @@ run();
 
 Replace the static headers added to AI requests for each provider.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectAiProviderHeaders" method="put" path="/v1/projects/{idOrName}/ai-provider-headers" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectAiProviderHeaders" method="put" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureAiProviderHeaders({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureAiProviderHeaders } from "@alienplatform/platform-api/funcs/projectsConfigureAiProviderHeaders.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureAiProviderHeaders(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureAiProviderHeaders failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectAiProviderHeaders" method="put" path="/v1/projects/{idOrName}/ai-provider-headers" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1459,9 +2227,60 @@ run();
 
 Configure customer-owned model providers without requiring an application Release.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectModels" method="put" path="/v1/projects/{idOrName}/project-capabilities/models" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectModels" method="put" path="/v1/projects/{idOrName}/project-capabilities/models" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureModels({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureModels } from "@alienplatform/platform-api/funcs/projectsConfigureModels.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureModels(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureModels failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectModels" method="put" path="/v1/projects/{idOrName}/project-capabilities/models" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1536,9 +2355,60 @@ run();
 
 Enable customer-owned application encryption without requiring an application Release.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectKeys" method="put" path="/v1/projects/{idOrName}/project-capabilities/keys" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectKeys" method="put" path="/v1/projects/{idOrName}/project-capabilities/keys" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureKeys({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureKeys } from "@alienplatform/platform-api/funcs/projectsConfigureKeys.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureKeys(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureKeys failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectKeys" method="put" path="/v1/projects/{idOrName}/project-capabilities/keys" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1613,9 +2483,60 @@ run();
 
 Enable buckets without requiring a project Release.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectBuckets" method="put" path="/v1/projects/{idOrName}/project-capabilities/buckets" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectBuckets" method="put" path="/v1/projects/{idOrName}/project-capabilities/buckets" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureBuckets({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureBuckets } from "@alienplatform/platform-api/funcs/projectsConfigureBuckets.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureBuckets(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureBuckets failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectBuckets" method="put" path="/v1/projects/{idOrName}/project-capabilities/buckets" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1690,9 +2611,60 @@ run();
 
 Enable customer-owned container registries without requiring an application Release.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectRegistry" method="put" path="/v1/projects/{idOrName}/project-capabilities/registry" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectRegistry" method="put" path="/v1/projects/{idOrName}/project-capabilities/registry" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureRegistry({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureRegistry } from "@alienplatform/platform-api/funcs/projectsConfigureRegistry.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureRegistry(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureRegistry failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectRegistry" method="put" path="/v1/projects/{idOrName}/project-capabilities/registry" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1767,9 +2739,60 @@ run();
 
 Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="configureProjectRemoteSandbox" method="put" path="/v1/projects/{idOrName}/project-capabilities/remote-sandbox" -->
+<!-- UsageSnippet language="typescript" operationID="configureProjectRemoteSandbox" method="put" path="/v1/projects/{idOrName}/project-capabilities/remote-sandbox" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.configureRemoteSandbox({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsConfigureRemoteSandbox } from "@alienplatform/platform-api/funcs/projectsConfigureRemoteSandbox.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsConfigureRemoteSandbox(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsConfigureRemoteSandbox failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="configureProjectRemoteSandbox" method="put" path="/v1/projects/{idOrName}/project-capabilities/remote-sandbox" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1844,9 +2867,60 @@ run();
 
 Get safe, server-derived capability status for a Project.
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectCapabilityOverview" method="get" path="/v1/projects/{idOrName}/project-capabilities/overview" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectCapabilityOverview" method="get" path="/v1/projects/{idOrName}/project-capabilities/overview" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getCapabilityOverview({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetCapabilityOverview } from "@alienplatform/platform-api/funcs/projectsGetCapabilityOverview.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetCapabilityOverview(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetCapabilityOverview failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectCapabilityOverview" method="get" path="/v1/projects/{idOrName}/project-capabilities/overview" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1919,9 +2993,60 @@ run();
 
 ## getAiUsage
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectAiUsage" method="get" path="/v1/projects/{idOrName}/ai-metrics" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectAiUsage" method="get" path="/v1/projects/{idOrName}/ai-metrics" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getAiUsage({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetAiUsage } from "@alienplatform/platform-api/funcs/projectsGetAiUsage.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetAiUsage(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetAiUsage failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectAiUsage" method="get" path="/v1/projects/{idOrName}/ai-metrics" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1994,9 +3119,60 @@ run();
 
 ## getEncryptionUsage
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getProjectEncryptionUsage" method="get" path="/v1/projects/{idOrName}/encryption-metrics" -->
+<!-- UsageSnippet language="typescript" operationID="getProjectEncryptionUsage" method="get" path="/v1/projects/{idOrName}/encryption-metrics" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.projects.getEncryptionUsage({
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { projectsGetEncryptionUsage } from "@alienplatform/platform-api/funcs/projectsGetEncryptionUsage.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await projectsGetEncryptionUsage(alien, {
+    idOrName: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("projectsGetEncryptionUsage failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getProjectEncryptionUsage" method="get" path="/v1/projects/{idOrName}/encryption-metrics" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 

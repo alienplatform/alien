@@ -6,7 +6,7 @@
 import { ConfigureProjectKeysRequestBody } from "@alienplatform/platform-api/models/operations";
 
 let value: ConfigureProjectKeysRequestBody = {
-  applicationEncryption: false,
+  applicationEncryption: true,
 };
 ```
 
@@ -14,4 +14,4 @@ let value: ConfigureProjectKeysRequestBody = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `applicationEncryption` | *boolean*               | :heavy_check_mark:      | N/A                     |
+| `applicationEncryption` | *true*                  | :heavy_check_mark:      | N/A                     |
