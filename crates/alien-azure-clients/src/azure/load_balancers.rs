@@ -6,6 +6,7 @@ use alien_client_core::{ErrorData, Result};
 
 use alien_error::{Context, IntoAlienError};
 use reqwest::{Client, Method};
+use serde_json::Value;
 
 #[cfg(feature = "test-utils")]
 use mockall::automock;
@@ -41,6 +42,14 @@ pub trait LoadBalancerApi: Send + Sync + std::fmt::Debug {
         resource_group_name: &str,
         load_balancer_name: &str,
     ) -> Result<LoadBalancer>;
+
+    /// Get health for the backends serving a load-balancing rule.
+    async fn get_load_balancing_rule_health(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancing_rule_name: &str,
+    ) -> Result<OperationResult<Value>>;
 
     /// Delete a load balancer
     ///
@@ -83,11 +92,62 @@ impl AzureLoadBalancerClient {
             token_cache,
         }
     }
+
+    async fn get_load_balancing_rule_health(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancing_rule_name: &str,
+    ) -> Result<OperationResult<Value>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/loadBalancers/{}/loadBalancingRules/{}/health",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                load_balancer_name,
+                load_balancing_rule_name
+            ),
+            Some(vec![
+                ("api-version", "2025-07-01".into()),
+                ("preserve-view", "true".into()),
+            ]),
+        );
+        let req = AzureRequestBuilder::new(Method::POST, url)
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "GetLoadBalancingRuleHealth",
+                load_balancing_rule_name,
+            )
+            .await
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl LoadBalancerApi for AzureLoadBalancerClient {
+    async fn get_load_balancing_rule_health(
+        &self,
+        resource_group_name: &str,
+        load_balancer_name: &str,
+        load_balancing_rule_name: &str,
+    ) -> Result<OperationResult<Value>> {
+        AzureLoadBalancerClient::get_load_balancing_rule_health(
+            self,
+            resource_group_name,
+            load_balancer_name,
+            load_balancing_rule_name,
+        )
+        .await
+    }
+
     async fn create_or_update_load_balancer(
         &self,
         resource_group_name: &str,
