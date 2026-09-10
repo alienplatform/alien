@@ -177,6 +177,20 @@ async fn sync_with_manager(
         }
     }
 
+    // Report what's currently loaded (as of the last `sync_bundles` call) in
+    // this request. `sync_bundles` is called again below with THIS response's
+    // target, so the report embedded here always reflects one tick's lag —
+    // acceptable since `syncing` is a transient, self-resolving state and the
+    // next tick reports again regardless of whether this one changed anything.
+    let operations_report = match &state.operations_sync_handler {
+        Some(handler) => Some(
+            handler
+                .sync_bundles(state.db.get_target_operations_bundle_set().await?.as_ref())
+                .await,
+        ),
+        None => None,
+    };
+
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
@@ -187,6 +201,7 @@ async fn sync_with_manager(
         observed_inventory_batches,
         capabilities: report_operator_capabilities(state),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
+        operations_report,
     };
 
     // Call manager with deployment_id in request body.
@@ -267,6 +282,19 @@ async fn sync_with_manager(
     if let Some(ref commands_url) = sync_response.commands_url {
         if let Err(e) = state.db.set_commands_url(commands_url).await {
             error!(error = %e, "Failed to persist commands_url");
+        }
+    }
+
+    // Persist the target bundle set so a restart doesn't lose it for a full
+    // extra tick — the sync_bundles() call above (built from THIS response,
+    // used on the NEXT request) reads it back via get_target_operations_bundle_set.
+    if let Some(ref target_bundle_set) = sync_response.target_operations_bundle_set {
+        if let Err(e) = state
+            .db
+            .set_target_operations_bundle_set(target_bundle_set)
+            .await
+        {
+            error!(error = %e, "Failed to persist target_operations_bundle_set");
         }
     }
 

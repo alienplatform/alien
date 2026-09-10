@@ -275,6 +275,19 @@ pub struct ReconcileData {
     pub capabilities: Vec<OperatorCapabilityReport>,
     pub operator_version: Option<String>,
     pub execution_claim: Option<ExecutionClaim>,
+    /// The Operator's self-reported operations-plugin catalog and loaded
+    /// bundle hash, opaque to OSS beyond forwarding it. Platform embedders use
+    /// this to detect drift against a project's enabled-plugin-set hash.
+    pub operations_report: Option<alien_core::sync::OperationsReport>,
+}
+
+/// Result of a successful [`DeploymentStore::reconcile`] call.
+pub struct ReconcileOutcome {
+    pub record: DeploymentRecord,
+    /// Bundles the Operator should download to catch up to the target
+    /// enabled-plugin-set hash, opaque to OSS beyond forwarding it back to the
+    /// Operator's next sync response.
+    pub target_operations_bundle_set: Option<alien_core::sync::TargetOperationsBundleSet>,
 }
 
 /// Persistence for deployments and deployment groups.
@@ -418,7 +431,7 @@ pub trait DeploymentStore: Send + Sync {
         &self,
         caller: &crate::auth::Subject,
         data: ReconcileData,
-    ) -> Result<DeploymentRecord, AlienError>;
+    ) -> Result<ReconcileOutcome, AlienError>;
 
     /// Renew an acquired deployment lease without changing deployment state.
     /// Implementations must compare the active session atomically and return a

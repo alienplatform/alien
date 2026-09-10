@@ -102,6 +102,7 @@ impl DeploymentLoopTransport for ManagerTransport {
                     capabilities: Vec::new(),
                     operator_version: None,
                     execution_claim: self.execution_claim.clone(),
+                    operations_report: None,
                 },
             )
             .await?;

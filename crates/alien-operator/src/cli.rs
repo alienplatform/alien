@@ -6,7 +6,7 @@
 use crate::error::{ErrorData, Result};
 use crate::loops::access_requests::AccessRequestSyncLoop;
 use crate::loops::debug_session::DebugSessionLoop;
-use crate::loops::operations_exec::OperationsExecLoop;
+use crate::loops::operations_exec::{OperationsExecLoop, OperationsSyncHandler};
 use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
@@ -164,10 +164,17 @@ pub type AccessRequestSyncLoopHook = fn() -> Option<std::sync::Arc<dyn AccessReq
 /// so the OSS operator runs no authorized operations commands.
 pub type OperationsExecLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsExecLoop>>;
 
+/// Optional fifth hook that lets downstream binaries inject a real
+/// [`OperationsSyncHandler`] (downloads/hot-reloads the plugin registry
+/// toward the sync loop's target bundle set and reports the loaded catalog
+/// back). Defaults to `None`, so the OSS operator reports nothing.
+pub type OperationsSyncHandlerHook = fn() -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
+
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
 const NOOP_OPERATIONS_EXEC_LOOP_HOOK: OperationsExecLoopHook = || None;
+const NOOP_OPERATIONS_SYNC_HANDLER_HOOK: OperationsSyncHandlerHook = || None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -194,18 +201,20 @@ pub fn cli_main_with_hooks(init_hook: InitHook, debug_loop_hook: DebugLoopHook) 
         debug_loop_hook,
         NOOP_ACCESS_REQUEST_LOOP_HOOK,
         NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+        NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     );
 }
 
 /// Full-control CLI entry point: injects the init hook plus the pluggable loops
-/// (debug-session, access-request approval, and pull-mode operations executor).
-/// Downstream binaries call this to wire in their real implementations; the OSS
-/// binary uses no-op hooks.
+/// (debug-session, access-request approval, pull-mode operations executor, and
+/// operations-bundle sync handler). Downstream binaries call this to wire in
+/// their real implementations; the OSS binary uses no-op hooks.
 pub fn cli_main_with_all_loops(
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
     access_request_loop_hook: AccessRequestSyncLoopHook,
     operations_exec_loop_hook: OperationsExecLoopHook,
+    operations_sync_handler_hook: OperationsSyncHandlerHook,
 ) {
     // rustls 0.23 with both `aws-lc-rs` (pulled by aws-sdk) and `ring`
     // (pulled by other deps) present in the tree can't auto-pick a provider
@@ -224,6 +233,7 @@ pub fn cli_main_with_all_loops(
             debug_loop_hook,
             access_request_loop_hook,
             operations_exec_loop_hook,
+            operations_sync_handler_hook,
         );
     }
 
@@ -238,6 +248,7 @@ pub fn cli_main_with_all_loops(
         debug_loop_hook,
         access_request_loop_hook,
         operations_exec_loop_hook,
+        operations_sync_handler_hook,
     )) {
         eprintln!("Error: {}", e);
         std::process::exit(1);
@@ -255,6 +266,7 @@ async fn run(
     debug_loop_hook: DebugLoopHook,
     access_request_loop_hook: AccessRequestSyncLoopHook,
     operations_exec_loop_hook: OperationsExecLoopHook,
+    operations_sync_handler_hook: OperationsSyncHandlerHook,
 ) -> Result<()> {
     let embedded_config: Option<EmbeddedOperatorConfig> = load_embedded_config().ok().flatten();
 
@@ -493,6 +505,7 @@ async fn run(
         debug_loop_hook(),
         access_request_loop_hook(),
         operations_exec_loop_hook(),
+        operations_sync_handler_hook(),
         cancel,
     )
     .await?;
@@ -618,12 +631,15 @@ mod windows_entry {
         std::sync::Mutex::new(None);
     static OPERATIONS_EXEC_LOOP_HOOK: std::sync::Mutex<Option<OperationsExecLoopHook>> =
         std::sync::Mutex::new(None);
+    static OPERATIONS_SYNC_HANDLER_HOOK: std::sync::Mutex<Option<OperationsSyncHandlerHook>> =
+        std::sync::Mutex::new(None);
 
     pub fn run_as_service(
         init_hook: InitHook,
         debug_loop_hook: DebugLoopHook,
         access_request_loop_hook: AccessRequestSyncLoopHook,
         operations_exec_loop_hook: OperationsExecLoopHook,
+        operations_sync_handler_hook: OperationsSyncHandlerHook,
     ) -> ! {
         *INIT_HOOK.lock().expect("init hook lock") = Some(init_hook);
         *DEBUG_LOOP_HOOK.lock().expect("debug loop hook lock") = Some(debug_loop_hook);
@@ -633,6 +649,9 @@ mod windows_entry {
         *OPERATIONS_EXEC_LOOP_HOOK
             .lock()
             .expect("operations-exec loop hook lock") = Some(operations_exec_loop_hook);
+        *OPERATIONS_SYNC_HANDLER_HOOK
+            .lock()
+            .expect("operations-sync handler hook lock") = Some(operations_sync_handler_hook);
         service_dispatcher::start(SERVICE_NAME, ffi_service_main)
             .expect("failed to start service dispatcher");
         std::process::exit(0);
@@ -680,6 +699,10 @@ mod windows_entry {
             .lock()
             .expect("operations-exec loop hook lock")
             .unwrap_or(super::NOOP_OPERATIONS_EXEC_LOOP_HOOK);
+        let operations_sync_handler_hook = OPERATIONS_SYNC_HANDLER_HOOK
+            .lock()
+            .expect("operations-sync handler hook lock")
+            .unwrap_or(super::NOOP_OPERATIONS_SYNC_HANDLER_HOOK);
         let args = Args::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
@@ -700,6 +723,7 @@ mod windows_entry {
             debug_loop_hook,
             access_request_loop_hook,
             operations_exec_loop_hook,
+            operations_sync_handler_hook,
         )) {
             Ok(()) => 0,
             Err(e) => {

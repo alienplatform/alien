@@ -15,7 +15,7 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::{OperatorCapabilityReport, TargetDeployment},
+    sync::{OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };
@@ -152,6 +152,10 @@ pub struct AgentSyncRequest {
     pub capabilities: Vec<OperatorCapabilityReport>,
     #[serde(default, rename = "operatorVersion")]
     pub operator_version: Option<String>,
+    /// The Operator's self-reported operations-plugin catalog and loaded
+    /// bundle hash. Opaque to OSS beyond forwarding it to `reconcile()`.
+    #[serde(default)]
+    pub operations_report: Option<OperationsReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -172,6 +176,11 @@ pub struct AgentSyncResponse {
     /// it to lease pending commands instead of the agent's local sync URL.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+    /// Bundles the Operator should download to catch up to the target
+    /// enabled-plugin-set hash. Opaque passthrough from the embedder's
+    /// `DeploymentStore::reconcile`; `None` in OSS.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq)]
@@ -502,6 +511,9 @@ async fn reconcile(
                 capabilities: req.capabilities,
                 operator_version: req.operator_version,
                 execution_claim: req.execution_claim,
+                // Push-mode reconcile never carries an operations report;
+                // that's a pull-mode-only concept reported via `/v1/sync`.
+                operations_report: None,
             },
         )
         .await
@@ -1313,6 +1325,7 @@ async fn agent_sync(
     // back to the manager so that API consumers can observe deployment progress.
     let mut ignored_agent_state_report = false;
     let mut reported_claim_is_terminal = false;
+    let mut target_operations_bundle_set = None;
     // A target-bearing row without an echoed claim belongs to work the agent
     // has not accepted yet. Do not let its idle state acknowledge that target.
     if let Some(current_state_value) = req.current_state.as_ref().filter(|_| {
@@ -1342,7 +1355,7 @@ async fn agent_sync(
                     )
                     .await;
 
-                    if let Err(e) = state
+                    match state
                         .deployment_store
                         .reconcile(
                             &subject,
@@ -1357,25 +1370,30 @@ async fn agent_sync(
                                 operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
                                 execution_claim: req.execution_claim.clone(),
+                                operations_report: req.operations_report.clone(),
                             },
                         )
                         .await
                     {
-                        if report_has_claim {
-                            return e.into_response();
+                        Err(e) => {
+                            if report_has_claim {
+                                return e.into_response();
+                            }
+                            tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
                         }
-                        tracing::warn!(deployment_id = %req.deployment_id, error = %e, "Failed to reconcile agent-reported state");
-                    } else {
-                        if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
-                            state.deployment_store.as_ref(),
-                            &state.bindings_provider,
-                            &state.target_bindings_providers,
-                            &req.deployment_id,
-                            &agent_state,
-                        )
-                        .await
-                        {
-                            return error.into_response();
+                        Ok(outcome) => {
+                            target_operations_bundle_set = outcome.target_operations_bundle_set;
+                            if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
+                                state.deployment_store.as_ref(),
+                                &state.bindings_provider,
+                                &state.target_bindings_providers,
+                                &req.deployment_id,
+                                &agent_state,
+                            )
+                            .await
+                            {
+                                return error.into_response();
+                            }
                         }
                     }
                 }
@@ -1624,9 +1642,10 @@ async fn agent_sync(
                     && (!req.heartbeats.is_empty()
                         || !req.observed_inventory_batches.is_empty()
                         || !req.capabilities.is_empty()
-                        || req.operator_version.is_some())
+                        || req.operator_version.is_some()
+                        || req.operations_report.is_some())
                 {
-                    if let Err(e) = state
+                    match state
                         .deployment_store
                         .reconcile(
                             &subject,
@@ -1641,15 +1660,21 @@ async fn agent_sync(
                                 operator_version: req.operator_version.clone(),
                                 suggested_delay_ms: None,
                                 execution_claim: None,
+                                operations_report: req.operations_report.clone(),
                             },
                         )
                         .await
                     {
-                        tracing::warn!(
-                            deployment_id = %req.deployment_id,
-                            error = %e,
-                            "Failed to reconcile agent-reported heartbeats"
-                        );
+                        Err(e) => {
+                            tracing::warn!(
+                                deployment_id = %req.deployment_id,
+                                error = %e,
+                                "Failed to reconcile agent-reported heartbeats"
+                            );
+                        }
+                        Ok(outcome) => {
+                            target_operations_bundle_set = outcome.target_operations_bundle_set;
+                        }
                     }
                 }
 
@@ -1680,6 +1705,7 @@ async fn agent_sync(
             }
         },
         commands_url: Some(state.config.commands_base_url()),
+        target_operations_bundle_set,
     })
     .into_response()
 }
