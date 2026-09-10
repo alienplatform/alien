@@ -77,10 +77,6 @@ export type CreateSetupLinkRequest = {
    */
   entryPoint?: SetupLinkEntryPoint | undefined;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
-  /**
-   * Recover Remote Operator bootstrap values for this exact existing group only if it has no deployments. Serialized with registration; never creates or rebinds a group.
-   */
-  recoveryDeploymentGroupId?: string | undefined;
 };
 
 /** @internal */
@@ -127,7 +123,6 @@ export type CreateSetupLinkRequest$Outbound = {
     | undefined;
   entryPoint?: SetupLinkEntryPoint$Outbound | undefined;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
-  recoveryDeploymentGroupId?: string | undefined;
 };
 
 /** @internal */
@@ -149,7 +144,6 @@ export const CreateSetupLinkRequest$outboundSchema: z.ZodType<
   entryPoint: SetupLinkEntryPoint$outboundSchema.optional(),
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
-  recoveryDeploymentGroupId: z.string().optional(),
 });
 
 export function createSetupLinkRequestToJSON(

@@ -283,13 +283,13 @@ export type ProjectListItemResponseMethod = ClosedEnum<
 >;
 
 export type ProjectListItemResponseDeployments = {
-  enabled: boolean;
+  enabled: true;
   methods?: Array<ProjectListItemResponseMethod> | undefined;
 };
 
 export type ProjectListItemResponseKeys = {
-  enabled: boolean;
-  applicationEncryption: boolean;
+  enabled: true;
+  applicationEncryption: true;
 };
 
 export const ProjectListItemResponseAllowedProvider = {
@@ -320,7 +320,7 @@ export type ProjectListItemResponseRequirement = {
 };
 
 export type ProjectListItemResponseModels = {
-  enabled: boolean;
+  enabled: true;
   allowedProviders: Array<ProjectListItemResponseAllowedProvider>;
   requirements: Array<ProjectListItemResponseRequirement>;
 };
@@ -333,7 +333,7 @@ export type ProjectListItemResponseAccess = ClosedEnum<
 >;
 
 export type ProjectListItemResponseBuckets = {
-  enabled: boolean;
+  enabled: true;
   access: ProjectListItemResponseAccess;
 };
 
@@ -346,13 +346,13 @@ export type ProjectListItemResponseCredentialPolicy = ClosedEnum<
 >;
 
 export type ProjectListItemResponseRegistry = {
-  enabled: boolean;
+  enabled: true;
   repositories: Array<string>;
   credentialPolicy: ProjectListItemResponseCredentialPolicy;
 };
 
 export type ProjectListItemResponseRemoteSandbox = {
-  enabled: boolean;
+  enabled: true;
   baseImage?: string | undefined;
   imageBundleUri?: string | undefined;
   maxSessionLifetimeSeconds: number;
@@ -657,7 +657,7 @@ export const ProjectListItemResponseDeployments$inboundSchema: z.ZodType<
   ProjectListItemResponseDeployments,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   methods: z.array(ProjectListItemResponseMethod$inboundSchema).optional(),
 });
 
@@ -677,8 +677,8 @@ export const ProjectListItemResponseKeys$inboundSchema: z.ZodType<
   ProjectListItemResponseKeys,
   unknown
 > = z.object({
-  enabled: z.boolean(),
-  applicationEncryption: z.boolean(),
+  enabled: z.literal(true),
+  applicationEncryption: z.literal(true),
 });
 
 export function projectListItemResponseKeysFromJSON(
@@ -727,7 +727,7 @@ export const ProjectListItemResponseModels$inboundSchema: z.ZodType<
   ProjectListItemResponseModels,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   allowedProviders: z.array(
     ProjectListItemResponseAllowedProvider$inboundSchema,
   ),
@@ -756,7 +756,7 @@ export const ProjectListItemResponseBuckets$inboundSchema: z.ZodType<
   ProjectListItemResponseBuckets,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   access: ProjectListItemResponseAccess$inboundSchema,
 });
 
@@ -780,7 +780,7 @@ export const ProjectListItemResponseRegistry$inboundSchema: z.ZodType<
   ProjectListItemResponseRegistry,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   repositories: z.array(z.string()),
   credentialPolicy: ProjectListItemResponseCredentialPolicy$inboundSchema,
 });
@@ -800,7 +800,7 @@ export const ProjectListItemResponseRemoteSandbox$inboundSchema: z.ZodType<
   ProjectListItemResponseRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   baseImage: z.string().optional(),
   imageBundleUri: z.string().optional(),
   maxSessionLifetimeSeconds: z.int(),

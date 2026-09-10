@@ -1,5 +1,7 @@
 # PrepareDeploymentStackPoolsUnion
 
+User-selected deployment settings for one compute pool.
+
 
 ## Supported Types
 
@@ -7,8 +9,8 @@
 
 ```typescript
 const value: operations.PrepareDeploymentStackPoolsFixed = {
-  mode: "fixed",
   machines: 529721,
+  mode: "fixed",
 };
 ```
 
@@ -16,9 +18,9 @@ const value: operations.PrepareDeploymentStackPoolsFixed = {
 
 ```typescript
 const value: operations.PrepareDeploymentStackPoolsAutoscale = {
+  max: 730498,
+  min: 830349,
   mode: "autoscale",
-  min: 730498,
-  max: 830349,
 };
 ```
 

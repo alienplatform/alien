@@ -147,6 +147,8 @@
             "Microsoft.Network/publicIPAddresses/read",
             "Microsoft.Network/applicationGateways/read",
             "Microsoft.Network/applicationGateways/write",
+            "Microsoft.Network/applicationGateways/backendhealth/action",
+            "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.Compute/disks/read"
           ],
           "dataActions": [

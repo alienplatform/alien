@@ -308,50 +308,6 @@ export class Alien extends ClientSDK {
     ));
   }
 
-  async getDeploymentCredentialRotation(
-    request: operations.GetDeploymentCredentialRotationRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentCredentialRotationStatus> {
-    return unwrapAsync(getDeploymentCredentialRotation(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async prepareDeploymentCredentialRotation(
-    request: operations.PrepareDeploymentCredentialRotationRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentCredentialRotation> {
-    return unwrapAsync(prepareDeploymentCredentialRotation(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async cancelDeploymentCredentialRotation(
-    request: operations.CancelDeploymentCredentialRotationRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentCredentialRotation> {
-    return unwrapAsync(cancelDeploymentCredentialRotation(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async getDeploymentCredentialRotationValues(
-    request: operations.GetDeploymentCredentialRotationValuesRequest,
-    options?: RequestOptions,
-  ): Promise<models.DeploymentCredentialRotationValues> {
-    return unwrapAsync(getDeploymentCredentialRotationValues(
-      this,
-      request,
-      options,
-    ));
-  }
-
   async listAwsVirtualKeys(
     request: operations.ListAwsVirtualKeysRequest,
     options?: RequestOptions,
@@ -434,6 +390,50 @@ export class Alien extends ClientSDK {
     options?: RequestOptions,
   ): Promise<operations.ContinueAwsVirtualKeyResponse> {
     return unwrapAsync(continueAwsVirtualKey(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentCredentialRotation(
+    request: operations.GetDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotationStatus> {
+    return unwrapAsync(getDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async prepareDeploymentCredentialRotation(
+    request: operations.PrepareDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotation> {
+    return unwrapAsync(prepareDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async cancelDeploymentCredentialRotation(
+    request: operations.CancelDeploymentCredentialRotationRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotation> {
+    return unwrapAsync(cancelDeploymentCredentialRotation(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async getDeploymentCredentialRotationValues(
+    request: operations.GetDeploymentCredentialRotationValuesRequest,
+    options?: RequestOptions,
+  ): Promise<models.DeploymentCredentialRotationValues> {
+    return unwrapAsync(getDeploymentCredentialRotationValues(
       this,
       request,
       options,

@@ -210,6 +210,14 @@ pub trait ComputeApi: Send + Sync + Debug {
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/get
     async fn get_backend_service(&self, backend_service_name: String) -> Result<BackendService>;
 
+    /// Gets the health of a backend group attached to a backend service.
+    /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/getHealth
+    async fn get_backend_service_health(
+        &self,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth>;
+
     /// Creates a backend service.
     /// See: https://cloud.google.com/compute/docs/reference/rest/v1/backendServices/insert
     async fn insert_backend_service(&self, backend_service: BackendService) -> Result<Operation>;
@@ -1011,6 +1019,26 @@ impl ComputeApi for ComputeClient {
                 &path,
                 None,
                 Option::<()>::None,
+                &backend_service_name,
+            )
+            .await
+    }
+
+    async fn get_backend_service_health(
+        &self,
+        backend_service_name: String,
+        group: String,
+    ) -> Result<BackendServiceGroupHealth> {
+        let path = format!(
+            "projects/{}/global/backendServices/{}/getHealth",
+            self.project_id, backend_service_name
+        );
+        self.base
+            .execute_request(
+                Method::POST,
+                &path,
+                None,
+                Some(ResourceGroupReference { group }),
                 &backend_service_name,
             )
             .await
@@ -3492,6 +3520,33 @@ pub struct BackendService {
     /// Type of resource (always "compute#backendService").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendServiceGroupHealth {
+    #[serde(default)]
+    pub health_status: Vec<BackendHealthStatus>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct BackendHealthStatus {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ip_address: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub port: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub health_state: Option<String>,
+}
+
+#[derive(Debug, Serialize, Clone)]
+struct ResourceGroupReference {
+    group: String,
 }
 
 /// Backend configuration for a backend service.

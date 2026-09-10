@@ -296,4 +296,46 @@ mod tests {
             );
         }
     }
+
+    /// The controller passes the service account's bare id as `${resourceName}` and the deployment
+    /// prefix separately, while the IAM role it grants on is named `{prefix}-{id}`. A resource
+    /// binding that drops `${stackPrefix}` renders an account-level role name outside the
+    /// deployment, and no snapshot covers it because none renders this binding.
+    #[test]
+    fn a_service_account_resource_grant_names_the_prefixed_role() {
+        let context = PermissionContext::new()
+            .with_aws_region("us-east-1")
+            .with_aws_account_id("123456789012")
+            .with_stack_prefix("acme-prod")
+            .with_resource_id("agents")
+            .with_resource_name("agents");
+        let generator = AwsRuntimePermissionsGenerator::new();
+
+        for id in [
+            "service-account/heartbeat",
+            "service-account/management",
+            "service-account/provision",
+            "service-account/impersonate",
+        ] {
+            let permission_set = get_permission_set(id).expect("a service-account set resolves");
+            let policy = generator
+                .generate_policy(permission_set, BindingTarget::Resource, &context)
+                .expect("AWS policy should generate");
+            let resources = policy
+                .statement
+                .iter()
+                .flat_map(|statement| statement.resource.iter())
+                .map(String::as_str)
+                .collect::<Vec<_>>();
+
+            assert!(
+                resources.contains(&"arn:aws:iam::123456789012:role/acme-prod-agents"),
+                "'{id}' never names the role the controller creates; got {resources:?}"
+            );
+            assert!(
+                !resources.contains(&"arn:aws:iam::123456789012:role/agents"),
+                "'{id}' grants an unprefixed role name outside the deployment; got {resources:?}"
+            );
+        }
+    }
 }

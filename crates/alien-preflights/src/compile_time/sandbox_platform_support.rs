@@ -104,18 +104,21 @@ mod tests {
         }
     }
 
-    /// Azure applies no per-sandbox ceiling. A stack that declares one reads as bounded while the
-    /// sandbox is not, so plan time refuses it rather than letting it run unbounded.
+    /// A ceiling outside the platform's own sizing rule is refused at plan time: Azure sizes cpu
+    /// in steps of 250m, so `333m` is a size it will not create. Caught while planning rather
+    /// than at the first session, where it reads as a runtime fault, not a fixable declaration.
     #[tokio::test]
-    async fn ceilings_on_a_platform_that_ignores_them_fail_at_plan_time() {
-        let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::Deny));
+    async fn ceilings_outside_the_platform_rule_fail_at_plan_time() {
+        let mut limits = ceilings();
+        limits.cpu = "333m".to_string();
+        let stack = stack_with(sandbox("agent", Some(limits), SandboxEgress::Deny));
 
         let result = SandboxPlatformSupportCheck
             .check(&stack, Platform::Azure)
             .await
             .expect("check runs");
 
-        assert!(!result.success, "unenforceable ceilings must not pass");
+        assert!(!result.success, "a size the platform refuses must not pass");
         let rendered = result.errors.join(" ");
         assert!(rendered.contains("agent"), "names the sandbox: {rendered}");
     }
@@ -125,7 +128,7 @@ mod tests {
     async fn the_same_ceilings_pass_where_they_are_enforced() {
         let stack = stack_with(sandbox("agent", Some(ceilings()), SandboxEgress::Deny));
 
-        for platform in [Platform::Aws, Platform::Kubernetes] {
+        for platform in [Platform::Aws, Platform::Azure, Platform::Kubernetes] {
             let result = SandboxPlatformSupportCheck
                 .check(&stack, platform)
                 .await

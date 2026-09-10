@@ -969,7 +969,9 @@ pub trait Container: Binding {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct CreateSessionRequest {
-    /// Caller-chosen session id. Omitted means the provider allocates one.
+    /// Session id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
+    /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
+    /// new session's id. Read the id back from the response rather than assume the one sent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
     /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a
@@ -992,6 +994,10 @@ pub struct SandboxSession {
     pub state: SandboxSessionState,
     /// Lifecycle generation. A capability from another generation is rejected, which is how
     /// terminate revokes without distributing a revocation list.
+    ///
+    /// Differs by backend: AWS/Azure allocate a fresh id per session, so a constant carries the
+    /// whole meaning; GCP has none, so this is the guest's boot id — which a snapshot restore
+    /// reports unchanged, so restore and replacement need the resource name too to tell apart.
     pub generation: u64,
 }
 
@@ -1078,6 +1084,55 @@ pub enum CommandOutput {
     },
 }
 
+/// The id a started job answers to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobStart {
+    /// Identifier every later poll and cancel addresses
+    pub job_id: String,
+}
+
+/// A job's output so far, and how it ended once it has.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobPoll {
+    /// Whether the command is still running
+    pub running: bool,
+    /// Output produced after the polled sequence. The ending is `exit` or `error`, never a frame.
+    pub frames: Vec<CommandOutput>,
+    /// How the command exited, once it has
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub exit: Option<JobExit>,
+    /// Why the command ended without exiting
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<JobError>,
+}
+
+/// How a job's command exited.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobExit {
+    /// Process exit code
+    pub code: i32,
+    /// Set when output was cut short by a bound rather than by the command finishing
+    #[serde(default)]
+    pub truncated: bool,
+}
+
+/// Why a job ended without its command exiting.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct JobError {
+    /// Machine-readable cause, e.g. `deadlineExceeded`
+    pub code: String,
+    /// Human-readable detail
+    pub message: String,
+}
+
 /// An authenticated, port-scoped capability to reach a service inside a sandbox.
 ///
 /// Not a URL string: AWS needs a JWE and a port header, Azure an Entra token, and a bare
@@ -1115,8 +1170,9 @@ pub trait Sandbox: Binding {
 
     /// Fetches a session by id, or `None` if it does not exist.
     ///
-    /// Requires `reconnect`. A GCP session id is scoped to one Cloud Run instance, so GCP
-    /// returns the typed error rather than a `None` a caller would read as "expired".
+    /// Requires `reconnect`. `None` means the session does not exist; a backend that cannot
+    /// answer the question returns the typed error instead, so an absent session and an
+    /// unreachable one are never the same result.
     async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>>;
 
     /// Fetches a session, creating it if absent.
@@ -1124,9 +1180,9 @@ pub trait Sandbox: Binding {
 
     /// Lists sessions belonging to this sandbox's parent.
     ///
-    /// Not offered on AWS, Azure or GCP, where enumerating would cost an account-wide grant or
-    /// the API has no verb for it; those raise `OperationNotSupported`. Reaching a session whose
-    /// id is known is `get`..
+    /// Offered only where the backend has a verb for it and the grant covers it — GCP lists
+    /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
+    /// account-wide grant the session role deliberately withholds. Reaching a known id is `get`.
     async fn list(&self) -> Result<Vec<SandboxSession>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.
@@ -1138,6 +1194,28 @@ pub trait Sandbox: Binding {
         session_id: &str,
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
+
+    /// Starts a command as a job, which outlives the call that started it. Requires `jobs`.
+    ///
+    /// A start that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN` and not retryable: the sandbox
+    /// may have taken the command, and repeating it would run it twice.
+    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart>;
+
+    /// Reads a job's output after `since_seq`, and its ending once it has one. Requires `jobs`.
+    ///
+    /// `None` reads from the first frame. Repeating a poll costs nothing and changes nothing, so
+    /// a sandbox that cannot be reached is `SANDBOX_UNREACHABLE` and retryable.
+    async fn poll_job(
+        &self,
+        session_id: &str,
+        job_id: &str,
+        since_seq: Option<u64>,
+    ) -> Result<JobPoll>;
+
+    /// Cancels a job, stopping its command. Requires `jobs`.
+    ///
+    /// Classified like `poll_job`: a cancel that is repeated stops nothing a second time.
+    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()>;
 
     /// Reads a file out of the sandbox. Requires `files`. Paths are normalised and may not
     /// escape the root.

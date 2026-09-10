@@ -602,29 +602,33 @@ impl AwsRemoteStackManagementController {
         // statement effects and conditions remain intact.
         let generator = AwsRuntimePermissionsGenerator::new();
         let mut all_statements = Vec::new();
-        if let Some(global_permission_set_ids) = management_profile.0.get("*") {
-            for permission_set_ref in global_permission_set_ids {
-                let permission_set =
-                    permission_set_ref.resolve(|name| get_permission_set(name).cloned());
-                let Some(permission_set) = permission_set else {
-                    continue;
-                };
-                if permission_set.platforms.aws.is_none() {
-                    continue;
-                }
-
-                let policy = generator
-                    .generate_policy(&permission_set, BindingTarget::Stack, &permission_context)
-                    .context(ErrorData::InfrastructureError {
-                        message: format!(
-                            "Failed to generate IAM policy for management permission set '{}'",
-                            permission_set.id
-                        ),
-                        operation: Some("generate_management_policy_document".to_string()),
-                        resource_id: Some("management".to_string()),
-                    })?;
-                all_statements.extend(policy.statement);
+        // Unfiltered, the first update re-grants the reach the package withheld; see
+        // `alien_permissions::management_identity_global_refs`.
+        let global_refs = alien_permissions::management_identity_global_refs(
+            ctx.desired_stack.resources.values(),
+            management_profile,
+        );
+        for permission_set_ref in global_refs {
+            let permission_set =
+                permission_set_ref.resolve(|name| get_permission_set(name).cloned());
+            let Some(permission_set) = permission_set else {
+                continue;
+            };
+            if permission_set.platforms.aws.is_none() {
+                continue;
             }
+
+            let policy = generator
+                .generate_policy(&permission_set, BindingTarget::Stack, &permission_context)
+                .context(ErrorData::InfrastructureError {
+                    message: format!(
+                        "Failed to generate IAM policy for management permission set '{}'",
+                        permission_set.id
+                    ),
+                    operation: Some("generate_management_policy_document".to_string()),
+                    resource_id: Some("management".to_string()),
+                })?;
+            all_statements.extend(policy.statement);
         }
 
         self.append_resource_scoped_management_statements(

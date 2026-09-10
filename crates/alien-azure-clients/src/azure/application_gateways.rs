@@ -31,6 +31,13 @@ pub trait ApplicationGatewayApi: Send + Sync + std::fmt::Debug {
         application_gateway_name: &str,
     ) -> Result<Value>;
 
+    /// Get backend health for an Application Gateway.
+    async fn get_application_gateway_backend_health(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+    ) -> Result<OperationResult<Value>>;
+
     /// Delete an Application Gateway.
     async fn delete_application_gateway(
         &self,
@@ -72,11 +79,55 @@ impl AzureApplicationGatewayClient {
             Some(vec![("api-version", Self::API_VERSION.into())]),
         )
     }
+
+    async fn get_application_gateway_backend_health(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+    ) -> Result<OperationResult<Value>> {
+        let bearer_token = self
+            .token_cache
+            .get_bearer_token_with_scope("https://management.azure.com/.default")
+            .await?;
+        let url = self.base.build_url(
+            &format!(
+                "/subscriptions/{}/resourceGroups/{}/providers/Microsoft.Network/applicationGateways/{}/backendhealth",
+                &self.token_cache.config().subscription_id,
+                resource_group_name,
+                application_gateway_name
+            ),
+            Some(vec![("api-version", "2025-07-01".into())]),
+        );
+        let req = AzureRequestBuilder::new(Method::POST, url)
+            .content_length("")
+            .build()?;
+        let signed = self.base.sign_request(req, &bearer_token).await?;
+        self.base
+            .execute_request_with_long_running_support(
+                signed,
+                "GetApplicationGatewayBackendHealth",
+                application_gateway_name,
+            )
+            .await
+    }
 }
 
 #[cfg_attr(target_arch = "wasm32", async_trait::async_trait(?Send))]
 #[cfg_attr(not(target_arch = "wasm32"), async_trait::async_trait)]
 impl ApplicationGatewayApi for AzureApplicationGatewayClient {
+    async fn get_application_gateway_backend_health(
+        &self,
+        resource_group_name: &str,
+        application_gateway_name: &str,
+    ) -> Result<OperationResult<Value>> {
+        AzureApplicationGatewayClient::get_application_gateway_backend_health(
+            self,
+            resource_group_name,
+            application_gateway_name,
+        )
+        .await
+    }
+
     async fn create_or_update_application_gateway(
         &self,
         resource_group_name: &str,

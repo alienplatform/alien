@@ -41,6 +41,7 @@ import type {
 import type {
   CommandFrame,
   Container,
+  JobPoll,
   Key,
   KeyOptions,
   Kv,
@@ -207,6 +208,25 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         ),
       ),
     list: () => guard(handle, async raw => (await raw.list()).map(session)),
+    startJob: (sessionId, command, options) =>
+      guard(handle, async raw =>
+        raw.startJob(
+          sessionId,
+          command,
+          options.deadlineMs,
+          options.workingDirectory ?? null,
+          options.env ?? null,
+        ),
+      ),
+    pollJob: (sessionId, jobId, sinceSeq) =>
+      guard(handle, async raw => {
+        const answered = await raw.pollJob(sessionId, jobId, sinceSeq ?? null)
+        const poll: JobPoll = { running: answered.running, frames: answered.frames.map(frame) }
+        if (answered.exit) poll.exit = { ...answered.exit }
+        if (answered.error) poll.error = { ...answered.error }
+        return poll
+      }),
+    cancelJob: (sessionId, jobId) => guard(handle, async raw => raw.cancelJob(sessionId, jobId)),
     runCommand: (sessionId, command, options) => ({
       [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
         let stream: RawCommandStreamHandle | null = null

@@ -26,7 +26,6 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
-    recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
 
   console.log(result);
@@ -55,7 +54,6 @@ async function run() {
     externalId: "ext_example_01",
     name: "prod-us-east-1",
     project: "<value>",
-    recoveryDeploymentGroupId: "dg_r27ict8c7vcgsumpj90ackf7b",
   });
   if (res.ok) {
     const { value: result } = res;

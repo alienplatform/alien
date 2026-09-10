@@ -6,6 +6,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The requested deployment needs choices or resources owned by setup.
+    #[error(
+        code = "DEPLOYMENT_SETUP_REQUIRED",
+        message = "Update the existing installation before retrying this deployment: {message}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    SetupRequired {
+        /// The missing choices or incompatible infrastructure reported by preflight.
+        message: String,
+    },
+
     /// A compile-time check failed
     #[error(
         code = "COMPILE_TIME_CHECK_FAILED",

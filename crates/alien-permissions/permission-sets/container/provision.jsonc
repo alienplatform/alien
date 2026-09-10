@@ -472,6 +472,8 @@
             "Microsoft.Network/applicationGateways/write",
             "Microsoft.Network/applicationGateways/read",
             "Microsoft.Network/applicationGateways/delete",
+            "Microsoft.Network/applicationGateways/backendhealth/action",
+            "Microsoft.Network/loadBalancers/loadBalancingRules/health/action",
             "Microsoft.ManagedIdentity/userAssignedIdentities/read",
             "Microsoft.ManagedIdentity/userAssignedIdentities/write",
             "Microsoft.ManagedIdentity/userAssignedIdentities/delete",

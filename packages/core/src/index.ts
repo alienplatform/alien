@@ -326,6 +326,8 @@ export {
   ComputeCapacityRecommendationSchema,
   ComputeClusterHeartbeatDataSchema,
   ComputeClusterHeartbeatStatusSchema,
+  ComputePoolSelectionSchema,
+  ComputeSettingsSchema,
   ComputeTypeSchema,
   ContainerHeartbeatDataSchema,
   CreateCommandRequestSchema,

@@ -13,6 +13,7 @@ export const SandboxCapabilitiesSchema = z.object({
 "egressDeny": z.boolean().describe("Whether a declared `deny` is actually enforced, rather than accepted and dropped"),
 "enforcedLimits": z.boolean().describe("The platform enforces the declared cpu, memory and disk ceilings"),
 "files": z.boolean().describe("Files can be moved in and out of a session"),
+"jobs": z.boolean().describe("A command can be started, polled and cancelled across separate calls, so it outlives the\none that started it. False where nothing inside the session owns the process in between."),
 "preview": z.boolean().describe("An authenticated, port-scoped capability to reach a service inside the sandbox"),
 "processLimit": z.boolean().describe("The platform can cap how many processes a session runs"),
 "reconnect": z.boolean().describe("A later call can reach a session created by an earlier one"),

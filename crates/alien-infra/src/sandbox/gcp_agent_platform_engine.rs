@@ -1,9 +1,9 @@
 //! GCP Agent Platform reasoning-engine controller.
 //!
-//! Creates the durable engine every sandbox template and session hangs under, one per sandbox, and
-//! records its server-assigned id in state for the template controller to read as a dependency.
-//! Vertex exposes no Terraform resource for the engine, so this API-call controller is its only
-//! creator.
+//! Reconciles the durable engine every sandbox template and session hangs under, one per sandbox.
+//! A Live engine is created here and its server-assigned id recorded for the template controller
+//! to read as a dependency; a Frozen one is created by the setup stack and imported Ready, and
+//! this controller neither creates nor deletes it.
 //!
 //! Create-once: the id is persisted, so a later reconcile reuses it and never creates a second
 //! engine. The provision permission set grants create and delete but no get/list, so readiness is
@@ -33,6 +33,28 @@ fn require_operation_name(name: Option<String>, resource_id: &str) -> Result<Str
             resource_id: Some(resource_id.to_string()),
         })
     })
+}
+
+/// Whether the runtime created the engine and therefore owns its deletion.
+///
+/// A Frozen engine is removed by `terraform destroy`, and deleting it here would take the parent
+/// of sessions the setup stack still owns. An absent lifecycle is refused rather than guessed:
+/// unlike the AWS image there is no second signal to fall back to.
+fn engine_deletion_is_runtime_owned(
+    lifecycle: Option<alien_core::ResourceLifecycle>,
+    resource_id: &str,
+) -> Result<bool> {
+    match lifecycle {
+        Some(alien_core::ResourceLifecycle::Live) => Ok(true),
+        Some(alien_core::ResourceLifecycle::Frozen) => Ok(false),
+        None => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "teardown of reasoning engine '{resource_id}' refused: stack state records no \
+                 lifecycle, so whether setup or the runtime owns it is unknown"
+            ),
+            resource_id: Some(resource_id.to_string()),
+        })),
+    }
 }
 
 #[controller]
@@ -195,6 +217,13 @@ impl GcpAgentPlatformEngineController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
 
+        if !self.owns_engine_deletion(ctx, &config.id)? {
+            return Ok(HandlerAction::Continue {
+                state: Deleted,
+                suggested_delay: None,
+            });
+        }
+
         let Some(engine) = self.engine_id.clone() else {
             // Nothing was ever created — a delete with no engine is already done.
             return Ok(HandlerAction::Continue {
@@ -245,6 +274,20 @@ impl GcpAgentPlatformEngineController {
 }
 
 impl GcpAgentPlatformEngineController {
+    fn owns_engine_deletion(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+    ) -> Result<bool> {
+        engine_deletion_is_runtime_owned(
+            ctx.state
+                .resources
+                .get(resource_id)
+                .and_then(|resource| resource.lifecycle),
+            resource_id,
+        )
+    }
+
     /// Creates a controller already holding a ready engine id, for tests that seed it as a
     /// dependency of the template controller.
     #[cfg(feature = "test-utils")]
@@ -263,7 +306,7 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
-    use alien_core::Platform;
+    use alien_core::{Platform, ResourceLifecycle};
     use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
     use alien_gcp_clients::longrunning::Operation;
     use std::sync::Arc;
@@ -304,10 +347,19 @@ mod tests {
     async fn build_executor(
         provider: Arc<MockPlatformServiceProvider>,
     ) -> SingleControllerExecutor {
+        build_executor_with(provider, ResourceLifecycle::Live, Default::default()).await
+    }
+
+    async fn build_executor_with(
+        provider: Arc<MockPlatformServiceProvider>,
+        lifecycle: ResourceLifecycle,
+        controller: GcpAgentPlatformEngineController,
+    ) -> SingleControllerExecutor {
         SingleControllerExecutor::builder()
             .resource(GcpAgentPlatformEngine::new("orders-engine".to_string()).build())
-            .controller(GcpAgentPlatformEngineController::default())
+            .controller(controller)
             .platform(Platform::Gcp)
+            .resource_lifecycle(lifecycle)
             .service_provider(provider)
             .with_test_dependencies()
             .build()
@@ -321,7 +373,7 @@ mod tests {
         m.expect_create_engine().returning(|_| Ok(pending_op()));
         m.expect_get_operation()
             .returning(|_| Ok(done_engine_op("eng-42")));
-        m.expect_delete_engine().returning(|_| Ok(()));
+        m.expect_delete_engine().times(1).returning(|_| Ok(()));
         let provider = provider_with(Arc::new(m));
 
         let mut executor = build_executor(provider).await;
@@ -393,6 +445,52 @@ mod tests {
         assert!(
             surfaced,
             "a create-engine failure surfaces rather than being swallowed"
+        );
+    }
+
+    /// A Frozen engine belongs to the setup stack. `terraform destroy` removes it, and the
+    /// controller deleting it first would take the parent of sessions the stack still owns — so
+    /// this asserts on the client, not on the status a wrong implementation would also reach.
+    #[tokio::test]
+    async fn a_frozen_engine_is_torn_down_without_a_single_provider_call() {
+        let mut provider = MockPlatformServiceProvider::new();
+        provider.expect_get_gcp_agent_platform_client().never();
+
+        let mut executor = build_executor_with(
+            Arc::new(provider),
+            ResourceLifecycle::Frozen,
+            GcpAgentPlatformEngineController::mock_ready("eng-42"),
+        )
+        .await;
+
+        executor.delete().expect("delete is accepted");
+        executor
+            .run_until_terminal()
+            .await
+            .expect("delete runs to terminal");
+        assert_eq!(executor.status(), ResourceStatus::Deleted);
+    }
+
+    /// Ownership is read from stack state and nowhere else. A row that records none is refused
+    /// rather than guessed: guessing Live destroys a setup-owned engine, which no retry undoes.
+    #[test]
+    fn teardown_without_a_recorded_lifecycle_is_refused() {
+        assert!(
+            engine_deletion_is_runtime_owned(Some(ResourceLifecycle::Live), "orders-engine")
+                .expect("a live engine is runtime-owned")
+        );
+        assert!(!engine_deletion_is_runtime_owned(
+            Some(ResourceLifecycle::Frozen),
+            "orders-engine"
+        )
+        .expect("a frozen engine is setup-owned"));
+
+        let error = engine_deletion_is_runtime_owned(None, "orders-engine")
+            .expect_err("an unrecorded lifecycle names no owner");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID", "{error}");
+        assert!(
+            error.to_string().contains("orders-engine"),
+            "names the engine: {error}"
         );
     }
 }

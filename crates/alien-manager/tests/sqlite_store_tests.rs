@@ -689,6 +689,47 @@ async fn acquire_and_release() {
 }
 
 #[tokio::test]
+async fn heartbeat_acquires_refresh_failure_without_turning_it_into_a_work_retry() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+    let dep = create_test_deployment(&store, &group_id, "health", Platform::Aws).await;
+    db.conn()
+        .lock()
+        .await
+        .execute(
+            "UPDATE deployments SET status = 'refresh-failed', retry_requested = 0 WHERE id = ?",
+            [dep.id.as_str()],
+        )
+        .await
+        .unwrap();
+
+    for (statuses, expected_count) in [
+        (vec!["refresh-failed".to_string()], 0),
+        (vec!["running".to_string(), "refresh-failed".to_string()], 1),
+    ] {
+        let acquired = store
+            .acquire(
+                &test_subject(),
+                "health-session",
+                &DeploymentFilter {
+                    statuses: Some(statuses),
+                    deployment_ids: Some(vec![dep.id.clone()]),
+                    ..Default::default()
+                },
+                1,
+            )
+            .await
+            .unwrap();
+        assert_eq!(acquired.len(), expected_count);
+        if let Some(item) = acquired.first() {
+            assert_eq!(item.deployment.status, "refresh-failed");
+            assert!(!item.deployment.retry_requested);
+        }
+    }
+}
+
+#[tokio::test]
 async fn acquire_does_not_pick_failed_status_without_retry_request() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());

@@ -1,5 +1,7 @@
 # PlanDeploymentComputePoolsUnion
 
+User-selected deployment settings for one compute pool.
+
 
 ## Supported Types
 
@@ -7,8 +9,8 @@
 
 ```typescript
 const value: operations.PlanDeploymentComputePoolsFixed = {
-  mode: "fixed",
   machines: 8761,
+  mode: "fixed",
 };
 ```
 
@@ -16,9 +18,9 @@ const value: operations.PlanDeploymentComputePoolsFixed = {
 
 ```typescript
 const value: operations.PlanDeploymentComputePoolsAutoscale = {
+  max: 546442,
+  min: 23862,
   mode: "autoscale",
-  min: 546442,
-  max: 23862,
 };
 ```
 

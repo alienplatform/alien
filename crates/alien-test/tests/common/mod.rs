@@ -7,6 +7,7 @@ pub mod remote_bindings;
 pub mod routing;
 pub mod runner;
 pub mod runtime_less;
+pub mod storage_cleanup;
 
 use std::future::Future;
 use std::time::Duration;

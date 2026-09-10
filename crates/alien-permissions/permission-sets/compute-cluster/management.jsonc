@@ -216,6 +216,35 @@
           }
         }
       },
+      // AWS creates this account-level role on the first ASG. It is shared across
+      // stacks, so scope by its exact ARN and service rather than stack tags.
+      {
+        "grant": {
+          "actions": ["iam:CreateServiceLinkedRole"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "autoscaling.amazonaws.com"
+              }
+            }
+          },
+          "resource": {
+            "resources": [
+              "arn:aws:iam::${awsAccountId}:role/aws-service-role/autoscaling.amazonaws.com/AWSServiceRoleForAutoScaling"
+            ],
+            "condition": {
+              "StringEquals": {
+                "iam:AWSServiceName": "autoscaling.amazonaws.com"
+              }
+            }
+          }
+        }
+      },
       // ASG creation must include boundary tags in the create request.
       {
         "grant": {

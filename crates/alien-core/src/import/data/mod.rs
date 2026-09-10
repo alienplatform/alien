@@ -26,10 +26,10 @@ pub use azure::{
     AzureVaultImportData, AzureWorkerImportData,
 };
 pub use gcp::{
-    GcpAiImportData, GcpArtifactRegistryImportData, GcpBuildImportData,
-    GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData, GcpNetworkImportData,
-    GcpPostgresImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
-    GcpRemoteStackManagementImportData, GcpServiceAccountImportData,
+    GcpAgentPlatformEngineImportData, GcpAiImportData, GcpArtifactRegistryImportData,
+    GcpBuildImportData, GcpComputeClusterImportData, GcpKeyImportData, GcpKvImportData,
+    GcpNetworkImportData, GcpPostgresImportData, GcpQueueImportData, GcpRemoteBindingsImportData,
+    GcpRemoteStackManagementImportData, GcpSandboxImportData, GcpServiceAccountImportData,
     GcpServiceActivationImportData, GcpStorageImportData, GcpVaultImportData, GcpWorkerImportData,
 };
 pub use kubernetes_cluster::{
@@ -170,6 +170,10 @@ mod schema_snapshots {
                 schema::<AzureStorageAccountImportData>(),
             ),
             ("azure_vault", schema::<AzureVaultImportData>()),
+            (
+                "gcp_agent_platform_engine",
+                schema::<GcpAgentPlatformEngineImportData>(),
+            ),
             ("gcp_ai", schema::<GcpAiImportData>()),
             (
                 "gcp_artifact_registry",
@@ -202,6 +206,7 @@ mod schema_snapshots {
                 "gcp_service_activation",
                 schema::<GcpServiceActivationImportData>(),
             ),
+            ("gcp_sandbox", schema::<GcpSandboxImportData>()),
             ("gcp_storage", schema::<GcpStorageImportData>()),
             ("gcp_vault", schema::<GcpVaultImportData>()),
         ]);

@@ -189,8 +189,10 @@ async fn create_refuses_a_per_session_environment() {
         })
         .await
         .expect_err("a session environment must be refused");
-    assert_eq!(error.code, "INVALID_INPUT", "{error}");
-    assert!(error.to_string().contains("each command"), "{error}");
+    // Same code AWS answers the identical condition with (see the reasoning above create's check).
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(error.to_string().contains("env"), "{error}");
+    assert!(error.to_string().contains("per command"), "{error}");
 }
 
 // ---- get / get_or_create ----------------------------------------------------------------------
@@ -648,6 +650,98 @@ async fn a_long_command_uses_the_job_path() {
     ));
 }
 
+/// A client whose job answers depend only on the cursor it is asked for, so the streaming path and
+/// the trait methods read the same job the same way.
+fn job_client() -> MockAgentPlatformApi {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(|_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&match since_of(input) {
+                None => serde_json::json!({
+                    "running": true,
+                    "frames": [stdout_frame(0, b"work")],
+                }),
+                Some(_) => serde_json::json!({
+                    "running": false,
+                    "frames": [],
+                    "exitCode": 0,
+                    "truncated": false,
+                }),
+            })
+            .unwrap()),
+            other => panic!("unexpected op {other}"),
+        });
+    client
+}
+
+fn since_of(input: &[u8]) -> Option<u64> {
+    serde_json::from_slice::<serde_json::Value>(input)
+        .ok()?
+        .get("sinceSeq")?
+        .as_u64()
+}
+
+/// `run_command`'s long path is `start_job` plus a poll loop, so what a caller polls for itself
+/// has to be exactly what the stream would have carried. A job surfaced through the trait that
+/// dropped or reordered a frame would be a second, quieter implementation of the same thing.
+#[tokio::test(start_paused = true)]
+async fn a_polled_job_carries_what_run_command_would_have_streamed() {
+    let streamed: Vec<CommandOutput> = provider(job_client())
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .map(|frame| frame.expect("every frame is output"))
+        .collect()
+        .await;
+
+    let sandbox = provider(job_client());
+    let started = sandbox
+        .start_job("s1", long_command())
+        .await
+        .expect("the job starts");
+    assert_eq!(started.job_id, "j1");
+
+    let first = sandbox
+        .poll_job("s1", &started.job_id, None)
+        .await
+        .expect("the first poll answers");
+    assert!(first.running, "the job has not ended yet");
+    let last = sandbox
+        .poll_job("s1", &started.job_id, Some(0))
+        .await
+        .expect("the second poll answers");
+    assert!(!last.running);
+
+    let exit = last.exit.expect("a job that ended carries its exit");
+    let polled: Vec<CommandOutput> = first
+        .frames
+        .into_iter()
+        .chain(last.frames)
+        .chain([CommandOutput::Exit {
+            code: exit.code,
+            truncated: exit.truncated,
+        }])
+        .collect();
+
+    assert_eq!(polled, streamed);
+    assert_eq!(
+        polled.len(),
+        2,
+        "the fixture produces one output frame and one exit, so an empty match would prove nothing"
+    );
+}
+
+fn long_command() -> RunCommandRequest {
+    RunCommandRequest {
+        command: vec!["/bin/sleep".to_string(), "40".to_string()],
+        working_directory: None,
+        env: BTreeMap::new(),
+        deadline: Duration::from_secs(60),
+    }
+}
+
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
 /// exit code, and the provider surfaces it rather than fabricating a clean exit.
 #[tokio::test(start_paused = true)]
@@ -1084,9 +1178,16 @@ fn a_frame_that_does_not_convert_ends_the_body() {
     body.extend_from_slice(&ndjson(&[exit_frame(0)]));
 
     let frames = parse_exec_frames(&body).expect("frames parse");
-    assert_eq!(frames.len(), 1, "the exit frame must not follow the failure");
     assert_eq!(
-        frames[0].as_ref().expect_err("a bad payload is not output").code,
+        frames.len(),
+        1,
+        "the exit frame must not follow the failure"
+    );
+    assert_eq!(
+        frames[0]
+            .as_ref()
+            .expect_err("a bad payload is not output")
+            .code,
         "SANDBOX_OUTCOME_UNKNOWN"
     );
 }
@@ -1120,5 +1221,112 @@ fn the_engine_is_reduced_to_a_bare_segment() {
         provider.engine(),
         "eng1",
         "the full resource name is reduced to the engine id"
+    );
+}
+
+// ---- capabilities, session fields and terminate idempotency ------------------------------------
+
+/// The access denial in the client's own form: what a delete under an engine this deployment was
+/// not granted returns. The API answers a cross-engine call with `PERMISSION_DENIED` naming the
+/// sandbox environment, so the denial arrives as a refusal rather than as a not-found.
+fn access_denied() -> AlienError<AgentPlatformErrorData> {
+    AlienError::new(alien_client_core::ErrorData::RemoteAccessDenied {
+        resource_type: "SandboxEnvironment".to_string(),
+        resource_name: "s1".to_string(),
+    })
+    .context(AgentPlatformErrorData::RequestFailed {
+        operation: "delete sandbox".to_string(),
+        message: "s1".to_string(),
+    })
+}
+
+/// Pins `capabilities()`'s doc: `sessionLifetime` must stay true even for a session with no
+/// declared ttl, the case a narrowing would get wrong (Agent Platform always sets `expireTime`).
+#[test]
+fn capabilities_describe_the_backend_not_this_declaration() {
+    let platform = SandboxCapabilities::gcp_agent_platform();
+
+    assert_eq!(
+        provider(MockAgentPlatformApi::new()).capabilities(),
+        platform
+    );
+
+    let untimed = GcpAgentPlatformSandbox::new(
+        Arc::new(MockAgentPlatformApi::new()),
+        ENGINE_FULL.to_string(),
+        TEMPLATE.to_string(),
+        None,
+    );
+    assert_eq!(
+        untimed.capabilities(),
+        platform,
+        "a session with no declared ttl still expires, so the row does not change"
+    );
+    assert!(
+        platform.session_lifetime,
+        "Agent Platform always sets expireTime"
+    );
+}
+
+/// Pins the refusal, not the message: `create_sandbox` must never be called — the failure
+/// this guards is a sandbox that starts anyway and serves every tenant from one box.
+#[tokio::test]
+async fn a_tenant_key_is_refused_rather_than_dropped() {
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_create_sandbox().never();
+
+    let error = provider(client)
+        .create(CreateSessionRequest {
+            tenant_key: Some("tenant-1".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect_err("a tenant key Agent Platform cannot honour is refused");
+
+    assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
+    assert!(
+        error.to_string().contains("tenantKey"),
+        "the refusal has to name the field a caller must remove: {error}"
+    );
+}
+
+/// Terminating an already-gone session succeeds — gone is the state it asks for. The poll is
+/// expected never: reaching it would mean not-found had been treated as a failure.
+#[tokio::test]
+async fn terminate_of_an_absent_session_succeeds() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(not_found()));
+    client.expect_get_sandbox().never();
+
+    provider(client)
+        .terminate("s1")
+        .await
+        .expect("terminating an absent session succeeds");
+}
+
+/// A session this deployment cannot reach stays refused: mapping every delete failure to `Ok`
+/// would report containment for a sandbox under another deployment's engine that was never
+/// deleted. Only not-found may pass.
+#[tokio::test]
+async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_delete_sandbox()
+        .times(1)
+        .returning(|_, _| Err(access_denied()));
+    client.expect_get_sandbox().never();
+
+    let error = provider(client)
+        .terminate("s1")
+        .await
+        .expect_err("a refused delete is not containment");
+
+    assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
+    assert!(
+        format!("{error}").to_lowercase().contains("denied"),
+        "the refusal must carry why the delete was refused, got: {error}"
     );
 }

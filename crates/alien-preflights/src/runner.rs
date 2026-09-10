@@ -417,6 +417,20 @@ impl PreflightRunner {
                 let compatibility_summary = self
                     .run_compatibility_checks(old_stack, &mutated_stack, config)
                     .await?;
+                // These checks compare the prepared target with installed resources,
+                // including runtime-owned capacity changes. Do not duplicate that
+                // decision using a hash of the unprepared release.
+                if !compatibility_summary.success && all_results.iter().all(|result| result.success)
+                {
+                    return Err(AlienError::new(ErrorData::SetupRequired {
+                        message: compatibility_summary
+                            .results
+                            .iter()
+                            .flat_map(|result| result.errors.iter().cloned())
+                            .collect::<Vec<_>>()
+                            .join("; "),
+                    }));
+                }
                 all_results.extend(compatibility_summary.results);
             } else {
                 info!("Applying explicit authority for frozen resource changes");
@@ -502,6 +516,78 @@ mod setup_update_authorization_tests {
             setup_fingerprint: "fingerprint".to_string(),
             setup_fingerprint_version: 1,
         }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn prepared_changes_require_setup_but_unchanged_targets_do_not() {
+        let old = empty_stack();
+        let target = Stack::new("stack".to_string())
+            .add(
+                alien_core::Storage::new("evidence".to_string()).build(),
+                alien_core::ResourceLifecycle::Frozen,
+            )
+            .build();
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_compatibility_check(Box::new(
+            crate::compatibility::FrozenResourcesUnchangedCheck,
+        ));
+        let runner = PreflightRunner::with_registry(registry);
+        let state = StackState::new(Platform::Local);
+        let client = ClientConfig::Local {
+            state_directory: "/unused".to_string(),
+        };
+        let error = runner
+            .run_deployment_time_preflights(
+                target.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect_err("new frozen storage needs setup");
+        assert_eq!(error.code, "DEPLOYMENT_SETUP_REQUIRED");
+        assert!(error.message.contains("evidence"));
+        assert!(!error.retryable);
+        assert!(old.resources.is_empty());
+        runner
+            .run_deployment_time_preflights(
+                old.clone(),
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                None,
+            )
+            .await
+            .expect("same release/configuration needs no setup");
+        let (_, _, authorized) = runner
+            .run_deployment_time_preflights(
+                target,
+                &state,
+                &config,
+                &client,
+                Some(&old),
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect("explicit setup authority may prepare the new storage");
+        assert!(authorized);
     }
 
     #[test]

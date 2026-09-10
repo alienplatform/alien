@@ -344,8 +344,13 @@ pub fn generate_terraform_module(
         target.is_kubernetes() && has_resource_type(&per_resource, "kubernetes_manifest");
     let include_helm_provider =
         target.is_kubernetes() && options.registration.is_some() && options.helm_install.is_some();
+    // All three azapi resource kinds: the sandbox group is a plain `azapi_resource`, and a
+    // missing provider block fails at `terraform init` rather than at plan, which reads as a
+    // broken package rather than a missing declaration.
+    let emits_azapi_resource = has_resource_type(&per_resource, "azapi_resource");
     let include_azapi_provider = has_resource_type(&per_resource, "azapi_update_resource")
-        || has_resource_type(&per_resource, "azapi_resource_action");
+        || has_resource_type(&per_resource, "azapi_resource_action")
+        || emits_azapi_resource;
     // Cloud Control, for AWS APIs the main provider has not caught up with. Keyed off what was
     // actually emitted, so a stack without one of those resources is unchanged.
     // Keyed off the connector, not the image: the image is a Cloud Control resource from the
@@ -353,6 +358,12 @@ pub fn generate_terraform_module(
     let include_awscc_provider = has_resource_type(
         &per_resource,
         crate::emitters::aws::sandbox::NETWORK_CONNECTOR_RESOURCE,
+    );
+    // The reasoning engine is a google-beta-only type. Keyed off the emitted block so a stack
+    // without a Frozen sandbox declares nothing extra.
+    let include_google_beta_provider = has_resource_type(
+        &per_resource,
+        crate::emitters::gcp::agent_platform_engine::ENGINE_RESOURCE,
     );
     // Any barrier at all needs the provider declared, not only GCP's: the AWS sandbox emits one
     // of its own, and a missing declaration fails at init rather than at plan.
@@ -393,6 +404,7 @@ pub fn generate_terraform_module(
             include_helm_provider,
             include_azapi_provider,
             include_awscc_provider,
+            include_google_beta_provider,
         ))?,
     );
     files.insert(
@@ -419,6 +431,7 @@ pub fn generate_terraform_module(
             include_helm_provider,
             include_azapi_provider,
             include_awscc_provider,
+            include_google_beta_provider,
         ))?,
     );
     files.insert(
@@ -498,6 +511,7 @@ pub fn generate_terraform_module(
             options.helm_install.as_ref(),
             &stack_inputs,
             retained_key_detach.is_some(),
+            emits_azapi_resource,
         ),
     );
 
@@ -575,8 +589,11 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
         .resources()
         .filter_map(|(resource_id, entry)| {
             // The document a security team approves the grant from, so it lists only bindings the
-            // module actually installs a policy for.
-            alien_core::remote_bindings::remote_binding_is_deliverable(entry)
+            // module actually installs a policy for. A Kubernetes target skips sandbox emission
+            // altogether, so a sandbox entry here would document a grant it never installs.
+            let skipped = target.is_kubernetes()
+                && entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE;
+            (!skipped && alien_core::remote_bindings::remote_binding_is_deliverable(entry))
                 .then(|| alien_core::remote_bindings::remote_binding_for_entry(entry))
                 .flatten()
                 .map(|definition| (resource_id, definition))
@@ -589,7 +606,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
     let mut lines = vec![
         "# Application access permissions".to_string(),
         String::new(),
-        "The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive Alien's management permissions.".to_string(),
+        "The setup creates one narrow application access identity. It can access only the resources listed below; it does not receive the setup's management permissions.".to_string(),
     ];
     for (resource_id, definition) in resources {
         lines.extend([
@@ -613,7 +630,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.actions.as_deref(),
+                        &code_spans(entry.grant.actions.as_deref()),
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.resources.join(", "), target, resource_id)
                         }),
@@ -625,7 +642,7 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.permissions.as_deref(),
+                        &code_spans(entry.grant.permissions.as_deref()),
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.scope, target, resource_id)
                         }),
@@ -639,10 +656,30 @@ fn remote_bindings_permissions_md(stack: &Stack, target: TerraformTarget) -> Opt
                     .as_deref()
                     .unwrap_or_default()
                 {
+                    // Roles and data actions together: an Azure grant may carry either, and a set
+                    // granting only a predefined role would otherwise render as a heading with
+                    // nothing under it — the strongest grant in the package documented as empty.
+                    let mut granted: Vec<String> = entry
+                        .grant
+                        .predefined_roles
+                        .iter()
+                        .flatten()
+                        // The annotation sits outside the code span: a reader has to be able to
+                        // tell the role's real name from a note about it.
+                        .map(|role| format!("`{role}` (built-in role)"))
+                        .collect();
+                    granted.extend(
+                        entry
+                            .grant
+                            .data_actions
+                            .iter()
+                            .flatten()
+                            .map(|action| format!("`{action}`")),
+                    );
                     append_permission_entry(
                         &mut lines,
                         entry.description.as_deref(),
-                        entry.grant.data_actions.as_deref(),
+                        &granted,
                         entry.binding.resource.as_ref().map(|binding| {
                             permission_doc_scope(&binding.scope, target, resource_id)
                         }),
@@ -663,9 +700,28 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
         ),
         _ => format!("${{local.resource_prefix}}-{resource_id}"),
     };
+    // Vertex AI assigns a reasoning engine's id at apply, so no scope can name it. The engine's
+    // display name is what an approver can find in the module, and the path still shows the
+    // boundary: this engine's sessions, not the project's.
+    let scope = match scope.strip_suffix("/reasoningEngines/${resourceName}") {
+        Some(parent) => format!(
+            "{parent}/reasoningEngines/(the id assigned at apply to {resource_name}-engine)"
+        ),
+        None => scope.to_string(),
+    };
     scope
+        // Sandbox templates carry the prefix separately; storage templates include it in
+        // resourceName. Resolve the pair first so the document matches the installed grant.
+        .replace("${stackPrefix}-${resourceName}", &resource_name)
         .replace("${resourceName}", &resource_name)
+        .replace("${stackPrefix}", "${local.resource_prefix}")
+        .replace("${awsRegion}", "${data.aws_region.current.region}")
+        .replace(
+            "${awsAccountId}",
+            "${data.aws_caller_identity.current.account_id}",
+        )
         .replace("${projectName}", "${var.gcp_project}")
+        .replace("${region}", "${var.gcp_region}")
         .replace("${subscriptionId}", "${var.azure_subscription_id}")
         .replace("${resourceGroup}", "${var.azure_resource_group_name}")
         .replace(
@@ -674,10 +730,21 @@ fn permission_doc_scope(scope: &str, target: TerraformTarget, resource_id: &str)
         )
 }
 
+/// Wraps each name in a code span, for the callers whose entries are names and nothing else.
+fn code_spans(permissions: Option<&[String]>) -> Vec<String> {
+    permissions
+        .unwrap_or_default()
+        .iter()
+        .map(|permission| format!("`{permission}`"))
+        .collect()
+}
+
+/// `permissions` arrives already rendered as markdown, so a caller can annotate an entry outside
+/// its code span rather than inside the name.
 fn append_permission_entry(
     lines: &mut Vec<String>,
     description: Option<&str>,
-    permissions: Option<&[String]>,
+    permissions: &[String],
     scope: Option<String>,
 ) {
     if let Some(description) = description {
@@ -686,8 +753,8 @@ fn append_permission_entry(
     if let Some(scope) = scope {
         lines.push(format!("  Scope: `{scope}`"));
     }
-    for permission in permissions.unwrap_or_default() {
-        lines.push(format!("  - `{permission}`"));
+    for permission in permissions {
+        lines.push(format!("  - {permission}"));
     }
 }
 
@@ -1025,7 +1092,11 @@ fn gcp_iam_resource_addresses(per_resource: &IndexMap<String, TfFragment>) -> Ve
             };
             matches!(
                 provider_type,
-                "google_project_iam_member" | "google_service_account_iam_member"
+                "google_project_iam_member"
+                    | "google_service_account_iam_member"
+                    // The grant that admits a remote caller: registration must not report success
+                    // while it is still propagating, or the caller's first call is a 403.
+                    | "google_vertex_ai_reasoning_engine_iam_member"
             )
         })
         .filter_map(resource_address)
@@ -1134,6 +1205,7 @@ fn versions_body(
     include_helm_provider: bool,
     include_azapi_provider: bool,
     include_awscc_provider: bool,
+    include_google_beta_provider: bool,
 ) -> Body {
     let required_version = if matches!(target, TerraformTarget::Eks) {
         ">= 1.9.0"
@@ -1163,6 +1235,13 @@ fn versions_body(
             "google",
             provider_decl_attr("hashicorp/google", ">= 5.0"),
         ));
+        if include_google_beta_provider {
+            // The floor is where `google_vertex_ai_reasoning_engine` exists.
+            provider_attrs.push(attr(
+                "google-beta",
+                provider_decl_attr("hashicorp/google-beta", ">= 6.0"),
+            ));
+        }
     }
     if matches!(target.cloud_platform(), alien_core::Platform::Azure) {
         // Upper bound deliberate: an open-ended constraint promises every future
@@ -1173,7 +1252,12 @@ fn versions_body(
             provider_decl_attr("hashicorp/azurerm", ">= 3.100, < 5.0"),
         ));
         if include_azapi_provider {
-            provider_attrs.push(attr("azapi", provider_decl_attr("Azure/azapi", ">= 2.6")));
+            // Bounded for the same reason as azurerm, and more sharply: the sandbox group is a
+            // preview type, and a major bump is free to change what `body` accepts.
+            provider_attrs.push(attr(
+                "azapi",
+                provider_decl_attr("Azure/azapi", ">= 2.6, < 3.0"),
+            ));
         }
     }
     if include_time_provider {
@@ -2004,7 +2088,7 @@ fn string_enum_variable_block(
 /// the account default VPC's cannot be enumerated at setup.
 fn network_mode_description(needs_named_subnets: bool) -> &'static str {
     if needs_named_subnets {
-        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered."
+        "Choose whether this setup creates a new network or uses an existing one. Values: create-new, use-existing. This application's private resources require explicit subnet IDs, which setup cannot discover from the account default VPC."
     } else {
         "Choose whether this setup creates a new network, uses an existing network, or uses the default network. Values: create-new, use-existing, use-default."
     }
@@ -2040,7 +2124,7 @@ fn network_mode_variable_block(needs_named_subnets: bool) -> Block {
                 attr(
                     "error_message",
                     Expression::String(
-                        "network_mode must be create-new or use-existing: this application's sandbox routes session egress through a VPC connector, which must name subnets."
+                        "network_mode must be create-new or use-existing: this application's private resources must name subnets."
                             .to_string(),
                     ),
                 ),
@@ -2276,6 +2360,7 @@ fn providers_body(
     include_helm_provider: bool,
     include_azapi_provider: bool,
     include_awscc_provider: bool,
+    include_google_beta_provider: bool,
 ) -> Body {
     let mut structures: Vec<Structure> = Vec::new();
     match target.cloud_platform() {
@@ -2330,6 +2415,18 @@ fn providers_body(
                     attr("region", expr::raw("var.gcp_region")),
                 ]),
             }));
+            // Declared in required_providers without a provider block, google-beta has no
+            // project or credentials to work from and plan refuses the module.
+            if include_google_beta_provider {
+                structures.push(Structure::Block(Block {
+                    identifier: Identifier::sanitized("provider"),
+                    labels: vec![BlockLabel::String("google-beta".to_string())],
+                    body: Body::from(vec![
+                        attr("project", expr::raw("var.gcp_project")),
+                        attr("region", expr::raw("var.gcp_region")),
+                    ]),
+                }));
+            }
         }
         alien_core::Platform::Azure => {
             structures.push(Structure::Block(Block {
@@ -3191,6 +3288,7 @@ fn readme_md(
     helm_install: Option<&TerraformHelmInstall>,
     stack_inputs: &[StackInputDefinition],
     has_retained_keys: bool,
+    emits_azapi_resource: bool,
 ) -> String {
     let required_env = if registration.is_some() {
         "export TF_VAR_token=\"...\"".to_string()
@@ -3238,8 +3336,8 @@ fn readme_md(
         };
         format!(
             "\nA completed apply installs the sandbox's {scaffolding} but not the sandbox image \
-             itself. The image is built after the deployment registers; the deployment's status \
-             in Alien reports when the sandbox can accept sessions.\n"
+             itself. The image is built after the deployment registers, and the deployment's \
+             status reports when the sandbox can accept sessions.\n"
         )
     };
 
@@ -3293,6 +3391,19 @@ fn readme_md(
     } else {
         ""
     };
+    // The two things an Azure approver stops on — a preview API version and a validation check
+    // turned off — documented in the artifact, not only in the source. Keyed off what was
+    // emitted, not the platform: an AKS target is `Platform::Azure` but skips sandbox emission
+    // entirely.
+    let azure_sandbox_note = if emits_azapi_resource
+        && stack
+            .resources()
+            .any(|(_, entry)| entry.config.resource_type() == alien_core::Sandbox::RESOURCE_TYPE)
+    {
+        "## The sandbox group\n\nThe sandbox group is created through the `azapi` provider at `Microsoft.App/sandboxGroups@2026-02-01-preview`, because the AzureRM provider has no typed resource for it. Being a preview API, its shape and regional availability can change.\n\nThat resource sets `schema_validation_enabled = false`: the `azapi` provider ships a bundled schema index that does not yet carry the type, so its client-side pre-check would reject a request ARM accepts. Azure Resource Manager still validates the request in full at apply.\n\nThe subscription must have the `Microsoft.App` resource provider registered before you apply:\n\n```bash\naz provider register --namespace Microsoft.App\n```\n\n`terraform destroy` removes the group, and removing it deletes every sandbox inside it.\n\n"
+    } else {
+        ""
+    };
     let inputs = input_sections.join("\n\n");
     format!(
         "# Deployment setup - {display_name}\n\n\
@@ -3300,7 +3411,7 @@ Target: `{target}`.\n\n\
 This module creates setup-owned infrastructure, grants the management access needed after setup, and prepares deployment registration metadata. Review the generated `.tf` files before applying; each resource file maps to one setup resource.\n\n\
 ## Inputs\n\n\
 {inputs}\n\n\
-## Run\n\n\
+{azure_sandbox_note}## Run\n\n\
 Use your organization's normal backend and approval workflow. A typical local review looks like:\n\n\
 ```bash\n{required_env}\nterraform init\nterraform validate\nterraform plan -out=tfplan\nterraform apply tfplan\n```\n{runtime_sandbox_note}\n\
 ## Registration\n\n\
@@ -3319,7 +3430,8 @@ Use your organization's normal backend and approval workflow. A typical local re
         runtime_sandbox_note = runtime_sandbox_note,
         registration_note = registration_note,
         kubernetes_operations = kubernetes_operations,
-        retained_key_operations = retained_key_operations
+        retained_key_operations = retained_key_operations,
+        azure_sandbox_note = azure_sandbox_note
     )
 }
 
@@ -3383,7 +3495,7 @@ fn readme_azure_inputs(target: TerraformTarget) -> String {
 /// the package contradict itself.
 fn readme_network_inputs(target: TerraformTarget, needs_named_subnets: bool) -> String {
     match target.cloud_platform() {
-        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. A sandbox in this application routes session egress through a VPC connector when enabled, and that connector must name subnets, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
+        alien_core::Platform::Aws if needs_named_subnets => "Network settings:\n\n- `network_mode`: `create-new` or `use-existing`. Private resources require explicit subnet IDs, so the default network is not offered.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Aws => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `vpc_cidr`, `availability_zones`: used with `create-new`.\n- `vpc_id`, `public_subnet_ids`, `private_subnet_ids`, `security_group_ids`: required with `use-existing`.".to_string(),
         alien_core::Platform::Gcp => "Network settings:\n\n- `network_mode`: `create-new`, `use-existing`, or `use-default`.\n- `network_cidr`, `availability_zones`: used with `create-new`.\n- `network_name`, `subnet_name`, `network_region`: required with `use-existing`.".to_string(),
         _ => String::new(),
@@ -3462,6 +3574,7 @@ mod tests {
         let versions = render_body(versions_body(
             TerraformTarget::Aws,
             Some(&registration),
+            false,
             false,
             false,
             false,

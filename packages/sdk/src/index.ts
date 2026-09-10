@@ -58,6 +58,9 @@ export {
 export type {
   CommandFrame,
   Container,
+  JobError,
+  JobExit,
+  JobPoll,
   Kv,
   Postgres,
   PostgresConnection,

@@ -1,3 +1,4 @@
+import { AlienError } from "@alienplatform/core"
 import { storage } from "@alienplatform/sdk"
 import { Hono } from "hono"
 import { toExternalOperationError } from "../helpers.js"
@@ -55,6 +56,31 @@ app.post("/storage-write/:bindingName", async c => {
     return c.json({ success: true, bindingName, key })
   } catch (error: unknown) {
     const alienError = await toExternalOperationError(error, "storage-write")
+    return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
+  }
+})
+
+app.delete("/storage-object/:bindingName/:key", async c => {
+  const bindingName = c.req.param("bindingName")
+  const key = c.req.param("key")
+  // Only the generated test namespaces are eligible on this public test app.
+  const testKey =
+    /^(?:storage-event-test-|wait_until_test_)[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.txt$/
+  if (bindingName !== "alien-storage" || !testKey.test(key)) {
+    return c.json(
+      {
+        success: false,
+        error: "Cleanup only accepts generated storage test keys in alien-storage",
+      },
+      400,
+    )
+  }
+  try {
+    await storage(bindingName).delete(key)
+    return c.body(null, 204)
+  } catch (error: unknown) {
+    if ((await AlienError.from(error)).httpStatusCode === 404) return c.body(null, 204)
+    const alienError = await toExternalOperationError(error, "storage-delete")
     return c.json({ success: false, error: alienError.message, code: alienError.code }, 500)
   }
 })

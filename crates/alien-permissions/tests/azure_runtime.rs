@@ -377,11 +377,9 @@ fn test_azure_wildcard_scope_error() {
 /// The heartbeat's stack binding stops at the resource group, and reads only.
 ///
 /// A resource-group scope enumerates sibling sandbox groups, which the resource binding does not,
-/// so the resource binding is the one to prefer. The stack binding exists for the reason
-/// `provision` is resource-group-scoped: `Microsoft.App/sandboxGroups` has no ARM template
-/// representation, so setup can neither create the group nor scope an assignment to one. What
-/// this pins is how far that concession goes — the resource group and no further, and a read
-/// rather than anything that reaches a session.
+/// so the resource binding is the one to prefer. The stack binding stands because nothing
+/// compiles the resource one for a sandbox yet. What this pins is how far that concession goes —
+/// the resource group and no further, and a read rather than anything that reaches a session.
 #[test]
 fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
@@ -390,7 +388,7 @@ fn sandbox_heartbeat_stack_scope_stops_at_the_resource_group() {
 
     let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect("the heartbeat has to reach the manager before the group exists");
+        .expect("the sandbox heartbeat set declares an Azure stack binding");
     assert_eq!(stack_plan.bindings.len(), 1);
     let scope = &stack_plan.bindings[0].scope;
     assert!(
@@ -449,10 +447,10 @@ fn sandbox_execute_grants_nothing_at_stack_scope() {
 /// Management's stack binding stops at the resource group, and never reaches session contents.
 ///
 /// At that scope a holder can terminate sessions in a sibling sandbox group, so the resource
-/// binding is the one to prefer; the stack binding exists only because setup cannot scope an
-/// assignment to a group that `Microsoft.App/sandboxGroups` gives it no way to create. The
-/// boundary this pins is the one `sandbox/execute` exists to hold: session lifecycle here,
-/// never a read or exec that reaches inside a session.
+/// binding is the one to prefer. The stack binding stands because the sandbox management grants
+/// are compiled at stack scope and nothing compiles the resource one. The boundary this pins is
+/// the one `sandbox/execute` exists to hold: session lifecycle here, never a read or exec that
+/// reaches inside a session.
 #[test]
 fn sandbox_management_stack_scope_stops_at_the_resource_group() {
     let generator = AzureRuntimePermissionsGenerator::new();
@@ -461,7 +459,7 @@ fn sandbox_management_stack_scope_stops_at_the_resource_group() {
 
     let stack_plan = generator
         .generate_grant_plan(permission_set, BindingTarget::Stack, &context)
-        .expect("management has to reach the manager before the group exists");
+        .expect("the sandbox management set declares an Azure stack binding");
     assert_eq!(stack_plan.bindings.len(), 1);
     let scope = &stack_plan.bindings[0].scope;
     assert!(
@@ -552,5 +550,63 @@ fn sandbox_provision_can_manage_its_group_at_stack_scope() {
             .iter()
             .any(|action| action.contains("roleAssignments")),
         "provision must not be able to assign roles: {stack_actions:?}"
+    );
+}
+
+/// `${resourceName}` already carries the stack prefix — every Azure emitter builds it as
+/// `<prefix>-<id>` — so a resource scope that also names `${stackPrefix}` renders the prefix twice
+/// and grants on a resource that does not exist. Nothing fails when that happens: the assignment
+/// is well-formed and simply covers nothing, which is why it needs a test rather than a reviewer.
+///
+/// Asserted as the whole scope rather than as the absence of a doubled prefix, so any spelling
+/// that changes the resource this grant lands on fails here, not only `${stackPrefix}-`.
+#[test]
+fn azure_resource_scopes_name_exactly_the_resource_they_are_filed_under() {
+    // `create_test_context` renders `${stackPrefix}` as `my-stack` and `${resourceName}` as
+    // `my-stack-payments-data`, which is the prefixed form every Azure emitter builds.
+    const RESOURCE_GROUP: &str = "/subscriptions/00000000-0000-0000-0000-000000000000\
+/resourceGroups/rg-observability-prod";
+    let generator = AzureRuntimePermissionsGenerator::new();
+    let context = create_test_context();
+    let mut checked = 0;
+
+    for (id, provider_path) in [
+        ("postgres/heartbeat", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        ("postgres/management", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        ("postgres/provision", "Microsoft.DBforPostgreSQL/flexibleServers"),
+        (
+            "service-account/heartbeat",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        (
+            "service-account/management",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        (
+            "service-account/provision",
+            "Microsoft.ManagedIdentity/userAssignedIdentities",
+        ),
+        ("vault/management", "Microsoft.KeyVault/vaults"),
+        ("vault/provision", "Microsoft.KeyVault/vaults"),
+    ] {
+        let permission_set = get_permission_set(id).expect("a declared permission set");
+        let plan = generator
+            .generate_grant_plan(permission_set, BindingTarget::Resource, &context)
+            .unwrap_or_else(|error| panic!("{id} should generate a resource grant plan: {error}"));
+
+        let expected =
+            format!("{RESOURCE_GROUP}/providers/{provider_path}/my-stack-payments-data");
+        for binding in &plan.bindings {
+            checked += 1;
+            assert_eq!(
+                binding.scope, expected,
+                "{id} grants on a resource other than the one it is filed under"
+            );
+        }
+    }
+
+    assert!(
+        checked > 0,
+        "no resource-scoped Azure binding rendered, so this test pins nothing"
     );
 }
