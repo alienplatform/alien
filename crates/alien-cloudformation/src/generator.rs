@@ -1165,10 +1165,9 @@ fn add_network_parameters(
             );
             template.parameters.insert(
                 PARAM_SECURITY_GROUP_IDS.to_string(),
-                aws_id_list_parameter(
+                comma_list_parameter(
                     "Only used with use-existing. Existing security group IDs.",
                     defaults.security_group_ids,
-                    "AWS::EC2::SecurityGroup::Id",
                 ),
             );
         }
@@ -2472,25 +2471,6 @@ fn number_parameter(
 fn comma_list_parameter(description: &str, default: Vec<String>) -> CfParameter {
     CfParameter {
         parameter_type: "CommaDelimitedList".to_string(),
-        description: Some(description.to_string()),
-        default: Some(CfExpression::from(default.join(","))),
-        allowed_values: None,
-        allowed_pattern: None,
-        min_length: None,
-        max_length: None,
-        min_value: None,
-        max_value: None,
-        no_echo: None,
-    }
-}
-
-fn aws_id_list_parameter(
-    description: &str,
-    default: Vec<String>,
-    aws_id_type: &str,
-) -> CfParameter {
-    CfParameter {
-        parameter_type: format!("List<{aws_id_type}>"),
         description: Some(description.to_string()),
         default: Some(CfExpression::from(default.join(","))),
         allowed_values: None,
