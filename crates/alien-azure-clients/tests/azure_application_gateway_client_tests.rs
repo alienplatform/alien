@@ -114,7 +114,13 @@ async fn operation_value(
             let body = operations
                 .wait_for_completion(&operation, operation_name, resource_name)
                 .await?;
-            serde_json::from_str(&body)?
+            if operation.location_url.is_some() {
+                operations
+                    .fetch_location_result(&operation, operation_name, resource_name)
+                    .await?
+            } else {
+                serde_json::from_str(&body)?
+            }
         }
     })
 }

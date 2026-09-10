@@ -590,12 +590,19 @@ async fn test_comprehensive_load_balancer_lifecycle(
                 .long_running_operation_client
                 .wait_for_completion(&operation, "GetLoadBalancingRuleHealth", lb_rule_name)
                 .await?;
-            serde_json::from_str(&body)?
+            if operation.location_url.is_some() {
+                ctx.long_running_operation_client
+                    .fetch_location_result(&operation, "GetLoadBalancingRuleHealth", lb_rule_name)
+                    .await?
+            } else {
+                serde_json::from_str(&body)?
+            }
         }
     };
     assert_eq!(
         health
             .pointer("/properties/output/up")
+            .or_else(|| health.pointer("/up"))
             .and_then(serde_json::Value::as_u64),
         Some(0)
     );
