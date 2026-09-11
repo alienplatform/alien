@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use alien_core::bindings::{BindingValue, KubernetesSandboxBinding, LocalSandboxBinding};
 use alien_core::SandboxEgress;
+use alien_error::ContextError as _;
 use axum::routing::post;
 use axum::{Json, Router};
 use futures::StreamExt as _;
@@ -345,4 +346,142 @@ async fn local_declares_no_lifetime_and_asks_its_manager_for_nothing() {
         "a refusal must cost no request: a container started and then left unbounded is exactly \
          what the refusal exists to prevent"
     );
+}
+
+/// A lifetime the request names but no sandbox can be built to, through both doors a caller
+/// reaches: `create`, and the `get_or_create` fall-through that creates for an id naming nothing.
+///
+/// Zero is the one that matters. Raised to one second it buys a sandbox the backend reaps while
+/// `create` is still inside its readiness wait, and that wait ends as `SANDBOX_UNREACHABLE` —
+/// retryable, HTTP 503 — so a caller obeying it mints another one-second sandbox and is told
+/// "transient" forever. The far end is checked beside it because saturating a lifetime wider than
+/// whole seconds hold applies a deadline the caller never asked for.
+async fn refuses_a_lifetime_no_sandbox_can_be_built_to(sandbox: &dyn Sandbox) {
+    for timeout_ms in [0_u64, u64::MAX] {
+        for (door, error) in [
+            (
+                "create",
+                sandbox
+                    .create(CreateSandboxRequest {
+                        timeout_ms: Some(timeout_ms),
+                        ..Default::default()
+                    })
+                    .await
+                    .expect_err("a lifetime no sandbox can be built to"),
+            ),
+            (
+                "get_or_create",
+                sandbox
+                    .get_or_create(CreateSandboxRequest {
+                        sandbox_id: Some("names-nothing".to_string()),
+                        timeout_ms: Some(timeout_ms),
+                        ..Default::default()
+                    })
+                    .await
+                    .expect_err("nor through the create the fall-through reaches"),
+            ),
+        ] {
+            assert_eq!(
+                error.code, "INVALID_INPUT",
+                "{door} with timeoutMs {timeout_ms} has to refuse the request, not report a \
+                 backend that could not be reached: {error}"
+            );
+            assert!(
+                !error.retryable,
+                "{door} with timeoutMs {timeout_ms} can never succeed, so a caller told to try \
+                 again would build one doomed sandbox per attempt: {error}"
+            );
+            assert!(
+                error.to_string().contains("sandbox lifetime"),
+                "{door} with timeoutMs {timeout_ms} has to name what the caller must change: \
+                 {error}"
+            );
+        }
+    }
+}
+
+/// The client double carries one expectation — the absent read the `get_or_create` door makes —
+/// so a `RunMicrovm` that got past the refusal panics on an unexpected call rather than matching
+/// a `max_lifetime` assertion and passing quietly.
+#[tokio::test]
+async fn aws_refuses_a_lifetime_no_microvm_can_be_built_to() {
+    let mut microvms = alien_aws_clients::aws::lambda_microvms::MockLambdaMicrovmsApi::new();
+    microvms.expect_get_microvm().returning(|id| {
+        Err(alien_error::AlienError::new(
+            alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "Microvm".to_string(),
+                resource_name: id.to_string(),
+            },
+        ))
+    });
+
+    let sandbox = AwsSandbox::new(
+        Arc::new(microvms),
+        "sbx",
+        "1",
+        Vec::new(),
+        Vec::new(),
+        None,
+        None,
+    );
+
+    refuses_a_lifetime_no_sandbox_can_be_built_to(&sandbox).await;
+}
+
+/// The declared ceiling does not stand in for the refusal: it bounds a lifetime that is too long,
+/// and neither end here is a lifetime the deployment's own limit can repair.
+#[tokio::test]
+async fn aws_refuses_it_under_a_declared_ceiling_too() {
+    let mut microvms = alien_aws_clients::aws::lambda_microvms::MockLambdaMicrovmsApi::new();
+    microvms.expect_get_microvm().returning(|id| {
+        Err(alien_error::AlienError::new(
+            alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "Microvm".to_string(),
+                resource_name: id.to_string(),
+            },
+        ))
+    });
+
+    let sandbox = AwsSandbox::new(
+        Arc::new(microvms),
+        "sbx",
+        "1",
+        Vec::new(),
+        Vec::new(),
+        None,
+        Some(1_800),
+    );
+
+    refuses_a_lifetime_no_sandbox_can_be_built_to(&sandbox).await;
+}
+
+/// GCP reaches the same refusal for the same reason, so the two backends that honour a lifetime
+/// answer one bad request identically. Its own `Terminated` mapping is untouched — this never
+/// gets far enough to build a sandbox that could terminate.
+#[tokio::test]
+async fn gcp_refuses_a_lifetime_no_sandbox_can_be_built_to() {
+    let mut client = alien_gcp_clients::gcp::agent_platform::MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(|_, id| {
+        Err(
+            alien_error::AlienError::new(alien_client_core::ErrorData::RemoteResourceNotFound {
+                resource_type: "SandboxEnvironment".to_string(),
+                resource_name: id.to_string(),
+            })
+            .context(
+                alien_gcp_clients::gcp::agent_platform::AgentPlatformErrorData::RequestFailed {
+                    operation: "get sandbox".to_string(),
+                    message: id.to_string(),
+                },
+            ),
+        )
+    });
+
+    let sandbox = GcpAgentPlatformSandbox::new(
+        Arc::new(client),
+        "projects/p/locations/us-central1/reasoningEngines/eng1".to_string(),
+        "projects/p/locations/us-central1/sandboxTemplates/agent".to_string(),
+        None,
+    );
+
+    refuses_a_lifetime_no_sandbox_can_be_built_to(&sandbox).await;
 }

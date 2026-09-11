@@ -147,7 +147,7 @@ pub fn spawn_sandboxed(
 /// the extra output is dropped and the terminal frame says so.
 pub async fn stream(
     mut child: Child,
-    deadline: Duration,
+    timeout: Duration,
     output_cap: usize,
     frames: mpsc::Sender<ProcessFrame>,
 ) {
@@ -183,7 +183,7 @@ pub async fn stream(
     };
 
     let mut connected = true;
-    let outcome = tokio::time::timeout(deadline, async {
+    let outcome = tokio::time::timeout(timeout, async {
         // Racing the channel against the work, not only draining it: `pump` learns the caller
         // left by failing to send, so a command that prints nothing would run to its deadline
         // after everyone stopped listening. `closed()` resolves as soon as the receiver drops,
@@ -228,7 +228,7 @@ pub async fn stream(
             kill_all(&mut child).await;
             ProcessFrame::Failed {
                 code: "timeoutExceeded",
-                message: format!("exceeded its {}ms deadline", deadline.as_millis()),
+                message: format!("exceeded its {}ms timeout", timeout.as_millis()),
             }
         }
     };
@@ -240,10 +240,10 @@ pub async fn stream(
 ///
 /// Safe on unbounded output: [`stream`] blocks on a full channel rather than buffering, and
 /// `output_cap` still applies to what is kept.
-pub async fn run(child: Child, deadline: Duration, output_cap: usize) -> Vec<ProcessFrame> {
+pub async fn run(child: Child, timeout: Duration, output_cap: usize) -> Vec<ProcessFrame> {
     let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
 
-    let produce = stream(child, deadline, output_cap, sender);
+    let produce = stream(child, timeout, output_cap, sender);
     let consume = async {
         let mut frames = Vec::new();
         while let Some(frame) = receiver.recv().await {

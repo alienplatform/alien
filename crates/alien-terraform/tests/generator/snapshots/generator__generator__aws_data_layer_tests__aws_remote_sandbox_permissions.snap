@@ -12,18 +12,18 @@ Create and terminate sandboxes in this sandbox resource, and run arbitrary code 
 
 Permission set: `sandbox/remote-execute` (revision 1).
 
-- Start, suspend, resume, and terminate sessions of the selected sandbox.
+- Start, suspend, resume, and terminate sandboxes of the selected MicroVM image.
   Scope: `arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-agents`
   - `lambda:RunMicrovm`
   - `lambda:SuspendMicrovm`
   - `lambda:ResumeMicrovm`
   - `lambda:TerminateMicrovm`
 
-- Start a session on the AWS-managed internet egress and HTTP ingress connectors.
+- Start a sandbox on the AWS-managed internet egress and HTTP ingress connectors.
   Scope: `arn:aws:lambda:${data.aws_region.current.region}:aws:network-connector:aws-network-connector:*`
   - `lambda:PassNetworkConnector`
 
-- Read a session's state and mint the token the sandbox agent protocol travels on.
+- Read a sandbox's state and mint the token the sandbox agent protocol travels on.
   Scope: `arn:aws:lambda:${data.aws_region.current.region}:${data.aws_caller_identity.current.account_id}:microvm-image:${local.resource_prefix}-agents`
   - `lambda:CreateMicrovmAuthToken`
   - `lambda:GetMicrovm`

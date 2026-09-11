@@ -358,16 +358,16 @@ impl Sandbox for AzureSandbox {
 
         let result = self.execute_within(sandbox_id, &shell, &request).await?;
         // The sandbox's own report, removed from what the caller sees.
-        let (deadline_exceeded, stderr) =
-            match TimeoutReport::read(result.exit_code, &result.stderr) {
-                Bounded::Ran { killed, stderr } => (killed, stderr),
-                Bounded::NotRun { reason } => {
-                    return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                        failure: "commandNotBounded".to_string(),
-                        reason,
-                    }))
-                }
-            };
+        let (timeout_exceeded, stderr) = match TimeoutReport::read(result.exit_code, &result.stderr)
+        {
+            Bounded::Ran { killed, stderr } => (killed, stderr),
+            Bounded::NotRun { reason } => {
+                return Err(AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "commandNotBounded".to_string(),
+                    reason,
+                }))
+            }
+        };
 
         // The data plane returns a completed result, not a stream, so the frames are
         // reconstructed in order. Streaming is unverified on Azure, and pretending otherwise
@@ -386,7 +386,7 @@ impl Sandbox for AzureSandbox {
             }));
         }
 
-        if deadline_exceeded {
+        if timeout_exceeded {
             // The output is kept and the terminal item says why it ends, as the agent-backed
             // providers do; the sandbox is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -1027,7 +1027,7 @@ const TERMINATE_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_s
 fn bounded_shell(
     command: &[String],
     env: &BTreeMap<String, String>,
-    deadline: std::time::Duration,
+    timeout: std::time::Duration,
 ) -> String {
     let escape = |value: &str| value.replace('\'', "'\\''");
 
@@ -1047,7 +1047,7 @@ fn bounded_shell(
         .collect::<String>();
     format!(
         "sh -c '{}' sh{arguments}",
-        escape(&TimeoutReport::bounded_program(deadline))
+        escape(&TimeoutReport::bounded_program(timeout))
     )
 }
 

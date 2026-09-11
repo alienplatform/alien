@@ -445,8 +445,10 @@ mod tests {
             }
         }
 
-        /// A declared lifetime reaches the binding; an absent one is omitted, matching the binding's
-        /// `skip_serializing_if` so the two never disagree on whether the key is present.
+        /// A declared lifetime reaches the binding under the name the type reads, and an absent
+        /// one is omitted to match the binding's `skip_serializing_if`. Both sides are asserted:
+        /// a key spelled differently on one of them deserializes as absent in the workload, so a
+        /// declared ceiling would be dropped rather than refused.
         #[test]
         fn a_lifetime_ceiling_is_present_only_when_declared() {
             let with_ttl = emit_binding(SandboxEgress::Deny, Some(1800))
@@ -455,6 +457,21 @@ mod tests {
             assert!(
                 object_keys(&with_ttl).contains("maxLifetimeSeconds"),
                 "a declared lifetime reaches the binding"
+            );
+
+            let typed = serde_json::to_value(alien_core::GcpAgentPlatformSandboxBinding {
+                engine: alien_core::BindingValue::Value("engine".to_string()),
+                template: alien_core::BindingValue::Value("template".to_string()),
+                region: alien_core::BindingValue::Value("us-central1".to_string()),
+                max_lifetime_seconds: Some(1800),
+            })
+            .expect("the binding type serializes");
+            assert_eq!(
+                typed
+                    .get("maxLifetimeSeconds")
+                    .and_then(serde_json::Value::as_i64),
+                Some(1800),
+                "the binding type must read the name the module emits"
             );
 
             let without = emit_binding(SandboxEgress::Deny, None)

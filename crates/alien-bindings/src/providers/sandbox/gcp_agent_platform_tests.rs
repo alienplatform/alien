@@ -967,7 +967,7 @@ async fn a_job_error_object_becomes_a_stream_error() {
             "jobPoll" => Ok(serde_json::to_vec(&serde_json::json!({
                 "running": false,
                 "frames": [],
-                "error": { "code": "timeoutExceeded", "message": "exceeded its 60000ms deadline" },
+                "error": { "code": "timeoutExceeded", "message": "exceeded its 60000ms timeout" },
             }))
             .unwrap()),
             other => panic!("unexpected op {other}"),

@@ -52,13 +52,43 @@ mod lifetime_capability_tests;
 /// Every backend's lifetime primitive is whole seconds, so this rounds up: a sandbox reaped
 /// before the time the caller asked for is a wrong answer, and up to a second of extra life is
 /// not. A declared ceiling bounds the result, so a request can only ever shorten a sandbox.
+///
+/// Both ends are refused rather than adjusted, as [`guard_for`] refuses both ends of a command
+/// timeout. A zero raised to a second buys a sandbox the backend reaps while `create` is still
+/// waiting for it to serve, and that wait fails as unreachable — a retryable answer to a request
+/// that can never succeed. Past what whole seconds can hold there is no lifetime to send, and a
+/// ceiling does not stand in for one: the ordinary deployment declares none.
 #[cfg(any(feature = "aws", feature = "gcp"))]
-pub(crate) fn requested_lifetime_seconds(timeout_ms: u64, declared_ceiling: Option<u32>) -> u32 {
-    let asked = u32::try_from(timeout_ms.div_ceil(1_000).max(1)).unwrap_or(u32::MAX);
-    match declared_ceiling {
+pub(crate) fn requested_lifetime_seconds(
+    timeout_ms: u64,
+    declared_ceiling: Option<u32>,
+    operation: &str,
+) -> crate::error::Result<u32> {
+    let refuse = |details: String| {
+        alien_error::AlienError::new(crate::error::ErrorData::InvalidInput {
+            operation_context: operation.to_string(),
+            details,
+            field_name: Some("timeoutMs".to_string()),
+        })
+    };
+
+    if timeout_ms == 0 {
+        return Err(refuse(
+            "a sandbox lifetime must be at least one millisecond".to_string(),
+        ));
+    }
+
+    let asked = u32::try_from(timeout_ms.div_ceil(1_000)).map_err(|_| {
+        refuse(format!(
+            "a sandbox lifetime must be at most {} seconds",
+            u32::MAX
+        ))
+    })?;
+
+    Ok(match declared_ceiling {
         Some(ceiling) => asked.min(ceiling),
         None => asked,
-    }
+    })
 }
 
 /// The longest command timeout these backends accept.
@@ -273,11 +303,55 @@ mod lifetime_tests {
     /// request exceed the declared ceiling would let a caller outlive the deployment's own limit.
     #[test]
     fn a_requested_lifetime_rounds_up_and_never_raises_the_declared_ceiling() {
-        assert_eq!(requested_lifetime_seconds(60_000, None), 60);
-        assert_eq!(requested_lifetime_seconds(1_500, None), 2);
-        assert_eq!(requested_lifetime_seconds(1, None), 1);
-        assert_eq!(requested_lifetime_seconds(600_000, Some(1_800)), 600);
-        assert_eq!(requested_lifetime_seconds(7_200_000, Some(1_800)), 1_800);
+        let seconds = |timeout_ms, ceiling| {
+            requested_lifetime_seconds(timeout_ms, ceiling, "sandbox.create")
+                .expect("a lifetime the backends can serve")
+        };
+
+        assert_eq!(seconds(60_000, None), 60);
+        assert_eq!(seconds(1_500, None), 2);
+        assert_eq!(seconds(1, None), 1);
+        assert_eq!(seconds(600_000, Some(1_800)), 600);
+        assert_eq!(seconds(7_200_000, Some(1_800)), 1_800);
+    }
+
+    /// A lifetime no backend can serve is refused as the invalid request it is, rather than
+    /// raised to a second or saturated at the widest one seconds can hold. Either adjustment
+    /// builds a sandbox nobody asked for; raising a zero builds one the backend reaps inside
+    /// `create`'s own readiness wait, which reports a permanently invalid request as retryable.
+    #[test]
+    fn a_lifetime_no_backend_can_serve_is_refused_rather_than_adjusted() {
+        for (what, timeout_ms, ceiling) in [
+            ("zero", 0_u64, None),
+            ("zero under a ceiling", 0, Some(1_800)),
+            ("wider than seconds hold", u64::MAX, None),
+            (
+                "wider than seconds hold, under a ceiling",
+                u64::MAX,
+                Some(1_800),
+            ),
+        ] {
+            let error = requested_lifetime_seconds(timeout_ms, ceiling, "sandbox.create")
+                .expect_err("a lifetime no backend can serve");
+            assert!(
+                matches!(
+                    &error.error,
+                    Some(crate::error::ErrorData::InvalidInput { field_name, .. })
+                        if field_name.as_deref() == Some("timeoutMs")
+                ),
+                "{what} has to name the field the caller sent, which is what a client turns into \
+                 a field-level message: {error:?}"
+            );
+            assert_eq!(
+                error.code, "INVALID_INPUT",
+                "{what} has to be refused as the caller's, not reported as a backend failure it \
+                 could retry: {error}"
+            );
+            assert!(
+                error.to_string().contains("sandbox lifetime"),
+                "{what} has to say which field is wrong: {error}"
+            );
+        }
     }
 }
 

@@ -135,13 +135,13 @@ pub struct GcpAgentPlatformSandbox {
 impl GcpAgentPlatformSandbox {
     /// The `ttl` a create is sent with: what the caller asked for, never above what the
     /// declaration allows.
-    fn lifetime_seconds(&self, timeout_ms: Option<u64>) -> Option<u32> {
+    fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
         match timeout_ms {
-            Some(timeout_ms) => Some(super::requested_lifetime_seconds(
-                timeout_ms,
-                self.max_lifetime_seconds,
-            )),
-            None => self.max_lifetime_seconds,
+            Some(timeout_ms) => {
+                super::requested_lifetime_seconds(timeout_ms, self.max_lifetime_seconds, operation)
+                    .map(Some)
+            }
+            None => Ok(self.max_lifetime_seconds),
         }
     }
 
@@ -546,6 +546,10 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }));
         }
 
+        let ttl = self
+            .lifetime_seconds(request.timeout_ms, CREATE)?
+            .map(|seconds| format!("{seconds}s"));
+
         let started = self
             .client
             .create_sandbox(
@@ -554,9 +558,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     display_name: request.sandbox_id.clone(),
                     sandbox_environment_template: Some(self.template.clone()),
                     sandbox_environment_snapshot: None,
-                    ttl: self
-                        .lifetime_seconds(request.timeout_ms)
-                        .map(|seconds| format!("{seconds}s")),
+                    ttl,
                 },
             )
             .await

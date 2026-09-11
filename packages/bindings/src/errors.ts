@@ -81,7 +81,7 @@ export const InvalidPostgresTlsConfigError = defineError({
 })
 
 /**
- * Thrown when the native addon reports a sandbox sandbox state or output frame kind this wrapper
+ * Thrown when the native addon reports a sandbox state or output frame kind this wrapper
  * does not know.
  *
  * Casting instead would put a value outside the declared union behind a type that says otherwise,

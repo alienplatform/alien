@@ -1,4 +1,4 @@
-//! Sandbox sandbox capabilities: what the manager mints and the agent verifies.
+//! Sandbox capabilities: what the manager mints and the agent verifies.
 //!
 //! Lives here because both sides need identical rules, and a mismatch between minting and
 //! verification is a security bug that only shows up as "it works" until it does not.

@@ -840,7 +840,8 @@ fn the_sandbox_templates_render_whole() {
 /// The grant a remote caller's credentials are bounded by.
 ///
 /// The setup package is where the Remote Bindings identity gets its policies, so without this the
-/// manager mints a session against a role that carries none.
+/// manager mints a session against a role that carries none. Nothing else pins the statement
+/// `Sid`s, which follow the permission labels.
 #[test]
 fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider() {
     let stack = Stack::new("byo-sandbox".to_string())
@@ -853,7 +854,7 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
             ResourceLifecycle::Frozen,
         )
         .build();
-    let (template, _yaml) = render_built_ins_template(
+    let (template, yaml) = render_built_ins_template(
         &stack,
         StackSettings::default(),
         custom_resource_registration(),
@@ -861,6 +862,7 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
         "aws",
         "remote sandbox",
     );
+    insta::assert_snapshot!("remote_sandbox_grant_aws", yaml);
 
     let policy = template
         .resources

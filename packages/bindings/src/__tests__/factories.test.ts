@@ -1428,13 +1428,15 @@ describe("sandbox streaming", () => {
         const inner = await new addon.BindingsHandle().sandbox(name)
         return {
           ...inner,
-          create: (sandboxId, tenantKey, env) => {
-            seen.push(env)
-            return inner.create(sandboxId, tenantKey, env)
+          // Spread rather than re-listed: a shim that names the arguments it cares about drops
+          // every later one, and the addon takes them positionally, so nothing would complain.
+          create: (...args: Parameters<RawSandboxHandle["create"]>) => {
+            seen.push(args[2])
+            return inner.create(...args)
           },
-          runCommand: (sandboxId, command, args, timeoutMs, cwd, env) => {
-            seen.push(env)
-            return inner.runCommand(sandboxId, command, args, timeoutMs, cwd, env)
+          runCommand: (...args: Parameters<RawSandboxHandle["runCommand"]>) => {
+            seen.push(args[5])
+            return inner.runCommand(...args)
           },
         }
       }

@@ -1054,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn an_error_frame_surfaces_as_an_error_not_a_silent_end() {
         let outputs = frames_from(vec![
-            "{\"t\":\"error\",\"code\":\"timeoutExceeded\",\"message\":\"exceeded its 300ms deadline\"}\n",
+            "{\"t\":\"error\",\"code\":\"timeoutExceeded\",\"message\":\"exceeded its 300ms timeout\"}\n",
         ])
         .await;
 

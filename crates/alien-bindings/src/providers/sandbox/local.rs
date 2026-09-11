@@ -181,7 +181,9 @@ impl LocalSandbox {
     /// When it fires the sandbox itself did not end the command, so the sandbox is ended — a
     /// force-remove, so the call returns one kill later — and the caller hears that it was.
     /// `timeoutExceeded` means the command has stopped, never that a stop was requested; the
-    /// path is reached only by a sandbox that could not run `timeout`.
+    /// path is reached only by a sandbox that could not run `timeout`. A force-remove that
+    /// itself fails leaves the outcome unknown, because the command is then more likely to be
+    /// running rather than less.
     async fn exec_within(
         &self,
         sandbox_id: &str,
@@ -200,24 +202,29 @@ impl LocalSandbox {
         .await
         {
             Ok(inner) => inner,
-            Err(_) => {
-                // Terminating ends the sandbox, not whatever the command already did before the
-                // kill landed, so this is an outcome that was never reported rather than one the
-                // sandbox established. A terminate that itself fails is chained rather than
-                // returned: it leaves the command even more likely to be running, so replacing the
-                // outcome with it would drop the one thing the caller has to know.
-                let outcome = ErrorData::SandboxOutcomeUnknown {
+            Err(_) => Err(match self.terminate(sandbox_id).await {
+                // The route force-removes the container and answers once it is gone, so the
+                // command has verifiably stopped — the bar Azure's poll-to-404 clears, and the
+                // one `timeoutExceeded` is defined by.
+                Ok(()) => AlienError::new(ErrorData::SandboxCommandFailed {
+                    failure: "timeoutExceeded".to_string(),
+                    reason: format!(
+                        "the command exceeded its {}s timeout and the sandbox could not end it, so the sandbox was terminated",
+                        request.timeout.as_secs()
+                    ),
+                }),
+                // A terminate that itself fails leaves the command even more likely to be
+                // running, so the outcome is unreported rather than established. The terminate's
+                // own error is chained rather than returned: it says the sandbox could not be
+                // deleted and nothing about the command.
+                Err(error) => error.context(ErrorData::SandboxOutcomeUnknown {
                     operation: "sandbox.runCommand".to_string(),
                     reason: format!(
                         "the command exceeded its {}s timeout and the sandbox could not end it",
                         request.timeout.as_secs()
                     ),
-                };
-                Err(match self.terminate(sandbox_id).await {
-                    Ok(()) => AlienError::new(outcome),
-                    Err(error) => error.context(outcome),
-                })
-            }
+                }),
+            }),
         }
     }
 }
@@ -356,7 +363,7 @@ impl Sandbox for LocalSandbox {
                 stderr.push_str(&String::from_utf8_lossy(&decoded));
             }
         }
-        let (deadline_exceeded, stderr) =
+        let (timeout_exceeded, stderr) =
             match TimeoutReport::read(i32::try_from(response.exit_code).ok(), &stderr) {
                 Bounded::Ran { killed, stderr } => (killed, stderr),
                 Bounded::NotRun { reason } => {
@@ -381,7 +388,7 @@ impl Sandbox for LocalSandbox {
             }));
         }
 
-        if deadline_exceeded {
+        if timeout_exceeded {
             // The output is kept and the terminal item says why it ends, as the agent-backed
             // providers do; the sandbox is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -759,8 +766,9 @@ mod tests {
     }
 
     /// When the sandbox cannot end the command — the route never answers — the guard ends the
-    /// sandbox. Ending it does not undo whatever the command did first, so the outcome is
-    /// unreported rather than established. Time is paused, so the guard fires instantly.
+    /// sandbox, and the removal is what makes `timeoutExceeded` true: the code is the one Azure
+    /// reports for the same event, so a caller branches on it once. Time is paused, so the guard
+    /// fires instantly.
     #[tokio::test(start_paused = true)]
     async fn a_command_the_sandbox_cannot_end_takes_the_sandbox_with_it() {
         let route = Arc::new(Route::default());
@@ -772,7 +780,11 @@ mod tests {
             .err()
             .expect("a command that outran its deadline has not succeeded");
 
-        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(
+            error.to_string().contains("timeoutExceeded"),
+            "the terminal code has to name the timeout: {error}"
+        );
         assert!(
             !error.retryable,
             "the command may have run before the kill landed: {error}"

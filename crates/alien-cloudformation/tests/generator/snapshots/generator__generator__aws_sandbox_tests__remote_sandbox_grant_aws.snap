@@ -1,0 +1,248 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_sandbox_tests.rs
+expression: yaml
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: remote sandbox
+Transform:
+- AWS::LanguageExtensions
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+    - Label:
+        default: Registration
+      Parameters:
+      - Token
+      - ManagingRoleArn
+    ParameterLabels:
+      ManagingRoleArn:
+        default: Management role ARN
+      Token:
+        default: Install token
+Parameters:
+  Token:
+    Type: String
+    Description: Install token from the application setup page.
+    NoEcho: true
+  ManagingRoleArn:
+    Type: String
+    Description: ARN of the management identity allowed to assume setup-created roles.
+Resources:
+  AgentsBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-agents-build
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:SourceAccount:
+                Ref: AWS::AccountId
+      Policies:
+      - PolicyName: sandbox-image-build
+        PolicyDocument:
+          Version: 2012-10-17
+          Statement:
+          - Sid: ReadSandboxBundle
+            Effect: Allow
+            Action:
+            - s3:GetObject
+            Resource:
+              Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip
+          - Effect: Allow
+            Action:
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - logs:PutLogEvents
+            Resource: '*'
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: agents
+      - Key: resource-type
+        Value: sandbox
+  Agents:
+    Type: AWS::Lambda::MicrovmImage
+    Properties:
+      Name:
+        Fn::Sub: ${AWS::StackName}-agents
+      Description: Sandbox agents
+      BaseImageArn:
+        Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:microvm-image:al2023-1
+      BaseImageVersion: '1'
+      BuildRoleArn:
+        Fn::GetAtt:
+        - AgentsBuildRole
+        - Arn
+      CodeArtifact:
+        Uri: s3://acme-artifacts/agents/bundle.zip
+      Logging:
+        Disabled: true
+      EgressNetworkConnectors:
+      - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:INTERNET_EGRESS
+      CpuConfigurations:
+      - Architecture: ARM_64
+      Resources:
+      - MinimumMemoryInMiB: 2048
+      AdditionalOsCapabilities: []
+      Hooks:
+        Port: 8971
+        MicrovmImageHooks:
+          Ready: ENABLED
+          ReadyTimeoutInSeconds: 120
+        MicrovmHooks:
+          Run: ENABLED
+          RunTimeoutInSeconds: 30
+          Resume: ENABLED
+          ResumeTimeoutInSeconds: 30
+      EnvironmentVariables:
+      - Key: ALIEN_SANDBOX_ROOT
+        Value: /sandbox
+      - Key: ALIEN_SANDBOX_PORT
+        Value: '8971'
+      - Key: ALIEN_SANDBOX_AUTHORIZATION
+        Value: transport
+      - Key: ALIEN_SANDBOX_EXEC_UID
+        Value: '60000'
+      - Key: ALIEN_SANDBOX_EXEC_GID
+        Value: '60000'
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: agents
+      - Key: resource-type
+        Value: sandbox
+  AgentsRemoteExecutePolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName:
+        Fn::Sub: ${AWS::StackName}-agents-sandbox-access
+      Roles:
+      - Ref: AccessRole
+      PolicyDocument:
+        Statement:
+        - Action:
+          - lambda:ResumeMicrovm
+          - lambda:RunMicrovm
+          - lambda:SuspendMicrovm
+          - lambda:TerminateMicrovm
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents
+          Sid: SandboxLifecycle
+        - Action:
+          - lambda:PassNetworkConnector
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:aws:network-connector:aws-network-connector:*
+          Sid: PassTheManagedConnectorsASandboxStartsOn
+        - Action:
+          - lambda:CreateMicrovmAuthToken
+          - lambda:GetMicrovm
+          Effect: Allow
+          Resource:
+          - Fn::Sub: arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:microvm-image:${AWS::StackName}-agents
+          Sid: ReachInsideASandbox
+        Version: 2012-10-17
+  AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Fn::Sub: ${AWS::StackName}-access
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Sid: AllowManagingRole
+          Effect: Allow
+          Principal:
+            AWS:
+              Ref: ManagingRoleArn
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              aws:PrincipalArn:
+                Ref: ManagingRoleArn
+      Tags:
+      - Key: managed-by
+        Value: setup
+      - Key: deployment
+        Value:
+          Ref: AWS::StackName
+      - Key: resource
+        Value: access
+      - Key: resource-type
+        Value: resource-access
+  DeploymentRegistration:
+    Type: AWS::CloudFormation::CustomResource
+    Properties:
+      ServiceToken: arn:aws:lambda:us-east-1:123456789012:function:register
+      Token:
+        Ref: Token
+      DeploymentName:
+        Ref: AWS::StackName
+      ResourcePrefix:
+        Ref: AWS::StackName
+      SourceKind: cloudformation
+      Platform: aws
+      Region:
+        Ref: AWS::Region
+      SetupTarget: aws
+      SetupImportFormatVersion: 1
+      SetupFingerprint: test
+      SetupFingerprintVersion: 1
+      ManagementConfig:
+        platform: aws
+        managingRoleArn:
+          Ref: ManagingRoleArn
+      StackSettings:
+        deploymentModel: push
+        updates: approval-required
+        telemetry: "off"
+        heartbeats: "on"
+      Resources:
+      - id: agents
+        type: sandbox
+        importData:
+          previewPorts: []
+          egressConnectorArns: []
+          allowEgress: true
+          imageIdentifier:
+            Fn::GetAtt:
+            - Agents
+            - ImageArn
+          imageArn:
+            Fn::GetAtt:
+            - Agents
+            - ImageArn
+          imageVersion:
+            Fn::GetAtt:
+            - Agents
+            - LatestActiveImageVersion
+      - id: access
+        type: resource-access
+        importData:
+          roleName:
+            Ref: AccessRole
+          roleArn:
+            Fn::GetAtt:
+            - AccessRole
+            - Arn
+    DependsOn:
+    - AgentsBuildRole
+    - Agents
+    - AgentsRemoteExecutePolicy
+    - AccessRole

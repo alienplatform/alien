@@ -112,13 +112,13 @@ impl AwsSandbox {
     /// The lifetime `RunMicrovm` is asked for: what the caller asked for, never above what the
     /// declaration allows. AWS cannot move a running MicroVM's deadline, so this is the only
     /// point at which it can be chosen.
-    fn lifetime_seconds(&self, timeout_ms: Option<u64>) -> Option<u32> {
+    fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
         match timeout_ms {
-            Some(timeout_ms) => Some(super::requested_lifetime_seconds(
-                timeout_ms,
-                self.max_lifetime_seconds,
-            )),
-            None => self.max_lifetime_seconds,
+            Some(timeout_ms) => {
+                super::requested_lifetime_seconds(timeout_ms, self.max_lifetime_seconds, operation)
+                    .map(Some)
+            }
+            None => Ok(self.max_lifetime_seconds),
         }
     }
 
@@ -261,6 +261,29 @@ fn sandbox_state(state: Option<&str>) -> SandboxState {
 }
 
 impl AwsSandbox {
+    /// Reads one of this binding's own sandboxes, or `None` if there is no such sandbox.
+    ///
+    /// `operation` is the verb the caller invoked, not this lookup: `get_or_create` reconnects
+    /// through here, and reporting its failure as `sandbox.get` would name a call the caller
+    /// never made.
+    async fn fetch(&self, sandbox_id: &str, operation: &str) -> Result<Option<SandboxInstance>> {
+        let Some(microvm) = self.owned_microvm(operation, sandbox_id).await? else {
+            return Ok(None);
+        };
+
+        // Echoing the caller's own id when the response carried none would report a sandbox the
+        // client could not parse as a sandbox it read — the same substitution `owned_microvm`
+        // refuses for the image.
+        let microvm_id = microvm.microvm_id.ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: format!("the record for sandbox '{sandbox_id}' carried no id"),
+            })
+        })?;
+
+        Ok(Some(self.instance(microvm_id, microvm.state)))
+    }
+
     /// Blocks until the agent answers, so `create` returns a sandbox that can take work.
     async fn wait_until_servable(&self, sandbox_id: &str) -> Result<()> {
         let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
@@ -394,6 +417,7 @@ impl Sandbox for AwsSandbox {
     async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
         let _ = request.sandbox_id;
         refuse_unsupported_create_fields(&request, "sandbox.create")?;
+        let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
         let client_token = uuid::Uuid::new_v4().simple().to_string();
 
         let microvm = self
@@ -407,7 +431,7 @@ impl Sandbox for AwsSandbox {
                 None,
                 self.egress_connector_arns.clone(),
                 self.idle_pause_seconds,
-                self.lifetime_seconds(request.timeout_ms),
+                max_lifetime_seconds,
             )
             .await
             .unreachable(
@@ -446,21 +470,7 @@ impl Sandbox for AwsSandbox {
     }
 
     async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
-        let Some(microvm) = self.owned_microvm("sandbox.get", sandbox_id).await? else {
-            return Ok(None);
-        };
-
-        // Echoing the caller's own id when the response carried none would report a sandbox the
-        // client could not parse as a sandbox it read — the same substitution `owned_microvm`
-        // refuses for the image.
-        let microvm_id = microvm.microvm_id.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxUnreachable {
-                operation: "sandbox.get".to_string(),
-                reason: format!("the record for sandbox '{sandbox_id}' carried no id"),
-            })
-        })?;
-
-        Ok(Some(self.instance(microvm_id, microvm.state)))
+        self.fetch(sandbox_id, "sandbox.get").await
     }
 
     async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
@@ -468,7 +478,7 @@ impl Sandbox for AwsSandbox {
         // than a fresh one would.
         refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
         if let Some(id) = request.sandbox_id.as_deref() {
-            if let Some(existing) = self.get(id).await? {
+            if let Some(existing) = self.fetch(id, "sandbox.getOrCreate").await? {
                 // Reaching a sandbox someone else started still has to mean what `create` means,
                 // or the guarantee holds only for whoever won the race. Waited for here rather
                 // than in `get`, which reports a sandbox's state and does not promise one.
@@ -747,6 +757,34 @@ mod tests {
         assert!(
             !resolved.created,
             "the sandbox was already running, so this call did not create it"
+        );
+    }
+
+    /// The reconnect read is `get_or_create`'s, not `get`'s. Naming the helper it happens to
+    /// share would point a reader at a call the caller never made.
+    #[tokio::test]
+    async fn a_failed_reconnect_reports_the_verb_the_caller_used() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm().returning(|_| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "GetMicrovm was throttled".to_string(),
+                },
+            ))
+        });
+        client.expect_run_microvm().never();
+
+        let error = sandbox(client)
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("unreadable".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a read that fails is not a sandbox that is absent");
+
+        assert!(
+            error.to_string().contains("sandbox.getOrCreate"),
+            "the reconnect failure names getOrCreate, not get: {error}"
         );
     }
 

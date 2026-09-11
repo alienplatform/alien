@@ -1,14 +1,14 @@
 {
   "id": "sandbox/remote-execute",
-  "description": "Allows a remote caller to create sandbox sessions and run arbitrary code inside them",
+  "description": "Allows a remote caller to create sandboxes and run arbitrary code inside them",
   "platforms": {
     // Every cloud here creates the sandbox's parent in setup, and can therefore scope a grant to
     // it. All three refuse an assignment naming a resource that doesn't exist yet, so parent and
     // grant must come from the same template.
     "aws": [
       {
-        "label": "session-lifecycle",
-        "description": "Start, suspend, resume, and terminate sessions of the selected sandbox.",
+        "label": "sandbox-lifecycle",
+        "description": "Start, suspend, resume, and terminate sandboxes of the selected MicroVM image.",
         "grant": {
           "actions": [
             "lambda:RunMicrovm",
@@ -18,9 +18,9 @@
           ]
         },
         // Resource-scoped only, unlike `sandbox/execute`, and this is the whole boundary. The
-        // manager hands a remote caller raw session credentials, so `owned_microvm`'s image check
+        // manager hands a remote caller raw sandbox credentials, so `owned_microvm`'s image check
         // runs in code the caller can decline to call; a stack-wide pattern would match every
-        // sibling sandbox's image and let one deployment's caller address another's sessions.
+        // sibling declaration's image and let one deployment's caller address another's sandboxes.
         "binding": {
           "resource": {
             "resources": [
@@ -30,8 +30,8 @@
         }
       },
       {
-        "label": "pass-the-managed-connectors-a-session-starts-on",
-        "description": "Start a session on the AWS-managed internet egress and HTTP ingress connectors.",
+        "label": "pass-the-managed-connectors-a-sandbox-starts-on",
+        "description": "Start a sandbox on the AWS-managed internet egress and HTTP ingress connectors.",
         "grant": {
           // An open-egress MicroVM is authorized for these even though the request names no
           // connector: AWS attaches both implicitly and a RunMicrovm response reports them back as
@@ -52,15 +52,15 @@
         }
       },
       {
-        "label": "reach-inside-a-session",
-        "description": "Read a session's state and mint the token the sandbox agent protocol travels on.",
+        "label": "reach-inside-a-sandbox",
+        "description": "Read a sandbox's state and mint the token the sandbox agent protocol travels on.",
         "grant": {
           // The same pair as `sandbox/execute`, and it carries the same weight: minting a MicroVM
           // auth token is access to session contents. `CreateMicrovmShellAuthToken` stays out for
           // the same reason it does there — an interactive shell is not part of this surface.
           //
-          // One image serves every session of the sandbox and AWS has no finer ARN, so this pair
-          // reaches every session of it, whoever started it. Preflight makes the sandbox
+          // One image serves every sandbox started from it and AWS has no finer ARN, so this pair
+          // reaches all of them, whoever started them. Preflight makes the declaration
           // single-tenant to the remote caller by refusing one the deployment's own compute can
           // also reach, which is the only containment IAM cannot express.
           //
@@ -79,8 +79,8 @@
     ],
     "azure": [
       {
-        "label": "session-lifecycle-and-exec",
-        "description": "Create, drive and tear down sessions of the selected sandbox group. Session image and size come from the create request; this grant does not limit them.",
+        "label": "sandbox-lifecycle-and-exec",
+        "description": "Create, drive and tear down sandboxes of the selected sandbox group. Sandbox image and size come from the create request; this grant does not limit them.",
         "grant": {
           // The role Microsoft documents as sufficient for the sandbox data plane, and the same
           // one `sandbox/execute` uses — it bundles lifecycle and exec, so this set can't grant
@@ -89,7 +89,7 @@
         },
         // Resource-scoped: the only stack-level scope Azure RBAC can express is the resource
         // group, which would reach every sibling sandbox. The scope bounds which group, not what
-        // runs in it — image and sizing are sent per session and applied at create.
+        // runs in it — image and sizing are sent per sandbox and applied at create.
         "binding": {
           "resource": {
             // `${resourceName}` already resolves to the prefixed name, so no `${stackPrefix}`.
@@ -100,8 +100,8 @@
     ],
     "gcp": [
       {
-        "label": "session-lifecycle-and-exec",
-        "description": "Create, drive and tear down sessions under the selected sandbox's reasoning engine.",
+        "label": "sandbox-lifecycle-and-exec",
+        "description": "Create, drive and tear down sandboxes under the selected reasoning engine.",
         "grant": {
           // The verbs the Agent Platform provider calls, `execute` included — this set and
           // `sandbox/execute` are the only two that reach session content. Custom role: no
@@ -118,7 +118,7 @@
           ]
         },
         // The engine, and nothing wider — same boundary the AWS and Azure blocks draw. Reasoning-
-        // engine IAM is enforced on the sessions under it; project scope would hand a remote caller
+        // engine IAM is enforced on the sandboxes under it; project scope would hand a remote caller
         // every sibling sandbox. No `stack` binding: `projects/${projectName}` is the only GCP
         // stack-level scope.
         "binding": {

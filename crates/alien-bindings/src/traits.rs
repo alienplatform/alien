@@ -967,7 +967,7 @@ pub trait Container: Binding {
 /// A request to create a sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CreateSandboxRequest {
     /// Sandbox id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
     /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
@@ -1075,8 +1075,11 @@ pub struct RunCommandRequest {
     /// How long this command may run. Required — a defaulted timeout is a hang waiting for a slow
     /// day.
     ///
-    /// Distinct from `CreateSandboxRequest::timeout_ms`, which is the sandbox's own wall-clock
-    /// lifetime: neither ever bounds or shortens the other.
+    /// `CreateSandboxRequest::timeout_ms` is an outer bound this timeout cannot see. Neither
+    /// shortens the other, but on AWS and GCP the platform reaps the sandbox at its lifetime
+    /// whatever is running inside: a command still going is cut off mid-flight and reports
+    /// `SANDBOX_OUTCOME_UNKNOWN`, never `timeoutExceeded`, because nothing survived to say what it
+    /// did. A lifetime has to leave room for the longest command it must cover.
     ///
     /// It bounds the command, not the call, and the call lands just after it. Where the agent
     /// supervises the process it kills the process group; where the data plane has no timeout of
@@ -1368,5 +1371,43 @@ pub trait BindingsProviderApi: Send + Sync + std::fmt::Debug {
         _resource_type: &str,
     ) -> Result<Option<std::collections::HashMap<String, String>>> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::CreateSandboxRequest;
+
+    /// A field this struct does not know is a caller asking for something it will not get, and
+    /// the field it would most want is the one that bounds the sandbox. Read as "absent",
+    /// `timeoutMs` misspelled is an unbounded sandbox reported as a bounded one.
+    #[test]
+    fn a_create_request_refuses_a_field_it_does_not_know() {
+        for body in [
+            r#"{"sessionId":"s1"}"#,
+            r#"{"timeoutMillis":60000}"#,
+            r#"{"timeout_ms":60000}"#,
+            r#"{"workingDirectory":"/work"}"#,
+        ] {
+            let error = serde_json::from_str::<CreateSandboxRequest>(body)
+                .expect_err("a field the request does not declare must be refused, not dropped");
+            assert!(
+                error.to_string().contains("unknown field"),
+                "{body} was refused for the wrong reason: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_create_request_takes_every_field_it_declares() {
+        let parsed: CreateSandboxRequest = serde_json::from_str(
+            r#"{"sandboxId":"s1","tenantKey":"t","env":{"A":"b"},"timeoutMs":60000}"#,
+        )
+        .expect("the declared fields parse");
+
+        assert_eq!(parsed.sandbox_id.as_deref(), Some("s1"));
+        assert_eq!(parsed.tenant_key.as_deref(), Some("t"));
+        assert_eq!(parsed.env.get("A").map(String::as_str), Some("b"));
+        assert_eq!(parsed.timeout_ms, Some(60_000));
     }
 }
