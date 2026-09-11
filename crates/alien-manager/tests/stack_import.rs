@@ -30,11 +30,12 @@ use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsServiceAccountImportData, AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
-    AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
-    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
-    RemoteStackManagement, ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount,
-    Stack, StackSettings, StackState, Storage, Worker, WorkerCode,
+    AzureRemoteStackManagementImportData, ComputePoolSelection, ComputeSettings, DeploymentState,
+    DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
+    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo, RemoteStackManagement,
+    ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -761,7 +762,18 @@ async fn deployment_token_activates_its_pending_setup_reservation() {
     )
     .await;
 
-    let body = aws_s3_import_request("acme-reserved", "us-east-1", "assets", "acme-imports");
+    let mut body = aws_s3_import_request("acme-reserved", "us-east-1", "assets", "acme-imports");
+    let selected_compute = ComputeSettings {
+        pools: HashMap::from([(
+            "general".to_string(),
+            ComputePoolSelection::Fixed {
+                machines: 1,
+                machine: Some("t4g.medium".to_string()),
+                failure_domains: None,
+            },
+        )]),
+    };
+    body.stack_settings.compute = Some(selected_compute.clone());
     let (status, json) = post_import(&fixture, Some(&deployment_token), &body).await;
     assert_eq!(status, StatusCode::OK, "{json:#}");
 
@@ -777,6 +789,14 @@ async fn deployment_token_activates_its_pending_setup_reservation() {
         Some(release_id.as_str())
     );
     assert!(activated.stack_state.is_some());
+    assert_eq!(
+        activated
+            .stack_settings
+            .expect("activated reservation has stack settings")
+            .compute,
+        Some(selected_compute),
+        "registration must replace reservation placeholders with setup selections"
+    );
 }
 
 #[tokio::test]

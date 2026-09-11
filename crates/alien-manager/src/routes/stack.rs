@@ -421,6 +421,7 @@ pub async fn stack_import(
                     &subject,
                     &existing.id,
                     UpdateImportedDeploymentParams {
+                        stack_settings: req.stack_settings.clone(),
                         stack_state: stack_state.clone(),
                         environment_info: environment_info.clone(),
                         runtime_metadata: runtime_metadata.clone(),

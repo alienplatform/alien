@@ -309,6 +309,7 @@ async fn input_values_survive_create_import_and_reimport() {
             &test_subject(),
             &imported.id,
             UpdateImportedDeploymentParams {
+                stack_settings: StackSettings::default(),
                 stack_state: StackState::new(Platform::Aws),
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),

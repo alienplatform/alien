@@ -186,6 +186,13 @@ pub struct CreateImportedDeploymentParams {
 /// Import-owned fields replaced when setup re-registers a deployment.
 #[derive(Debug, Clone)]
 pub struct UpdateImportedDeploymentParams {
+    /// Complete deployment settings resolved by the setup artifact.
+    ///
+    /// A launch-time reservation contains only the choices known before the
+    /// customer runs setup. Registration must replace those placeholders with
+    /// the concrete network and compute selections that created the imported
+    /// infrastructure.
+    pub stack_settings: StackSettings,
     pub stack_state: StackState,
     pub environment_info: Option<EnvironmentInfo>,
     pub runtime_metadata: RuntimeMetadata,
