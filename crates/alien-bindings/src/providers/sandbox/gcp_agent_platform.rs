@@ -651,6 +651,18 @@ impl Sandbox for GcpAgentPlatformSandbox {
                         }
                     }
                 }
+                // Still coming up, or already being woken by someone else. Waited for rather than
+                // replaced: the sandbox keeps starting either way, and a second one beside it is
+                // the leak the arm above exists to avoid. A slow data plane is answered with the
+                // failure, never by provisioning more of it.
+                Ok(Some(session)) if session.state == SandboxSessionState::Starting => {
+                    let generation = self.settle(id).await?;
+                    return Ok(ResolvedSession::found(SandboxSession {
+                        session_id: id.to_string(),
+                        state: SandboxSessionState::Running,
+                        generation,
+                    }));
+                }
                 Ok(_) => {}
                 Err(error) if error.code == "SANDBOX_UNREACHABLE" => {}
                 Err(error) => {

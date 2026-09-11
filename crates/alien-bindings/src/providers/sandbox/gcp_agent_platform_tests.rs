@@ -278,6 +278,80 @@ async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
 }
 
 /// A reconnect to a suspended session wakes it and hands it back, rather than creating a second
+/// A reconnect to a session still coming up waits for it. Replacing it would leave the first one
+/// starting, reaching RUNNING and costing its owner, with nobody holding its id — the same leak the
+/// suspended arm avoids. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
+/// fires.
+#[tokio::test]
+async fn get_or_create_waits_for_a_booting_session_rather_than_creating_a_second() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(move |_, id| {
+        // Coming up on the first read, running once it has settled.
+        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(sandbox_in_state(id, "STATE_CREATING"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client
+        .expect_execute()
+        .withf(|_, _, input| op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_create_sandbox().never();
+    client.expect_delete_sandbox().never();
+    client.expect_resume().never();
+
+    let session = provider(client)
+        .get_or_create(CreateSessionRequest {
+            session_id: Some("booting".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a booting session is waited for and handed back");
+
+    assert_eq!(session.session.session_id, "booting");
+    assert_eq!(session.session.state, SandboxSessionState::Running);
+    assert!(
+        !session.created,
+        "whoever started it created it, not this call"
+    );
+}
+
+/// `STATE_RESUMING` reads as `Starting` too, and it is the reading two callers sharing one id
+/// actually produce: one wakes the session, the other must not answer the wake in progress with a
+/// second sandbox.
+#[tokio::test]
+async fn get_or_create_waits_out_a_wake_someone_else_started() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(move |_, id| {
+        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(sandbox_in_state(id, "STATE_RESUMING"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client
+        .expect_execute()
+        .withf(|_, _, input| op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_create_sandbox().never();
+    client.expect_delete_sandbox().never();
+    // Not ours to wake: someone else's resume is already in flight.
+    client.expect_resume().never();
+
+    let session = provider(client)
+        .get_or_create(CreateSessionRequest {
+            session_id: Some("waking".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a wake already in flight is waited out");
+
+    assert!(!session.created, "the session existed before this call");
+}
+
 /// sandbox and orphaning the paused one. Mutation check: fold the `Suspended` arm into `Ok(_) =>
 /// {}` and `create_sandbox().never()` fails while a second sandbox is minted.
 #[tokio::test]
