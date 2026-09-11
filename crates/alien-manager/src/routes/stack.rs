@@ -962,7 +962,11 @@ fn is_idempotent_import(
         .as_deref()
         .or(existing.current_release_id.as_deref())
         == Some(release_id)
+        && existing.setup_target.as_deref() == Some(req.setup_target.as_str())
         && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
+        && existing.setup_fingerprint_version == Some(req.setup_fingerprint_version)
+        && existing.stack_settings.as_ref() == Some(&req.stack_settings)
+        && existing.environment_info.as_ref() == infer_import_environment_info(req).as_ref()
         && existing.input_values == req.input_values
         && imported_resources_are_unchanged(existing, imported_stack_state)
 }
@@ -1694,6 +1698,62 @@ mod setup_update_authorization_tests {
             &imported_state,
             &None,
             &runtime_metadata,
+            "release",
+            &req,
+        ));
+    }
+
+    #[test]
+    fn idempotent_import_requires_every_persisted_setup_field_to_match() {
+        let prepared = stack("live-worker", "frozen-storage");
+        let existing = record(prepared);
+        let mut req = request();
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let imported_state = existing.stack_state.clone().unwrap();
+
+        assert!(is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+
+        req.setup_target = "different-target".to_string();
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+        req.setup_target = "target".to_string();
+
+        req.setup_fingerprint_version = 2;
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+        req.setup_fingerprint_version = 1;
+
+        req.stack_settings.telemetry = alien_core::TelemetryMode::Off;
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let mut existing_with_environment = existing;
+        existing_with_environment.environment_info =
+            Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                account_id: "123456789012".to_string(),
+                region: "region".to_string(),
+            }));
+        assert!(!is_idempotent_import(
+            &existing_with_environment,
+            &imported_state,
             "release",
             &req,
         ));
