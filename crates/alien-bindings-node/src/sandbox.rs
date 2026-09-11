@@ -43,6 +43,15 @@ pub struct SandboxSessionJs {
     pub generation: i64,
 }
 
+/// A session from `getOrCreate`, and which of the two things happened.
+#[napi(object)]
+pub struct ResolvedSessionJs {
+    /// The session, whether it was made here or found.
+    pub session: SandboxSessionJs,
+    /// Whether this call is what created it, so a caller knows if its first-run setup has run.
+    pub created: bool,
+}
+
 fn session_to_js(session: SandboxSession) -> SandboxSessionJs {
     SandboxSessionJs {
         session_id: session.session_id,
@@ -319,16 +328,16 @@ impl SandboxHandle {
         Ok(session.map(session_to_js))
     }
 
-    /// Fetches a session, creating it if absent.
+    /// Fetches a session, creating it if absent, and reports which it did.
     #[napi]
     pub async fn get_or_create(
         &self,
         session_id: Option<String>,
         tenant_key: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
-    ) -> napi::Result<SandboxSessionJs> {
+    ) -> napi::Result<ResolvedSessionJs> {
         let sandbox = self.inner.clone();
-        let session = sandbox
+        let resolved = sandbox
             .get_or_create(CreateSessionRequest {
                 session_id,
                 tenant_key,
@@ -336,7 +345,10 @@ impl SandboxHandle {
             })
             .await
             .map_err(map_alien_error)?;
-        Ok(session_to_js(session))
+        Ok(ResolvedSessionJs {
+            session: session_to_js(resolved.session),
+            created: resolved.created,
+        })
     }
 
     /// Lists this sandbox's sessions.

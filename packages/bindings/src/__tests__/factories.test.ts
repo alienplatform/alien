@@ -129,9 +129,8 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
     create: async sessionId => ({ sessionId: sessionId ?? "s1", state: "running", generation: 1 }),
     get: async sessionId => ({ sessionId, state: "running", generation: 1 }),
     getOrCreate: async sessionId => ({
-      sessionId: sessionId ?? "s1",
-      state: "running",
-      generation: 1,
+      session: { sessionId: sessionId ?? "s1", state: "running", generation: 1 },
+      created: true,
     }),
     list: async () => [],
     runCommand: async () => {

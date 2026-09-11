@@ -385,6 +385,14 @@ export interface SandboxSession {
   generation: number
 }
 
+/** A session from `getOrCreate`, and which of the two things happened. */
+export interface ResolvedSession {
+  /** The session, whether it was made by this call or found. */
+  session: SandboxSession
+  /** Whether this call is what created it. */
+  created: boolean
+}
+
 /** One frame of a running command's output. */
 export type CommandFrame =
   | { kind: "stdout" | "stderr"; seq: number; data: Buffer }
@@ -456,13 +464,13 @@ export interface Sandbox {
   }): Promise<SandboxSession>
   /** Fetches a session, or `null` if it does not exist. Requires `reconnect`. */
   get(sessionId: string): Promise<SandboxSession | null>
-  /** Fetches a session, creating it if absent. */
+  /** Fetches a session, creating it if absent, and reports which it did. */
   getOrCreate(options?: {
     sessionId?: string
     tenantKey?: string
     /** Environment every command in the session starts with. */
     env?: Record<string, string>
-  }): Promise<SandboxSession>
+  }): Promise<ResolvedSession>
   /**
    * Lists this sandbox's sessions. Not offered on AWS, Azure or GCP — those raise rather than
    * enumerate. Reach a session whose id you hold with `get`.

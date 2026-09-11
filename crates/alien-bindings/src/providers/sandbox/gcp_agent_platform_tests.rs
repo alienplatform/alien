@@ -271,9 +271,10 @@ async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
         .await
         .expect("a stale session is replaced");
     assert_eq!(
-        session.session_id, "fresh",
+        session.session.session_id, "fresh",
         "the fresh session is returned, not the stale id"
     );
+    assert!(session.created, "a replacement is a session this call made");
 }
 
 /// A reconnect to a suspended session wakes it and hands it back, rather than creating a second
@@ -309,12 +310,16 @@ async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second
         })
         .await
         .expect("a suspended session is resumed and returned");
-    assert_eq!(session.session_id, "paused");
-    assert_eq!(session.state, SandboxSessionState::Running);
+    assert_eq!(session.session.session_id, "paused");
+    assert_eq!(session.session.state, SandboxSessionState::Running);
+    assert!(
+        !session.created,
+        "waking a sleeping session is not creating one"
+    );
     // The reconnect path the capability flip promises: a woken session carries a real generation
     // read from the container it came back on, not the unprobed sentinel.
     assert_ne!(
-        session.generation, NO_GENERATION,
+        session.session.generation, NO_GENERATION,
         "a woken session carries its container generation"
     );
 }

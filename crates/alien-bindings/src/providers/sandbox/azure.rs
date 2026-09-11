@@ -13,7 +13,7 @@ use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    ResolvedSession, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_azure_clients::azure::sandbox_data_plane::{
     CreateSandbox, EgressHostRule, EgressPolicy, SandboxDataPlaneApi,
@@ -255,13 +255,13 @@ impl Sandbox for AzureSandbox {
         }))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession> {
         if let Some(id) = request.session_id.as_deref() {
             // `create` returns a session that can take work, and reaching one someone else
             // started has to mean the same thing — so the same gate every other verb uses: bring
             // it up, judge it there, and refuse it if it does not match.
             match self.reconnect(id).await {
-                Ok(session) => return Ok(session),
+                Ok(session) => return Ok(ResolvedSession::found(session)),
                 // The two ways an id can fail to serve — gone, or running a policy the
                 // declaration no longer matches — mean the same thing to a caller asking for a
                 // session, and are answered the same way: a fresh one. A session refused for its
@@ -282,7 +282,7 @@ impl Sandbox for AzureSandbox {
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSession::created)
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {
@@ -2594,7 +2594,8 @@ mod tests {
             .await
             .expect("a new session should be created");
 
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// A permission the declaration never asked for fails the create as surely as a missing one.
@@ -3010,7 +3011,8 @@ mod tests {
             .await
             .expect("a stale session is replaced");
 
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// A session id is one path segment, because it is interpolated into the data-plane URL and
@@ -3146,7 +3148,8 @@ mod tests {
         // Answered the same way as a terminated id: the caller gets a fresh session. The one
         // that woke up wider is put back to sleep, not deleted — the id may be another
         // revision's.
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// A sandbox left behind must not publish the cloud's own response text.
@@ -3815,7 +3818,8 @@ mod tests {
             .await
             .expect("a caller asking for a session gets a usable one");
 
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// A session the data plane reports as `Failed` is replaced, not carried forever.
@@ -3855,7 +3859,8 @@ mod tests {
             .await
             .expect("a failed session is replaced rather than returned");
 
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// `Failed` is a state the data plane reports and this client has to know.
@@ -3912,7 +3917,8 @@ mod tests {
             .await
             .expect("a session that died mid-wait is replaced");
 
-        assert_eq!(session.session_id, "fresh");
+        assert_eq!(session.session.session_id, "fresh");
+        assert!(session.created, "a replacement is a session this call made");
     }
 
     /// A sleeping session that still matches is reconnected, not replaced.
@@ -3962,7 +3968,11 @@ mod tests {
             .await
             .expect("a compliant sleeping session is woken and returned");
 
-        assert_eq!(session.session_id, "asleep-and-fine");
+        assert_eq!(session.session.session_id, "asleep-and-fine");
+        assert!(
+            !session.created,
+            "waking a sleeping session is not creating one"
+        );
     }
 
     /// A sleeping session with no policy on its record is woken before it is judged.
@@ -4011,7 +4021,11 @@ mod tests {
             .await
             .expect("an absent policy on a sleeping record is unknown, not a mismatch");
 
-        assert_eq!(session.session_id, "asleep-without-a-record");
+        assert_eq!(session.session.session_id, "asleep-without-a-record");
+        assert!(
+            !session.created,
+            "waking a sleeping session is not creating one"
+        );
     }
 
     /// A session woken to be judged, found uncontained, and left awake says so.

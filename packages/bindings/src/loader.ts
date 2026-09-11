@@ -204,6 +204,11 @@ export interface RawSandboxSession {
   generation: number
 }
 
+export interface RawResolvedSession {
+  session: RawSandboxSession
+  created: boolean
+}
+
 /** Raw napi sandbox handle. */
 export interface RawSandboxHandle {
   capabilities(): string[]
@@ -217,7 +222,7 @@ export interface RawSandboxHandle {
     sessionId?: string | null,
     tenantKey?: string | null,
     env?: Record<string, string> | null,
-  ): Promise<RawSandboxSession>
+  ): Promise<RawResolvedSession>
   list(): Promise<RawSandboxSession[]>
   runCommand(
     sessionId: string,

@@ -198,15 +198,14 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         return found === null ? null : session(found)
       }),
     getOrCreate: options =>
-      guard(handle, async raw =>
-        session(
-          await raw.getOrCreate(
-            options?.sessionId ?? null,
-            options?.tenantKey ?? null,
-            options?.env ?? null,
-          ),
-        ),
-      ),
+      guard(handle, async raw => {
+        const resolved = await raw.getOrCreate(
+          options?.sessionId ?? null,
+          options?.tenantKey ?? null,
+          options?.env ?? null,
+        )
+        return { session: session(resolved.session), created: resolved.created }
+      }),
     list: () => guard(handle, async raw => (await raw.list()).map(session)),
     startJob: (sessionId, command, options) =>
       guard(handle, async raw =>

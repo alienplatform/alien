@@ -19,7 +19,7 @@ use crate::providers::sandbox::agent_protocol::{self, AgentTransport, AGENT_PORT
 use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    ResolvedSession, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
@@ -450,7 +450,7 @@ impl Sandbox for AwsSandbox {
         Ok(Some(self.session(microvm_id, microvm.state)))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession> {
         // Refused on the reconnect path too: an existing session honors these fields no more
         // than a fresh one would.
         refuse_unsupported_session_fields(&request, "sandbox.getOrCreate")?;
@@ -461,13 +461,15 @@ impl Sandbox for AwsSandbox {
                 // than in `get`, which reports a session's state and does not promise one.
                 if matches!(existing.state, SandboxSessionState::Starting) {
                     self.wait_until_servable(id).await?;
-                    return Ok(self.session(id.to_string(), Some("RUNNING".to_string())));
+                    return Ok(ResolvedSession::found(
+                        self.session(id.to_string(), Some("RUNNING".to_string())),
+                    ));
                 }
-                return Ok(existing);
+                return Ok(ResolvedSession::found(existing));
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSession::created)
     }
 
     /// Not offered, as on Azure and GCP.
@@ -701,6 +703,61 @@ mod tests {
             .terminate("already-reaped")
             .await
             .expect("an absent session is already terminated");
+    }
+
+    /// Reconnecting must not report a session this call did not make, or a caller runs its
+    /// first-run setup a second time on a session that already had it.
+    #[tokio::test]
+    async fn reconnecting_to_a_running_session_reports_found() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client.expect_run_microvm().never();
+
+        let resolved = sandbox(client)
+            .get_or_create(CreateSessionRequest {
+                session_id: Some("already-up".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("a running session is handed back");
+
+        assert_eq!(resolved.session.session_id, "already-up");
+        assert!(
+            !resolved.created,
+            "the session was already running, so this call did not create it"
+        );
+    }
+
+    /// The branch that waits: a MicroVM still coming up is waited for, and the wait failing is
+    /// answered with the failure rather than with a second MicroVM nobody holds an id for.
+    ///
+    /// Pins only the never-create half. Carrying the wait through to success needs a TLS listener,
+    /// because `authorized_request` builds an `https://` URL — the readiness poll itself is covered
+    /// directly by `the_readiness_poll_outlasts_the_snapshot_restore_window`.
+    #[tokio::test]
+    async fn a_booting_session_is_never_answered_with_a_second_microvm() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        // Coming up, and with no endpoint published yet, so the wait runs and then gives up.
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "PENDING")));
+        client.expect_run_microvm().never();
+
+        let error = sandbox(client)
+            .get_or_create(CreateSessionRequest {
+                session_id: Some("still-booting".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a session that never publishes an endpoint cannot be served");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("still-booting"),
+            "the failure names the session it waited on: {error}"
+        );
     }
 
     /// See `capabilities()` for why this tracks `preview_ports`.

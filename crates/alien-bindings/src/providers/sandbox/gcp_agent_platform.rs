@@ -21,7 +21,8 @@ use tracing::warn;
 use crate::error::{ErrorData, Result};
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, JobError, JobExit, JobPoll, JobStart,
-    PreviewCapability, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    PreviewCapability, ResolvedSession, RunCommandRequest, Sandbox, SandboxSession,
+    SandboxSessionState,
 };
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
@@ -613,14 +614,14 @@ impl Sandbox for GcpAgentPlatformSandbox {
         }))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession> {
         if let Some(id) = request.session_id.as_deref() {
             // A running, reachable session is handed back; anything else is served by a fresh
             // session rather than by destroying one this call did not create, which may be
             // another revision's.
             match self.get(id).await {
                 Ok(Some(session)) if session.state == SandboxSessionState::Running => {
-                    return Ok(session)
+                    return Ok(ResolvedSession::found(session))
                 }
                 // The ordinary resting state for a reconnect: a suspended session is woken and
                 // confirmed, and handed back if it comes up healthy. A wake this call made that
@@ -631,7 +632,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
                     if self.resume(id).await.is_ok() {
                         match self.get(id).await {
                             Ok(Some(woken)) if woken.state == SandboxSessionState::Running => {
-                                return Ok(woken)
+                                return Ok(ResolvedSession::found(woken))
                             }
                             _ => {
                                 // The wake could not be undone: leaving it live beside a fresh
@@ -661,7 +662,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSession::created)
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {

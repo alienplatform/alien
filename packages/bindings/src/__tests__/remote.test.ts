@@ -64,7 +64,7 @@ function fakeRemoteAddon() {
     capabilities: () => ["files", "reconnect"],
     create: async sessionId => session(sessionId),
     get: async () => null,
-    getOrCreate: async sessionId => session(sessionId),
+    getOrCreate: async sessionId => ({ session: session(sessionId), created: false }),
     list: async () => [],
     runCommand: async () => {
       throw new Error("unused")

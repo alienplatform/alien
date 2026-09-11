@@ -19,7 +19,7 @@ use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
 use crate::traits::{
     Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    ResolvedSession, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
 };
 use alien_core::bindings::LocalSandboxBinding;
 use alien_core::{Platform, SandboxCapabilities};
@@ -262,14 +262,14 @@ impl Sandbox for LocalSandbox {
             .find(|session| session.session_id == session_id))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession> {
         if let Some(id) = request.session_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
-                return Ok(existing);
+                return Ok(ResolvedSession::found(existing));
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSession::created)
     }
 
     async fn list(&self) -> Result<Vec<SandboxSession>> {

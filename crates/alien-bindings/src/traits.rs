@@ -1001,6 +1001,36 @@ pub struct SandboxSession {
     pub generation: u64,
 }
 
+/// A session from `get_or_create`, and which of the two things happened.
+///
+/// A reconnect and a create are separate paths in every provider; `created` carries that
+/// distinction out to the caller, which would otherwise make its own first-run work idempotent.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedSession {
+    /// The session, whether it was made here or found.
+    pub session: SandboxSession,
+    /// Whether this request is what created it.
+    pub created: bool,
+}
+
+impl ResolvedSession {
+    /// This request created the session.
+    pub fn created(session: SandboxSession) -> Self {
+        Self {
+            session,
+            created: true,
+        }
+    }
+
+    /// An existing session, whatever it took to reach it — a wait, a wake — but not made here.
+    pub fn found(session: SandboxSession) -> Self {
+        Self {
+            session,
+            created: false,
+        }
+    }
+}
+
 /// Lifecycle state of a sandbox session.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
@@ -1175,8 +1205,13 @@ pub trait Sandbox: Binding {
     /// unreachable one are never the same result.
     async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>>;
 
-    /// Fetches a session, creating it if absent.
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession>;
+    /// Fetches a session, creating it if absent, and reports which it did.
+    ///
+    /// Answer `created` from the path taken, never from a timestamp: the clocks are the provider's,
+    /// not ours. No backend offers an atomic create-if-absent, so two callers naming one id can
+    /// both be told they created it; a caller that cannot tolerate its setup running twice needs
+    /// its own lock.
+    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession>;
 
     /// Lists sessions belonging to this sandbox's parent.
     ///

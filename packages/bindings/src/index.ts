@@ -74,6 +74,7 @@ export type {
   Queue,
   QueueMessage,
   RemoteStorage,
+  ResolvedSession,
   RunCommandOptions,
   Sandbox,
   SandboxSession,
