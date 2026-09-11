@@ -53,6 +53,7 @@ async fn persist_remote_storage_state(fixture: &Fixture) {
             &Subject::system(),
             &fixture.deployment_a,
             UpdateImportedDeploymentParams {
+                stack_settings: StackSettings::default(),
                 stack_state,
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
