@@ -29,7 +29,13 @@ impl TfEmitter for AwsNetworkEmitter {
         let label = required_label(ctx)?;
 
         match &network.settings {
-            NetworkSettings::UseDefault => Ok(default_network_data(label, None)),
+            // Other consumers, notably EKS, emit their own default-VPC data sources with
+            // service-specific filtering. Only setup-owned Postgres needs the generic lookup
+            // here; emitting it for every static default network would overwrite those blocks.
+            NetworkSettings::UseDefault if stack_has_setup_postgres(ctx) => {
+                Ok(default_network_data(label, None))
+            }
+            NetworkSettings::UseDefault => Ok(TfFragment::empty()),
             NetworkSettings::ByoVpcAws { .. } => {
                 // Declare the availability-zones data source so the
                 // `availabilityZones` field in import data resolves —
@@ -47,13 +53,7 @@ impl TfEmitter for AwsNetworkEmitter {
                 availability_zones,
             } => {
                 let mut fragment = create_topology(ctx, label, cidr.clone(), *availability_zones);
-                if ctx.stack.resources().any(|(_id, entry)| {
-                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
-                        && entry
-                            .config
-                            .downcast_ref::<alien_core::Postgres>()
-                            .is_some()
-                }) {
+                if stack_has_setup_postgres(ctx) {
                     fragment.extend(default_network_data(
                         label,
                         Some("var.network_mode == \"use-default\" ? 1 : 0"),
@@ -190,6 +190,16 @@ impl TfEmitter for AwsNetworkEmitter {
             }
         })
     }
+}
+
+fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_id, entry)| {
+        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+            && entry
+                .config
+                .downcast_ref::<alien_core::Postgres>()
+                .is_some()
+    })
 }
 
 /// Data sources used by setup-owned resources when the customer chooses the account's default
