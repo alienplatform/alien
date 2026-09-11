@@ -14,7 +14,7 @@
 
 use alien_core::{
     ClientConfig, KubernetesClientConfig, Platform, ResourceStatus, Sandbox, SandboxCode,
-    SandboxEgress, SandboxLimits, SandboxSessionPolicy,
+    SandboxEgress, SandboxLifecyclePolicy, SandboxLimits,
 };
 use alien_infra::controller_test::SingleControllerExecutor;
 use alien_infra::KubernetesSandboxController;
@@ -35,9 +35,9 @@ fn sandbox(id: &str) -> Sandbox {
             max_processes: None,
         })
         .egress(SandboxEgress::Deny)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(600),
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build()
 }

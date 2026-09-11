@@ -79,7 +79,7 @@ mod tests {
     use crate::import::ImporterRegistry;
     use alien_core::{
         GcpAgentPlatformEngine, Platform, Resource, ResourceEntry, ResourceLifecycle, Sandbox,
-        SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings,
+        SandboxCode, SandboxEgress, SandboxLifecyclePolicy, StackSettings,
     };
 
     fn import_context<'a>(
@@ -114,9 +114,9 @@ mod tests {
                     image: "python:3.12".to_string(),
                 })
                 .egress(SandboxEgress::Deny)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
         )

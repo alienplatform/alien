@@ -403,7 +403,7 @@ mod tests {
     /// egress than the declaration asked for.
     #[test]
     fn a_hostname_allowlist_is_refused_rather_than_widened() {
-        use alien_core::{SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy};
+        use alien_core::{SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxLimits};
 
         let sandbox = Sandbox::new("sbx".to_string())
             .code(SandboxCode::Image {
@@ -418,9 +418,9 @@ mod tests {
             .egress(SandboxEgress::AllowDomains {
                 domains: vec!["example.com".to_string()],
             })
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 

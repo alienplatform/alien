@@ -1,7 +1,7 @@
 //! Sandbox resource for running untrusted code in an isolated environment.
 //!
-//! A Sandbox is a session-oriented resource: the declaration provisions a durable parent, and
-//! the application creates and destroys individual sessions through its binding at runtime.
+//! The declaration provisions a durable parent, and the application creates and destroys
+//! individual sandboxes through its binding at runtime.
 //!
 //! The capability set differs per platform and is published rather than assumed. Calling an
 //! unsupported capability is a typed error naming both the platform and the capability, so a
@@ -41,7 +41,7 @@ pub enum SandboxCode {
     },
 }
 
-/// Hard ceilings enforced on a sandbox session.
+/// Hard ceilings enforced on a sandbox.
 ///
 /// These are limits, not scheduling requests. Untrusted code does not respect a hint, so every
 /// field is enforced by the platform and a platform that cannot enforce one is rejected at plan
@@ -85,9 +85,9 @@ pub struct MicrovmTier {
 /// The published sizes, smallest first. Baseline memory to vCPU is 2 GB per vCPU, peak is four
 /// times baseline, and disk is fixed per tier rather than independently selectable.
 /// Longest life AWS will run a MicroVM for, from `RunMicrovm`'s `maximumDurationInSeconds`.
-const AWS_MAX_SESSION_LIFETIME_SECONDS: u32 = 28_800;
+const AWS_MAX_LIFETIME_SECONDS: u32 = 28_800;
 
-/// Azure's session sizing rule, quoted from the data plane's own refusal of an oversized request:
+/// Azure's sandbox sizing rule, quoted from the data plane's own refusal of an oversized request:
 /// *CPU must be n×250m for n=1..64 (0.25–16 cores); Memory ≤ cores × 2Gi; Disk ≤ cores × 20Gi*.
 const AZURE_CPU_STEP_MILLICORES: i64 = 250;
 const AZURE_MAX_CPU_MILLICORES: i64 = 16_000;
@@ -160,7 +160,7 @@ impl SandboxEgress {
     /// boolean cannot carry.
     ///
     /// `AllowDomains` needs a host list, so it maps to nothing and each caller refuses it in its
-    /// own error naming the sandbox. One source for what a mode means, so a template and a session
+    /// own error naming the sandbox. One source for what a mode means, so a template and a sandbox
     /// cannot disagree on it.
     pub fn internet_access_switch(&self) -> Option<bool> {
         match self {
@@ -171,12 +171,15 @@ impl SandboxEgress {
     }
 }
 
-/// How long a session may live and when it is suspended.
+/// How long a sandbox may live and when it is paused.
+///
+/// Declaration-time ceilings, not per-request values: every sandbox created through this
+/// declaration's binding is held to them, whatever a caller asks for at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SandboxSessionPolicy {
-    /// Wall-clock ceiling on a single session, after which the platform terminates it.
+pub struct SandboxLifecyclePolicy {
+    /// Wall-clock ceiling on a single sandbox, after which the platform terminates it.
     ///
     /// Optional because not every backend has the primitive: Kubernetes has
     /// `activeDeadlineSeconds` and AWS `maximumDurationInSeconds`, while neither Azure nor Local
@@ -184,9 +187,9 @@ pub struct SandboxSessionPolicy {
     /// never applied. AWS caps it at 8 hours.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
-    /// Idle period after which the session is suspended, where the platform supports it
+    /// Idle period after which the sandbox is paused, where the platform supports it
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idle_suspend_seconds: Option<u32>,
+    pub idle_pause_seconds: Option<u32>,
 }
 
 /// What a platform's sandbox backend can actually do.
@@ -198,18 +201,18 @@ pub struct SandboxSessionPolicy {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SandboxCapabilities {
-    /// Files can be moved in and out of a session
+    /// Files can be moved in and out of a sandbox
     pub files: bool,
-    /// A later call can reach a session created by an earlier one
+    /// A later call can reach a sandbox created by an earlier one
     pub reconnect: bool,
     /// A command can be started, polled and cancelled across separate calls, so it outlives the
-    /// one that started it. False where nothing inside the session owns the process in between.
+    /// one that started it. False where nothing inside the sandbox owns the process in between.
     pub jobs: bool,
     /// An authenticated, port-scoped capability to reach a service inside the sandbox
     pub preview: bool,
-    /// Session state can be suspended and resumed
-    pub suspend_resume: bool,
-    /// A session's full state can be captured and used to create another
+    /// Sandbox state can be paused and resumed
+    pub pause_resume: bool,
+    /// A sandbox's full state can be captured and used to create another
     pub snapshot: bool,
     /// Egress can be restricted to a hostname allowlist
     pub domain_egress_rules: bool,
@@ -217,10 +220,10 @@ pub struct SandboxCapabilities {
     pub egress_deny: bool,
     /// The platform enforces the declared cpu, memory and disk ceilings
     pub enforced_limits: bool,
-    /// The platform can cap how many processes a session runs
+    /// The platform can cap how many processes a sandbox runs
     pub process_limit: bool,
-    /// The platform terminates a session at a declared wall-clock deadline
-    pub session_lifetime: bool,
+    /// The platform terminates a sandbox at a declared wall-clock deadline
+    pub sandbox_lifetime: bool,
     /// A command runs in its own PID namespace and cannot see or signal the agent's processes.
     ///
     /// Only where an agent runs as root. Creating the namespace needs `CAP_SYS_ADMIN`, and the
@@ -248,7 +251,7 @@ impl SandboxCapabilities {
                 reconnect: true,
                 jobs: true,
                 preview: true,
-                suspend_resume: true,
+                pause_resume: true,
                 snapshot: false,
                 domain_egress_rules: false,
                 egress_deny: true,
@@ -257,7 +260,7 @@ impl SandboxCapabilities {
                 process_limit: false,
                 // `maximumDurationInSeconds` on `RunMicrovm`, which Lambda enforces by
                 // terminating the MicroVM. Capped at 8 hours by the service.
-                session_lifetime: true,
+                sandbox_lifetime: true,
                 // Measured, not assumed: the agent inside a Lambda MicroVM runs as uid 0 with
                 // `CapEff: 00000000a80425fb`, the standard container default set, which excludes
                 // `CAP_SYS_ADMIN`. It can drop privilege (`CAP_SETUID`/`CAP_SETGID` are held) and
@@ -269,14 +272,14 @@ impl SandboxCapabilities {
             }),
             Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
-            // Preview needs a gateway that validates a session-and-port capability, and that
+            // Preview needs a gateway that validates a sandbox-and-port capability, and that
             // gateway does not exist yet.
             Platform::Kubernetes => Ok(Self {
                 files: true,
                 reconnect: true,
                 jobs: true,
                 preview: false,
-                suspend_resume: false,
+                pause_resume: false,
                 snapshot: false,
                 domain_egress_rules: false,
                 egress_deny: true,
@@ -284,7 +287,7 @@ impl SandboxCapabilities {
                 // A pid ceiling is a kubelet setting per node, not a pod field.
                 process_limit: false,
                 // `activeDeadlineSeconds` on the pod, which the kubelet enforces.
-                session_lifetime: true,
+                sandbox_lifetime: true,
                 // The pod drops every capability, including the `CAP_SYS_ADMIN` the agent would
                 // need to unshare. That is also what denies `ptrace`, so this stays false rather
                 // than the pod being weakened to make it true.
@@ -298,17 +301,17 @@ impl SandboxCapabilities {
             Platform::Local => Ok(Self {
                 files: true,
                 reconnect: true,
-                // Nothing runs inside the session: the manager drives Docker from outside it.
+                // Nothing runs inside the sandbox: the manager drives Docker from outside it.
                 jobs: false,
                 preview: true,
-                suspend_resume: false,
+                pause_resume: false,
                 snapshot: false,
                 domain_egress_rules: false,
                 egress_deny: true,
                 enforced_limits: true,
                 // Docker's `--pids-limit`.
                 process_limit: true,
-                session_lifetime: false,
+                sandbox_lifetime: false,
                 // Local has no in-sandbox agent: the manager drives Docker from outside, so
                 // there is no supervisor inside the sandbox to isolate from.
                 supervisor_pid_namespace: false,
@@ -330,29 +333,29 @@ impl SandboxCapabilities {
         Self {
             files: true,
             reconnect: true,
-            // No Alien process runs inside the session to own a command between two calls.
+            // No Alien process runs inside the sandbox to own a command between two calls.
             jobs: false,
             // A sandbox port carries a URL and an auth config, and the auth config offers two
             // things: anonymous, or Entra ID with an allowlist of human email addresses.
             // Neither is a credential scoped to a port for a fixed time, which is what a
             // preview capability is. Returning the anonymous URL would publish the port.
             preview: false,
-            suspend_resume: true,
+            pause_resume: true,
             // False for a client reason, not a cloud one: this client has no snapshot call, and
-            // `CreateSessionRequest` has no field to consume the id it would return. Also
+            // `CreateSandboxRequest` has no field to consume the id it would return. Also
             // unclaimed: Microsoft does not garbage-collect snapshots, so an id is a bill that grows.
             snapshot: false,
             domain_egress_rules: true,
             egress_deny: true,
-            // Enforced inside the session, not at create: an over-allocation raises `MemoryError`
-            // while the sandbox keeps running. `azure_session_limits` checks the continuous
+            // Enforced inside the sandbox, not at create: an over-allocation raises `MemoryError`
+            // while the sandbox keeps running. `azure_sandbox_limits` checks the continuous
             // sizing rule at plan time instead of matching a tier.
             enforced_limits: true,
             process_limit: false,
             // Auto-suspend and auto-delete exist; a wall-clock ceiling does not. Accepting
             // `maxLifetimeSeconds` here would be the silent no-op the capability set exists
             // to prevent, so this is a decision rather than a gap.
-            session_lifetime: false,
+            sandbox_lifetime: false,
             // No Alien process inside an Azure sandbox, so there is no supervisor to isolate.
             supervisor_pid_namespace: false,
             // No Alien process runs the command at all — the platform's own data plane does,
@@ -364,32 +367,32 @@ impl SandboxCapabilities {
     /// What the GCP Agent Platform sandbox backend supports; the body of the `Platform::Gcp` arm.
     pub fn gcp_agent_platform() -> Self {
         Self {
-            // Agent file operations move over the session envelope.
+            // Agent file operations move over the sandbox envelope.
             files: true,
-            // Reaching a session across processes is safe because `generation` is derived from the
+            // Reaching a sandbox across processes is safe because `generation` is derived from the
             // container boot id read through the agent's health op, so a caller detects a container
-            // replaced under a stable session name rather than reconnecting to a blank one.
+            // replaced under a stable sandbox name rather than reconnecting to a blank one.
             reconnect: true,
             jobs: true,
             // No method mints a port-scoped ingress capability; the only ingress is `:execute`.
             preview: false,
             // `:pause` and `:resume` preserve the running container.
-            suspend_resume: true,
-            // The create path never sends `sandbox_environment_snapshot`, so no session state is
+            pause_resume: true,
+            // The create path never sends `sandbox_environment_snapshot`, so no sandbox state is
             // reachable through the trait; declared false until the client carries it.
             snapshot: false,
             // Egress is shaped by VPC and DNS peering, which is not a hostname allowlist.
             domain_egress_rules: false,
             // A declared `deny` blocks both routed egress and DNS.
             egress_deny: true,
-            // The declared ceilings are enforced, but by terminating the session on breach rather
-            // than by refusing the allocation — a caller reading `true` should expect the session
+            // The declared ceilings are enforced, but by terminating the sandbox on breach rather
+            // than by refusing the allocation — a caller reading `true` should expect the sandbox
             // to die, not a clean error at the point of the request.
             enforced_limits: true,
             // No ceiling on process count is observed.
             process_limit: false,
-            // `ttl` maps to a session `expireTime` the platform terminates at.
-            session_lifetime: true,
+            // `ttl` maps to a sandbox `expireTime` the platform terminates at.
+            sandbox_lifetime: true,
             // No PID-namespace isolation between the command and anything supervising it.
             supervisor_pid_namespace: false,
             // No separate supervisor identity: the command is not run under a different identity
@@ -405,13 +408,13 @@ impl SandboxCapabilities {
             SandboxCapability::Reconnect => self.reconnect,
             SandboxCapability::Jobs => self.jobs,
             SandboxCapability::Preview => self.preview,
-            SandboxCapability::SuspendResume => self.suspend_resume,
+            SandboxCapability::PauseResume => self.pause_resume,
             SandboxCapability::Snapshot => self.snapshot,
             SandboxCapability::DomainEgressRules => self.domain_egress_rules,
             SandboxCapability::EgressDeny => self.egress_deny,
             SandboxCapability::EnforcedLimits => self.enforced_limits,
             SandboxCapability::ProcessLimit => self.process_limit,
-            SandboxCapability::SessionLifetime => self.session_lifetime,
+            SandboxCapability::SandboxLifetime => self.sandbox_lifetime,
             SandboxCapability::SupervisorPidNamespace => self.supervisor_pid_namespace,
             SandboxCapability::SupervisorIsolation => self.supervisor_isolation,
         };
@@ -432,17 +435,17 @@ impl SandboxCapabilities {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxCapability {
-    /// Moving files in and out of a session
+    /// Moving files in and out of a sandbox
     Files,
-    /// Reaching a session created by an earlier call
+    /// Reaching a sandbox created by an earlier call
     Reconnect,
     /// Starting, polling and cancelling a command across separate calls
     Jobs,
     /// An authenticated, port-scoped ingress capability
     Preview,
-    /// Suspending and resuming session state
-    SuspendResume,
-    /// Capturing full session state
+    /// Pausing and resuming sandbox state
+    PauseResume,
+    /// Capturing full sandbox state
     Snapshot,
     /// Restricting egress to a hostname allowlist
     DomainEgressRules,
@@ -450,10 +453,10 @@ pub enum SandboxCapability {
     EgressDeny,
     /// Platform-enforced resource ceilings
     EnforcedLimits,
-    /// A ceiling on the number of processes a session may run
+    /// A ceiling on the number of processes a sandbox may run
     ProcessLimit,
-    /// A wall-clock ceiling on a session, applied by the platform rather than by a caller
-    SessionLifetime,
+    /// A wall-clock ceiling on a sandbox, applied by the platform rather than by a caller
+    SandboxLifetime,
     /// A command runs in its own PID namespace, isolated from the agent supervising it
     SupervisorPidNamespace,
     /// A command runs under a different identity than the process supervising it
@@ -468,20 +471,20 @@ impl SandboxCapability {
             Self::Reconnect => "reconnect",
             Self::Jobs => "jobs",
             Self::Preview => "preview",
-            Self::SuspendResume => "suspendResume",
+            Self::PauseResume => "pauseResume",
             Self::Snapshot => "snapshot",
             Self::DomainEgressRules => "domainEgressRules",
             Self::EgressDeny => "egressDeny",
             Self::EnforcedLimits => "enforcedLimits",
             Self::ProcessLimit => "processLimit",
-            Self::SessionLifetime => "sessionLifetime",
+            Self::SandboxLifetime => "sandboxLifetime",
             Self::SupervisorPidNamespace => "supervisorPidNamespace",
             Self::SupervisorIsolation => "supervisorIsolation",
         }
     }
 }
 
-/// An isolated environment for running untrusted code, created per session at runtime.
+/// An isolated environment for running untrusted code, created at runtime.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -502,8 +505,8 @@ pub struct Sandbox {
     pub limits: Option<SandboxLimits>,
     /// Outbound network policy
     pub egress: SandboxEgress,
-    /// Session lifetime and idle behaviour
-    pub session: SandboxSessionPolicy,
+    /// Sandbox lifetime ceiling and idle behaviour
+    pub lifecycle: SandboxLifecyclePolicy,
     /// Ports eligible for a preview capability. An application reaches its sandbox through the
     /// provider, so it cannot widen its own ingress at runtime; a holder of a remote binding's
     /// credentials is bounded by no port condition, which is why a remote sandbox declares none.
@@ -604,7 +607,7 @@ impl Sandbox {
         capabilities.require(SandboxCapability::EnforcedLimits, platform)?;
 
         if platform == Platform::Azure {
-            self.azure_session_limits()?;
+            self.azure_sandbox_limits()?;
         }
 
         if platform == Platform::Aws {
@@ -614,17 +617,17 @@ impl Sandbox {
 
             // The ceiling is Lambda's, and it rejects the run rather than clamping — so a value
             // outside it would pass planning, render into the package, and fail at the first
-            // session. Kubernetes takes the same field with no such bound, which is why this
+            // sandbox. Kubernetes takes the same field with no such bound, which is why this
             // sits under the AWS gate rather than on the type.
-            if let Some(seconds) = self.session.max_lifetime_seconds {
-                if !(1..=AWS_MAX_SESSION_LIFETIME_SECONDS).contains(&seconds) {
+            if let Some(seconds) = self.lifecycle.max_lifetime_seconds {
+                if !(1..=AWS_MAX_LIFETIME_SECONDS).contains(&seconds) {
                     return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                         resource_id: self.id.clone(),
                         field: "maxLifetimeSeconds".to_string(),
                         value: seconds.to_string(),
                         reason: format!(
                             "AWS runs a MicroVM for between 1 and \
-                             {AWS_MAX_SESSION_LIFETIME_SECONDS} seconds"
+                             {AWS_MAX_LIFETIME_SECONDS} seconds"
                         ),
                     }));
                 }
@@ -634,11 +637,11 @@ impl Sandbox {
         self.validate_capabilities(&capabilities, platform)
     }
 
-    /// The catalog disk image Azure creates a session from.
+    /// The catalog disk image Azure creates a sandbox from.
     ///
     /// Azure names a public catalog entry rather than pulling a reference, so a registry path,
     /// tag or digest has nowhere to go. An allowlist, because the answer to "what else could be
-    /// in there" is a name the data plane rejects at the first session, long after the apply.
+    /// in there" is a name the data plane rejects at the first sandbox, long after the apply.
     pub fn azure_catalog_image(&self) -> Result<&str> {
         let refused = |value: &str, reason: &str| {
             AlienError::new(ErrorData::SandboxLimitInvalid {
@@ -668,7 +671,7 @@ impl Sandbox {
         {
             return Err(refused(
                 image,
-                "Azure creates a session from a public catalog disk image, so code.image must be \
+                "Azure creates a sandbox from a public catalog disk image, so code.image must be \
                  a bare catalog name such as 'ubuntu'",
             ));
         }
@@ -678,7 +681,7 @@ impl Sandbox {
     /// Checks the declared ceilings against Azure's sizing rule (the `AZURE_*` constants above).
     /// Refused at plan time, like [`Self::microvm_tier`], so a bad value is a declaration to fix
     /// rather than a runtime fault at create.
-    pub fn azure_session_limits(&self) -> Result<()> {
+    pub fn azure_sandbox_limits(&self) -> Result<()> {
         let Some(limits) = self.limits.as_ref() else {
             // Nothing declared means the binding substitutes Alien's own default sizing, which is
             // inside the rule — asserted where those constants live, since this cannot see them.
@@ -860,12 +863,12 @@ impl Sandbox {
             capabilities.require(SandboxCapability::Preview, platform)?;
         }
 
-        if self.session.idle_suspend_seconds.is_some() {
-            capabilities.require(SandboxCapability::SuspendResume, platform)?;
+        if self.lifecycle.idle_pause_seconds.is_some() {
+            capabilities.require(SandboxCapability::PauseResume, platform)?;
         }
 
-        if self.session.max_lifetime_seconds.is_some() {
-            capabilities.require(SandboxCapability::SessionLifetime, platform)?;
+        if self.lifecycle.max_lifetime_seconds.is_some() {
+            capabilities.require(SandboxCapability::SandboxLifetime, platform)?;
         }
 
         Ok(())
@@ -967,12 +970,12 @@ pub fn millicores(value: &str) -> Option<i64> {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxOutputs {
-    /// Name of the durable parent that sessions are created inside
+    /// Name of the durable parent that sandboxes are created inside
     pub parent_name: String,
     /// Platform-specific identifier for the parent (image ARN, sandbox group id, namespace)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
-    /// Data-plane endpoint sessions are created through, where the platform has one
+    /// Data-plane endpoint sandboxes are created through, where the platform has one
     #[serde(skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<String>,
 }
@@ -1210,9 +1213,9 @@ mod tests {
                 max_processes: None,
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .preview_ports(preview_ports)
             .build()
@@ -1279,7 +1282,7 @@ mod tests {
         let gcp = SandboxCapabilities::for_platform(Platform::Gcp).expect("gcp is supported");
         assert!(
             gcp.reconnect,
-            "generation from the container boot id makes a session reachable across processes"
+            "generation from the container boot id makes a sandbox reachable across processes"
         );
         assert!(!gcp.preview);
         assert!(gcp.enforced_limits);
@@ -1294,7 +1297,7 @@ mod tests {
         // The data plane honours a continuous cpu/memory/disk surface and refuses anything
         // outside `n×250m`, with the rule in the message.
         assert!(azure.enforced_limits);
-        assert!(azure.suspend_resume);
+        assert!(azure.pause_resume);
         // Both stay false for reasons that are not "unbuilt": a snapshot id has nothing to
         // consume it on any backend, and an Azure port's auth is anonymous or a human allowlist,
         // neither of which is a port-scoped credential.
@@ -1302,14 +1305,14 @@ mod tests {
         assert!(!azure.preview);
 
         let aws = SandboxCapabilities::for_platform(Platform::Aws).expect("aws is supported");
-        assert!(!aws.snapshot, "AWS has no user-callable session snapshot");
-        assert!(aws.suspend_resume);
+        assert!(!aws.snapshot, "AWS has no user-callable sandbox snapshot");
+        assert!(aws.pause_resume);
 
         let k8s =
             SandboxCapabilities::for_platform(Platform::Kubernetes).expect("k8s is supported");
         assert!(
             !k8s.preview,
-            "the session-scoped ingress gateway does not exist yet"
+            "the sandbox-scoped ingress gateway does not exist yet"
         );
     }
 
@@ -1378,10 +1381,10 @@ mod tests {
     fn gcp_agent_platform_row_matches_measured_backend() {
         let row = SandboxCapabilities::gcp_agent_platform();
 
-        assert!(row.files, "agent file ops move over the session envelope");
+        assert!(row.files, "agent file ops move over the sandbox envelope");
         assert!(
             row.reconnect,
-            "generation is derived from the container boot id, so a session is reachable across \
+            "generation is derived from the container boot id, so a sandbox is reachable across \
              processes"
         );
         assert!(
@@ -1389,7 +1392,7 @@ mod tests {
             "the only ingress is :execute; no port-scoped capability"
         );
         assert!(
-            row.suspend_resume,
+            row.pause_resume,
             ":pause and :resume preserve the container"
         );
         assert!(
@@ -1406,10 +1409,10 @@ mod tests {
         );
         assert!(
             row.enforced_limits,
-            "ceilings are enforced, by terminating the session on breach"
+            "ceilings are enforced, by terminating the sandbox on breach"
         );
         assert!(!row.process_limit, "no process-count ceiling is observed");
-        assert!(row.session_lifetime, "ttl maps to a session expireTime");
+        assert!(row.sandbox_lifetime, "ttl maps to a sandbox expireTime");
         assert!(!row.supervisor_pid_namespace, "no PID-namespace isolation");
         assert!(
             !row.supervisor_isolation,
@@ -1508,9 +1511,9 @@ mod tests {
                 image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 
@@ -1529,9 +1532,9 @@ mod tests {
                 image: "alpine".to_string(),
             })
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 
@@ -1545,7 +1548,7 @@ mod tests {
 
     /// Pins Azure's own sizing rule: `250m`, `1500m` and `4000m` are valid, `32000m` and `333m`
     /// are refused. Checked at plan time so a bad value is a declaration to fix, not a package
-    /// that renders without error and dies at the first session.
+    /// that renders without error and dies at the first sandbox.
     #[test]
     fn azure_sizes_follow_the_rule_the_data_plane_states() {
         let sized = |cpu: &str, memory: &str, disk: &str| {
@@ -1564,7 +1567,7 @@ mod tests {
         sized("4000m", "8192Mi", "40960Mi").expect("cpu, memory and disk are all honoured");
         sized("16000m", "32Gi", "320Gi").expect("the top of the range");
 
-        // Same off-step case `azure_session_limits` checks the multiple for, not just the range.
+        // Same off-step case `azure_sandbox_limits` checks the multiple for, not just the range.
         let off_step = sized("333m", "512Mi", "5120Mi").expect_err("333m is not a step of 250m");
         assert_eq!(off_step.code, "SANDBOX_LIMIT_INVALID", "{off_step}");
         assert!(off_step.to_string().contains("cpu"), "{off_step}");
@@ -1677,14 +1680,14 @@ mod tests {
     }
 
     /// Lambda rejects a run outside 1–28,800 rather than clamping it, so a value beyond that
-    /// would pass planning, render into the package, and fail at the first session. Kubernetes
+    /// would pass planning, render into the package, and fail at the first sandbox. Kubernetes
     /// takes the same field with no such bound, so the check is AWS's alone.
     #[test]
     fn a_lifetime_aws_would_reject_is_refused_while_planning() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
 
         for seconds in [0, 28_801, 100_000] {
-            sandbox.session.max_lifetime_seconds = Some(seconds);
+            sandbox.lifecycle.max_lifetime_seconds = Some(seconds);
             let error = sandbox
                 .validate_for_platform(Platform::Aws)
                 .expect_err("a lifetime outside what AWS runs is refused");
@@ -1696,13 +1699,13 @@ mod tests {
                 .expect("the kubelet takes any activeDeadlineSeconds");
         }
 
-        sandbox.session.max_lifetime_seconds = Some(28_800);
+        sandbox.lifecycle.max_lifetime_seconds = Some(28_800);
         sandbox
             .validate_for_platform(Platform::Aws)
             .expect("the ceiling itself is allowed");
     }
 
-    /// An image reference Azure cannot honour is refused while planning, not at the first session.
+    /// An image reference Azure cannot honour is refused while planning, not at the first sandbox.
     ///
     /// `code.image`'s own documentation gives a tag and a registry path as examples — exactly
     /// what Azure cannot take, so this is the shape a customer is most likely to declare.
@@ -1761,9 +1764,9 @@ mod tests {
     /// `activeDeadlineSeconds` and Lambda's `maximumDurationInSeconds`. Everywhere else it would
     /// need a reaper that does not exist, so it is refused rather than accepted and dropped.
     #[test]
-    fn a_session_deadline_is_accepted_only_where_the_platform_applies_it() {
+    fn a_sandbox_deadline_is_accepted_only_where_the_platform_applies_it() {
         let mut sandbox = sandbox_with(SandboxEgress::Deny, vec![]);
-        sandbox.session.max_lifetime_seconds = Some(3600);
+        sandbox.lifecycle.max_lifetime_seconds = Some(3600);
 
         sandbox
             .validate_for_platform(Platform::Kubernetes)
@@ -1869,9 +1872,9 @@ mod tests {
                 },
             })
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 
@@ -1912,7 +1915,7 @@ mod tests {
             "code": {"type": "image", "image": "ubuntu:24.04"},
             "limits": {"cpu": "1", "memory": "2Gi", "disk": "20Gi"},
             "egress": {"mode": "deny"},
-            "session": {},
+            "lifecycle": {},
             "unexpected": true
         }"#;
 
@@ -1947,9 +1950,9 @@ mod tests {
                     .expect("the fixture declares limits"),
             )
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 
@@ -1961,38 +1964,38 @@ mod tests {
             .expect_err("renaming a sandbox is not an update");
     }
 
-    /// Azure declares an idle-suspend policy but not a wall-clock ceiling.
+    /// Azure declares an idle-pause policy but not a wall-clock ceiling.
     ///
-    /// The two travel together in `SandboxSessionPolicy` and are gated separately on purpose:
-    /// Azure suspends on idle and has no maximum lifetime, so accepting one and refusing the
+    /// The two travel together in `SandboxLifecyclePolicy` and are gated separately on purpose:
+    /// Azure pauses on idle and has no maximum lifetime, so accepting one and refusing the
     /// other is the honest split rather than an inconsistency.
     #[test]
     fn azure_takes_an_idle_policy_and_still_refuses_a_lifetime_ceiling() {
-        let with_policy = |session: SandboxSessionPolicy| {
+        let with_policy = |lifecycle: SandboxLifecyclePolicy| {
             Sandbox::new("sbx".to_string())
                 .code(SandboxCode::Image {
                     image: "ubuntu".to_string(),
                 })
                 .egress(SandboxEgress::Allow)
-                .session(session)
+                .lifecycle(lifecycle)
                 .build()
                 .validate_for_platform(Platform::Azure)
         };
 
-        with_policy(SandboxSessionPolicy {
+        with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: Some(900),
+            idle_pause_seconds: Some(900),
         })
-        .expect("Azure suspends a session on idle");
+        .expect("Azure pauses a sandbox on idle");
 
-        let error = with_policy(SandboxSessionPolicy {
+        let error = with_policy(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(3600),
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .expect_err("Azure has no wall-clock ceiling to enforce one with");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
         assert!(
-            error.message.contains("sessionLifetime"),
+            error.message.contains("sandboxLifetime"),
             "names the capability: {}",
             error.message
         );
@@ -2011,9 +2014,9 @@ mod tests {
                     image: "ubuntu".to_string(),
                 })
                 .egress(SandboxEgress::AllowDomains { domains })
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build()
                 .validate_for_platform(Platform::Azure)

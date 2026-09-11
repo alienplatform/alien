@@ -1,9 +1,9 @@
-//! Sandbox session capabilities: what the manager mints and the agent verifies.
+//! Sandbox sandbox capabilities: what the manager mints and the agent verifies.
 //!
 //! Lives here because both sides need identical rules, and a mismatch between minting and
 //! verification is a security bug that only shows up as "it works" until it does not.
 //!
-//! A capability is scoped to **one session and one operation class**. Provider ids and hostnames
+//! A capability is scoped to **one sandbox and one operation class**. Provider ids and hostnames
 //! are guessable, so neither is authorisation.
 
 use serde::{Deserialize, Serialize};
@@ -17,9 +17,9 @@ use alien_error::AlienError;
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxOperationClass {
-    /// Running commands and moving files inside an existing session
+    /// Running commands and moving files inside an existing sandbox
     Execute,
-    /// Creating and terminating sessions
+    /// Creating and terminating sandboxes
     Manage,
 }
 
@@ -28,11 +28,11 @@ pub enum SandboxOperationClass {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxCapabilityClaims {
-    /// Session this capability addresses
+    /// Sandbox this capability addresses
     pub session_id: String,
     /// Operation class permitted
     pub operation: SandboxOperationClass,
-    /// Lifecycle generation the session started under
+    /// Lifecycle generation the sandbox started under
     pub generation: u64,
     /// Unix seconds after which the capability is void
     pub expires_at: i64,
@@ -40,10 +40,10 @@ pub struct SandboxCapabilityClaims {
     pub key_id: String,
 }
 
-/// What the agent knows about itself, established at session start.
+/// What the agent knows about itself, established at sandbox start.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SandboxSessionIdentity {
-    /// The session this agent serves
+    /// The sandbox this agent serves
     pub session_id: String,
     /// The generation it started under
     pub generation: u64,
@@ -54,17 +54,17 @@ impl SandboxCapabilityClaims {
     ///
     /// Signature checking happens before this — an unsigned claim never reaches here. What this
     /// enforces is everything a valid signature does *not* prove: that the capability is for
-    /// this session, this generation, this operation, and still in date.
+    /// this sandbox, this generation, this operation, and still in date.
     pub fn verify(
         &self,
         identity: &SandboxSessionIdentity,
         required: SandboxOperationClass,
         now_unix: i64,
     ) -> Result<()> {
-        // Session first: a capability for another session is the case that matters most, and
+        // Sandbox first: a capability for another sandbox is the case that matters most, and
         // reporting expiry for it would tell an attacker the wrong thing.
         if self.session_id != identity.session_id {
-            return Err(refused("this capability addresses a different session"));
+            return Err(refused("this capability addresses a different sandbox"));
         }
 
         // A running agent cannot observe a generation changed outside it, so terminate fences
@@ -80,7 +80,7 @@ impl SandboxCapabilityClaims {
         }
 
         // Execute does not imply Manage. Manage does not imply Execute either: the whole point
-        // of the split is that an app which only runs code cannot terminate sessions.
+        // of the split is that an app which only runs code cannot terminate sandboxes.
         if self.operation != required {
             return Err(refused(
                 "this capability does not permit this operation class",
@@ -124,11 +124,11 @@ mod tests {
     fn a_matching_capability_is_accepted() {
         claims()
             .verify(&identity(), SandboxOperationClass::Execute, NOW)
-            .expect("a capability for this session, generation and class is valid");
+            .expect("a capability for this sandbox, generation and class is valid");
     }
 
     /// The case that matters most: provider ids are guessable, so a capability
-    /// minted for one session must be useless against another.
+    /// minted for one sandbox must be useless against another.
     #[test]
     fn a_capability_for_another_session_is_refused() {
         let mut other = claims();
@@ -136,8 +136,8 @@ mod tests {
 
         let error = other
             .verify(&identity(), SandboxOperationClass::Execute, NOW)
-            .expect_err("session B must not accept session A's capability");
-        assert!(error.to_string().contains("different session"));
+            .expect_err("sandbox B must not accept sandbox A's capability");
+        assert!(error.to_string().contains("different sandbox"));
     }
 
     /// Terminate bumps the generation; anything minted before is void even if
@@ -164,7 +164,7 @@ mod tests {
     }
 
     /// The split only means something if it holds in both directions. An execute-only app must
-    /// not terminate sessions, and a manage-only component must not read session contents.
+    /// not terminate sandboxes, and a manage-only component must not read sandbox contents.
     #[test]
     fn operation_classes_do_not_imply_each_other() {
         claims()
@@ -179,7 +179,7 @@ mod tests {
     }
 
     /// Checked before expiry on purpose: telling a caller "expired" for a capability that was
-    /// never theirs leaks which sessions exist.
+    /// never theirs leaks which sandboxes exist.
     #[test]
     fn a_wrong_session_is_reported_as_wrong_session_even_when_also_expired() {
         let mut wrong = claims();
@@ -190,8 +190,8 @@ mod tests {
             .verify(&identity(), SandboxOperationClass::Execute, NOW)
             .expect_err("refused");
         assert!(
-            error.to_string().contains("different session"),
-            "the reason must not reveal that some other session's capability had expired"
+            error.to_string().contains("different sandbox"),
+            "the reason must not reveal that some other sandbox's capability had expired"
         );
     }
 

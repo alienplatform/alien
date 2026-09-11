@@ -3,8 +3,8 @@
  *
  * Only the paths that need no cloud credentials and no running sandbox are covered here: how a
  * binding is resolved from the environment, and what a caller sees when one is missing or
- * malformed. Creating a session needs a backend — Local needs Docker, and the four cloud backends
- * need real credentials — so session behaviour is covered by `crates/alien-local/tests/` against
+ * malformed. Creating a sandbox needs a backend — Local needs Docker, and the four cloud backends
+ * need real credentials — so sandbox behaviour is covered by `crates/alien-local/tests/` against
  * real Docker and by the e2e apps against a deployed stack.
  *
  * The value of this file is the boundary the other suites skip: an unconfigured or wrong-shaped
@@ -46,7 +46,7 @@ describe("sandbox binding resolution", () => {
   })
 
   it("refuses an AWS binding that is missing a required field", async () => {
-    // imageVersion is load-bearing: image plus version is the session identity, so a binding
+    // imageVersion is load-bearing: image plus version is the sandbox identity, so a binding
     // without it would enumerate the wrong scope rather than fail.
     setBinding("sandbox-incomplete", {
       provider: "aws",

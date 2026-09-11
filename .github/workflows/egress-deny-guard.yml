@@ -101,7 +101,7 @@ jobs:
                   "id": "probe",
                   "code": { "type": "image", "image": "s3://$ARTIFACT_BUCKET/$BUNDLE_KEY" },
                   "egress": { "mode": "deny" },
-                  "session": {}
+                  "lifecycle": {}
                 },
                 "lifecycle": "frozen",
                 "dependencies": [],

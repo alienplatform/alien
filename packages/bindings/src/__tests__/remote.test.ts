@@ -54,17 +54,17 @@ function fakeRemoteAddon() {
     decrypt: async ciphertext => ciphertext,
   }
   const resolveKey = vi.fn<(name: string) => Promise<RawKeyHandle>>(async () => key)
-  const session = (sessionId: string | null | undefined) => ({
-    sessionId: sessionId ?? "generated",
+  const instance = (sandboxId: string | null | undefined) => ({
+    sandboxId: sandboxId ?? "generated",
     state: "running",
     generation: 1,
   })
   const terminate = vi.fn<RawSandboxHandle["terminate"]>(async () => {})
   const sandbox: RawSandboxHandle = {
     capabilities: () => ["files", "reconnect"],
-    create: async sessionId => session(sessionId),
+    create: async sandboxId => instance(sandboxId),
     get: async () => null,
-    getOrCreate: async sessionId => ({ session: session(sessionId), created: false }),
+    getOrCreate: async sandboxId => ({ sandbox: instance(sandboxId), created: false }),
     list: async () => [],
     runCommand: async () => {
       throw new Error("unused")
@@ -72,10 +72,9 @@ function fakeRemoteAddon() {
     startJob: async () => "j1",
     pollJob: async () => ({ running: false, frames: [], exit: { code: 0, truncated: false } }),
     cancelJob: async () => {},
-    readFile: async (_sessionId, path) => Buffer.from(path),
+    readFile: async (_sandboxId, path) => Buffer.from(path),
     writeFile: async () => {},
-    mkdir: async () => {},
-    suspend: async () => {},
+    pause: async () => {},
     resume: async () => {},
     terminate,
   }
@@ -293,8 +292,7 @@ describe("Bindings.forRemoteDeployment", () => {
         "cancelJob",
         "readFile",
         "writeFiles",
-        "mkdir",
-        "suspend",
+        "pause",
         "resume",
         "terminate",
       ].sort(),

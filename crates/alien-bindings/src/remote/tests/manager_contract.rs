@@ -403,7 +403,7 @@ fn sandbox_lease_body(
             "imageVersion": "7",
             "region": "us-east-1",
             "previewPorts": preview_ports,
-            "idleSuspendSeconds": 300,
+            "idlePauseSeconds": 300,
             "maxLifetimeSeconds": 3600,
             "allowEgress": allow_egress,
         },
@@ -478,7 +478,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_aws_provide
     assert_eq!(binding.image_version, value("7"));
     assert_eq!(binding.region, value("us-east-1"));
     assert_eq!(binding.preview_ports, vec![8080, 3000]);
-    assert_eq!(binding.idle_suspend_seconds, Some(300));
+    assert_eq!(binding.idle_pause_seconds, Some(300));
     assert_eq!(binding.max_lifetime_seconds, Some(3600));
     assert!(binding.allow_egress);
     assert_eq!(binding.execution_role_arn, None);
@@ -544,6 +544,52 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_aws_provide
     );
 }
 
+/// A ceiling under a name this binding does not know fails the whole lease rather than being
+/// dropped from it. The generated binding denies unknown fields, and that is the difference
+/// between a loud refusal and a sandbox running without the wall-clock ceiling its declaration
+/// asked for. The two names below are what a manager built against an earlier contract sends.
+#[tokio::test]
+async fn a_sandbox_lease_naming_a_ceiling_the_binding_does_not_know_is_refused() {
+    for (current, stale) in [
+        ("idlePauseSeconds", "idleSuspendSeconds"),
+        ("maxLifetimeSeconds", "sessionTtlSeconds"),
+    ] {
+        let expires_at = Utc::now() + ChronoDuration::minutes(5);
+        let mut body = sandbox_lease_body(expires_at, json!([8080]), true);
+        let binding = body["binding"]
+            .as_object_mut()
+            .expect("the sandbox lease carries a binding object");
+        let seconds = binding
+            .remove(current)
+            .unwrap_or_else(|| panic!("the fixture declares {current}"));
+        binding.insert(stale.to_string(), seconds);
+
+        let manager_url = spawn_generated_contract_server(GeneratedContractState {
+            response: Arc::new(StdRwLock::new((StatusCode::OK, body))),
+            requests: Arc::new(StdMutex::new(Vec::new())),
+        })
+        .await;
+        let bindings = RemoteBindings::from_manager_access(
+            DEPLOYMENT_ID,
+            &manager_url,
+            GENERATED_MANAGER_TOKEN,
+            expires_at,
+        )
+        .expect("construct bindings from assigned Manager access");
+
+        let error = bindings
+            .sandbox("agent")
+            .await
+            .expect_err("a ceiling under an unknown name must not resolve");
+        assert_eq!(error.code, "INVALID_RESPONSE_PAYLOAD", "{stale}: {error}");
+        let rendered = format!("{error}");
+        assert!(
+            rendered.contains(stale) && rendered.contains(current),
+            "the refusal must name the field it did not expect and the one it wanted: {rendered}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn remote_sandbox_lease_is_refused_when_it_declares_restricted_egress() {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
@@ -565,7 +611,7 @@ async fn remote_sandbox_lease_is_refused_when_it_declares_restricted_egress() {
     .expect("construct bindings from assigned Manager access");
 
     // The remote contract carries no connectors, so `allowEgress: false` describes a sandbox
-    // whose sessions would start unrouted and reach the internet.
+    // whose sandboxes would start unrouted and reach the internet.
     let error = bindings
         .sandbox("agent")
         .await
@@ -620,7 +666,7 @@ fn azure_sandbox_lease_body(expires_at: DateTime<Utc>, allow_egress: bool) -> se
             "resourceGroup": "acme-rg",
             "diskImage": "ubuntu",
             "allowEgress": allow_egress,
-            "idleSuspendSeconds": 300,
+            "idlePauseSeconds": 300,
             "cpu": "1000m",
             "memory": "2048Mi",
             "disk": "20480Mi",
@@ -687,7 +733,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_azure_provi
     assert_eq!(binding.resource_group, value("acme-rg"));
     assert_eq!(binding.disk_image, value("ubuntu"));
     assert_eq!(binding.egress, alien_core::SandboxEgress::Allow);
-    assert_eq!(binding.idle_suspend_seconds, Some(300));
+    assert_eq!(binding.idle_pause_seconds, Some(300));
     assert_eq!(binding.cpu, Some(value("1000m")));
     assert_eq!(binding.memory, Some(value("2048Mi")));
     assert_eq!(binding.disk, Some(value("20480Mi")));
@@ -742,8 +788,8 @@ async fn an_azure_sandbox_lease_without_open_egress_is_refused() {
 }
 
 /// The GCP arm of the same contract, decoded through the **generated** client. Both names a
-/// session is addressed by — engine and template — must survive the trip: created without the
-/// template, a session runs an unpinned image with none of the declared limits or egress applied.
+/// sandbox is addressed by — engine and template — must survive the trip: created without the
+/// template, a sandbox runs an unpinned image with none of the declared limits or egress applied.
 #[tokio::test]
 async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provider() {
     let expires_at = Utc::now() + ChronoDuration::minutes(5);
@@ -756,7 +802,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provide
                 "engine": engine,
                 "template": format!("{engine}/sandboxEnvironmentTemplates/7"),
                 "region": "us-central1",
-                "sessionTtlSeconds": 3600,
+                "maxLifetimeSeconds": 3600,
             },
             "clientConfig": {
                 "projectId": "acme",
@@ -804,7 +850,7 @@ async fn remote_sandbox_decodes_every_declared_field_and_reaches_the_gcp_provide
         value(&format!("{engine}/sandboxEnvironmentTemplates/7"))
     );
     assert_eq!(binding.region, value("us-central1"));
-    assert_eq!(binding.session_ttl_seconds, Some(3600));
+    assert_eq!(binding.max_lifetime_seconds, Some(3600));
     assert_eq!(client_config.project_id, "acme");
     assert!(client_config.service_overrides.is_none());
     let alien_core::GcpCredentials::AccessToken { token } = client_config.credentials else {

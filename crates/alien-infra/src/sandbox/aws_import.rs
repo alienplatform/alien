@@ -46,8 +46,8 @@ impl ResourceImporter for AwsSandboxImporter {
             egress_connector_arns: data.egress_connector_arns,
             allow_egress: data.allow_egress,
             preview_ports: data.preview_ports,
-            idle_suspend_seconds: sandbox.session.idle_suspend_seconds,
-            max_lifetime_seconds: sandbox.session.max_lifetime_seconds,
+            idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
+            max_lifetime_seconds: sandbox.lifecycle.max_lifetime_seconds,
             ..Default::default()
         };
 

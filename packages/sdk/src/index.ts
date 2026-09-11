@@ -68,7 +68,7 @@ export type {
   Queue,
   RunCommandOptions,
   Sandbox,
-  SandboxSession,
+  SandboxInstance,
   Storage,
   Vault,
 } from "@alienplatform/bindings"

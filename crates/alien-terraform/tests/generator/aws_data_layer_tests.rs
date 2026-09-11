@@ -8,7 +8,7 @@
 use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, Key, Kv, LifecycleRule, Network, NetworkSettings, PermissionProfile, Queue, RemoteBindings,
-    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy,
+    ResourceLifecycle, ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
     ServiceAccount, Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::TerraformTarget;
@@ -399,9 +399,9 @@ fn aws_remote_sandbox_grants_the_access_identity_its_own_image_and_nothing_wider
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
         })
         .egress(SandboxEgress::Allow)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -487,9 +487,9 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
             image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
         })
         .egress(SandboxEgress::Deny)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build();
     let stack = Stack::new("byo-sandbox-deny".to_string())
@@ -544,9 +544,9 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
                     image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
                 })
                 .egress(SandboxEgress::Allow)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

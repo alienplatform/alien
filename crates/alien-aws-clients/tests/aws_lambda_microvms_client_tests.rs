@@ -146,7 +146,7 @@ async fn exec_in(
     let mut request = Client::new()
         .post(format!("https://{endpoint}/v1/exec"))
         .header("X-aws-proxy-port", "8971")
-        .json(&serde_json::json!({"command": command, "deadlineMs": 10000}));
+        .json(&serde_json::json!({"command": command, "timeoutMs": 10000}));
     for (name, value) in token.auth_token {
         request = request.header(name, value);
     }

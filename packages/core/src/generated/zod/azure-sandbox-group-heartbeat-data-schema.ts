@@ -7,7 +7,7 @@ import * as z from "zod";
 import { SandboxHeartbeatStatusSchema } from "./sandbox-heartbeat-status-schema.js";
 
 /**
- * @description Azure: the sandbox group\'s ARM state. The data plane has no list operation, so a session count\nis not available here.
+ * @description Azure: the sandbox group\'s ARM state. The data plane has no list operation, so a sandbox count\nis not available here.
  */
 export const AzureSandboxGroupHeartbeatDataSchema = z.object({
     "provisioningState": z.string().nullish(),
@@ -15,6 +15,6 @@ export const AzureSandboxGroupHeartbeatDataSchema = z.object({
 get "status"(){
                 return SandboxHeartbeatStatusSchema
               }
-    }).describe("Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count\nis not available here.")
+    }).describe("Azure: the sandbox group's ARM state. The data plane has no list operation, so a sandbox count\nis not available here.")
 
 export type AzureSandboxGroupHeartbeatData = z.infer<typeof AzureSandboxGroupHeartbeatDataSchema>

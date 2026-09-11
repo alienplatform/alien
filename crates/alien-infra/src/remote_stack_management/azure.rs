@@ -1140,9 +1140,9 @@ mod tests {
                 image: "ubuntu".to_string(),
             })
             .egress(SandboxEgress::Allow)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
         let stack = alien_core::Stack::new("byo-sandbox".to_string())
@@ -1171,9 +1171,9 @@ mod tests {
                         image: "ubuntu".to_string(),
                     })
                     .egress(SandboxEgress::Allow)
-                    .session(alien_core::SandboxSessionPolicy {
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

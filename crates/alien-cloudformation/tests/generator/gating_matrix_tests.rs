@@ -13,7 +13,7 @@ use alien_cloudformation::{CfRegistry, CloudFormationTarget};
 use alien_core::{
     ownership_policy_for_resource_type, Ai, AwsOpenSearch, Email, EmailInbound, Key, Kv, Network,
     NetworkSettings, PermissionProfile, Platform, Queue, ResourceLifecycle, ResourceRef, Sandbox,
-    SandboxCode, SandboxEgress, SandboxLimits, SandboxSessionPolicy, ServiceAccount, Stack,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SandboxLimits, ServiceAccount, Stack,
     StackSettings, Storage, Vault, Worker, WorkerCode,
 };
 use std::collections::HashMap;
@@ -83,9 +83,9 @@ fn gated_fixture(resource_type: &str) -> Option<(Stack, StackSettings)> {
                         max_processes: None,
                     })
                     .egress(SandboxEgress::Deny)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

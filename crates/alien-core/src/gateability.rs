@@ -214,7 +214,7 @@ mod tests {
         }
     }
 
-    /// A sandbox declaration is the image and its pool, never a session — sessions are created at
+    /// A sandbox declaration is the image and its pool, never a sandbox — sandboxes are created at
     /// runtime and cleaned up with the parent, so neither gate sits on one. Both lifecycles gate
     /// because both are real: Frozen bakes the image at stack creation, Live builds it at runtime.
     #[test]

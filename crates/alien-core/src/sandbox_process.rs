@@ -39,7 +39,7 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024;
 /// Port the agent listens on inside a sandbox.
 ///
 /// Defined once because two independent copies are a runtime-only failure: the image build places
-/// the agent on one port and the client dials the other, and nothing catches it until a session
+/// the agent on one port and the client dials the other, and nothing catches it until a sandbox
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
@@ -125,7 +125,7 @@ async fn kill_all(child: &mut Child) {
 /// Spawns untrusted code with a fresh environment: `PATH`, plus `environment` and nothing else.
 ///
 /// The ambient environment is not inherited. The agent's own environment names its port, its
-/// session root and its session id, so passing it down hands untrusted code a map to the API that
+/// sandbox root and its sandbox id, so passing it down hands untrusted code a map to the API that
 /// is running it — along with whatever else the runtime happened to set.
 pub fn spawn_sandboxed(
     program: &str,
@@ -227,7 +227,7 @@ pub async fn stream(
         Err(_) => {
             kill_all(&mut child).await;
             ProcessFrame::Failed {
-                code: "deadlineExceeded",
+                code: "timeoutExceeded",
                 message: format!("exceeded its {}ms deadline", deadline.as_millis()),
             }
         }
@@ -376,7 +376,7 @@ mod tests {
     }
 
     /// A deadline that reaches only the direct child is not a deadline: the command backgrounds a
-    /// process and returns, and that process keeps the session's CPU and files after the caller
+    /// process and returns, and that process keeps the sandbox's CPU and files after the caller
     /// was told the command was killed.
     #[tokio::test]
     #[cfg(unix)]
@@ -402,7 +402,7 @@ mod tests {
             matches!(
                 terminal(&frames),
                 ProcessFrame::Failed {
-                    code: "deadlineExceeded",
+                    code: "timeoutExceeded",
                     ..
                 }
             ),
@@ -538,7 +538,7 @@ mod tests {
         assert!(matches!(
             terminal(&frames),
             ProcessFrame::Failed {
-                code: "deadlineExceeded",
+                code: "timeoutExceeded",
                 ..
             }
         ));

@@ -81,7 +81,7 @@ pub fn sandbox_pod(
             restart_policy: Some("Never".to_string()),
             // The kubelet kills the pod at the deadline, so the ceiling holds even if whatever
             // created the session never comes back to terminate it.
-            active_deadline_seconds: sandbox.session.max_lifetime_seconds.map(i64::from),
+            active_deadline_seconds: sandbox.lifecycle.max_lifetime_seconds.map(i64::from),
             enable_service_links: Some(false),
             security_context: Some(PodSecurityContext {
                 run_as_non_root: Some(true),
@@ -175,7 +175,7 @@ pub fn capability_environment(public_key_base64: &str) -> Vec<EnvVar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{SandboxEgress, SandboxLimits, SandboxSessionPolicy};
+    use alien_core::{SandboxEgress, SandboxLifecyclePolicy, SandboxLimits};
 
     fn sandbox(egress: SandboxEgress) -> Sandbox {
         Sandbox::new("agent".to_string())
@@ -189,9 +189,9 @@ mod tests {
                 max_processes: None,
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(3600),
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build()
     }
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn a_pod_without_a_declared_deadline_carries_none() {
         let mut config = sandbox(SandboxEgress::Deny);
-        config.session.max_lifetime_seconds = None;
+        config.lifecycle.max_lifetime_seconds = None;
         let pod = sandbox_pod(&config, "s1", "sbx", "gvisor", None, None);
         assert_eq!(pod.spec.expect("a spec").active_deadline_seconds, None);
     }

@@ -46,7 +46,7 @@ use alien_core::{
     ManagementConfig, Network, NetworkSettings, Platform, Queue, RemoteBindings,
     RemoteBindingsOutputs, RemoteStackManagement, RemoteStackManagementOutputs, Resource,
     ResourceDefinition, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceStatus,
-    ResourceType, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount,
+    ResourceType, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     ServiceActivation, StackSettings, Storage, Vault, Worker,
 };
 use alien_infra::{ImporterRegistry, StackResourceStateExt};
@@ -1200,9 +1200,9 @@ fn sandbox_resource() -> Sandbox {
             image: "manager.example.com/alien-artifacts-proj:base".to_string(),
         })
         .egress(SandboxEgress::Deny)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: Some(1800),
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build()
 }

@@ -11,18 +11,18 @@ import { KubernetesSandboxHeartbeatDataSchema } from "./kubernetes-sandbox-heart
 import { LocalSandboxHeartbeatDataSchema } from "./local-sandbox-heartbeat-data-schema.js";
 
 /**
- * @description Content-free telemetry about a sandbox\'s sessions.\n\nNever anything from inside a session. A controller reaches only the cloud\'s management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.
+ * @description Content-free telemetry about what a sandbox resource is running.\n\nNever anything from inside a sandbox. A controller reaches only the cloud\'s management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.
  */
 export const SandboxHeartbeatDataSchema = z.union([z.lazy(() => AwsMicrovmSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["awsMicrovm"])
     })).describe("AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it."), z.lazy(() => AzureSandboxGroupHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["azureSandboxGroup"])
-    })).describe("Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count\nis not available here."), z.lazy(() => GcpAgentPlatformSandboxHeartbeatDataSchema).and(z.object({
+    })).describe("Azure: the sandbox group's ARM state. The data plane has no list operation, so a sandbox count\nis not available here."), z.lazy(() => GcpAgentPlatformSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["gcpAgentPlatform"])
-    })).describe("GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.\n\nNo session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management\npermission set holds. No template state either — emission is gated on reading it `ACTIVE`,\nwhich is what `status` already says."), z.lazy(() => KubernetesSandboxHeartbeatDataSchema).and(z.object({
+    })).describe("GCP: the Agent Platform template sandboxes are cut from, and the engine it hangs under.\n\nNo sandbox count: that needs `aiplatform.sandboxEnvironments.list`, which only the management\npermission set holds. No template state either — emission is gated on reading it `ACTIVE`,\nwhich is what `status` already says."), z.lazy(() => KubernetesSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["kubernetesPods"])
     })).describe("Kubernetes: pods carrying the sandbox label, in the deployment's namespace."), z.lazy(() => LocalSandboxHeartbeatDataSchema).and(z.object({
     "backend": z.enum(["local"])
-    })).describe("Local: containers Docker still holds for this sandbox.")]).describe("Content-free telemetry about a sandbox's sessions.\n\nNever anything from inside a session. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
+    })).describe("Local: containers Docker still holds for this sandbox.")]).describe("Content-free telemetry about what a sandbox resource is running.\n\nNever anything from inside a sandbox. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
 
 export type SandboxHeartbeatData = z.infer<typeof SandboxHeartbeatDataSchema>

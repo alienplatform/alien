@@ -2,7 +2,7 @@
 //!
 //! AWS and Kubernetes both talk to the same agent over HTTP and differ in exactly one thing:
 //! how a request is authorized. AWS mints an endpoint token scoped to one MicroVM and an
-//! explicit port set; Kubernetes claims a pod and presents a capability scoped to that session. So
+//! explicit port set; Kubernetes claims a pod and presents a capability scoped to that sandbox. So
 //! the transport is the trait and the protocol is written once over it.
 //!
 //! The decoding is the reason this is shared rather than copied. A body that ends without a
@@ -46,15 +46,15 @@ const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(test)]
 const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
 
-/// How a backend turns a session id into an authorized request.
+/// How a backend turns a sandbox id into an authorized request.
 ///
 /// The only thing AWS and Kubernetes disagree on.
 #[async_trait]
 pub trait AgentTransport: Send + Sync + std::fmt::Debug {
-    /// Builds a request to `path` on the session's agent, carrying whatever authorizes it.
+    /// Builds a request to `path` on the sandbox's agent, carrying whatever authorizes it.
     async fn request(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder>;
@@ -122,14 +122,14 @@ struct JobErrorResponse {
 /// Runs a command, streaming frames as the agent produces them.
 pub async fn run_command<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     request: RunCommandRequest,
 ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
     let body = exec_body(&request)?;
 
     let response = send(
         transport
-            .request(session_id, reqwest::Method::POST, "/v1/exec")
+            .request(sandbox_id, reqwest::Method::POST, "/v1/exec")
             .await?
             .json(&body),
         RUN_COMMAND,
@@ -142,14 +142,14 @@ pub async fn run_command<T: AgentTransport + ?Sized>(
 /// Starts a command as a job the agent owns until it is polled to its end or cancelled.
 pub async fn start_job<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     request: RunCommandRequest,
 ) -> Result<JobStart> {
     let body = exec_body(&request)?;
 
     let response = send(
         transport
-            .request(session_id, reqwest::Method::POST, "/v1/jobs/start")
+            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/start")
             .await?
             .json(&body),
         JOB_START,
@@ -181,13 +181,13 @@ pub async fn start_job<T: AgentTransport + ?Sized>(
 /// Reads a job's output after `since_seq`, and its ending once it has one.
 pub async fn poll_job<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     job_id: &str,
     since_seq: Option<u64>,
 ) -> Result<JobPoll> {
     let response = send(
         transport
-            .request(session_id, reqwest::Method::POST, "/v1/jobs/poll")
+            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/poll")
             .await?
             .json(&json!({ "jobId": job_id, "sinceSeq": since_seq })),
         JOB_POLL,
@@ -226,12 +226,12 @@ pub async fn poll_job<T: AgentTransport + ?Sized>(
 /// Cancels a job, stopping the command it runs.
 pub async fn cancel_job<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     job_id: &str,
 ) -> Result<()> {
     send(
         transport
-            .request(session_id, reqwest::Method::POST, "/v1/jobs/cancel")
+            .request(sandbox_id, reqwest::Method::POST, "/v1/jobs/cancel")
             .await?
             .json(&json!({ "jobId": job_id })),
         JOB_CANCEL,
@@ -243,19 +243,19 @@ pub async fn cancel_job<T: AgentTransport + ?Sized>(
 
 /// The body `/v1/exec` and `/v1/jobs/start` both take.
 fn exec_body(request: &RunCommandRequest) -> Result<serde_json::Value> {
-    // Checked after conversion, not on the Duration: a sub-millisecond deadline is non-zero here
-    // and floors to `deadlineMs: 0`, which the agent then refuses as invalid.
-    if deadline_millis(request.deadline) == 0 {
+    // Checked after conversion, not on the Duration: a sub-millisecond timeout is non-zero here
+    // and floors to `timeoutMs: 0`, which the agent then refuses as invalid.
+    if timeout_millis(request.timeout) == 0 {
         return Err(AlienError::new(ErrorData::SandboxCommandFailed {
             failure: "invalidRequest".to_string(),
-            reason: "a command must carry a non-zero deadline".to_string(),
+            reason: "a command must carry a non-zero timeout".to_string(),
         }));
     }
 
     Ok(json!({
-        "command": request.command,
-        "deadlineMs": deadline_millis(request.deadline),
-        "workingDirectory": request.working_directory,
+        "command": request.argv(),
+        "timeoutMs": timeout_millis(request.timeout),
+        "cwd": request.cwd,
         "env": request.env,
     }))
 }
@@ -263,12 +263,12 @@ fn exec_body(request: &RunCommandRequest) -> Result<serde_json::Value> {
 /// Reads a file out of the sandbox.
 pub async fn read_file<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     path: &str,
 ) -> Result<Vec<u8>> {
     let response = send(
         transport
-            .request(session_id, reqwest::Method::GET, "/v1/files")
+            .request(sandbox_id, reqwest::Method::GET, "/v1/files")
             .await?
             .query(&[("path", path)]),
         "sandbox.readFile",
@@ -298,13 +298,13 @@ pub async fn read_file<T: AgentTransport + ?Sized>(
 /// Writes files into the sandbox, one request per path.
 pub async fn write_files<T: AgentTransport + ?Sized>(
     transport: &T,
-    session_id: &str,
+    sandbox_id: &str,
     files: BTreeMap<String, Vec<u8>>,
 ) -> Result<()> {
     for (path, contents) in files {
         send(
             transport
-                .request(session_id, reqwest::Method::PUT, "/v1/files")
+                .request(sandbox_id, reqwest::Method::PUT, "/v1/files")
                 .await?
                 .json(&json!({
                     "path": path,
@@ -318,30 +318,12 @@ pub async fn write_files<T: AgentTransport + ?Sized>(
     Ok(())
 }
 
-/// Creates a directory inside the sandbox.
-pub async fn mkdir<T: AgentTransport + ?Sized>(
-    transport: &T,
-    session_id: &str,
-    path: &str,
-) -> Result<()> {
-    send(
-        transport
-            .request(session_id, reqwest::Method::POST, "/v1/mkdir")
-            .await?
-            .json(&json!({ "path": path })),
-        "sandbox.mkdir",
-    )
-    .await?;
-
-    Ok(())
-}
-
 /// Milliseconds, saturated rather than wrapped.
 ///
-/// A deadline long enough to overflow `u64` milliseconds is not a deadline anyone meant, and
+/// A timeout long enough to overflow `u64` milliseconds is not a timeout anyone meant, and
 /// wrapping it would turn "effectively forever" into "immediately".
-fn deadline_millis(deadline: Duration) -> u64 {
-    u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX)
+fn timeout_millis(timeout: Duration) -> u64 {
+    u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
 }
 
 /// What a request whose outcome is unknown becomes: no answer before its headers, or a body
@@ -1072,7 +1054,7 @@ mod tests {
     #[tokio::test]
     async fn an_error_frame_surfaces_as_an_error_not_a_silent_end() {
         let outputs = frames_from(vec![
-            "{\"t\":\"error\",\"code\":\"deadlineExceeded\",\"message\":\"exceeded its 300ms deadline\"}\n",
+            "{\"t\":\"error\",\"code\":\"timeoutExceeded\",\"message\":\"exceeded its 300ms deadline\"}\n",
         ])
         .await;
 
@@ -1080,7 +1062,7 @@ mod tests {
         let error = outputs[0]
             .as_ref()
             .expect_err("an error frame is a failure");
-        assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+        assert!(error.to_string().contains("timeoutExceeded"), "{error}");
     }
 
     /// A transport that authorizes nothing, so the tests exercise the protocol rather than a
@@ -1092,7 +1074,7 @@ mod tests {
     impl AgentTransport for TestTransport {
         async fn request(
             &self,
-            _session_id: &str,
+            _sandbox_id: &str,
             method: reqwest::Method,
             path: &str,
         ) -> Result<reqwest::RequestBuilder> {
@@ -1292,12 +1274,40 @@ mod tests {
         );
     }
 
-    fn command(deadline: Duration) -> RunCommandRequest {
+    /// The body AWS and Kubernetes both send: the program first, then its arguments in order.
+    ///
+    /// The agent takes one argv array, so the split has to be rejoined here, and a rejoin that
+    /// dropped, reordered or duplicated an element would run something other than what was asked
+    /// for. Two arguments rather than one: with a single argument an inverted or duplicated
+    /// rejoin produces the same array as the correct one.
+    #[test]
+    fn the_program_leads_its_arguments_in_the_body_the_agent_receives() {
+        let body = exec_body(&RunCommandRequest {
+            command: "python".to_string(),
+            args: vec!["-u".to_string(), "main.py".to_string()],
+            cwd: Some("/work".to_string()),
+            env: BTreeMap::from([("TOKEN".to_string(), "t".to_string())]),
+            timeout: Duration::from_millis(5_000),
+        })
+        .expect("a command with a non-zero timeout builds a body");
+
+        assert_eq!(
+            body["command"],
+            serde_json::json!(["python", "-u", "main.py"]),
+            "the program leads, and its arguments follow in order"
+        );
+        assert_eq!(body["cwd"], serde_json::json!("/work"));
+        assert_eq!(body["timeoutMs"], serde_json::json!(5_000));
+        assert_eq!(body["env"], serde_json::json!({ "TOKEN": "t" }));
+    }
+
+    fn command(timeout: Duration) -> RunCommandRequest {
         RunCommandRequest {
-            command: vec!["/bin/sleep".to_string(), "600".to_string()],
-            working_directory: None,
+            command: "/bin/sleep".to_string(),
+            args: vec!["600".to_string()],
+            cwd: None,
             env: BTreeMap::new(),
-            deadline,
+            timeout,
         }
     }
 }

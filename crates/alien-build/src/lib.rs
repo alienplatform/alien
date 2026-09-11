@@ -5142,12 +5142,12 @@ mod tests {
 #[cfg(test)]
 mod sandbox_push_tests {
     use super::*;
-    use alien_core::{ResourceLifecycle, SandboxEgress, SandboxSessionPolicy};
+    use alien_core::{ResourceLifecycle, SandboxEgress, SandboxLifecyclePolicy};
 
-    fn session() -> SandboxSessionPolicy {
-        SandboxSessionPolicy {
+    fn lifecycle() -> SandboxLifecyclePolicy {
+        SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         }
     }
 
@@ -5157,7 +5157,7 @@ mod sandbox_push_tests {
                 image: image.to_string(),
             })
             .egress(SandboxEgress::Allow)
-            .session(session())
+            .lifecycle(lifecycle())
             .build()
     }
 
@@ -5273,7 +5273,7 @@ mod sandbox_push_tests {
                         },
                     })
                     .egress(SandboxEgress::Allow)
-                    .session(session())
+                    .lifecycle(lifecycle())
                     .build(),
                 ResourceLifecycle::Live,
             )

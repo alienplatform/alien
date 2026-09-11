@@ -28,7 +28,7 @@ const sandbox = isLocal
       .code({ type: "image", image: "alpine:3.20" })
       .limits({ cpu: "500m", memory: "512Mi", disk: "1Gi", maxProcesses: 64 })
       .egress({ mode: "deny" })
-      .session({})
+      .lifecycle({})
       .build()
   : undefined
 

@@ -333,8 +333,8 @@ mod tests {
     use super::*;
     use alien_core::{
         permissions::PermissionProfile, Ai, EnvironmentVariablesSnapshot, ExternalBindings, Key,
-        ManagementConfig, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, StackSettings,
-        Storage, Worker, WorkerCode,
+        ManagementConfig, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        StackSettings, Storage, Worker, WorkerCode,
     };
 
     fn config() -> DeploymentConfig {
@@ -411,9 +411,9 @@ mod tests {
                 image: "ubuntu:24.04".to_string(),
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build()
     }

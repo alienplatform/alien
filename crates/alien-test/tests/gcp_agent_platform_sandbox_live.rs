@@ -42,7 +42,7 @@ use futures::StreamExt;
 
 use alien_bindings::providers::sandbox::gcp_agent_platform::GcpAgentPlatformSandbox;
 use alien_bindings::traits::{
-    CommandOutput, CreateSessionRequest, RunCommandRequest, Sandbox, SandboxSessionState,
+    CommandOutput, CreateSandboxRequest, RunCommandRequest, Sandbox, SandboxState,
 };
 use alien_core::{GcpClientConfig, GcpCredentials};
 use alien_gcp_clients::gcp::agent_platform::{
@@ -266,16 +266,18 @@ async fn run(
     session: &str,
     argv: &[&str],
     env: BTreeMap<String, String>,
-    deadline: Duration,
+    timeout: Duration,
 ) -> CommandResult {
+    let (command, args) = argv.split_first().expect("a command names a program");
     let mut stream = provider
         .run_command(
             session,
             RunCommandRequest {
-                command: argv.iter().map(|arg| arg.to_string()).collect(),
-                working_directory: None,
+                command: (*command).to_string(),
+                args: args.iter().map(|arg| (*arg).to_string()).collect(),
+                cwd: None,
                 env,
-                deadline,
+                timeout,
             },
         )
         .await
@@ -313,7 +315,7 @@ async fn shell(provider: &GcpAgentPlatformSandbox, session: &str, script: &str) 
 async fn wait_until_running(provider: &GcpAgentPlatformSandbox, session: &str) -> u64 {
     for _ in 0..60 {
         if let Some(found) = provider.get(session).await.expect("get answers") {
-            if found.state == SandboxSessionState::Running {
+            if found.state == SandboxState::Running {
                 return found.generation;
             }
         }
@@ -349,11 +351,11 @@ async fn create_exec_reconnect_private_clone_terminate() {
     let provider = provider(&client, &engine, &template);
 
     let session = provider
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create reaches a running, agent-answering session");
-    assert_eq!(session.state, SandboxSessionState::Running);
-    let sid = session.session_id.clone();
+    assert_eq!(session.state, SandboxState::Running);
+    let sid = session.sandbox_id.clone();
 
     let marker = format!("alien-sbx-live-{}", uuid::Uuid::new_v4().simple());
     let wrote = shell(
@@ -508,7 +510,7 @@ async fn reconnect_reader_child() {
         .expect("the sandbox is still present for the second process");
     assert_eq!(
         session.state,
-        SandboxSessionState::Running,
+        SandboxState::Running,
         "the reconnected session is running"
     );
     assert_eq!(
@@ -572,10 +574,10 @@ async fn a_command_past_the_proxy_cap_completes_detached() {
     let provider = provider(&client, &engine, &template);
 
     let session = provider
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create succeeds");
-    let sid = session.session_id.clone();
+    let sid = session.sandbox_id.clone();
 
     // A deadline past the synchronous window forces the provider onto the detached path; the
     // command sleeps well past the ~30s cap and must still report its output and exit.
@@ -605,10 +607,10 @@ async fn a_command_past_the_proxy_cap_completes_detached() {
 
 // ---- Capability rows measured live ------------------------------------------------------------
 
-/// `suspendResume`: a suspended session resumes onto the same container with its filesystem intact.
+/// `pauseResume`: a paused session resumes onto the same container with its filesystem intact.
 #[tokio::test]
 #[ignore = "requires a real GCP project; see module docs"]
-async fn suspend_resume_preserves_the_container_and_filesystem() {
+async fn pause_resume_preserves_the_container_and_filesystem() {
     let config = LiveConfig::from_env();
     let client = config.client();
     let engine = provision_engine(&client).await;
@@ -621,10 +623,10 @@ async fn suspend_resume_preserves_the_container_and_filesystem() {
     let provider = provider(&client, &engine, &template);
 
     let session = provider
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create succeeds");
-    let sid = session.session_id.clone();
+    let sid = session.sandbox_id.clone();
     let before = session.generation;
 
     let marker = format!("mark-{}", uuid::Uuid::new_v4().simple());
@@ -634,24 +636,24 @@ async fn suspend_resume_preserves_the_container_and_filesystem() {
         &format!("printf %s '{marker}' > /sandbox/keep"),
     )
     .await;
-    assert_eq!(wrote.exit_code, 0, "the pre-suspend marker writes");
+    assert_eq!(wrote.exit_code, 0, "the pre-pause marker writes");
 
-    provider.suspend(&sid).await.expect("the session suspends");
+    provider.pause(&sid).await.expect("the session pauses");
     provider.resume(&sid).await.expect("the session resumes");
 
     let after = wait_until_running(&provider, &sid).await;
     // The load-bearing guarantee is that the filesystem survives. Resume may return onto a
     // reissued container with a fresh boot id — the generation is derived from it precisely so a
     // caller detects that — so the generation is observed, not asserted to be unchanged.
-    eprintln!("suspend/resume generation: before={before} after={after}");
+    eprintln!("pause/resume generation: before={before} after={after}");
     let kept = provider
         .read_file(&sid, "/keep")
         .await
-        .expect("the marker survives the suspend/resume");
+        .expect("the marker survives the pause/resume");
     assert_eq!(
         kept,
         marker.as_bytes(),
-        "the filesystem is intact across suspend/resume"
+        "the filesystem is intact across pause/resume"
     );
 
     provider
@@ -678,10 +680,10 @@ async fn egress_deny_blocks_the_network_including_dns() {
     let provider = provider(&client, &engine, &template);
 
     let session = provider
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create succeeds");
-    let sid = session.session_id.clone();
+    let sid = session.sandbox_id.clone();
 
     // DNS alone, and the resolver's own exit code is captured so a missing binary (127) cannot be
     // mistaken for a blocked network — that mistake is exactly the false PASS this row must avoid.
@@ -730,10 +732,10 @@ async fn snapshot_restore_carries_pre_snapshot_state_only() {
     let provider = provider(&client, &engine, &template);
 
     let session = provider
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create succeeds");
-    let sid = session.session_id.clone();
+    let sid = session.sandbox_id.clone();
 
     let before = format!("before-{}", uuid::Uuid::new_v4().simple());
     assert_eq!(

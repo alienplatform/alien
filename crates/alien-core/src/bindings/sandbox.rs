@@ -1,14 +1,14 @@
 //! Sandbox binding definitions.
 //!
-//! Carries what a provider needs to reach the durable parent and create sessions inside it.
-//! Session identity is never in here — sessions are created at runtime and the provider is the
+//! Carries what a provider needs to reach the durable parent and create sandboxes inside it.
+//! Sandbox identity is never in here — sandboxes are created at runtime and the provider is the
 //! record, so a binding describes the parent only.
 
 use super::BindingValue;
 use crate::SandboxEgress;
 use serde::{Deserialize, Serialize};
 
-/// Represents a sandbox binding for creating and reaching sandbox sessions.
+/// Represents a sandbox binding for creating and reaching sandboxes.
 ///
 /// Service tags are prefixed with `sandbox-` because serde selects the variant on the `service`
 /// field alone. An unprefixed `local` would deserialize as another resource's local binding by
@@ -22,7 +22,7 @@ pub enum SandboxBinding {
     /// Azure Container Apps Sandboxes
     #[serde(rename = "sandbox-azure")]
     Azure(AzureSandboxBinding),
-    /// GCP Agent Platform sandboxes, created as sessions under a durable Agent Engine
+    /// GCP Agent Platform sandboxes, created under a durable Agent Engine
     #[serde(rename = "sandbox-gcp-agent-platform")]
     GcpAgentPlatform(GcpAgentPlatformSandboxBinding),
     /// Sandbox pods under a sandboxed runtime class
@@ -37,9 +37,9 @@ pub enum SandboxBinding {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AwsSandboxBinding {
-    /// MicroVM image ARN that scopes this sandbox's sessions
+    /// MicroVM image ARN that scopes the sandboxes this binding creates
     pub image_arn: BindingValue<String>,
-    /// Image version. Sessions are enumerated by image and version together, so a rolled
+    /// Image version. Sandboxes are enumerated by image and version together, so a rolled
     /// version remains a cleanup scope until its own MicroVMs are gone.
     pub image_version: BindingValue<String>,
     /// Region the MicroVMs run in
@@ -47,11 +47,11 @@ pub struct AwsSandboxBinding {
     /// Execution role attached to each MicroVM, distinct from the workload's own role
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution_role_arn: Option<BindingValue<String>>,
-    /// Egress connectors every session is started with.
+    /// Egress connectors every sandbox is started with.
     ///
     /// Carried rather than implied: a MicroVM started with no connector reaches the public
     /// internet, so an empty list here is `allow`, not `deny`. The declared mode is realised by
-    /// which connector setup built, and the session has to be started with it.
+    /// which connector setup built, and the sandbox has to be started with it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub egress_connector_arns: Vec<BindingValue<String>>,
     /// Ports a preview capability may be minted for.
@@ -61,10 +61,10 @@ pub struct AwsSandboxBinding {
     /// true if the declared list reaches the code that mints.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub preview_ports: Vec<u16>,
-    /// Idle seconds after which a session suspends, if the declaration asked for one.
+    /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_suspend_seconds: Option<u32>,
-    /// Wall-clock ceiling on a session, if the declaration asked for one.
+    pub idle_pause_seconds: Option<u32>,
+    /// Wall-clock ceiling on a sandbox, if the declaration asked for one.
     ///
     /// Enforced by Lambda rather than by us: `RunMicrovm` takes it as
     /// `maximumDurationInSeconds` and terminates the MicroVM when it elapses.
@@ -92,25 +92,25 @@ pub struct AzureSandboxBinding {
     /// Resource group the sandbox group sits in. The data-plane path is scoped by it, and the
     /// Azure client config does not carry one.
     pub resource_group: BindingValue<String>,
-    /// Outbound policy every session is created with, as declared.
+    /// Outbound policy every sandbox is created with, as declared.
     ///
     /// Carried whole rather than as a flag: the data plane's default action is `Allow`, so a
-    /// session created without a policy is an open one, and a hostname list has no boolean to
+    /// sandbox created without a policy is an open one, and a hostname list has no boolean to
     /// travel in.
     pub egress: SandboxEgress,
-    /// Idle seconds after which a session suspends, if the declaration asked for one.
+    /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     ///
     /// Carried because the data plane takes it at create and nowhere else: a policy that does not
     /// travel with the create body is a declaration the sandbox never hears about.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub idle_suspend_seconds: Option<u32>,
-    /// Catalog disk image every session is created from, taken from the declaration's `code`.
+    pub idle_pause_seconds: Option<u32>,
+    /// Catalog disk image every sandbox is created from, taken from the declaration's `code`.
     ///
     /// Carried rather than hardcoded in the provider because the declaration is the only place
     /// that knows it, and a sandbox running an image its author did not choose is the one Azure
     /// gap that fails without an error.
     pub disk_image: BindingValue<String>,
-    /// Session ceilings in the data plane's own units, from the declaration. Optional because a
+    /// Sandbox ceilings in the data plane's own units, from the declaration. Optional because a
     /// binding from an earlier release carries none — a required field would fail to deserialize
     /// on an already-running deployment. Absent takes the data plane's own default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -123,24 +123,24 @@ pub struct AzureSandboxBinding {
 
 /// GCP Agent Platform sandbox binding configuration.
 ///
-/// Sessions have a durable parent to address: an Agent Engine provisioned at deploy and reached
+/// Sandboxes have a durable parent to address: an Agent Engine provisioned at deploy and reached
 /// through a regional endpoint.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GcpAgentPlatformSandboxBinding {
-    /// Agent Engine that parents every session. Sessions are created and enumerated under it,
+    /// Agent Engine that parents every sandbox. Sandboxes are created and enumerated under it,
     /// so a binding without it can neither reach nor reap them.
     pub engine: BindingValue<String>,
-    /// Template every session is created from. It carries the image digest, the ceilings and the
-    /// egress rules, so a session created without it runs an unpinned image with none applied.
+    /// Template every sandbox is created from. It carries the image digest, the ceilings and the
+    /// egress rules, so a sandbox created without it runs an unpinned image with none applied.
     pub template: BindingValue<String>,
     /// Region selecting the regional aiplatform endpoint. The engine is regional with no global
     /// alias, so the endpoint cannot be derived without it.
     pub region: BindingValue<String>,
-    /// Seconds a session may live, from the declaration. Carried only when one was declared; an
+    /// Seconds a sandbox may live, from the declaration. Carried only when one was declared; an
     /// absent value takes the service default, which is why it is not defaulted here.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_ttl_seconds: Option<u32>,
+    pub max_lifetime_seconds: Option<u32>,
 }
 
 /// Kubernetes sandbox binding configuration.
@@ -153,7 +153,7 @@ pub struct KubernetesSandboxBinding {
     pub runtime_class: BindingValue<String>,
     /// Label selector identifying this sandbox's pods, used for enumeration and reaping
     pub selector: BindingValue<String>,
-    /// Session broker served by the operator. Claiming a pod is a `PATCH` on pods, which must
+    /// Sandbox broker served by the operator. Claiming a pod is a `PATCH` on pods, which must
     /// not reach the application.
     pub broker_url: BindingValue<String>,
     /// Secret holding the capability signing key, by name. The binding names it; only the
@@ -170,7 +170,7 @@ pub struct KubernetesSandboxBinding {
 pub struct LocalSandboxBinding {
     /// Loopback endpoint of the local sandbox manager
     pub manager_url: BindingValue<String>,
-    /// Key scoping this sandbox's sessions within the manager
+    /// Key scoping this binding's sandboxes within the manager
     pub sandbox_key: BindingValue<String>,
     /// File holding the route's bearer token. A locator, not the token: a binding is
     /// serialized into the workload's environment, and a secret there is a secret in state.
@@ -191,7 +191,7 @@ impl SandboxBinding {
             execution_role_arn: None,
             egress_connector_arns: Vec::new(),
             preview_ports: Vec::new(),
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
             max_lifetime_seconds: None,
             allow_egress: false,
         })
@@ -205,7 +205,7 @@ impl SandboxBinding {
         resource_group: impl Into<BindingValue<String>>,
         disk_image: impl Into<BindingValue<String>>,
         egress: SandboxEgress,
-        idle_suspend_seconds: Option<u32>,
+        idle_pause_seconds: Option<u32>,
     ) -> Self {
         Self::Azure(AzureSandboxBinding {
             sandbox_group: sandbox_group.into(),
@@ -213,7 +213,7 @@ impl SandboxBinding {
             region: region.into(),
             resource_group: resource_group.into(),
             egress,
-            idle_suspend_seconds,
+            idle_pause_seconds,
             disk_image: disk_image.into(),
             // Ceilings are set on the struct where a caller has them; a positional argument each
             // would make this constructor ten wide for the case that rarely carries them.
@@ -228,13 +228,13 @@ impl SandboxBinding {
         engine: impl Into<BindingValue<String>>,
         template: impl Into<BindingValue<String>>,
         region: impl Into<BindingValue<String>>,
-        session_ttl_seconds: Option<u32>,
+        max_lifetime_seconds: Option<u32>,
     ) -> Self {
         Self::GcpAgentPlatform(GcpAgentPlatformSandboxBinding {
             engine: engine.into(),
             template: template.into(),
             region: region.into(),
-            session_ttl_seconds,
+            max_lifetime_seconds,
         })
     }
 
@@ -323,7 +323,7 @@ mod tests {
 
     /// The Agent Platform binding carries an egress-bearing template, so there is no safe default
     /// for a missing required field: a binding stripped of one must fail to load rather than
-    /// deserialize into a session with no image, no limits and open egress. `sessionTtlSeconds` is
+    /// deserialize into a sandbox with no image, no limits and open egress. `maxLifetimeSeconds` is
     /// the one field that may be absent, and its absence must still parse.
     #[test]
     fn agent_platform_required_fields_have_no_default() {
@@ -350,7 +350,7 @@ mod tests {
         without_ttl
             .as_object_mut()
             .expect("binding serializes as an object")
-            .remove("sessionTtlSeconds")
+            .remove("maxLifetimeSeconds")
             .expect("the fixture set a ttl");
         let restored: SandboxBinding =
             serde_json::from_value(without_ttl).expect("an absent ttl still loads");

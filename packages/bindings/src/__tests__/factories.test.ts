@@ -126,10 +126,10 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
 
   const sandboxHandle: RawSandboxHandle = {
     capabilities: () => ["reconnect"],
-    create: async sessionId => ({ sessionId: sessionId ?? "s1", state: "running", generation: 1 }),
-    get: async sessionId => ({ sessionId, state: "running", generation: 1 }),
-    getOrCreate: async sessionId => ({
-      session: { sessionId: sessionId ?? "s1", state: "running", generation: 1 },
+    create: async sandboxId => ({ sandboxId: sandboxId ?? "s1", state: "running", generation: 1 }),
+    get: async sandboxId => ({ sandboxId, state: "running", generation: 1 }),
+    getOrCreate: async sandboxId => ({
+      sandbox: { sandboxId: sandboxId ?? "s1", state: "running", generation: 1 },
       created: true,
     }),
     list: async () => [],
@@ -143,15 +143,14 @@ function fakeAddon(): { addon: NativeAddon; constructions: unknown[] } {
       return { next: async () => frames[index++] ?? null, close: async () => {} }
     },
     startJob: async () => "j1",
-    pollJob: async (_sessionId, _jobId, sinceSeq) =>
+    pollJob: async (_sandboxId, _jobId, sinceSeq) =>
       sinceSeq === undefined || sinceSeq === null
         ? { running: true, frames: [{ kind: "stdout", seq: 0, data: Buffer.from("working\n") }] }
         : { running: false, frames: [], exit: { code: 3, truncated: false } },
     cancelJob: async () => {},
     readFile: async () => Buffer.from("contents"),
     writeFile: async () => {},
-    mkdir: async () => {},
-    suspend: async () => {},
+    pause: async () => {},
     resume: async () => {},
     terminate: async () => {},
   }
@@ -637,13 +636,55 @@ describe("createFactories postgres surface", () => {
   })
 })
 
+describe("sandbox create", () => {
+  it("carries the id and the lifetime through to the addon, and reads the id back", async () => {
+    const create = vi.fn<RawSandboxHandle["create"]>(async sandboxId => ({
+      sandboxId: sandboxId ?? "s1",
+      state: "running",
+      generation: 1,
+    }))
+    const getOrCreate = vi.fn<RawSandboxHandle["getOrCreate"]>(async sandboxId => ({
+      sandbox: { sandboxId: sandboxId ?? "s1", state: "running", generation: 1 },
+      created: true,
+    }))
+    const { addon } = fakeAddon()
+
+    class RecordingBindingsHandle {
+      async sandbox(name: string): Promise<RawSandboxHandle> {
+        const inner = await new addon.BindingsHandle().sandbox(name)
+        return { ...inner, create, getOrCreate }
+      }
+    }
+
+    const { sandbox } = createFactories(() => ({
+      ...addon,
+      BindingsHandle: RecordingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
+    }))
+    const handle = sandbox("sbx")
+
+    const created = await handle.create({ sandboxId: "mine", timeoutMs: 600_000 })
+    expect(created.sandboxId).toBe("mine")
+    // Positional, because the addon takes them positionally: a lifetime that arrives as the
+    // tenant key, or not at all, is a sandbox with no deadline and no error to show for it.
+    expect(create).toHaveBeenCalledWith("mine", null, null, 600_000)
+
+    const resolved = await handle.getOrCreate({ timeoutMs: 1_000 })
+    expect(resolved.sandbox.sandboxId).toBe("s1")
+    expect(resolved.created).toBe(true)
+    expect(getOrCreate).toHaveBeenCalledWith(null, null, null, 1_000)
+  })
+})
+
 describe("sandbox jobs", () => {
   it("returns the job id, forwards the poll cursor, and maps the ending", async () => {
     const { addon } = fakeAddon()
     const { sandbox } = createFactories(() => addon)
     const handle = sandbox("sbx")
 
-    const jobId = await handle.startJob("s1", ["/bin/sleep", "600"], { deadlineMs: 600_000 })
+    const jobId = await handle.startJob("s1", "/bin/sleep", {
+      args: ["600"],
+      timeoutMs: 600_000,
+    })
     expect(jobId).toBe("j1")
 
     const first = await handle.pollJob("s1", jobId)
@@ -689,7 +730,7 @@ describe("sandbox jobs", () => {
     }))
 
     const error = await sandbox("sbx")
-      .startJob("s1", ["/bin/sleep", "600"], { deadlineMs: 600_000 })
+      .startJob("s1", "/bin/sleep", { args: ["600"], timeoutMs: 600_000 })
       .then(
         () => null,
         (caught: unknown) => caught,
@@ -709,8 +750,8 @@ describe("sandbox streaming", () => {
     const { sandbox } = createFactories(() => addon)
 
     const seen: string[] = []
-    for await (const frame of sandbox("sbx").runCommand("s1", ["/bin/echo"], {
-      deadlineMs: 10_000,
+    for await (const frame of sandbox("sbx").runCommand("s1", "/bin/echo", {
+      timeoutMs: 10_000,
     })) {
       seen.push(
         frame.kind === "exit" ? `exit:${frame.exitCode}` : frame.data.toString("utf8").trim(),
@@ -753,7 +794,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     const first = iterator.next()
     const second = iterator.next()
@@ -798,7 +839,7 @@ describe("sandbox streaming", () => {
       BindingsHandle: CountingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
     }))
 
-    sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+    sandbox("sbx").runCommand("s1", "/bin/echo", { timeoutMs: 1000 })
     await new Promise(resolve => setTimeout(resolve, 0))
 
     expect(opened).toBe(0)
@@ -843,7 +884,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/sleep", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     const pull = iterator.next()
     await reading
@@ -896,7 +937,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/sleep", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     const pull = iterator.next()
     await started
@@ -954,7 +995,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/sleep", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     const pending = iterator.next()
     await new Promise(resolve => setTimeout(resolve, 0))
@@ -994,7 +1035,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
 
     await expect(iterator.next()).rejects.toThrow("read exploded")
@@ -1028,7 +1069,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     await iterator.next()
 
@@ -1085,7 +1126,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 10_000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 10_000 })
       [Symbol.asyncIterator]()
     await expect(iterator.next()).resolves.toEqual({
       done: false,
@@ -1143,7 +1184,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 1000 })
       [Symbol.asyncIterator]()
     const error = await iterator.next().catch((caught: unknown) => caught)
 
@@ -1188,7 +1229,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 1000 })
       [Symbol.asyncIterator]()
     const error = await iterator.next().catch((caught: unknown) => caught)
 
@@ -1222,7 +1263,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 1000 })
       [Symbol.asyncIterator]()
     const error = await iterator.next().catch((caught: unknown) => caught)
 
@@ -1271,7 +1312,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/sleep"], { deadlineMs: 1000 })
+      .runCommand("s1", "/bin/sleep", { timeoutMs: 1000 })
       [Symbol.asyncIterator]()
     const pull = iterator.next()
     await reading
@@ -1314,7 +1355,7 @@ describe("sandbox streaming", () => {
     }))
 
     const iterator = sandbox("sbx")
-      .runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 })
+      .runCommand("s1", "/bin/echo", { timeoutMs: 1000 })
       [Symbol.asyncIterator]()
     await iterator.next()
     const error = await iterator.return?.().catch((caught: unknown) => caught)
@@ -1373,7 +1414,7 @@ describe("sandbox streaming", () => {
       BindingsHandle: ClosingBindingsHandle as unknown as NativeAddon["BindingsHandle"],
     }))
 
-    await consume(sandbox("sbx").runCommand("s1", ["/bin/echo"], { deadlineMs: 1000 }))
+    await consume(sandbox("sbx").runCommand("s1", "/bin/echo", { timeoutMs: 1000 }))
 
     expect(closed).toBe(1)
   })
@@ -1387,13 +1428,13 @@ describe("sandbox streaming", () => {
         const inner = await new addon.BindingsHandle().sandbox(name)
         return {
           ...inner,
-          create: (sessionId, tenantKey, env) => {
+          create: (sandboxId, tenantKey, env) => {
             seen.push(env)
-            return inner.create(sessionId, tenantKey, env)
+            return inner.create(sandboxId, tenantKey, env)
           },
-          runCommand: (sessionId, command, deadlineMs, workingDirectory, env) => {
+          runCommand: (sandboxId, command, args, timeoutMs, cwd, env) => {
             seen.push(env)
-            return inner.runCommand(sessionId, command, deadlineMs, workingDirectory, env)
+            return inner.runCommand(sandboxId, command, args, timeoutMs, cwd, env)
           },
         }
       }
@@ -1405,8 +1446,8 @@ describe("sandbox streaming", () => {
     }))
 
     await sandbox("sbx").create({ env: { TOKEN: "s3cret" } })
-    for await (const _ of sandbox("sbx").runCommand("s1", ["/bin/echo"], {
-      deadlineMs: 1000,
+    for await (const _ of sandbox("sbx").runCommand("s1", "/bin/echo", {
+      timeoutMs: 1000,
       env: { EXTRA: "1" },
     }));
 

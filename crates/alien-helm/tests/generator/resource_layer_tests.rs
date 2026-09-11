@@ -5,7 +5,7 @@
 use super::helpers::{assert_helm_valid, render, snapshot_chart, try_render};
 use alien_core::{
     ArtifactRegistry, Kv, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
-    SandboxSessionPolicy, Stack, StackSettings, Storage, Vault,
+    SandboxLifecyclePolicy, Stack, StackSettings, Storage, Vault,
 };
 
 #[test]
@@ -50,9 +50,9 @@ fn a_sandbox_emits_its_network_policy_and_the_brokers_rbac() {
                     image: "ubuntu:24.04".to_string(),
                 })
                 .egress(SandboxEgress::Deny)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: Some(3600),
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -106,9 +106,9 @@ fn a_sandbox_allowing_egress_still_denies_the_metadata_endpoint() {
                     image: "ubuntu:24.04".to_string(),
                 })
                 .egress(SandboxEgress::Allow)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -181,9 +181,9 @@ fn a_hostname_allowlist_is_refused_rather_than_widened() {
                 .egress(SandboxEgress::AllowDomains {
                     domains: vec!["example.com".to_string()],
                 })
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

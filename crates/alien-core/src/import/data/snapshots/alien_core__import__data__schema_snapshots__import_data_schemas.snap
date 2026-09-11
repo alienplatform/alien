@@ -320,7 +320,7 @@ expression: schemas
   },
   "aws_sandbox": {
     "$schema": "http://json-schema.org/draft-07/schema#",
-    "description": "AWS Sandbox ImportData.\n\nCarries the sandbox's parent from the setup emitter to the runtime controller. The image **version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only session identity there is, and a controller holding a stale version would enumerate the wrong set and orphan every session started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by stack creation and names its image; a Live one is built by the controller after the deployment registers, so it names the build role and bundle instead, leaving the image fields empty.",
+    "description": "AWS Sandbox ImportData.\n\nCarries the sandbox's parent from the setup emitter to the runtime controller. The image **version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only sandbox identity there is, and a controller holding a stale version would enumerate the wrong set and orphan every sandbox started on the previous one.\n\nTwo shapes arrive here, and which fields are present says which. A Frozen sandbox is built by stack creation and names its image; a Live one is built by the controller after the deployment registers, so it names the build role and bundle instead, leaving the image fields empty.",
     "properties": {
       "allowEgress": {
         "description": "Whether the declaration asked for open egress.\n\nThe controller builds the binding from this, and an empty connector list cannot be read without it: a stripped `deny` import would otherwise look exactly like an open sandbox.",
@@ -362,7 +362,7 @@ expression: schemas
         ]
       },
       "imageVersion": {
-        "description": "Image version the sessions are scoped to. Re-imported on every image roll, and absent until a runtime-provisioned image has been built.",
+        "description": "Image version the sandboxes are scoped to. Re-imported on every image roll, and absent until a runtime-provisioned image has been built.",
         "type": [
           "string",
           "null"

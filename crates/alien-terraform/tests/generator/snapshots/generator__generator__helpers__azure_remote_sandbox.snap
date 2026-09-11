@@ -306,7 +306,7 @@ The setup creates one narrow application access identity. It can access only the
 
 ## `agents` (sandbox)
 
-Create and terminate sessions in this sandbox, and run arbitrary code inside them.
+Create and terminate sandboxes in this sandbox resource, and run arbitrary code inside them.
 
 Permission set: `sandbox/remote-execute` (revision 1).
 

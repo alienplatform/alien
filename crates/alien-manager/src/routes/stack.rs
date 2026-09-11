@@ -1509,9 +1509,9 @@ mod setup_update_authorization_tests {
                 image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
             })
             .egress(alien_core::SandboxEgress::Deny)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
         let worker = Worker::new("api".to_string())

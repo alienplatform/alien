@@ -11,18 +11,17 @@ use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine as _;
 use futures::stream::{self, BoxStream};
-use futures::StreamExt;
 use serde::Deserialize;
 use serde_json::json;
 
 use crate::error::{ErrorData, Result};
-use crate::providers::sandbox::{guard_for, Bounded, DeadlineReport};
+use crate::providers::sandbox::{guard_for, Bounded, TimeoutReport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    ResolvedSession, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
+    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::LocalSandboxBinding;
-use alien_core::{Platform, SandboxCapabilities};
+use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
 #[derive(Debug, Deserialize)]
@@ -178,22 +177,22 @@ impl LocalSandbox {
 
     /// Runs one argv under the client-side guard.
     ///
-    /// The guard is the deadline plus the grace the in-session `timeout` needs to report back.
-    /// When it fires the session itself did not end the command, so the session is ended — a
+    /// The guard is the timeout plus the grace the in-sandbox `timeout` needs to report back.
+    /// When it fires the sandbox itself did not end the command, so the sandbox is ended — a
     /// force-remove, so the call returns one kill later — and the caller hears that it was.
-    /// `deadlineExceeded` means the command has stopped, never that a stop was requested; the
-    /// path is reached only by a session that could not run `timeout`.
+    /// `timeoutExceeded` means the command has stopped, never that a stop was requested; the
+    /// path is reached only by a sandbox that could not run `timeout`.
     async fn exec_within(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         command: &[String],
         request: &RunCommandRequest,
     ) -> Result<ExecResponse> {
         match tokio::time::timeout(
-            guard_for(request.deadline)?,
+            guard_for(request.timeout)?,
             self.send(
                 self.client
-                    .post(self.url(&format!("/v1/sessions/{session_id}/exec")))
+                    .post(self.url(&format!("/v1/sessions/{sandbox_id}/exec")))
                     .json(&json!({ "command": command })),
                 "sandbox.runCommand",
             ),
@@ -202,7 +201,7 @@ impl LocalSandbox {
         {
             Ok(inner) => inner,
             Err(_) => {
-                // Terminating ends the session, not whatever the command already did before the
+                // Terminating ends the sandbox, not whatever the command already did before the
                 // kill landed, so this is an outcome that was never reported rather than one the
                 // sandbox established. A terminate that itself fails is chained rather than
                 // returned: it leaves the command even more likely to be running, so replacing the
@@ -210,11 +209,11 @@ impl LocalSandbox {
                 let outcome = ErrorData::SandboxOutcomeUnknown {
                     operation: "sandbox.runCommand".to_string(),
                     reason: format!(
-                        "the command exceeded its {}s deadline and the session could not end it",
-                        request.deadline.as_secs()
+                        "the command exceeded its {}s timeout and the sandbox could not end it",
+                        request.timeout.as_secs()
                     ),
                 };
-                Err(match self.terminate(session_id).await {
+                Err(match self.terminate(sandbox_id).await {
                     Ok(()) => AlienError::new(outcome),
                     Err(error) => error.context(outcome),
                 })
@@ -225,15 +224,30 @@ impl LocalSandbox {
 
 impl Binding for LocalSandbox {}
 
+/// Refused rather than dropped: Docker has no wall-clock ceiling, so accepting one would report a
+/// bounded sandbox and leave an unbounded container running on the developer's machine.
+fn refuse_create_time_lifetime(request: &CreateSandboxRequest) -> Result<()> {
+    if request.timeout_ms.is_none() {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::OperationNotSupported {
+        operation: SandboxCapability::SandboxLifetime.as_str().to_string(),
+        reason: "local sandboxes run as Docker containers, which carry no wall-clock ceiling; \
+                 terminate the sandbox when the caller is done with it"
+            .to_string(),
+    }))
+}
+
 #[async_trait]
 impl Sandbox for LocalSandbox {
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::for_platform(Platform::Local).expect("Local has a sandbox backend")
     }
 
-    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        let session_id = request
-            .session_id
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        refuse_create_time_lifetime(&request)?;
+        let sandbox_id = request
+            .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
         // Only the id. Image, limits, egress and preview ports come from the controller's
@@ -242,46 +256,49 @@ impl Sandbox for LocalSandbox {
             .send(
                 self.client
                     .post(self.url("/v1/sessions"))
-                    .json(&json!({ "sessionId": session_id })),
+                    .json(&json!({ "sessionId": sandbox_id })),
                 "sandbox.create",
             )
             .await?;
 
-        Ok(SandboxSession {
-            session_id: created.session_id,
-            state: SandboxSessionState::Running,
+        Ok(SandboxInstance {
+            sandbox_id: created.session_id,
+            state: SandboxState::Running,
             generation: 1,
         })
     }
 
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
         Ok(self
             .list()
             .await?
             .into_iter()
-            .find(|session| session.session_id == session_id))
+            .find(|sandbox| sandbox.sandbox_id == sandbox_id))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession> {
-        if let Some(id) = request.session_id.as_deref() {
+    async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        // Refused on the reconnect path too: an existing sandbox honors a lifetime no more than a
+        // fresh one would.
+        refuse_create_time_lifetime(&request)?;
+        if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
-                return Ok(ResolvedSession::found(existing));
+                return Ok(ResolvedSandbox::found(existing));
             }
         }
 
-        self.create(request).await.map(ResolvedSession::created)
+        self.create(request).await.map(ResolvedSandbox::created)
     }
 
-    async fn list(&self) -> Result<Vec<SandboxSession>> {
+    async fn list(&self) -> Result<Vec<SandboxInstance>> {
         let sessions: Vec<SessionBody> = self
             .send(self.client.get(self.url("/v1/sessions")), "sandbox.list")
             .await?;
 
         Ok(sessions
             .into_iter()
-            .map(|session| SandboxSession {
-                session_id: session.session_id,
-                state: SandboxSessionState::Running,
+            .map(|session| SandboxInstance {
+                sandbox_id: session.session_id,
+                state: SandboxState::Running,
                 generation: 1,
             })
             .collect())
@@ -289,31 +306,31 @@ impl Sandbox for LocalSandbox {
 
     async fn run_command(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        if request.deadline.is_zero() {
+        if request.timeout.is_zero() {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: "sandbox.runCommand".to_string(),
-                reason: "a command must carry a non-zero deadline".to_string(),
+                reason: "a command must carry a non-zero timeout".to_string(),
             }));
         }
 
-        // The deadline bounds the untrusted code, not the caller's patience. The route runs the
-        // command to completion, so the deadline is enforced inside the session: the wrapper kills
-        // the command at it, the session survives, and the call lands right after — the shape the
+        // The timeout bounds the untrusted code, not the caller's patience. The route runs the
+        // command to completion, so the timeout is enforced inside the sandbox: the wrapper kills
+        // the command at it, the sandbox survives, and the call lands right after — the shape the
         // agent-supervised backends give. The client-side guard is the backstop for a route that
-        // never answers at all; there the only lever left is ending the session, which the manager
-        // does with a force-remove, one kill after the deadline.
+        // never answers at all; there the only lever left is ending the sandbox, which the manager
+        // does with a force-remove, one kill after the timeout.
         // Passed to `sh` as arguments, so nothing re-parses the command's text.
         let mut argv = vec![
             "sh".to_string(),
             "-c".to_string(),
-            DeadlineReport::bounded_program(request.deadline),
+            TimeoutReport::bounded_program(request.timeout),
             "sh".to_string(),
         ];
-        argv.extend(request.command.iter().cloned());
-        let response = self.exec_within(session_id, &argv, &request).await?;
+        argv.extend(request.argv());
+        let response = self.exec_within(sandbox_id, &argv, &request).await?;
 
         // Each stream is joined before it is read: the route returns a finished result rather
         // than a live stream, and the wrapper's announcement and its repeat can land in separate
@@ -340,7 +357,7 @@ impl Sandbox for LocalSandbox {
             }
         }
         let (deadline_exceeded, stderr) =
-            match DeadlineReport::read(i32::try_from(response.exit_code).ok(), &stderr) {
+            match TimeoutReport::read(i32::try_from(response.exit_code).ok(), &stderr) {
                 Bounded::Ran { killed, stderr } => (killed, stderr),
                 Bounded::NotRun { reason } => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
@@ -366,12 +383,12 @@ impl Sandbox for LocalSandbox {
 
         if deadline_exceeded {
             // The output is kept and the terminal item says why it ends, as the agent-backed
-            // providers do; the session is untouched.
+            // providers do; the sandbox is untouched.
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                failure: "deadlineExceeded".to_string(),
+                failure: "timeoutExceeded".to_string(),
                 reason: format!(
-                    "the command exceeded its {}s deadline and was killed; the session is still usable",
-                    request.deadline.as_secs()
+                    "the command exceeded its {}s timeout and was killed; the sandbox is still usable",
+                    request.timeout.as_secs()
                 ),
             })));
         } else {
@@ -384,11 +401,11 @@ impl Sandbox for LocalSandbox {
         Ok(Box::pin(stream::iter(frames)))
     }
 
-    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
+    async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
         let response: ReadFileResponse = self
             .send(
                 self.client
-                    .get(self.url(&format!("/v1/sessions/{session_id}/files")))
+                    .get(self.url(&format!("/v1/sessions/{sandbox_id}/files")))
                     .query(&[("path", path)]),
                 "sandbox.readFile",
             )
@@ -405,11 +422,11 @@ impl Sandbox for LocalSandbox {
             })
     }
 
-    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+    async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
         for (path, contents) in files {
             self.request(
                 self.client
-                    .put(self.url(&format!("/v1/sessions/{session_id}/files")))
+                    .put(self.url(&format!("/v1/sessions/{sandbox_id}/files")))
                     .json(&json!({
                         "path": path,
                         "contentsBase64": BASE64.encode(contents),
@@ -422,37 +439,11 @@ impl Sandbox for LocalSandbox {
         Ok(())
     }
 
-    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
-        let request = RunCommandRequest {
-            command: vec!["/bin/mkdir".to_string(), "-p".to_string(), path.to_string()],
-            working_directory: None,
-            env: BTreeMap::new(),
-            deadline: std::time::Duration::from_secs(30),
-        };
-
-        // Drain to the terminal frame: the command has already run by the time the stream is
-        // built, but a non-zero exit means the directory does not exist and the caller must hear
-        // about it rather than discover it on the next write.
-        let mut frames = self.run_command(session_id, request).await?;
-        while let Some(frame) = frames.next().await {
-            if let CommandOutput::Exit { code, .. } = frame? {
-                if code != 0 {
-                    return Err(AlienError::new(ErrorData::OperationNotSupported {
-                        operation: "sandbox.mkdir".to_string(),
-                        reason: format!("mkdir '{path}' exited with {code}"),
-                    }));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    async fn preview(&self, session_id: &str, port: u16) -> Result<PreviewCapability> {
+    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
         let response: PreviewResponse = self
             .send(
                 self.client
-                    .get(self.url(&format!("/v1/sessions/{session_id}/preview")))
+                    .get(self.url(&format!("/v1/sessions/{sandbox_id}/preview")))
                     .query(&[("port", port.to_string())]),
                 "sandbox.preview",
             )
@@ -468,39 +459,39 @@ impl Sandbox for LocalSandbox {
         })
     }
 
-    async fn suspend(&self, _session_id: &str) -> Result<()> {
-        Err(self.unsupported("suspendResume"))
+    async fn pause(&self, _sandbox_id: &str) -> Result<()> {
+        Err(self.unsupported("pauseResume"))
     }
 
-    async fn resume(&self, _session_id: &str) -> Result<()> {
-        Err(self.unsupported("suspendResume"))
+    async fn resume(&self, _sandbox_id: &str) -> Result<()> {
+        Err(self.unsupported("pauseResume"))
     }
 
-    async fn snapshot(&self, _session_id: &str) -> Result<String> {
+    async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
         Err(self.unsupported("snapshot"))
     }
 
-    async fn start_job(&self, _session_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
+    async fn start_job(&self, _sandbox_id: &str, _request: RunCommandRequest) -> Result<JobStart> {
         Err(self.unsupported("jobs"))
     }
 
     async fn poll_job(
         &self,
-        _session_id: &str,
+        _sandbox_id: &str,
         _job_id: &str,
         _since_seq: Option<u64>,
     ) -> Result<JobPoll> {
         Err(self.unsupported("jobs"))
     }
 
-    async fn cancel_job(&self, _session_id: &str, _job_id: &str) -> Result<()> {
+    async fn cancel_job(&self, _sandbox_id: &str, _job_id: &str) -> Result<()> {
         Err(self.unsupported("jobs"))
     }
 
-    async fn terminate(&self, session_id: &str) -> Result<()> {
+    async fn terminate(&self, sandbox_id: &str) -> Result<()> {
         self.request(
             self.client
-                .delete(self.url(&format!("/v1/sessions/{session_id}"))),
+                .delete(self.url(&format!("/v1/sessions/{sandbox_id}"))),
             "sandbox.terminate",
         )
         .await?;
@@ -519,6 +510,7 @@ mod tests {
     use axum::extract::{Path, State};
     use axum::routing::post;
     use axum::{Json, Router};
+    use futures::StreamExt as _;
     use std::net::SocketAddr;
     use std::sync::{Arc, Mutex};
 
@@ -529,25 +521,25 @@ mod tests {
         execs: Mutex<std::collections::VecDeque<serde_json::Value>>,
         commands: Mutex<Vec<Vec<String>>>,
         deleted: Mutex<Vec<String>>,
-        /// Set to make the session refuse to be deleted, which is the case where the command is
+        /// Set to make the sandbox refuse to be deleted, which is the case where the command is
         /// even more likely to still be running.
         delete_refuses: std::sync::atomic::AtomicBool,
     }
 
     /// Stands in for the wrapper's kill in a scripted response.
-    const DEADLINE_PLACEHOLDER: &str = "<deadline>";
-    /// The nonce a session would draw. Announced on the first line of stderr, and repeated by
+    const TIMEOUT_PLACEHOLDER: &str = "<timeout>";
+    /// The nonce a sandbox would draw. Announced on the first line of stderr, and repeated by
     /// the killer, exactly as the wrapper does.
     /// The width the wrapper draws — `od -N16` is 16 bytes, so 32 hex digits. Short of that is
     /// not an announcement, and a fixture that used a short one pinned a weaker rule than the
-    /// session's.
-    const SESSION_NONCE: &str = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
+    /// sandbox's.
+    const SANDBOX_NONCE: &str = "a1b2c3d4a1b2c3d4a1b2c3d4a1b2c3d4";
 
-    /// Wraps a scripted stderr the way a bounded session would return it.
-    fn as_session_stderr(stderr: &str) -> String {
+    /// Wraps a scripted stderr the way a bounded sandbox would return it.
+    fn as_sandbox_stderr(stderr: &str) -> String {
         match stderr {
-            DEADLINE_PLACEHOLDER => format!("{SESSION_NONCE}\npartial-err{SESSION_NONCE}"),
-            other => format!("{SESSION_NONCE}\n{other}"),
+            TIMEOUT_PLACEHOLDER => format!("{SANDBOX_NONCE}\npartial-err{SANDBOX_NONCE}"),
+            other => format!("{SANDBOX_NONCE}\n{other}"),
         }
     }
 
@@ -558,7 +550,7 @@ mod tests {
         }
         output.push(json!({
             "stream": "stderr",
-            "dataBase64": BASE64.encode(as_session_stderr(stderr)),
+            "dataBase64": BASE64.encode(as_sandbox_stderr(stderr)),
         }));
         json!({ "output": output, "exitCode": exit_code })
     }
@@ -611,28 +603,29 @@ mod tests {
         }
     }
 
-    fn command(deadline_secs: u64) -> RunCommandRequest {
+    fn command(timeout_secs: u64) -> RunCommandRequest {
         RunCommandRequest {
-            command: vec!["sleep".to_string(), "forever".to_string()],
-            working_directory: None,
+            command: "python".to_string(),
+            args: vec!["-u".to_string(), "main.py".to_string()],
+            cwd: None,
             env: BTreeMap::new(),
-            deadline: std::time::Duration::from_secs(deadline_secs),
+            timeout: std::time::Duration::from_secs(timeout_secs),
         }
     }
 
-    /// The deadline is enforced inside the session: the argv is prefixed with `timeout`, and when
-    /// it fires the output is kept, the stream ends in `deadlineExceeded`, and the session is not
+    /// The deadline is enforced inside the sandbox: the argv is prefixed with `timeout`, and when
+    /// it fires the output is kept, the stream ends in `timeoutExceeded`, and the sandbox is not
     /// touched.
     ///
     /// The wrapper reports its own kill, so the double answers with that report rather than the
     /// test leaning on timing.
     #[tokio::test]
-    async fn a_command_past_its_deadline_is_killed_in_place_and_the_session_survives() {
+    async fn a_command_past_its_timeout_is_killed_in_place_and_the_sandbox_survives() {
         let route = Arc::new(Route::default());
         route.execs.lock().expect("execs").push_back(exec_response(
             137,
             "partial\n",
-            DEADLINE_PLACEHOLDER,
+            TIMEOUT_PLACEHOLDER,
         ));
         let sandbox = serve(route.clone()).await;
 
@@ -653,12 +646,12 @@ mod tests {
             .as_ref()
             .expect_err("the stream must end in the deadline error, not an exit frame");
         assert!(
-            terminal.to_string().contains("deadlineExceeded"),
+            terminal.to_string().contains("timeoutExceeded"),
             "{terminal}"
         );
         assert!(
             route.deleted.lock().expect("deleted").is_empty(),
-            "the session survives an in-session kill"
+            "the sandbox survives an in-sandbox kill"
         );
         let sent = route.commands.lock().expect("commands").clone();
         assert_eq!(sent.len(), 1, "one command: {sent:?}");
@@ -667,8 +660,14 @@ mod tests {
         assert!(sent[0][2].contains("sleep 30"), "{:?}", sent[0]);
         assert_eq!(
             &sent[0][3..],
-            &["sh".to_string(), "sleep".to_string(), "forever".to_string()],
-            "the command is passed as arguments, not pasted into the program"
+            &[
+                "sh".to_string(),
+                "python".to_string(),
+                "-u".to_string(),
+                "main.py".to_string()
+            ],
+            "the program leads its arguments, in order, each passed as one argument rather than \
+             pasted into the program text"
         );
     }
 
@@ -676,13 +675,13 @@ mod tests {
     /// the repeat can arrive separately. Read a frame at a time, the pair would be missed and a
     /// killed command would come back as an ordinary exit with protocol bytes in its output.
     #[tokio::test]
-    async fn a_deadline_split_across_stderr_frames_is_still_read() {
+    async fn a_timeout_split_across_stderr_frames_is_still_read() {
         let route = Arc::new(Route::default());
         route.execs.lock().expect("execs").push_back(json!({
             "output": [
-                { "stream": "stderr", "dataBase64": BASE64.encode(format!("{SESSION_NONCE}\n")) },
+                { "stream": "stderr", "dataBase64": BASE64.encode(format!("{SANDBOX_NONCE}\n")) },
                 { "stream": "stderr", "dataBase64": BASE64.encode("partial-err") },
-                { "stream": "stderr", "dataBase64": BASE64.encode(SESSION_NONCE) },
+                { "stream": "stderr", "dataBase64": BASE64.encode(SANDBOX_NONCE) },
             ],
             "exitCode": 137,
         }));
@@ -705,7 +704,7 @@ mod tests {
             .as_ref()
             .expect_err("a killed command ends in the deadline error");
         assert!(
-            terminal.to_string().contains("deadlineExceeded"),
+            terminal.to_string().contains("timeoutExceeded"),
             "{terminal}"
         );
     }
@@ -713,7 +712,7 @@ mod tests {
     /// 124 is an ordinary exit status. Without the wrapper's report the command exited on its
     /// own, and saying otherwise would tell the caller its command was killed.
     #[tokio::test]
-    async fn a_command_exiting_124_of_its_own_accord_is_an_exit_not_a_deadline() {
+    async fn a_command_exiting_124_of_its_own_accord_is_an_exit_not_a_timeout() {
         let route = Arc::new(Route::default());
         route
             .execs
@@ -737,7 +736,7 @@ mod tests {
 
     /// A terminate that itself fails leaves the command even more likely to be running, so the
     /// unknown outcome has to survive it. Returning the terminate's own error instead would tell a
-    /// caller the session could not be deleted and say nothing about the command.
+    /// caller the sandbox could not be deleted and say nothing about the command.
     #[tokio::test(start_paused = true)]
     async fn a_terminate_that_fails_does_not_hide_the_unknown_outcome() {
         let route = Arc::new(Route::default());
@@ -759,11 +758,11 @@ mod tests {
         );
     }
 
-    /// When the session cannot end the command — the route never answers — the guard ends the
-    /// session. Ending it does not undo whatever the command did first, so the outcome is
+    /// When the sandbox cannot end the command — the route never answers — the guard ends the
+    /// sandbox. Ending it does not undo whatever the command did first, so the outcome is
     /// unreported rather than established. Time is paused, so the guard fires instantly.
     #[tokio::test(start_paused = true)]
-    async fn a_command_the_session_cannot_end_takes_the_session_with_it() {
+    async fn a_command_the_sandbox_cannot_end_takes_the_sandbox_with_it() {
         let route = Arc::new(Route::default());
         let sandbox = serve(route.clone()).await;
 
@@ -781,7 +780,7 @@ mod tests {
         assert_eq!(
             route.deleted.lock().expect("deleted").clone(),
             vec!["s1".to_string()],
-            "the session must actually be removed, not merely reported as terminated"
+            "the sandbox must actually be removed, not merely reported as terminated"
         );
     }
 }

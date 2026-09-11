@@ -6,7 +6,7 @@ use super::helpers::{
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
     import::data::AwsSandboxImportData, Network, NetworkSettings, RemoteBindings,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
     StackSettings, Worker, WorkerCode,
 };
 
@@ -25,9 +25,9 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
             image: image.to_string(),
         })
         .egress(egress)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build()
 }

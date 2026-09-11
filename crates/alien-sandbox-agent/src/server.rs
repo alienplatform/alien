@@ -134,14 +134,6 @@ pub struct WriteFileBody {
     pub contents_base64: String,
 }
 
-/// A directory to create.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MkdirBody {
-    /// Path inside the session
-    pub path: String,
-}
-
 /// The id a started job answers to.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -184,7 +176,7 @@ pub struct JobPollResponse {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct JobErrorBody {
-    /// Machine-readable cause, e.g. `deadlineExceeded`
+    /// Machine-readable cause, e.g. `timeoutExceeded`
     pub code: String,
     /// Human-readable detail
     pub message: String,
@@ -261,7 +253,6 @@ pub fn router(state: Arc<AgentState>) -> Router {
         )
         .route("/v1/exec", post(run_command))
         .route("/v1/files", get(read_file).put(write_file))
-        .route("/v1/mkdir", post(mkdir))
         .route("/v1/jobs/start", post(job_start))
         .route("/v1/jobs/poll", post(job_poll))
         .route("/v1/jobs/cancel", post(job_cancel))
@@ -358,7 +349,7 @@ async fn run_command(
 
     // Resolved before anything is spawned, so a refused directory is an error response rather
     // than a stream whose first frame is a failure.
-    let working_directory = match &request.working_directory {
+    let working_directory = match &request.cwd {
         Some(path) => resolve_within_root(&state.session_root, path)?,
         None => state.session_root.clone(),
     };
@@ -438,19 +429,6 @@ async fn write_file(
     Ok(StatusCode::NO_CONTENT)
 }
 
-async fn mkdir(
-    State(state): State<Arc<AgentState>>,
-    ConnectInfo(peer): ConnectInfo<SocketAddr>,
-    headers: HeaderMap,
-    Json(body): Json<MkdirBody>,
-) -> std::result::Result<StatusCode, ApiError> {
-    authorize(&state, peer, &headers, SandboxOperationClass::Execute)?;
-
-    files::mkdir(&state.session_root, &body.path).await?;
-
-    Ok(StatusCode::NO_CONTENT)
-}
-
 /// Starts a command as a detached job whose output is polled for rather than streamed.
 ///
 /// The provider chooses this over `/v1/exec` when a command's deadline is longer than one proxied
@@ -465,7 +443,7 @@ async fn job_start(
 
     // Resolved here, as in `run_command`, so a refused directory answers with an error rather than a
     // job whose first frame is a failure.
-    let working_directory = match &request.working_directory {
+    let working_directory = match &request.cwd {
         Some(path) => resolve_within_root(&state.session_root, path)?,
         None => state.session_root.clone(),
     };
@@ -578,14 +556,6 @@ async fn agent_platform(
         .await?
         .into_response()),
         "writeFile" => Ok(write_file(
-            State(state),
-            ConnectInfo(peer),
-            headers,
-            Json(reparse(&body)?),
-        )
-        .await?
-        .into_response()),
-        "mkdir" => Ok(mkdir(
             State(state),
             ConnectInfo(peer),
             headers,

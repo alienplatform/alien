@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 ///
 /// Carries the sandbox's parent from the setup emitter to the runtime controller. The image
 /// **version** is not decoration: `RunMicrovm` has no `tags`, so image plus version is the only
-/// session identity there is, and a controller holding a stale version would enumerate the wrong
-/// set and orphan every session started on the previous one.
+/// sandbox identity there is, and a controller holding a stale version would enumerate the wrong
+/// set and orphan every sandbox started on the previous one.
 ///
 /// Two shapes arrive here, and which fields are present says which. A Frozen sandbox is built by
 /// stack creation and names its image; a Live one is built by the controller after the deployment
@@ -21,7 +21,7 @@ pub struct AwsSandboxImportData {
     /// MicroVM image ARN. Absent until a runtime-provisioned image has been built.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_arn: Option<String>,
-    /// Image version the sessions are scoped to. Re-imported on every image roll, and absent
+    /// Image version the sandboxes are scoped to. Re-imported on every image roll, and absent
     /// until a runtime-provisioned image has been built.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub image_version: Option<String>,

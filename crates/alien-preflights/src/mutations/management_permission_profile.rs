@@ -420,8 +420,8 @@ mod tests {
         KubernetesClusterProvider, KubernetesExposureSettings, KubernetesHeartbeatMode,
         KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
         KubernetesSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, Sandbox, SandboxCode,
-        SandboxEgress, SandboxSessionPolicy, ServiceActivation, StackSettings, StackState, Storage,
-        TelemetryMode, Worker, WorkerCode, WorkerPublicEndpoint,
+        SandboxEgress, SandboxLifecyclePolicy, ServiceActivation, StackSettings, StackState,
+        Storage, TelemetryMode, Worker, WorkerCode, WorkerPublicEndpoint,
     };
 
     fn empty_env_snapshot() -> EnvironmentVariablesSnapshot {
@@ -492,9 +492,9 @@ mod tests {
                 image: "public.ecr.aws/docker/library/alpine:3.20".to_string(),
             })
             .egress(SandboxEgress::Allow)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
         let stack = Stack::new("test-stack".to_string())

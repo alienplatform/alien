@@ -455,7 +455,7 @@ impl RemoteBindings {
     /// Loads a Sandbox binding for running untrusted code in the customer's cloud.
     ///
     /// No refreshing wrapper, mirroring the in-cloud accessor: a sandbox handle addresses a
-    /// control plane rather than holding data-plane credentials, and each session capability is
+    /// control plane rather than holding data-plane credentials, and each sandbox capability is
     /// minted per call. The handle keeps the credential lease that was current when it was
     /// created, so call this again once that lease expires.
     ///

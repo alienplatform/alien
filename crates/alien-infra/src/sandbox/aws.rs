@@ -108,7 +108,7 @@ pub struct AwsSandboxController {
     pub(crate) preview_ports: Vec<u16>,
     /// Idle-suspend seconds for the binding, captured from the declaration.
     #[serde(default)]
-    pub(crate) idle_suspend_seconds: Option<u32>,
+    pub(crate) idle_pause_seconds: Option<u32>,
     /// Session lifetime ceiling for the binding, captured from the declaration.
     #[serde(default)]
     pub(crate) max_lifetime_seconds: Option<u32>,
@@ -160,8 +160,8 @@ impl AwsSandboxController {
                 message: "declared limits do not fit any MicroVM tier".to_string(),
                 resource_id: Some(config.id.clone()),
             })?;
-        self.idle_suspend_seconds = config.session.idle_suspend_seconds;
-        self.max_lifetime_seconds = config.session.max_lifetime_seconds;
+        self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
 
         // The vendor's base image travels inside the bundle's Dockerfile, already resolved to
         // a registry the build role can reach; the only image this call names is AWS's managed
@@ -469,8 +469,8 @@ impl AwsSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
         // The session-policy ceilings feed the binding and cost nothing to refresh.
-        self.idle_suspend_seconds = config.session.idle_suspend_seconds;
-        self.max_lifetime_seconds = config.session.max_lifetime_seconds;
+        self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
 
         // Ownership decides before the bundle is even read. A Frozen sandbox's image belongs to
         // the setup stack, which owns its bundle too and hands none over — so there is nothing
@@ -777,7 +777,7 @@ impl AwsSandboxController {
                 .map(|arn| BindingValue::value(arn.clone()))
                 .collect(),
             preview_ports: self.preview_ports.clone(),
-            idle_suspend_seconds: self.idle_suspend_seconds,
+            idle_pause_seconds: self.idle_pause_seconds,
             max_lifetime_seconds: self.max_lifetime_seconds,
             allow_egress: self.allow_egress,
         });
@@ -1218,7 +1218,7 @@ mod tests {
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
         UpdateMicrovmImageResponse,
     };
-    use alien_core::{Platform, SandboxCode, SandboxEgress, SandboxSessionPolicy};
+    use alien_core::{Platform, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
     use std::sync::Arc;
 
     const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
@@ -1233,9 +1233,9 @@ mod tests {
                 image: BUNDLE_URI.to_string(),
             })
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
-                idle_suspend_seconds: Some(600),
+                idle_pause_seconds: Some(600),
             })
             .build()
     }
@@ -1249,9 +1249,9 @@ mod tests {
                 image: bundle_uri.to_string(),
             })
             .egress(SandboxEgress::Deny)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: Some(1800),
-                idle_suspend_seconds: Some(600),
+                idle_pause_seconds: Some(600),
             })
             .build()
     }
@@ -1638,7 +1638,7 @@ mod tests {
         assert_eq!(binding["region"], "us-east-1");
         assert_eq!(binding["egressConnectorArns"][0], DENY_CONNECTOR_ARN);
         assert_eq!(binding["previewPorts"][0], 8080);
-        assert_eq!(binding["idleSuspendSeconds"], 600);
+        assert_eq!(binding["idlePauseSeconds"], 600);
         assert_eq!(binding["maxLifetimeSeconds"], 1800);
     }
 

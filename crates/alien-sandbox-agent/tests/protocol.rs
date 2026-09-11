@@ -183,12 +183,32 @@ async fn a_request_without_a_capability_is_refused() {
 
     let response = reqwest::Client::new()
         .post(format!("{}/v1/exec", agent.base_url))
-        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 5000}))
+        .json(&json!({"command": ["/bin/echo", "hi"], "timeoutMs": 5000}))
         .send()
         .await
         .expect("responds");
 
     assert_eq!(response.status(), 401);
+}
+
+/// The write path carries the same check as exec: it is the one route that changes the sandbox's
+/// filesystem, and the transport-mode tests below rely on this check being what they relax.
+#[tokio::test]
+async fn a_write_without_a_capability_is_refused() {
+    let agent = Agent::start().await;
+
+    let response = reqwest::Client::new()
+        .put(format!("{}/v1/files", agent.base_url))
+        .json(&json!({"path": "/work/landed.txt", "contentsBase64": BASE64.encode("x")}))
+        .send()
+        .await
+        .expect("responds");
+
+    assert_eq!(response.status(), 401);
+    assert!(
+        !agent.root.join("work/landed.txt").exists(),
+        "a refused write must not have landed anyway"
+    );
 }
 
 /// Over the wire: session ids and hostnames are guessable, so this is the refusal that matters
@@ -202,7 +222,7 @@ async fn a_capability_for_another_session_is_refused() {
     let response = reqwest::Client::new()
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(agent.mint(other))
-        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 5000}))
+        .json(&json!({"command": ["/bin/echo", "hi"], "timeoutMs": 5000}))
         .send()
         .await
         .expect("responds");
@@ -271,7 +291,7 @@ async fn a_command_streams_its_output_and_a_real_exit_code() {
     let response = reqwest::Client::new()
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(agent.capability())
-        .json(&json!({"command": ["/bin/sh", "-c", "echo out; echo err 1>&2; exit 7"], "deadlineMs": 10_000}))
+        .json(&json!({"command": ["/bin/sh", "-c", "echo out; echo err 1>&2; exit 7"], "timeoutMs": 10_000}))
         .send()
         .await
         .expect("responds");
@@ -305,16 +325,16 @@ async fn a_command_streams_its_output_and_a_real_exit_code() {
     );
 }
 
-/// Over the wire: the stream ends with an error frame naming the deadline, not with a silent
+/// Over the wire: the stream ends with an error frame naming the timeout, not with a silent
 /// close the caller could read as success.
 #[tokio::test]
-async fn a_command_that_overruns_ends_the_stream_with_a_deadline_error() {
+async fn a_command_that_overruns_ends_the_stream_with_a_timeout_error() {
     let agent = Agent::start().await;
 
     let response = reqwest::Client::new()
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(agent.capability())
-        .json(&json!({"command": ["/bin/sleep", "30"], "deadlineMs": 300}))
+        .json(&json!({"command": ["/bin/sleep", "30"], "timeoutMs": 300}))
         .send()
         .await
         .expect("responds");
@@ -322,7 +342,7 @@ async fn a_command_that_overruns_ends_the_stream_with_a_deadline_error() {
     let frames = frames(&response.text().await.expect("body"));
     let terminal = frames.last().expect("terminal");
     assert_eq!(terminal["t"], "error");
-    assert_eq!(terminal["code"], "deadlineExceeded");
+    assert_eq!(terminal["code"], "timeoutExceeded");
 }
 
 #[tokio::test]
@@ -390,8 +410,8 @@ async fn path_traversal_is_refused_over_the_protocol() {
         .bearer_auth(agent.capability())
         .json(&json!({
             "command": ["/bin/pwd"],
-            "deadlineMs": 5000,
-            "workingDirectory": "/../.."
+            "timeoutMs": 5000,
+            "cwd": "/../.."
         }))
         .send()
         .await
@@ -401,22 +421,6 @@ async fn path_traversal_is_refused_over_the_protocol() {
         400,
         "a working directory outside the session must be refused before anything is spawned"
     );
-}
-
-#[tokio::test]
-async fn mkdir_creates_a_directory_inside_the_session() {
-    let agent = Agent::start().await;
-
-    let response = reqwest::Client::new()
-        .post(format!("{}/v1/mkdir", agent.base_url))
-        .bearer_auth(agent.capability())
-        .json(&json!({"path": "/work/build"}))
-        .send()
-        .await
-        .expect("responds");
-
-    assert_eq!(response.status(), 204);
-    assert!(agent.root.join("work/build").is_dir());
 }
 
 /// AWS: the proxy validates a JWE scoped to one MicroVM, an explicit port set and an expiry
@@ -455,14 +459,14 @@ async fn transport_authorization_needs_no_capability() {
     });
 
     let response = reqwest::Client::new()
-        .post(format!("http://{address}/v1/mkdir"))
-        .json(&json!({"path": "/work"}))
+        .put(format!("http://{address}/v1/files"))
+        .json(&json!({"path": "/work/landed.txt", "contentsBase64": BASE64.encode("x")}))
         .send()
         .await
         .expect("responds");
 
     assert_eq!(response.status(), 204);
-    assert!(root.join("work").is_dir());
+    assert!(root.join("work/landed.txt").is_file());
 }
 
 /// Transport mode accepts a caller without a capability, which is safe for anything arriving
@@ -499,8 +503,8 @@ async fn transport_authorization_refuses_the_code_the_agent_runs() {
     });
 
     let response = reqwest::Client::new()
-        .post(format!("http://{address}/v1/mkdir"))
-        .json(&json!({"path": "/work"}))
+        .put(format!("http://{address}/v1/files"))
+        .json(&json!({"path": "/work/landed.txt", "contentsBase64": BASE64.encode("x")}))
         .send()
         .await
         .expect("responds");
@@ -566,7 +570,7 @@ async fn exec_through_the_envelope_is_byte_identical_to_v1() {
     let versioned = client
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(agent.capability())
-        .json(&json!({"command": ["/bin/echo", "hello"], "deadlineMs": 10_000}))
+        .json(&json!({"command": ["/bin/echo", "hello"], "timeoutMs": 10_000}))
         .send()
         .await
         .expect("responds");
@@ -574,7 +578,7 @@ async fn exec_through_the_envelope_is_byte_identical_to_v1() {
         .post(format!("{}/", agent.base_url))
         .bearer_auth(agent.capability())
         .json(
-            &json!({"v": 1, "op": "exec", "command": ["/bin/echo", "hello"], "deadlineMs": 10_000}),
+            &json!({"v": 1, "op": "exec", "command": ["/bin/echo", "hello"], "timeoutMs": 10_000}),
         )
         .send()
         .await
@@ -643,33 +647,6 @@ async fn write_file_through_the_envelope_is_byte_identical_to_v1_and_lands() {
     assert_eq!(
         std::fs::read(agent.root.join("work/env.txt")).expect("the envelope write landed"),
         b"x"
-    );
-}
-
-#[tokio::test]
-async fn mkdir_through_the_envelope_is_byte_identical_to_v1_and_lands() {
-    let agent = Agent::start().await;
-    let client = reqwest::Client::new();
-
-    let versioned = client
-        .post(format!("{}/v1/mkdir", agent.base_url))
-        .bearer_auth(agent.capability())
-        .json(&json!({"path": "/work/v1"}))
-        .send()
-        .await
-        .expect("responds");
-    let enveloped = client
-        .post(format!("{}/", agent.base_url))
-        .bearer_auth(agent.capability())
-        .json(&json!({"v": 1, "op": "mkdir", "path": "/work/env"}))
-        .send()
-        .await
-        .expect("responds");
-
-    assert_eq!(wire(versioned).await, wire(enveloped).await);
-    assert!(
-        agent.root.join("work/env").is_dir(),
-        "the envelope mkdir landed"
     );
 }
 
@@ -759,7 +736,7 @@ async fn an_unsupported_version_is_refused() {
 
 /// The envelope must route through `peer.rs`, not around it: under transport authorization the code
 /// the agent itself runs shares the guest's network stack and reaches this port, and it must be
-/// refused there exactly as it is on `/v1/mkdir`. Running the agent with this process as its exec
+/// refused there exactly as it is on `/v1/files`. Running the agent with this process as its exec
 /// identity is what that in-guest caller looks like from the inside.
 ///
 /// Linux-only because the socket's owner is read from `/proc/net/tcp`.
@@ -792,7 +769,12 @@ async fn the_envelope_refuses_the_code_the_agent_runs_under_transport() {
 
     let response = reqwest::Client::new()
         .post(format!("http://{address}/"))
-        .json(&json!({"v": 1, "op": "mkdir", "path": "/work"}))
+        .json(&json!({
+            "v": 1,
+            "op": "writeFile",
+            "path": "/work/landed.txt",
+            "contentsBase64": BASE64.encode("x"),
+        }))
         .send()
         .await
         .expect("responds");
@@ -828,7 +810,7 @@ async fn a_job_completes_and_its_output_is_polled_across_calls() {
             "v": 1,
             "op": "jobStart",
             "command": ["/bin/sh", "-c", "echo one; echo two"],
-            "deadlineMs": 10_000
+            "timeoutMs": 10_000
         }))
         .send()
         .await
@@ -892,7 +874,7 @@ async fn a_command_over_exec_creates_no_job() {
     let response = reqwest::Client::new()
         .post(format!("{}/v1/exec", agent.base_url))
         .bearer_auth(agent.capability())
-        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 10_000}))
+        .json(&json!({"command": ["/bin/echo", "hi"], "timeoutMs": 10_000}))
         .send()
         .await
         .expect("responds");
@@ -930,7 +912,7 @@ async fn starting_a_job_without_a_capability_is_refused() {
 
     let response = reqwest::Client::new()
         .post(format!("{}/v1/jobs/start", agent.base_url))
-        .json(&json!({"command": ["/bin/echo", "hi"], "deadlineMs": 10_000}))
+        .json(&json!({"command": ["/bin/echo", "hi"], "timeoutMs": 10_000}))
         .send()
         .await
         .expect("responds");

@@ -10,8 +10,8 @@ import { SandboxHeartbeatStatusSchema } from "./sandbox-heartbeat-status-schema.
  * @description AWS: the image a sandbox runs from, and the lifecycle state AWS reports for it.
  */
 export const AwsMicrovmSandboxHeartbeatDataSchema = z.object({
-    "imageIdentifier": z.string().describe("Image the sessions belong to."),
-"imageState": z.string().describe("The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account.").nullish(),
+    "imageIdentifier": z.string().describe("Image the sandboxes belong to."),
+"imageState": z.string().describe("The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo sandbox count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account.").nullish(),
 get "status"(){
                 return SandboxHeartbeatStatusSchema
               }

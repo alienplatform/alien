@@ -108,7 +108,7 @@ use utoipa::OpenApi;
     SandboxCode,
     SandboxLimits,
     SandboxEgress,
-    SandboxSessionPolicy,
+    SandboxLifecyclePolicy,
     SandboxCapabilities,
     SandboxCapability,
     Email,

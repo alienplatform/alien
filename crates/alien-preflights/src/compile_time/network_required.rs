@@ -259,7 +259,7 @@ mod tests {
     use alien_core::{
         permissions::PermissionsConfig, CapacityGroup, ComputeCluster, Container, ContainerCode,
         Network, NetworkSettings, ResourceEntry, ResourceLifecycle, ResourceSpec, SandboxCode,
-        SandboxSessionPolicy, Worker, WorkerCode, WorkerPublicEndpoint,
+        SandboxLifecyclePolicy, Worker, WorkerCode, WorkerPublicEndpoint,
     };
     use indexmap::IndexMap;
 
@@ -419,9 +419,9 @@ mod tests {
                         image: "test:latest".to_string(),
                     })
                     .egress(egress)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
             ),

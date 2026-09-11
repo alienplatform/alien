@@ -87,8 +87,8 @@ impl StackMutation for GcpAgentPlatformEngineMutation {
 mod tests {
     use super::*;
     use alien_core::{
-        PermissionsConfig, SandboxCode, SandboxEgress, SandboxSessionPolicy, StackInputDefinition,
-        StackSettings,
+        PermissionsConfig, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        StackInputDefinition, StackSettings,
     };
 
     fn config() -> DeploymentConfig {
@@ -113,9 +113,9 @@ mod tests {
                         image: "python:3.12".to_string(),
                     })
                     .egress(SandboxEgress::Deny)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 lifecycle,
@@ -175,9 +175,9 @@ mod tests {
                         image: "python:3.12".to_string(),
                     })
                     .egress(SandboxEgress::Deny)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

@@ -375,22 +375,37 @@ export interface Vault {
   list(): Promise<string[]>
 }
 
-/** A live sandbox session. */
-export interface SandboxSession {
-  /** Session id, which is what every later call addresses. */
-  sessionId: string
+/** A live sandbox. */
+export interface SandboxInstance {
+  /** Sandbox id, which is what every later call addresses. */
+  sandboxId: string
   /** Lifecycle state. */
-  state: "starting" | "running" | "suspended" | "terminated"
-  /** Increments when a session is replaced, so a stale handle is detectable. */
+  state: "starting" | "running" | "paused" | "terminated"
+  /** Increments when a sandbox is replaced, so a stale handle is detectable. */
   generation: number
 }
 
-/** A session from `getOrCreate`, and which of the two things happened. */
-export interface ResolvedSession {
-  /** The session, whether it was made by this call or found. */
-  session: SandboxSession
+/** A sandbox from `getOrCreate`, and which of the two things happened. */
+export interface ResolvedSandbox {
+  /** The sandbox, whether it was made by this call or found. */
+  sandbox: SandboxInstance
   /** Whether this call is what created it. */
   created: boolean
+}
+
+/** What a sandbox is created with. */
+export interface CreateSandboxOptions {
+  sandboxId?: string
+  tenantKey?: string
+  /** Environment every command in the sandbox starts with. */
+  env?: Record<string, string>
+  /**
+   * Wall-clock lifetime, after which the platform terminates the sandbox.
+   *
+   * Only a backend reporting `sandboxLifetime` takes one; the rest raise rather than run on past
+   * it. A ceiling the deployment declared still applies, so this can only ever shorten a sandbox.
+   */
+  timeoutMs?: number
 }
 
 /** One frame of a running command's output. */
@@ -401,19 +416,24 @@ export type CommandFrame =
 /** What a command needs to run. */
 export interface RunCommandOptions {
   /**
-   * How long the command may run, in milliseconds. Required rather than defaulted: a defaulted
-   * deadline is a hang waiting for a slow day, in a sandbox running code you do not control.
+   * How long this command may run, in milliseconds. Required rather than defaulted: a defaulted
+   * timeout is a hang waiting for a slow day, in a sandbox running code you do not control.
    *
-   * It bounds the command, not the call. What expiry does to the session differs by backend:
-   * where the backend has no timeout of its own the only lever is ending the session, so the
-   * iterator raises once that is confirmed, somewhat after the deadline. Where the agent
-   * supervises the process it kills the process group and the session stays usable. Either way
-   * the command is stopped; only the session's fate differs.
+   * Not `CreateSandboxOptions.timeoutMs`, which is the sandbox's own wall-clock lifetime; neither
+   * bounds the other.
+   *
+   * It bounds the command, not the call. What expiry does to the sandbox differs by backend:
+   * where the backend has no timeout of its own the only lever is ending the sandbox, so the
+   * iterator raises once that is confirmed, somewhat after it expires. Where the agent
+   * supervises the process it kills the process group and the sandbox stays usable. Either way
+   * the command is stopped; only the sandbox's fate differs.
    */
-  deadlineMs: number
+  timeoutMs: number
+  /** Arguments for the program, each passed as one argument rather than re-parsed as text. */
+  args?: string[]
   /** Working directory inside the sandbox. */
-  workingDirectory?: string
-  /** Environment for this command, on top of whatever the session was created with. */
+  cwd?: string
+  /** Environment for this command, on top of whatever the sandbox was created with. */
   env?: Record<string, string>
 }
 
@@ -425,7 +445,7 @@ export interface JobExit {
 
 /** Why a job ended without its command exiting. */
 export interface JobError {
-  /** Machine-readable cause, e.g. `deadlineExceeded`. */
+  /** Machine-readable cause, e.g. `timeoutExceeded`. */
   code: string
   message: string
 }
@@ -449,33 +469,28 @@ export interface Sandbox {
   /** Which operations this platform supports. */
   capabilities(): Promise<string[]>
   /**
-   * Creates a session that can already take work.
+   * Creates a sandbox that can already take work.
    *
-   * Resolves only once the session can serve, so the first command never races its start. On a
+   * Resolves only once the sandbox can serve, so the first command never races its start. On a
    * backend whose start API returns early — AWS, where a MicroVM restores from a snapshot — that
-   * wait is part of this call and can take seconds; a session that never becomes reachable
+   * wait is part of this call and can take seconds; a sandbox that never becomes reachable
    * rejects rather than resolving into something unusable.
    */
-  create(options?: {
-    sessionId?: string
-    tenantKey?: string
-    /** Environment every command in the session starts with. */
-    env?: Record<string, string>
-  }): Promise<SandboxSession>
-  /** Fetches a session, or `null` if it does not exist. Requires `reconnect`. */
-  get(sessionId: string): Promise<SandboxSession | null>
-  /** Fetches a session, creating it if absent, and reports which it did. */
-  getOrCreate(options?: {
-    sessionId?: string
-    tenantKey?: string
-    /** Environment every command in the session starts with. */
-    env?: Record<string, string>
-  }): Promise<ResolvedSession>
+  create(options?: CreateSandboxOptions): Promise<SandboxInstance>
+  /** Fetches a sandbox, or `null` if it does not exist. Requires `reconnect`. */
+  get(sandboxId: string): Promise<SandboxInstance | null>
   /**
-   * Lists this sandbox's sessions. Not offered on AWS, Azure or GCP — those raise rather than
-   * enumerate. Reach a session whose id you hold with `get`.
+   * Fetches a sandbox, creating it if absent, and reports which it did.
+   *
+   * `timeoutMs` bounds a sandbox this call creates; one that is found keeps the lifetime it was
+   * created with, and `created` is how a caller tells the two apart.
    */
-  list(): Promise<SandboxSession[]>
+  getOrCreate(options?: CreateSandboxOptions): Promise<ResolvedSandbox>
+  /**
+   * Lists this binding's sandboxes. Not offered on AWS, Azure or GCP — those raise rather than
+   * enumerate. Reach a sandbox whose id you hold with `get`.
+   */
+  list(): Promise<SandboxInstance[]>
   /**
    * Runs a command, yielding frames as the command produces them.
    *
@@ -483,8 +498,8 @@ export interface Sandbox {
    * loop asks for the next frame, so a slow consumer slows the producer instead of buffering.
    */
   runCommand(
-    sessionId: string,
-    command: string[],
+    sandboxId: string,
+    command: string,
     options: RunCommandOptions,
   ): AsyncIterable<CommandFrame>
   /**
@@ -494,26 +509,24 @@ export interface Sandbox {
    * goes away can reach the job again by its id. A start that goes unanswered raises
    * `SANDBOX_OUTCOME_UNKNOWN` and must not be repeated — the sandbox may have taken the command.
    */
-  startJob(sessionId: string, command: string[], options: RunCommandOptions): Promise<string>
+  startJob(sandboxId: string, command: string, options: RunCommandOptions): Promise<string>
   /**
    * Reads a job's output after `sinceSeq`, and its ending once it has one. Requires `jobs`.
    *
    * Omit `sinceSeq` to read from the first frame; afterwards pass the highest `seq` seen, which is
    * what makes a repeated poll return only what is new.
    */
-  pollJob(sessionId: string, jobId: string, sinceSeq?: number): Promise<JobPoll>
+  pollJob(sandboxId: string, jobId: string, sinceSeq?: number): Promise<JobPoll>
   /** Cancels a job, stopping its command. Requires `jobs`. */
-  cancelJob(sessionId: string, jobId: string): Promise<void>
+  cancelJob(sandboxId: string, jobId: string): Promise<void>
   /** Reads a file out of the sandbox. Requires `files`. */
-  readFile(sessionId: string, path: string): Promise<Buffer>
-  /** Writes files into the sandbox. Requires `files`. */
-  writeFiles(sessionId: string, files: Record<string, Buffer | string>): Promise<void>
-  /** Creates a directory inside the sandbox. Requires `files`. */
-  mkdir(sessionId: string, path: string): Promise<void>
-  /** Suspends a session, preserving state. Requires `suspendResume`. */
-  suspend(sessionId: string): Promise<void>
-  /** Resumes a suspended session. Requires `suspendResume`. */
-  resume(sessionId: string): Promise<void>
-  /** Destroys a session. Idempotent. */
-  terminate(sessionId: string): Promise<void>
+  readFile(sandboxId: string, path: string): Promise<Buffer>
+  /** Writes files into the sandbox. Requires `files`. Parent directories are created as needed. */
+  writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>
+  /** Pauses a sandbox, preserving state. Requires `pauseResume`. */
+  pause(sandboxId: string): Promise<void>
+  /** Resumes a paused sandbox. Requires `pauseResume`. */
+  resume(sandboxId: string): Promise<void>
+  /** Destroys a sandbox. Idempotent. */
+  terminate(sandboxId: string): Promise<void>
 }

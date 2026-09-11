@@ -964,78 +964,85 @@ pub trait Container: Binding {
     fn as_any(&self) -> &dyn std::any::Any;
 }
 
-/// A request to create a sandbox session.
+/// A request to create a sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct CreateSessionRequest {
-    /// Session id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
+pub struct CreateSandboxRequest {
+    /// Sandbox id to reconnect to, for the verbs that take one. AWS, Azure and GCP always
     /// allocate their own on `create` and ignore this; only Local and Kubernetes honor it as the
-    /// new session's id. Read the id back from the response rather than assume the one sent.
+    /// new sandbox's id. Read the id back from the response rather than assume the one sent.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<String>,
+    pub sandbox_id: Option<String>,
     /// Opaque tenant key. Never sent to a provider verbatim — the binding derives a
     /// fixed-length identifier from it with a deployment-scoped HMAC.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tenant_key: Option<String>,
-    /// Environment variables to place in the session.
+    /// Environment variables to place in the sandbox.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
+    /// Wall-clock lifetime, after which the platform terminates the sandbox.
+    ///
+    /// Requires `sandboxLifetime`; a backend without it refuses rather than accepting a ceiling
+    /// it would never apply. It only ever shortens: a declared ceiling still bounds the sandbox,
+    /// so a caller cannot buy itself more life than the deployment allows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_ms: Option<u64>,
 }
 
-/// A live sandbox session.
+/// A live sandbox.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub struct SandboxSession {
-    /// Provider-scoped session identifier
-    pub session_id: String,
+pub struct SandboxInstance {
+    /// Provider-scoped sandbox identifier
+    pub sandbox_id: String,
     /// Current lifecycle state
-    pub state: SandboxSessionState,
+    pub state: SandboxState,
     /// Lifecycle generation. A capability from another generation is rejected, which is how
     /// terminate revokes without distributing a revocation list.
     ///
-    /// Differs by backend: AWS/Azure allocate a fresh id per session, so a constant carries the
+    /// Differs by backend: AWS/Azure allocate a fresh id per sandbox, so a constant carries the
     /// whole meaning; GCP has none, so this is the guest's boot id — which a snapshot restore
     /// reports unchanged, so restore and replacement need the resource name too to tell apart.
     pub generation: u64,
 }
 
-/// A session from `get_or_create`, and which of the two things happened.
+/// A sandbox from `get_or_create`, and which of the two things happened.
 ///
 /// A reconnect and a create are separate paths in every provider; `created` carries that
 /// distinction out to the caller, which would otherwise make its own first-run work idempotent.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ResolvedSession {
-    /// The session, whether it was made here or found.
-    pub session: SandboxSession,
+pub struct ResolvedSandbox {
+    /// The sandbox, whether it was made here or found.
+    pub sandbox: SandboxInstance,
     /// Whether this request is what created it.
     pub created: bool,
 }
 
-impl ResolvedSession {
-    /// This request created the session.
-    pub fn created(session: SandboxSession) -> Self {
+impl ResolvedSandbox {
+    /// This request created the sandbox.
+    pub fn created(sandbox: SandboxInstance) -> Self {
         Self {
-            session,
+            sandbox,
             created: true,
         }
     }
 
-    /// An existing session, whatever it took to reach it — a wait, a wake — but not made here.
-    pub fn found(session: SandboxSession) -> Self {
+    /// An existing sandbox, whatever it took to reach it — a wait, a wake — but not made here.
+    pub fn found(sandbox: SandboxInstance) -> Self {
         Self {
-            session,
+            sandbox,
             created: false,
         }
     }
 }
 
-/// Lifecycle state of a sandbox session.
+/// Lifecycle state of a sandbox.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
-pub enum SandboxSessionState {
+pub enum SandboxState {
     /// Created but not yet able to run a command.
     ///
     /// A real state, not a placeholder: a MicroVM takes seconds to reach `RUNNING`, and calling
@@ -1043,8 +1050,8 @@ pub enum SandboxSessionState {
     Starting,
     /// Executing, consuming CPU and memory
     Running,
-    /// Suspended with state preserved
-    Suspended,
+    /// Paused with state preserved
+    Paused,
     /// Terminated; the id will not run again
     Terminated,
 }
@@ -1054,32 +1061,47 @@ pub enum SandboxSessionState {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct RunCommandRequest {
-    /// Command and arguments
-    pub command: Vec<String>,
+    /// The program to run
+    pub command: String,
+    /// Arguments handed to the program, each as one argument — nothing re-parses their text
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
     /// Working directory inside the sandbox
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub working_directory: Option<String>,
-    /// Environment overlaid on the session's own
+    pub cwd: Option<String>,
+    /// Environment overlaid on the sandbox's own
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub env: BTreeMap<String, String>,
-    /// How long the command may run. Required — a defaulted deadline is a hang waiting for a slow
+    /// How long this command may run. Required — a defaulted timeout is a hang waiting for a slow
     /// day.
+    ///
+    /// Distinct from `CreateSandboxRequest::timeout_ms`, which is the sandbox's own wall-clock
+    /// lifetime: neither ever bounds or shortens the other.
     ///
     /// It bounds the command, not the call, and the call lands just after it. Where the agent
     /// supervises the process it kills the process group; where the data plane has no timeout of
-    /// its own the command runs under `timeout` inside the session. Either way the session stays
-    /// usable. Only a session that cannot run `timeout` is ended instead, and that call returns
-    /// once the session is gone.
+    /// its own the command runs under `timeout` inside the sandbox. Either way the sandbox stays
+    /// usable. Only a sandbox that cannot run `timeout` is ended instead, and that call returns
+    /// once the sandbox is gone.
     ///
-    /// On every backend `deadlineExceeded` is reported only once the command has verifiably
-    /// stopped — the agent waits for its kill, and where there is no agent the session kills the
+    /// On every backend `timeoutExceeded` is reported only once the command has verifiably
+    /// stopped — the agent waits for its kill, and where there is no agent the sandbox kills the
     /// command itself and says so. It is never reported on a stop that was merely requested: a
-    /// deadline that leaves untrusted code running is not a deadline.
+    /// timeout that leaves untrusted code running is not a timeout.
     ///
     /// What stops is the command and its process group. A descendant that detaches itself into a
     /// session of its own is beyond any signal sent from inside, on every backend; it is bounded
-    /// by the sandbox session, which ends on terminate or at its own lifetime ceiling.
-    pub deadline: Duration,
+    /// by the sandbox, which ends on terminate or at its own lifetime ceiling.
+    pub timeout: Duration,
+}
+
+impl RunCommandRequest {
+    /// The program followed by its arguments, which is the shape every backend's exec takes.
+    pub fn argv(&self) -> Vec<String> {
+        std::iter::once(self.command.clone())
+            .chain(self.args.iter().cloned())
+            .collect()
+    }
 }
 
 /// One frame of a running command's output.
@@ -1157,7 +1179,7 @@ pub struct JobExit {
 #[cfg_attr(feature = "openapi", derive(ToSchema))]
 #[serde(rename_all = "camelCase")]
 pub struct JobError {
-    /// Machine-readable cause, e.g. `deadlineExceeded`
+    /// Machine-readable cause, e.g. `timeoutExceeded`
     pub code: String,
     /// Human-readable detail
     pub message: String,
@@ -1182,7 +1204,7 @@ pub struct PreviewCapability {
     pub expires_in_seconds: u64,
 }
 
-/// A sandbox binding: create sessions, run untrusted code in them, and tear them down.
+/// A sandbox binding: create sandboxes, run untrusted code in them, and tear them down.
 ///
 /// Capabilities differ per platform. Call `capabilities()` and branch, or call and handle the
 /// typed error — an unsupported capability is never a silent no-op.
@@ -1191,34 +1213,38 @@ pub trait Sandbox: Binding {
     /// What this platform's backend supports.
     fn capabilities(&self) -> alien_core::SandboxCapabilities;
 
-    /// Creates a session that can already take work.
+    /// Creates a sandbox that can already take work.
     ///
-    /// Returning before the session can serve pushes a readiness poll into every caller for a
+    /// Returning before the sandbox can serve pushes a readiness poll into every caller for a
     /// condition only the backend can observe, and the resulting race fails a fraction of the
     /// time rather than every time. A backend whose start API returns early waits here.
-    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession>;
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance>;
 
-    /// Fetches a session by id, or `None` if it does not exist.
+    /// Fetches a sandbox by id, or `None` if it does not exist.
     ///
-    /// Requires `reconnect`. `None` means the session does not exist; a backend that cannot
-    /// answer the question returns the typed error instead, so an absent session and an
+    /// Requires `reconnect`. `None` means the sandbox does not exist; a backend that cannot
+    /// answer the question returns the typed error instead, so an absent sandbox and an
     /// unreachable one are never the same result.
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>>;
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>>;
 
-    /// Fetches a session, creating it if absent, and reports which it did.
+    /// Fetches a sandbox, creating it if absent, and reports which it did.
     ///
     /// Answer `created` from the path taken, never from a timestamp: the clocks are the provider's,
     /// not ours. No backend offers an atomic create-if-absent, so two callers naming one id can
     /// both be told they created it; a caller that cannot tolerate its setup running twice needs
     /// its own lock.
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<ResolvedSession>;
+    ///
+    /// `timeoutMs` bounds a sandbox this call creates. No backend can move a running sandbox's
+    /// deadline, so one that is found keeps the lifetime it was created with, and `created` is
+    /// how a caller tells the two apart.
+    async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox>;
 
-    /// Lists sessions belonging to this sandbox's parent.
+    /// Lists the sandboxes belonging to this binding's parent.
     ///
     /// Offered only where the backend has a verb for it and the grant covers it — GCP lists
     /// under its engine. AWS and Azure raise `OperationNotSupported`: enumerating there costs an
-    /// account-wide grant the session role deliberately withholds. Reaching a known id is `get`.
-    async fn list(&self) -> Result<Vec<SandboxSession>>;
+    /// account-wide grant the sandbox role deliberately withholds. Reaching a known id is `get`.
+    async fn list(&self) -> Result<Vec<SandboxInstance>>;
 
     /// Runs a command, streaming output frames until exactly one terminal frame.
     ///
@@ -1226,7 +1252,7 @@ pub trait Sandbox: Binding {
     /// writer, rather than buffering without bound.
     async fn run_command(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<futures::stream::BoxStream<'static, Result<CommandOutput>>>;
 
@@ -1234,7 +1260,7 @@ pub trait Sandbox: Binding {
     ///
     /// A start that goes unanswered is `SANDBOX_OUTCOME_UNKNOWN` and not retryable: the sandbox
     /// may have taken the command, and repeating it would run it twice.
-    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart>;
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart>;
 
     /// Reads a job's output after `since_seq`, and its ending once it has one. Requires `jobs`.
     ///
@@ -1242,7 +1268,7 @@ pub trait Sandbox: Binding {
     /// a sandbox that cannot be reached is `SANDBOX_UNREACHABLE` and retryable.
     async fn poll_job(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         job_id: &str,
         since_seq: Option<u64>,
     ) -> Result<JobPoll>;
@@ -1250,32 +1276,29 @@ pub trait Sandbox: Binding {
     /// Cancels a job, stopping its command. Requires `jobs`.
     ///
     /// Classified like `poll_job`: a cancel that is repeated stops nothing a second time.
-    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()>;
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()>;
 
     /// Reads a file out of the sandbox. Requires `files`. Paths are normalised and may not
     /// escape the root.
-    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>>;
+    async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>>;
 
-    /// Writes files into the sandbox. Requires `files`.
-    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()>;
-
-    /// Creates a directory inside the sandbox. Requires `files`.
-    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()>;
+    /// Writes files into the sandbox. Requires `files`. Parent directories are created as needed.
+    async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()>;
 
     /// Mints a capability to reach a declared port. Requires `preview`.
-    async fn preview(&self, session_id: &str, port: u16) -> Result<PreviewCapability>;
+    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability>;
 
-    /// Suspends a session, preserving state. Requires `suspendResume`.
-    async fn suspend(&self, session_id: &str) -> Result<()>;
+    /// Pauses a sandbox, preserving state. Requires `pauseResume`.
+    async fn pause(&self, sandbox_id: &str) -> Result<()>;
 
-    /// Resumes a suspended session. Requires `suspendResume`.
-    async fn resume(&self, session_id: &str) -> Result<()>;
+    /// Resumes a paused sandbox. Requires `pauseResume`.
+    async fn resume(&self, sandbox_id: &str) -> Result<()>;
 
-    /// Captures full session state and returns its identifier. Requires `snapshot`.
-    async fn snapshot(&self, session_id: &str) -> Result<String>;
+    /// Captures full sandbox state and returns its identifier. Requires `snapshot`.
+    async fn snapshot(&self, sandbox_id: &str) -> Result<String>;
 
-    /// Terminates a session. Idempotent: terminating an absent session succeeds.
-    async fn terminate(&self, session_id: &str) -> Result<()>;
+    /// Terminates a sandbox. Idempotent: terminating an absent sandbox succeeds.
+    async fn terminate(&self, sandbox_id: &str) -> Result<()>;
 
     /// Get a reference to this object as `Any` for dynamic casting
     fn as_any(&self) -> &dyn std::any::Any;

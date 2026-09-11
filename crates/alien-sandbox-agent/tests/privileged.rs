@@ -68,8 +68,8 @@ fn session_root() -> (TempDir, PathBuf) {
 async fn run_as_exec_uid(command: &[&str], working_directory: Option<&Path>) -> Vec<Frame> {
     let request = ExecRequest {
         command: command.iter().map(|part| part.to_string()).collect(),
-        deadline_ms: 30_000,
-        working_directory: None,
+        timeout_ms: 30_000,
+        cwd: None,
         env: BTreeMap::new(),
     };
 
@@ -180,12 +180,9 @@ async fn the_command_can_write_beside_what_was_uploaded() {
 async fn a_working_directory_the_agent_created_is_usable() {
     let (_dir, root) = session_root();
 
-    files::mkdir(&root, "/work")
-        .await
-        .expect("the agent creates it");
     files::write(&root, "/work/data.txt", b"payload")
         .await
-        .expect("the agent writes into it");
+        .expect("the agent creates the directory and writes into it");
 
     let frames = run_as_exec_uid(&["/bin/cat", "data.txt"], Some(&root.join("work"))).await;
 

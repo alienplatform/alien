@@ -3,9 +3,9 @@ import {
   type SandboxCode,
   type Sandbox as SandboxConfig,
   type SandboxEgress,
+  type SandboxLifecyclePolicy,
   type SandboxLimits,
   SandboxSchema,
-  type SandboxSessionPolicy,
 } from "./generated/index.js"
 import { type Resource, ResourceBuilder } from "./resource.js"
 
@@ -14,16 +14,16 @@ export type {
   SandboxCapabilities,
   SandboxCode,
   SandboxEgress,
+  SandboxLifecyclePolicy,
   SandboxLimits,
   SandboxOutputs,
-  SandboxSessionPolicy,
 } from "./generated/index.js"
 export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
 
 /**
  * An isolated environment for running untrusted code.
  *
- * The declaration provisions a durable parent; individual sessions are created and destroyed
+ * The declaration provisions a durable parent; individual sandboxes are created and destroyed
  * at runtime through the binding. Backends differ:
  * - AWS: Lambda MicroVMs on Firecracker, with an Alien agent inside the image
  * - Azure: Container Apps Sandboxes, whose data plane implements the API natively
@@ -33,8 +33,8 @@ export { SandboxSchema as SandboxConfigSchema } from "./generated/index.js"
  *
  * Capabilities are not uniform. Call `capabilities()` on the binding and branch, or handle the
  * typed error — an unsupported capability never silently succeeds. Notably GCP cannot
- * reconnect to a session (its session id is scoped to one Cloud Run instance), only Azure
- * restricts egress to a hostname allowlist, no platform can snapshot a session, and only AWS
+ * reconnect to a sandbox (its id is scoped to one Cloud Run instance), only Azure
+ * restricts egress to a hostname allowlist, no platform can snapshot a sandbox, and only AWS
  * and Local run a command under a different identity than the process supervising it. Elsewhere the
  * command shares the supervisor's user, so it can read the supervisor's environment and
  * signal it, and the container is the isolation boundary.
@@ -79,10 +79,10 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
-   * Sets session lifetime and idle behaviour.
+   * Sets the sandbox lifetime ceiling and idle behaviour.
    */
-  public session(session: SandboxSessionPolicy): this {
-    this._config.session = session
+  public lifecycle(lifecycle: SandboxLifecyclePolicy): this {
+    this._config.lifecycle = lifecycle
     return this
   }
 
