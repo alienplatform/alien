@@ -947,10 +947,8 @@ fn can_accept_reimport(
     release_id: &str,
     req: &StackImportRequest,
 ) -> bool {
-    matches!(
-        existing.status.as_str(),
-        "running" | "update-failed" | "refresh-failed"
-    ) || is_idempotent_import(existing, imported_stack_state, release_id, req)
+    is_stable_setup_repair_state(&existing.status)
+        || is_idempotent_import(existing, imported_stack_state, release_id, req)
 }
 
 fn is_idempotent_import(
@@ -982,9 +980,24 @@ fn is_pending_setup_reservation(existing: &DeploymentRecord, release_id: &str) -
 }
 
 fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
+    is_stable_setup_repair_state(&existing.status)
+}
+
+/// Setup may be rerun after a completed deployment or a terminal failure.
+///
+/// These states have no active execution to race. In particular, the initial
+/// failure states must remain repairable: setup owns the frozen resources and
+/// is the only actor that can correct them before provisioning resumes. Active
+/// and deletion states deliberately remain excluded.
+fn is_stable_setup_repair_state(status: &str) -> bool {
     matches!(
-        existing.status.as_str(),
-        "running" | "update-failed" | "refresh-failed"
+        status,
+        "preflights-failed"
+            | "initial-setup-failed"
+            | "provisioning-failed"
+            | "running"
+            | "update-failed"
+            | "refresh-failed"
     )
 }
 
@@ -1599,6 +1612,44 @@ mod setup_update_authorization_tests {
                 ResourceLifecycle::Live,
             )
             .build()
+    }
+
+    #[test]
+    fn setup_repair_accepts_only_terminal_non_deletion_states() {
+        for status in [
+            "preflights-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+            "running",
+            "refresh-failed",
+            "update-failed",
+        ] {
+            assert!(
+                is_stable_setup_repair_state(status),
+                "{status} must remain repairable by its owning setup tool"
+            );
+        }
+
+        for status in [
+            "pending",
+            "initial-setup",
+            "provisioning",
+            "waiting-for-machines",
+            "update-pending",
+            "updating",
+            "delete-pending",
+            "deleting",
+            "delete-failed",
+            "teardown-required",
+            "teardown-failed",
+            "deleted",
+            "error",
+        ] {
+            assert!(
+                !is_stable_setup_repair_state(status),
+                "{status} must not accept a concurrent setup repair"
+            );
+        }
     }
 
     #[test]

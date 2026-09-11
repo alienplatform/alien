@@ -1064,6 +1064,100 @@ async fn re_import_replaces_stack_state() {
 }
 
 #[tokio::test]
+async fn re_import_repairs_terminal_initial_failures() {
+    for failed_status in [
+        DeploymentStatus::PreflightsFailed,
+        DeploymentStatus::InitialSetupFailed,
+        DeploymentStatus::ProvisioningFailed,
+    ] {
+        let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+        let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+        let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &imported.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist");
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: deployment.id,
+                    session: "failed-initial-deployment".to_string(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: failed_status,
+                        platform: deployment.platform,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack: stack_with_storage("assets"),
+                        }),
+                        target_release: None,
+                        stack_state: deployment.stack_state,
+                        error: None,
+                        environment_info: deployment.environment_info,
+                        runtime_metadata: deployment.runtime_metadata,
+                        retry_requested: false,
+                        protocol_version: deployment.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                },
+            )
+            .await
+            .expect("fixture should enter a stable failure state");
+
+        body.resources[0].import_data = serde_json::to_value(AwsStorageImportData {
+            bucket_name: "acme-imports-repaired".to_string(),
+            bucket_arn: "arn:aws:s3:::acme-imports-repaired".to_string(),
+        })
+        .unwrap();
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "stable failure {failed_status:?} must be repairable: {json:#}"
+        );
+
+        let persisted = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &imported.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist");
+        assert_eq!(persisted.status, "update-pending");
+        let outputs = persisted
+            .stack_state
+            .as_ref()
+            .and_then(|state| state.resources.get("assets"))
+            .and_then(|resource| resource.outputs.as_ref())
+            .expect("repaired setup outputs must persist");
+        assert!(serde_json::to_value(outputs)
+            .unwrap()
+            .to_string()
+            .contains("acme-imports-repaired"));
+    }
+}
+
+#[tokio::test]
 async fn re_import_advances_setup_registration_replay_baseline() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let mut first_request =
