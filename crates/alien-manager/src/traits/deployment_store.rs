@@ -186,6 +186,13 @@ pub struct CreateImportedDeploymentParams {
 /// Import-owned fields replaced when setup re-registers a deployment.
 #[derive(Debug, Clone)]
 pub struct UpdateImportedDeploymentParams {
+    /// Complete deployment settings resolved by the setup artifact.
+    ///
+    /// A launch-time reservation contains only the choices known before the
+    /// customer runs setup. Registration must replace those placeholders with
+    /// the concrete network and compute selections that created the imported
+    /// infrastructure.
+    pub stack_settings: StackSettings,
     pub stack_state: StackState,
     pub environment_info: Option<EnvironmentInfo>,
     pub runtime_metadata: RuntimeMetadata,
@@ -194,6 +201,9 @@ pub struct UpdateImportedDeploymentParams {
     pub setup_target: String,
     pub setup_fingerprint: String,
     pub setup_fingerprint_version: u32,
+    /// Initial status when this import activates a launch-time reservation.
+    /// Ordinary re-imports leave this unset and preserve their current status.
+    pub activation_status: Option<String>,
     /// Move the deployment to `update-pending` in the same write as the import data.
     pub schedule_reconciliation: bool,
     /// Deployer stack input values carried by the re-import; they overwrite

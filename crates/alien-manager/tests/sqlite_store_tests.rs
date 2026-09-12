@@ -309,6 +309,7 @@ async fn input_values_survive_create_import_and_reimport() {
             &test_subject(),
             &imported.id,
             UpdateImportedDeploymentParams {
+                stack_settings: StackSettings::default(),
                 stack_state: StackState::new(Platform::Aws),
                 environment_info: None,
                 runtime_metadata: RuntimeMetadata::default(),
@@ -317,6 +318,7 @@ async fn input_values_survive_create_import_and_reimport() {
                 setup_target: "test".to_string(),
                 setup_fingerprint: "test".to_string(),
                 setup_fingerprint_version: 1,
+                activation_status: None,
                 schedule_reconciliation: false,
                 input_values: edited.clone(),
             },

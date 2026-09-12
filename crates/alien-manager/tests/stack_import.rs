@@ -30,11 +30,12 @@ use alien_core::permissions::PermissionProfile;
 use alien_core::{
     AwsEnvironmentInfo, AwsManagementConfig, AwsRemoteStackManagementImportData,
     AwsServiceAccountImportData, AwsStorageImportData, AzureEnvironmentInfo, AzureManagementConfig,
-    AzureRemoteStackManagementImportData, DeploymentState, DeploymentStatus, EnvironmentInfo,
-    GcpEnvironmentInfo, GcpManagementConfig, GcpRemoteStackManagementImportData, KubernetesCluster,
-    KubernetesClusterOwnership, KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo,
-    RemoteStackManagement, ResourceLifecycle, ResourceStatus, ServiceAccount, Stack, StackSettings,
-    Storage, Worker, WorkerCode,
+    AzureRemoteStackManagementImportData, ComputePoolSelection, ComputeSettings, DeploymentState,
+    DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo, GcpManagementConfig,
+    GcpRemoteStackManagementImportData, KubernetesCluster, KubernetesClusterOwnership,
+    KubernetesClusterProvider, ManagementConfig, Platform, ReleaseInfo, RemoteStackManagement,
+    ResourceLifecycle, ResourceStatus, RuntimeMetadata, ServiceAccount, Stack, StackSettings,
+    StackState, Storage, Worker, WorkerCode,
 };
 use alien_manager::auth::Authz;
 use alien_manager::config::ManagerConfig;
@@ -47,9 +48,9 @@ use alien_manager::stores::sqlite::{
     SqliteDatabase, SqliteDeploymentStore, SqliteReleaseStore, SqliteTokenStore,
 };
 use alien_manager::traits::{
-    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams, CreateReleaseParams,
-    CreateTokenParams, CredentialResolver, DeploymentStore, ReconcileData, ReleaseStore,
-    TelemetryBackend, TokenStore, TokenType,
+    AuthValidator, CreateDeploymentGroupParams, CreateDeploymentParams,
+    CreateImportedDeploymentParams, CreateReleaseParams, CreateTokenParams, CredentialResolver,
+    DeploymentStore, ReconcileData, ReleaseStore, TelemetryBackend, TokenStore, TokenType,
 };
 
 // ---------------------------------------------------------------------------
@@ -669,6 +670,136 @@ async fn happy_path_creates_imported_deployment() {
 }
 
 #[tokio::test]
+async fn deployment_token_reimports_only_its_own_setup_without_bootstrap_token() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+    let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::CREATED, "{json:#}");
+    let first: StackImportResponse = serde_json::from_value(json).unwrap();
+    let token = first
+        .deployment_token
+        .as_deref()
+        .expect("deployment credential");
+
+    let hash = format!("{:x}", Sha256::digest(fixture.dg_token.as_bytes()));
+    let bootstrap = fixture
+        .token_store
+        .validate_token(&hash)
+        .await
+        .unwrap()
+        .unwrap();
+    fixture
+        .token_store
+        .delete_token(&bootstrap.id)
+        .await
+        .unwrap();
+    let (status, _) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (status, json) = post_import(&fixture, Some(token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+    let replay: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(replay.deployment_id, first.deployment_id);
+    assert_eq!(replay.deployment_token, first.deployment_token);
+
+    let mut other = body;
+    other.deployment_name = "another-deployment".to_string();
+    let (status, json) = post_import(&fixture, Some(token), &other).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{json:#}");
+    assert!(fixture
+        .deployment_store
+        .get_deployment_by_name(
+            &alien_manager::auth::Subject::system(),
+            &fixture.deployment_group_id,
+            "another-deployment"
+        )
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
+async fn deployment_token_activates_its_pending_setup_reservation() {
+    let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+    let release_id = fixture.release_id.clone().expect("fixture has a release");
+    let reserved = fixture
+        .deployment_store
+        .create_with_state(
+            &alien_manager::auth::Subject::system(),
+            CreateImportedDeploymentParams {
+                name: "acme-reserved".to_string(),
+                deployment_group_id: fixture.deployment_group_id.clone(),
+                platform: Platform::Aws,
+                deployment_protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+                base_platform: None,
+                stack_settings: StackSettings::default(),
+                stack_state: StackState::new(Platform::Aws),
+                environment_info: None,
+                runtime_metadata: RuntimeMetadata::default(),
+                status: "pending".to_string(),
+                current_release_id: None,
+                desired_release_id: None,
+                import_source: Some(ImportSourceKind::CloudFormation),
+                setup_metadata: Some(serde_json::json!({
+                    "setupReservation": { "releaseId": release_id.clone() }
+                })),
+                setup_target: "aws".to_string(),
+                setup_fingerprint: "test".to_string(),
+                setup_fingerprint_version: 1,
+                deployment_token: None,
+                management_config: None,
+                input_values: Default::default(),
+            },
+        )
+        .await
+        .unwrap();
+    let deployment_token = mint_token(
+        &fixture.token_store,
+        TokenType::Deployment,
+        "ax_dep_",
+        None,
+        Some(reserved.id.clone()),
+    )
+    .await;
+
+    let mut body = aws_s3_import_request("acme-reserved", "us-east-1", "assets", "acme-imports");
+    let selected_compute = ComputeSettings {
+        pools: HashMap::from([(
+            "general".to_string(),
+            ComputePoolSelection::Fixed {
+                machines: 1,
+                machine: Some("t4g.medium".to_string()),
+                failure_domains: None,
+            },
+        )]),
+    };
+    body.stack_settings.compute = Some(selected_compute.clone());
+    let (status, json) = post_import(&fixture, Some(&deployment_token), &body).await;
+    assert_eq!(status, StatusCode::OK, "{json:#}");
+
+    let activated = fixture
+        .deployment_store
+        .get_deployment(&alien_manager::auth::Subject::system(), &reserved.id)
+        .await
+        .unwrap()
+        .expect("reservation remains the same deployment");
+    assert_eq!(activated.status, "provisioning");
+    assert_eq!(
+        activated.current_release_id.as_deref(),
+        Some(release_id.as_str())
+    );
+    assert!(activated.stack_state.is_some());
+    assert_eq!(
+        activated
+            .stack_settings
+            .expect("activated reservation has stack settings")
+            .compute,
+        Some(selected_compute),
+        "registration must replace reservation placeholders with setup selections"
+    );
+}
+
+#[tokio::test]
 async fn incomplete_setup_handoff_is_rejected_before_deployment_creation() {
     let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
     let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
@@ -930,6 +1061,100 @@ async fn re_import_replaces_stack_state() {
         outputs_json.to_string().contains("acme-imports-v2"),
         "updated import data should replace the persisted stack state: {outputs_json:#}"
     );
+}
+
+#[tokio::test]
+async fn re_import_repairs_terminal_initial_failures() {
+    for failed_status in [
+        DeploymentStatus::PreflightsFailed,
+        DeploymentStatus::InitialSetupFailed,
+        DeploymentStatus::ProvisioningFailed,
+    ] {
+        let fixture = make_fixture(Some(stack_with_storage("assets"))).await;
+        let mut body = aws_s3_import_request("acme-prod", "us-east-1", "assets", "acme-imports");
+
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(status, StatusCode::CREATED, "body = {json:#}");
+        let imported: StackImportResponse = serde_json::from_value(json).unwrap();
+
+        let deployment = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &imported.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist");
+        fixture
+            .deployment_store
+            .reconcile(
+                &alien_manager::auth::Subject::system(),
+                ReconcileData {
+                    deployment_id: deployment.id,
+                    session: "failed-initial-deployment".to_string(),
+                    execution_claim: None,
+                    state: DeploymentState {
+                        status: failed_status,
+                        platform: deployment.platform,
+                        current_release: Some(ReleaseInfo {
+                            release_id: fixture.release_id.clone(),
+                            version: None,
+                            description: None,
+                            stack: stack_with_storage("assets"),
+                        }),
+                        target_release: None,
+                        stack_state: deployment.stack_state,
+                        error: None,
+                        environment_info: deployment.environment_info,
+                        runtime_metadata: deployment.runtime_metadata,
+                        retry_requested: false,
+                        protocol_version: deployment.deployment_protocol_version,
+                    },
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: vec![],
+                    observed_inventory_batches: vec![],
+                    capabilities: vec![],
+                    operator_version: None,
+                },
+            )
+            .await
+            .expect("fixture should enter a stable failure state");
+
+        body.resources[0].import_data = serde_json::to_value(AwsStorageImportData {
+            bucket_name: "acme-imports-repaired".to_string(),
+            bucket_arn: "arn:aws:s3:::acme-imports-repaired".to_string(),
+        })
+        .unwrap();
+        let (status, json) = post_import(&fixture, Some(&fixture.dg_token), &body).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "stable failure {failed_status:?} must be repairable: {json:#}"
+        );
+
+        let persisted = fixture
+            .deployment_store
+            .get_deployment(
+                &alien_manager::auth::Subject::system(),
+                &imported.deployment_id,
+            )
+            .await
+            .unwrap()
+            .expect("deployment must persist");
+        assert_eq!(persisted.status, "update-pending");
+        let outputs = persisted
+            .stack_state
+            .as_ref()
+            .and_then(|state| state.resources.get("assets"))
+            .and_then(|resource| resource.outputs.as_ref())
+            .expect("repaired setup outputs must persist");
+        assert!(serde_json::to_value(outputs)
+            .unwrap()
+            .to_string()
+            .contains("acme-imports-repaired"));
+    }
 }
 
 #[tokio::test]

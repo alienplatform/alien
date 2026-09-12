@@ -707,6 +707,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         params: UpdateImportedDeploymentParams,
     ) -> Result<DeploymentRecord, AlienError> {
         let UpdateImportedDeploymentParams {
+            stack_settings,
             stack_state,
             environment_info,
             runtime_metadata,
@@ -715,6 +716,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             setup_target,
             setup_fingerprint,
             setup_fingerprint_version,
+            activation_status,
             schedule_reconciliation,
             input_values,
         } = params;
@@ -726,6 +728,11 @@ impl DeploymentStore for SqliteDeploymentStore {
             .into_alien_error()
             .context(GenericError {
                 message: "Failed to serialize imported stack_state".to_string(),
+            })?;
+        let stack_settings_json = serde_json::to_string(&stack_settings)
+            .into_alien_error()
+            .context(GenericError {
+                message: "Failed to serialize imported stack_settings".to_string(),
             })?;
         let runtime_metadata_json = serde_json::to_string(&runtime_metadata)
             .into_alien_error()
@@ -755,6 +762,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             let mut update = Query::update();
             update
                 .table(Deployments::Table)
+                .value(Deployments::StackSettings, stack_settings_json)
                 .value(Deployments::StackState, stack_state_json)
                 .value(Deployments::EnvironmentInfo, environment_info_json)
                 .value(Deployments::RuntimeMetadata, runtime_metadata_json)
@@ -774,6 +782,9 @@ impl DeploymentStore for SqliteDeploymentStore {
 
             if let Some(release_id) = current_release_id {
                 update.value(Deployments::CurrentReleaseId, release_id);
+            }
+            if let Some(status) = activation_status {
+                update.value(Deployments::Status, status);
             }
             if schedule_reconciliation {
                 update
