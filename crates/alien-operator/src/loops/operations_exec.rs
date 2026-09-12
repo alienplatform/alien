@@ -21,6 +21,7 @@
 
 use std::sync::Arc;
 
+use alien_core::sync::{OperationsReport, TargetOperationsBundleSet};
 use async_trait::async_trait;
 use serde_json::Value;
 use tracing::debug;
@@ -60,6 +61,43 @@ pub trait OperationsExecLoop: Send + Sync + 'static {
     async fn run(self: Arc<Self>, state: Arc<OperatorState>);
 }
 
+/// Drives the Operator's plugin registry toward the target bundle set the
+/// sync loop receives, and reports what's actually loaded. Injected by the
+/// binary; the OSS operator has no plugin registry, so it downloads nothing
+/// and reports nothing.
+///
+/// The sync loop calls [`sync_bundles`](Self::sync_bundles) once per sync
+/// tick with the server's `targetOperationsBundleSet` (or `None` if the
+/// project has never enabled a plugin). An implementation should:
+/// 1. Compare `target.hash` (if any) against what it currently has loaded.
+/// 2. If different, download the bundles it doesn't already have via their
+///    presigned URLs and hot-reload its registry — never block the sync
+///    loop itself; downloads should happen in the background and this call
+///    should return promptly with the state as of *now*.
+/// 3. Return an [`OperationsReport`] reflecting the currently loaded catalog
+///    (not the target) so the platform can detect drift and mark the
+///    installation `stuck` if downloads keep failing.
+#[async_trait]
+pub trait OperationsSyncHandler: Send + Sync + 'static {
+    async fn sync_bundles(&self, target: Option<&TargetOperationsBundleSet>) -> OperationsReport;
+}
+
+/// No-op handler used when no plugin registry is wired in (OSS builds,
+/// airgapped binaries). Reports an empty, hash-less catalog — the platform
+/// reads a `None`/absent report as "this Operator doesn't report," never as
+/// "stuck."
+pub struct UnimplementedOperationsSyncHandler;
+
+#[async_trait]
+impl OperationsSyncHandler for UnimplementedOperationsSyncHandler {
+    async fn sync_bundles(&self, _target: Option<&TargetOperationsBundleSet>) -> OperationsReport {
+        OperationsReport {
+            loaded_bundle_hash: None,
+            operations: Vec::new(),
+        }
+    }
+}
+
 /// No-op loop used when no executor is wired in (OSS builds, airgapped
 /// binaries). Logs once and parks until shutdown so the supervisor doesn't
 /// treat the unused loop as an early exit.
@@ -85,7 +123,10 @@ mod tests {
     use tokio::time::timeout;
     use tokio_util::sync::CancellationToken;
 
-    use super::{OperationsExecLoop, UnimplementedOperationsExecLoop};
+    use super::{
+        OperationsExecLoop, OperationsSyncHandler, UnimplementedOperationsExecLoop,
+        UnimplementedOperationsSyncHandler,
+    };
     use crate::{db::OperatorDb, OperatorConfig, OperatorState};
 
     #[tokio::test]
@@ -108,6 +149,7 @@ mod tests {
             config,
             db,
             service_provider: None,
+            operations_sync_handler: None,
             cancel: cancel.clone(),
         });
 
@@ -122,5 +164,12 @@ mod tests {
             .await
             .expect("operations receiver should stop after operator cancellation")
             .expect("operations receiver task should not panic");
+    }
+
+    #[tokio::test]
+    async fn unimplemented_sync_handler_reports_empty_hashless_catalog() {
+        let report = UnimplementedOperationsSyncHandler.sync_bundles(None).await;
+        assert!(report.loaded_bundle_hash.is_none());
+        assert!(report.operations.is_empty());
     }
 }

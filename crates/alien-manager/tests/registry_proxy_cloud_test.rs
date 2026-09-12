@@ -469,6 +469,7 @@ impl CloudProxyTest {
                     suggested_delay_ms: None,
                     capabilities: vec![],
                     operator_version: None,
+                    operations_report: None,
                 },
             )
             .await

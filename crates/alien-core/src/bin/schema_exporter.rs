@@ -1,3 +1,6 @@
+use alien_core::sync::{
+    OperationsBundleDownload, OperationsReport, ReportedOperation, TargetOperationsBundleSet,
+};
 use alien_core::*;
 use clap::Parser;
 use std::{fs::File, io::Write as _};
@@ -50,7 +53,11 @@ use utoipa::OpenApi;
     StackResourceState,
     StackSettings,
     NetworkSettings,
+    ComputeSettings,
+    FailureDomainSelection,
+    ComputePoolSelection,
     DomainSettings,
+    PublicEndpointTargetSettings,
     CustomDomainConfig,
     CustomCertificateConfig,
     AwsCustomCertificateConfig,
@@ -234,6 +241,10 @@ use utoipa::OpenApi;
     AzureStorageAccountImportData,
     AzureFlexibleServerPostgresImportData,
     AzureSandboxImportData,
+    ReportedOperation,
+    OperationsReport,
+    OperationsBundleDownload,
+    TargetOperationsBundleSet,
 )))]
 struct ApiDoc;
 

@@ -1183,7 +1183,7 @@ impl DeploymentStore for SqliteDeploymentStore {
         &self,
         caller: &crate::auth::Subject,
         data: ReconcileData,
-    ) -> Result<DeploymentRecord, AlienError> {
+    ) -> Result<ReconcileOutcome, AlienError> {
         let now = Utc::now();
         let state = &data.state;
         let next_step_after = data.suggested_delay_ms.map(|delay_ms| {
@@ -1346,10 +1346,16 @@ impl DeploymentStore for SqliteDeploymentStore {
             .to_string(SqliteQueryBuilder);
         self.db.execute(&lock_heartbeat_sql).await?;
 
-        // Fetch and return the updated deployment
-        self.get_deployment(caller, &data.deployment_id)
+        // Fetch and return the updated deployment. OSS has no operations-plugin
+        // concept, so there is never a target bundle set to report back.
+        let record = self
+            .get_deployment(caller, &data.deployment_id)
             .await?
-            .ok_or_else(|| db_error("Deployment not found after reconcile"))
+            .ok_or_else(|| db_error("Deployment not found after reconcile"))?;
+        Ok(ReconcileOutcome {
+            record,
+            target_operations_bundle_set: None,
+        })
     }
 
     async fn release(
