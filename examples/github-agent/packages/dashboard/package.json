@@ -22,19 +22,19 @@
     "@tanstack/react-query": "^5.62.11",
     "@tanstack/react-table": "^9.1.2",
     "autoprefixer": "^10.4.20",
-    "bcrypt": "^5.1.1",
+    "bcrypt": "^6.0.0",
     "better-auth": "^1.2.8",
     "canvas-confetti": "^1.9.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
     "date-fns": "4.1.0",
-    "drizzle-orm": "^0.38.3",
+    "drizzle-orm": "^0.45.2",
     "embla-carousel-react": "8.5.1",
     "github-agent-remote-agent": "file:../remote-agent",
     "input-otp": "1.4.1",
     "lucide-react": "^0.468.0",
-    "next": "15.2.6",
+    "next": "15.5.24",
     "next-themes": "^0.4.6",
     "pg": "^8.13.1",
     "radix-ui": "^1.6.7",
@@ -66,5 +66,13 @@
     "tsx": "^4.19.2",
     "tw-animate-css": "1.3.3",
     "typescript": "^5"
+  },
+  "pnpm": {
+    "overrides": {
+      "@workflow/core>nanoid": "5.1.16",
+      "@workflow/world-local>undici": "7.29.0",
+      "@workflow/world-vercel>undici": "7.29.0",
+      "next>postcss": "8.5.18"
+    }
   }
 }

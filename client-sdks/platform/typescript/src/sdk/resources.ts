@@ -33,6 +33,9 @@ export class Resources extends ClientSDK {
     ));
   }
 
+  /**
+   * List the project's deployments with their rollout state relative to this release.
+   */
   async listDeployments(
     request: operations.ListResourceDeploymentsRequest,
     options?: RequestOptions,

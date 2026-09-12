@@ -10,6 +10,10 @@ import {
 } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
+import {
+  DeploymentCredentialRotationEvent,
+  DeploymentCredentialRotationEvent$inboundSchema,
+} from "./deploymentcredentialrotationevent.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type EventListItemResponseDataDeploymentDeletionRequested = {
@@ -1358,7 +1362,8 @@ export type EventListItemResponseDataUnion =
   | EventListItemResponseDataDeploymentReleasePinned
   | EventListItemResponseDataDeploymentReleaseUnpinned
   | EventListItemResponseDataDeploymentEnvironmentUpdated
-  | EventListItemResponseDataDeploymentDeletionRequested;
+  | EventListItemResponseDataDeploymentDeletionRequested
+  | DeploymentCredentialRotationEvent;
 
 export const EventListItemResponseStateSuccess = {
   Success: "success",
@@ -1556,7 +1561,8 @@ export type EventListItemResponse = {
     | EventListItemResponseDataDeploymentReleasePinned
     | EventListItemResponseDataDeploymentReleaseUnpinned
     | EventListItemResponseDataDeploymentEnvironmentUpdated
-    | EventListItemResponseDataDeploymentDeletionRequested;
+    | EventListItemResponseDataDeploymentDeletionRequested
+    | DeploymentCredentialRotationEvent;
   /**
    * Represents the state of an event
    */
@@ -3391,6 +3397,7 @@ export const EventListItemResponseDataUnion$inboundSchema: z.ZodType<
   z.lazy(() =>
     EventListItemResponseDataDeploymentDeletionRequested$inboundSchema
   ),
+  DeploymentCredentialRotationEvent$inboundSchema,
 ]);
 
 export function eventListItemResponseDataUnionFromJSON(
@@ -3608,6 +3615,7 @@ export const EventListItemResponse$inboundSchema: z.ZodType<
     z.lazy(() =>
       EventListItemResponseDataDeploymentDeletionRequested$inboundSchema
     ),
+    DeploymentCredentialRotationEvent$inboundSchema,
   ]),
   state: z.union([
     z.lazy(() => EventListItemResponseState$inboundSchema),

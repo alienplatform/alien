@@ -41,20 +41,6 @@ export class DebugSessions extends ClientSDK {
   }
 
   /**
-   * Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
-   */
-  async update(
-    request: operations.UpdateDebugSessionRequest,
-    options?: RequestOptions,
-  ): Promise<models.DebugSession> {
-    return unwrapAsync(debugSessionsUpdate(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Retrieve a debug session by ID.
    */
   async get(
@@ -62,6 +48,20 @@ export class DebugSessions extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.DebugSession> {
     return unwrapAsync(debugSessionsGet(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+   */
+  async update(
+    request: operations.UpdateDebugSessionRequest,
+    options?: RequestOptions,
+  ): Promise<models.DebugSession> {
+    return unwrapAsync(debugSessionsUpdate(
       this,
       request,
       options,

@@ -13,7 +13,7 @@ export type ConfigureProjectKeysGlobals = {
 };
 
 export type ConfigureProjectKeysRequestBody = {
-  applicationEncryption: boolean;
+  applicationEncryption: true;
 };
 
 export type ConfigureProjectKeysRequest = {
@@ -26,7 +26,7 @@ export type ConfigureProjectKeysRequest = {
 
 /** @internal */
 export type ConfigureProjectKeysRequestBody$Outbound = {
-  applicationEncryption: boolean;
+  applicationEncryption: true;
 };
 
 /** @internal */
@@ -34,7 +34,7 @@ export const ConfigureProjectKeysRequestBody$outboundSchema: z.ZodType<
   ConfigureProjectKeysRequestBody$Outbound,
   ConfigureProjectKeysRequestBody
 > = z.object({
-  applicationEncryption: z.boolean(),
+  applicationEncryption: z.literal(true),
 });
 
 export function configureProjectKeysRequestBodyToJSON(

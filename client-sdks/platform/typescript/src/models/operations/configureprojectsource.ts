@@ -352,13 +352,13 @@ export type ConfigureProjectSourceMethod = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceDeployments = {
-  enabled: boolean;
+  enabled: true;
   methods?: Array<ConfigureProjectSourceMethod> | undefined;
 };
 
 export type ConfigureProjectSourceKeys = {
-  enabled: boolean;
-  applicationEncryption: boolean;
+  enabled: true;
+  applicationEncryption: true;
 };
 
 export const ConfigureProjectSourceAllowedProvider = {
@@ -389,7 +389,7 @@ export type ConfigureProjectSourceRequirement = {
 };
 
 export type ConfigureProjectSourceModels = {
-  enabled: boolean;
+  enabled: true;
   allowedProviders: Array<ConfigureProjectSourceAllowedProvider>;
   requirements: Array<ConfigureProjectSourceRequirement>;
 };
@@ -402,7 +402,7 @@ export type ConfigureProjectSourceAccess = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceBuckets = {
-  enabled: boolean;
+  enabled: true;
   access: ConfigureProjectSourceAccess;
 };
 
@@ -415,13 +415,13 @@ export type ConfigureProjectSourceCredentialPolicy = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceRegistry = {
-  enabled: boolean;
+  enabled: true;
   repositories: Array<string>;
   credentialPolicy: ConfigureProjectSourceCredentialPolicy;
 };
 
 export type ConfigureProjectSourceRemoteSandbox = {
-  enabled: boolean;
+  enabled: true;
   baseImage?: string | undefined;
   imageBundleUri?: string | undefined;
   maxSessionLifetimeSeconds: number;
@@ -942,7 +942,7 @@ export const ConfigureProjectSourceDeployments$inboundSchema: z.ZodType<
   ConfigureProjectSourceDeployments,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   methods: z.array(ConfigureProjectSourceMethod$inboundSchema).optional(),
 });
 
@@ -961,8 +961,8 @@ export const ConfigureProjectSourceKeys$inboundSchema: z.ZodType<
   ConfigureProjectSourceKeys,
   unknown
 > = z.object({
-  enabled: z.boolean(),
-  applicationEncryption: z.boolean(),
+  enabled: z.literal(true),
+  applicationEncryption: z.literal(true),
 });
 
 export function configureProjectSourceKeysFromJSON(
@@ -1010,7 +1010,7 @@ export const ConfigureProjectSourceModels$inboundSchema: z.ZodType<
   ConfigureProjectSourceModels,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   allowedProviders: z.array(
     ConfigureProjectSourceAllowedProvider$inboundSchema,
   ),
@@ -1039,7 +1039,7 @@ export const ConfigureProjectSourceBuckets$inboundSchema: z.ZodType<
   ConfigureProjectSourceBuckets,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   access: ConfigureProjectSourceAccess$inboundSchema,
 });
 
@@ -1063,7 +1063,7 @@ export const ConfigureProjectSourceRegistry$inboundSchema: z.ZodType<
   ConfigureProjectSourceRegistry,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   repositories: z.array(z.string()),
   credentialPolicy: ConfigureProjectSourceCredentialPolicy$inboundSchema,
 });
@@ -1083,7 +1083,7 @@ export const ConfigureProjectSourceRemoteSandbox$inboundSchema: z.ZodType<
   ConfigureProjectSourceRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   baseImage: z.string().optional(),
   imageBundleUri: z.string().optional(),
   maxSessionLifetimeSeconds: z.int(),

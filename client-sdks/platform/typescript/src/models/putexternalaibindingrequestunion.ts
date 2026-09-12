@@ -10,7 +10,7 @@ export type PutExternalAIBindingRequestDatabricks = {
   workspaceUrl: string;
   clientId: string;
   clientSecret: string;
-  acknowledgeAlienCredentialAccess: boolean;
+  acknowledgeAlienCredentialAccess: true;
 };
 
 export const PutExternalAIBindingRequestProviderEnum = {
@@ -24,7 +24,7 @@ export type PutExternalAIBindingRequestProviderEnum = ClosedEnum<
 export type PutExternalAIBindingRequest = {
   provider: PutExternalAIBindingRequestProviderEnum;
   apiKey: string;
-  acknowledgeAlienCredentialAccess: boolean;
+  acknowledgeAlienCredentialAccess: true;
 };
 
 export type PutExternalAIBindingRequestUnion =
@@ -38,7 +38,7 @@ export type PutExternalAIBindingRequestDatabricks$Outbound = {
   workspaceUrl: string;
   clientId: string;
   clientSecret: string;
-  acknowledgeAlienCredentialAccess: boolean;
+  acknowledgeAlienCredentialAccess: true;
 };
 
 /** @internal */
@@ -50,7 +50,7 @@ export const PutExternalAIBindingRequestDatabricks$outboundSchema: z.ZodType<
   workspaceUrl: z.string(),
   clientId: z.string(),
   clientSecret: z.string(),
-  acknowledgeAlienCredentialAccess: z.boolean(),
+  acknowledgeAlienCredentialAccess: z.literal(true),
 });
 
 export function putExternalAIBindingRequestDatabricksToJSON(
@@ -72,7 +72,7 @@ export const PutExternalAIBindingRequestProviderEnum$outboundSchema: z.ZodEnum<
 export type PutExternalAIBindingRequest$Outbound = {
   provider: string;
   apiKey: string;
-  acknowledgeAlienCredentialAccess: boolean;
+  acknowledgeAlienCredentialAccess: true;
 };
 
 /** @internal */
@@ -82,7 +82,7 @@ export const PutExternalAIBindingRequest$outboundSchema: z.ZodType<
 > = z.object({
   provider: PutExternalAIBindingRequestProviderEnum$outboundSchema,
   apiKey: z.string(),
-  acknowledgeAlienCredentialAccess: z.boolean(),
+  acknowledgeAlienCredentialAccess: z.literal(true),
 });
 
 export function putExternalAIBindingRequestToJSON(

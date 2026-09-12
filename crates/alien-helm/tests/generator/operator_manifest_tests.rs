@@ -2,9 +2,11 @@ use alien_helm::{
     generate_operator_manifest, HelmChart, OperatorManifestOptions, OperatorOutputFormat,
     OperatorPermission, OperatorScope,
 };
+use alien_operations_sdk::{KubernetesOperationPermissions, PluginManifest};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_yaml::Value as YamlValue;
+use std::collections::BTreeSet;
 
 use super::test_utils;
 
@@ -16,7 +18,25 @@ fn rendered_manifest(
     permission: OperatorPermission,
     kubernetes_operations_enabled: bool,
 ) -> String {
+    rendered_with_custom(
+        scope,
+        permission,
+        kubernetes_operations_enabled,
+        &[],
+        OperatorOutputFormat::RawManifest,
+    )
+    .expect("operator manifest should render")
+}
+
+fn rendered_with_custom(
+    scope: OperatorScope,
+    permission: OperatorPermission,
+    kubernetes_operations_enabled: bool,
+    custom_operation_permissions: &[KubernetesOperationPermissions],
+    format: OperatorOutputFormat,
+) -> alien_core::Result<String> {
     generate_operator_manifest(OperatorManifestOptions {
+        custom_operation_permissions,
         manager_url: "https://manager.example.com",
         group_token: "ax_dg_test",
         encryption_key: TEST_ENCRYPTION_KEY,
@@ -31,9 +51,222 @@ fn rendered_manifest(
         label_selector: None,
         kubernetes_operations_enabled,
         permission,
-        format: OperatorOutputFormat::RawManifest,
+        format,
     })
-    .expect("operator manifest should render")
+}
+
+fn custom_operation(plugin_name: &str) -> KubernetesOperationPermissions {
+    // Exercise the author-facing metadata contract, not a hand-built rule.
+    let manifest = serde_json::json!({
+        "name": plugin_name, "version": "1", "tier": "read-only",
+        "binaries": {"amd64": "inspector"},
+        "operations": [{"name": "inspect", "kubernetesPermissions": {
+            "schemaVersion": 1, "rules": [{
+                "apiGroup": "example.com", "resource": "widgets",
+                "verbs": ["watch", "get", "list", "get"],
+                "resourceNames": ["sample", "sample"], "reason": "Inspect selected widgets"
+            }]
+        }}]
+    });
+    let parsed = PluginManifest::parse_and_validate(manifest.to_string().as_bytes()).unwrap();
+    let operation = &parsed.operations[0];
+    KubernetesOperationPermissions {
+        plugin: parsed.name.clone(),
+        operation: operation.name.clone(),
+        tier: operation.effective_tier(parsed.tier),
+        permissions: operation.kubernetes_permissions.clone().unwrap(),
+    }
+}
+
+#[test]
+fn custom_permissions_follow_enabled_consumers_with_stable_scoped_rbac() {
+    let first = custom_operation("first");
+    let second = custom_operation("second");
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        for enabled in [
+            vec![],
+            vec![first.clone()],
+            vec![first.clone(), second.clone()],
+            vec![second.clone()],
+            vec![],
+        ] {
+            let rendered = rendered_with_custom(
+                scope,
+                OperatorPermission::Diagnostics,
+                false,
+                &enabled,
+                OperatorOutputFormat::RawManifest,
+            )
+            .unwrap();
+            let docs = parse_manifest(&rendered);
+            let role = docs
+                .iter()
+                .find(|doc| doc["kind"] == "Role" || doc["kind"] == "ClusterRole")
+                .unwrap();
+            let rules: Vec<_> = role["rules"]
+                .as_sequence()
+                .unwrap()
+                .iter()
+                .filter(|rule| rule["resources"][0] == "widgets")
+                .collect();
+            assert_eq!(rules.len(), usize::from(!enabled.is_empty()));
+            if let Some(rule) = rules.first() {
+                assert_eq!(
+                    rule["apiGroups"],
+                    serde_yaml::to_value(["example.com"]).unwrap()
+                );
+                assert_eq!(
+                    rule["verbs"],
+                    serde_yaml::to_value(["get", "list", "watch"]).unwrap()
+                );
+                assert_eq!(
+                    rule["resourceNames"],
+                    serde_yaml::to_value(["sample"]).unwrap()
+                );
+            }
+            for operation in &enabled {
+                assert!(rendered.contains(&format!(
+                    "{}/inspect: Inspect selected widgets",
+                    operation.plugin
+                )));
+            }
+            let mut reordered = enabled.clone();
+            reordered.reverse();
+            for operation in &mut reordered {
+                operation.permissions.rules[0].verbs.reverse();
+            }
+            assert_eq!(
+                rendered,
+                rendered_with_custom(
+                    scope,
+                    OperatorPermission::Diagnostics,
+                    false,
+                    &reordered,
+                    OperatorOutputFormat::RawManifest
+                )
+                .unwrap()
+            );
+        }
+    }
+}
+
+#[test]
+fn custom_rules_obey_ceiling_and_validate_before_filtering() {
+    let mut operation = custom_operation("restarter");
+    operation.tier = alien_operations_sdk::RiskTier::Mutating;
+    let rule = &mut operation.permissions.rules[0];
+    rule.api_group.clear();
+    rule.resource = "pods".into();
+    rule.verbs = vec!["delete".into()];
+    for (permission, expected) in [
+        (OperatorPermission::Diagnostics, false),
+        (OperatorPermission::Remediation, true),
+    ] {
+        let manifest = rendered_with_custom(
+            OperatorScope::Namespace,
+            permission,
+            false,
+            &[operation.clone()],
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        let docs = parse_manifest(&manifest);
+        let role = docs.iter().find(|doc| doc["kind"] == "Role").unwrap();
+        assert_eq!(rule_allows(role, "pods", "delete"), expected);
+    }
+    for invalid_resource in ["secrets", "pods/exec", "*"] {
+        operation.permissions.rules[0].resource = invalid_resource.into();
+        assert!(rendered_with_custom(
+            OperatorScope::Namespace,
+            OperatorPermission::Diagnostics,
+            false,
+            &[operation.clone()],
+            OperatorOutputFormat::RawManifest
+        )
+        .is_err());
+    }
+    operation.permissions.schema_version = 999;
+    assert!(rendered_with_custom(
+        OperatorScope::Namespace,
+        OperatorPermission::Diagnostics,
+        false,
+        &[operation],
+        OperatorOutputFormat::RawManifest
+    )
+    .is_err());
+}
+
+#[test]
+fn custom_rules_reject_malformed_identifiers_before_rendering() {
+    for (group, resource) in [
+        ("example..com", "widgets"),
+        ("example.-com", "widgets"),
+        ("example.com", "1widgets"),
+        ("example.com", "custom.widgets"),
+    ] {
+        let mut operation = custom_operation("inspector");
+        operation.permissions.rules[0].api_group = group.to_owned();
+        operation.permissions.rules[0].resource = resource.to_owned();
+        for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+            for format in [
+                OperatorOutputFormat::RawManifest,
+                OperatorOutputFormat::HelmTemplate,
+            ] {
+                assert!(rendered_with_custom(
+                    scope,
+                    OperatorPermission::Diagnostics,
+                    false,
+                    &[operation.clone()],
+                    format,
+                )
+                .is_err());
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_builtin_and_custom_grants_are_deduplicated_and_keep_both_reasons() {
+    let mut operation = custom_operation("inspector");
+    let rule = &mut operation.permissions.rules[0];
+    rule.api_group.clear();
+    rule.resource = "pods/log".to_owned();
+    rule.verbs = vec!["get".to_owned()];
+    rule.resource_names.clear();
+    for (builtin, custom, expected) in [
+        (true, true, 1),
+        (true, false, 1),
+        (false, true, 1),
+        (false, false, 0),
+    ] {
+        let enabled = if custom {
+            vec![operation.clone()]
+        } else {
+            vec![]
+        };
+        let manifest = rendered_with_custom(
+            OperatorScope::Namespace,
+            OperatorPermission::Diagnostics,
+            builtin,
+            &enabled,
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        let docs = parse_manifest(&manifest);
+        let role = docs.iter().find(|doc| doc["kind"] == "Role").unwrap();
+        let rules: Vec<_> = role["rules"]
+            .as_sequence()
+            .unwrap()
+            .iter()
+            .filter(|rule| rule["resources"][0] == "pods/log")
+            .collect();
+        assert_eq!(rules.len(), expected);
+        assert_eq!(manifest.contains("the kubernetes/logs operation."), builtin);
+        assert_eq!(
+            manifest.contains("inspector/inspect: Inspect selected widgets"),
+            custom
+        );
+    }
 }
 
 fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
@@ -41,6 +274,103 @@ fn parse_manifest(manifest: &str) -> Vec<YamlValue> {
         .map(|doc| YamlValue::deserialize(doc).expect("manifest document should be valid YAML"))
         .filter(|doc| !doc.is_null())
         .collect()
+}
+
+fn permission_grants(manifest: &str) -> BTreeSet<(String, String, String, Vec<String>)> {
+    let mut grants = BTreeSet::new();
+    for doc in parse_manifest(manifest) {
+        if doc["kind"] != "Role" && doc["kind"] != "ClusterRole" {
+            continue;
+        }
+        for rule in doc["rules"].as_sequence().unwrap() {
+            let mut names: Vec<_> = rule["resourceNames"]
+                .as_sequence()
+                .into_iter()
+                .flatten()
+                .map(|name| name.as_str().unwrap().to_owned())
+                .collect();
+            names.sort();
+            for group in rule["apiGroups"].as_sequence().unwrap() {
+                for resource in rule["resources"].as_sequence().unwrap() {
+                    for verb in rule["verbs"].as_sequence().unwrap() {
+                        grants.insert((
+                            group.as_str().unwrap().to_owned(),
+                            resource.as_str().unwrap().to_owned(),
+                            verb.as_str().unwrap().to_owned(),
+                            names.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    grants
+}
+
+#[test]
+fn attribution_cannot_inject_grants_into_rendered_yaml() {
+    for scope in [OperatorScope::Namespace, OperatorScope::Cluster] {
+        let mut operation = custom_operation("inspector");
+        operation.permissions.rules[0].reason = "Inspect widgets — 状態".to_owned();
+        let mut expected = permission_grants(&rendered_manifest(
+            scope,
+            OperatorPermission::Diagnostics,
+            false,
+        ));
+        for verb in ["get", "list", "watch"] {
+            expected.insert((
+                "example.com".to_owned(),
+                "widgets".to_owned(),
+                verb.to_owned(),
+                vec!["sample".to_owned()],
+            ));
+        }
+        let valid = rendered_with_custom(
+            scope,
+            OperatorPermission::Diagnostics,
+            false,
+            &[operation.clone()],
+            OperatorOutputFormat::RawManifest,
+        )
+        .unwrap();
+        assert_eq!(permission_grants(&valid), expected);
+
+        for line_break in ['\n', '\r', '\u{85}', '\u{2028}', '\u{2029}'] {
+            let attribution = format!("Inspect{line_break}  - apiGroups: [\"\"]{line_break}    resources: [\"secrets\"]{line_break}    verbs: [\"get\"]{line_break}  #");
+            for field in ["plugin", "operation", "reason"] {
+                let mut malicious = operation.clone();
+                match field {
+                    "plugin" => malicious.plugin = attribution.clone(),
+                    "operation" => malicious.operation = attribution.clone(),
+                    _ => malicious.permissions.rules[0].reason = attribution.clone(),
+                }
+                for format in [
+                    OperatorOutputFormat::RawManifest,
+                    OperatorOutputFormat::HelmTemplate,
+                ] {
+                    let rendered = rendered_with_custom(
+                        scope,
+                        OperatorPermission::Diagnostics,
+                        false,
+                        &[malicious.clone()],
+                        format,
+                    );
+                    if format == OperatorOutputFormat::RawManifest {
+                        if let Ok(manifest) = &rendered {
+                            // Inspect actual YAML semantics, not just the string:
+                            // an accepted comment must never add another grant.
+                            assert_eq!(
+                                permission_grants(manifest),
+                                expected,
+                                "attribution changed the emitted grants"
+                            );
+                        }
+                    }
+                    assert!(rendered.is_err(), "accepted {line_break:?} in {field}");
+                }
+            }
+        }
+    }
 }
 
 fn rule_allows(role: &YamlValue, resource: &str, verb: &str) -> bool {
@@ -140,7 +470,9 @@ fn complete_operator_manifests_intersect_operation_enablement_with_permission_ce
 
 #[test]
 fn operator_template_accepts_cloud_identity_values() {
+    let custom = custom_operation("inspector");
     let template = generate_operator_manifest(OperatorManifestOptions {
+        custom_operation_permissions: &[custom],
         manager_url: "https://manager.example.com",
         group_token:
             "{{ required \"remoteOperator.registrationToken is required\" .Values.remoteOperator.registrationToken }}",
@@ -189,6 +521,23 @@ alien:
     test_utils::helm_lint(&chart.files).assert_ok("remote operator cloud identity helm lint");
     let rendered = test_utils::helm_template(&chart.files, None);
     rendered.assert_ok("remote operator cloud identity helm template");
+    let documents = parse_manifest(&rendered.stdout);
+    let role = documents.iter().find(|doc| doc["kind"] == "Role").unwrap();
+    let rule = role["rules"]
+        .as_sequence()
+        .unwrap()
+        .iter()
+        .find(|rule| rule["resources"][0] == "widgets")
+        .unwrap();
+    assert_eq!(rule["apiGroups"][0], "example.com");
+    assert_eq!(
+        rule["resourceNames"],
+        serde_yaml::to_value(["sample"]).unwrap()
+    );
+    assert_eq!(
+        rule["verbs"],
+        serde_yaml::to_value(["get", "list", "watch"]).unwrap()
+    );
     assert!(
         rendered
             .stdout

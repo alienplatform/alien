@@ -17,13 +17,13 @@ export type ProjectCapabilitiesMethod = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesDeployments = {
-  enabled: boolean;
+  enabled: true;
   methods?: Array<ProjectCapabilitiesMethod> | undefined;
 };
 
 export type ProjectCapabilitiesKeys = {
-  enabled: boolean;
-  applicationEncryption: boolean;
+  enabled: true;
+  applicationEncryption: true;
 };
 
 export const ProjectCapabilitiesAllowedProvider = {
@@ -54,7 +54,7 @@ export type ProjectCapabilitiesRequirement = {
 };
 
 export type ProjectCapabilitiesModels = {
-  enabled: boolean;
+  enabled: true;
   allowedProviders: Array<ProjectCapabilitiesAllowedProvider>;
   requirements: Array<ProjectCapabilitiesRequirement>;
 };
@@ -67,7 +67,7 @@ export type ProjectCapabilitiesAccess = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesBuckets = {
-  enabled: boolean;
+  enabled: true;
   access: ProjectCapabilitiesAccess;
 };
 
@@ -80,13 +80,13 @@ export type ProjectCapabilitiesCredentialPolicy = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesRegistry = {
-  enabled: boolean;
+  enabled: true;
   repositories: Array<string>;
   credentialPolicy: ProjectCapabilitiesCredentialPolicy;
 };
 
 export type ProjectCapabilitiesRemoteSandbox = {
-  enabled: boolean;
+  enabled: true;
   baseImage?: string | undefined;
   imageBundleUri?: string | undefined;
   maxSessionLifetimeSeconds: number;
@@ -116,7 +116,7 @@ export const ProjectCapabilitiesDeployments$inboundSchema: z.ZodType<
   ProjectCapabilitiesDeployments,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   methods: z.array(ProjectCapabilitiesMethod$inboundSchema).optional(),
 });
 
@@ -135,8 +135,8 @@ export const ProjectCapabilitiesKeys$inboundSchema: z.ZodType<
   ProjectCapabilitiesKeys,
   unknown
 > = z.object({
-  enabled: z.boolean(),
-  applicationEncryption: z.boolean(),
+  enabled: z.literal(true),
+  applicationEncryption: z.literal(true),
 });
 
 export function projectCapabilitiesKeysFromJSON(
@@ -184,7 +184,7 @@ export const ProjectCapabilitiesModels$inboundSchema: z.ZodType<
   ProjectCapabilitiesModels,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   allowedProviders: z.array(ProjectCapabilitiesAllowedProvider$inboundSchema),
   requirements: z.array(
     z.lazy(() => ProjectCapabilitiesRequirement$inboundSchema),
@@ -211,7 +211,7 @@ export const ProjectCapabilitiesBuckets$inboundSchema: z.ZodType<
   ProjectCapabilitiesBuckets,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   access: ProjectCapabilitiesAccess$inboundSchema,
 });
 
@@ -235,7 +235,7 @@ export const ProjectCapabilitiesRegistry$inboundSchema: z.ZodType<
   ProjectCapabilitiesRegistry,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   repositories: z.array(z.string()),
   credentialPolicy: ProjectCapabilitiesCredentialPolicy$inboundSchema,
 });
@@ -255,7 +255,7 @@ export const ProjectCapabilitiesRemoteSandbox$inboundSchema: z.ZodType<
   ProjectCapabilitiesRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   baseImage: z.string().optional(),
   imageBundleUri: z.string().optional(),
   maxSessionLifetimeSeconds: z.int(),

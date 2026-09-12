@@ -11,9 +11,60 @@
 
 ## listInventory
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listInventory" method="get" path="/v1/resources" -->
+<!-- UsageSnippet language="typescript" operationID="listInventory" method="get" path="/v1/resources" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.resources.listInventory({
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { resourcesListInventory } from "@alienplatform/platform-api/funcs/resourcesListInventory.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await resourcesListInventory(alien, {
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("resourcesListInventory failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listInventory" method="get" path="/v1/resources" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -86,9 +137,9 @@ run();
 
 ## listOverview
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listResourceOverview" method="get" path="/v1/resources/{area}" -->
+<!-- UsageSnippet language="typescript" operationID="listResourceOverview" method="get" path="/v1/resources/{area}" example="projectId" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -99,7 +150,60 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.resources.listOverview({
-    area: "worker",
+    area: "daemon",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { resourcesListOverview } from "@alienplatform/platform-api/funcs/resourcesListOverview.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await resourcesListOverview(alien, {
+    area: "daemon",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("resourcesListOverview failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listResourceOverview" method="get" path="/v1/resources/{area}" example="projectName" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.resources.listOverview({
+    area: "container",
     project: "my-project",
   });
 
@@ -126,7 +230,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await resourcesListOverview(alien, {
-    area: "worker",
+    area: "container",
     project: "my-project",
   });
   if (res.ok) {
@@ -163,9 +267,64 @@ run();
 
 ## listDeployments
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="listResourceDeployments" method="get" path="/v1/resources/{area}/{resourceId}/deployments" -->
+<!-- UsageSnippet language="typescript" operationID="listResourceDeployments" method="get" path="/v1/resources/{area}/{resourceId}/deployments" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.resources.listDeployments({
+    area: "daemon",
+    resourceId: "<id>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { resourcesListDeployments } from "@alienplatform/platform-api/funcs/resourcesListDeployments.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await resourcesListDeployments(alien, {
+    area: "daemon",
+    resourceId: "<id>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("resourcesListDeployments failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="listResourceDeployments" method="get" path="/v1/resources/{area}/{resourceId}/deployments" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -242,9 +401,66 @@ run();
 
 ## getDeploymentDetail
 
-### Example Usage
+### Example Usage: projectId
 
-<!-- UsageSnippet language="typescript" operationID="getResourceDeploymentDetail" method="get" path="/v1/resources/{area}/deployments/{deploymentId}/{resourceId}" -->
+<!-- UsageSnippet language="typescript" operationID="getResourceDeploymentDetail" method="get" path="/v1/resources/{area}/deployments/{deploymentId}/{resourceId}" example="projectId" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.resources.getDeploymentDetail({
+    area: "container",
+    deploymentId: "<id>",
+    resourceId: "<id>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { resourcesGetDeploymentDetail } from "@alienplatform/platform-api/funcs/resourcesGetDeploymentDetail.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await resourcesGetDeploymentDetail(alien, {
+    area: "container",
+    deploymentId: "<id>",
+    resourceId: "<id>",
+    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("resourcesGetDeploymentDetail failed:", res.error);
+  }
+}
+
+run();
+```
+### Example Usage: projectName
+
+<!-- UsageSnippet language="typescript" operationID="getResourceDeploymentDetail" method="get" path="/v1/resources/{area}/deployments/{deploymentId}/{resourceId}" example="projectName" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 

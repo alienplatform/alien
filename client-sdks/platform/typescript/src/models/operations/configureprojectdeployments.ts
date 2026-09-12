@@ -22,7 +22,7 @@ export type ConfigureProjectDeploymentsMethod = ClosedEnum<
 >;
 
 export type ConfigureProjectDeploymentsRequestBody = {
-  enabled: boolean;
+  enabled: true;
   methods: Array<ConfigureProjectDeploymentsMethod>;
 };
 
@@ -41,7 +41,7 @@ export const ConfigureProjectDeploymentsMethod$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type ConfigureProjectDeploymentsRequestBody$Outbound = {
-  enabled: boolean;
+  enabled: true;
   methods: Array<string>;
 };
 
@@ -50,7 +50,7 @@ export const ConfigureProjectDeploymentsRequestBody$outboundSchema: z.ZodType<
   ConfigureProjectDeploymentsRequestBody$Outbound,
   ConfigureProjectDeploymentsRequestBody
 > = z.object({
-  enabled: z.boolean(),
+  enabled: z.literal(true),
   methods: z.array(ConfigureProjectDeploymentsMethod$outboundSchema),
 });
 
