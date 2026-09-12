@@ -1338,6 +1338,24 @@ fn add_standard_conditions(
                 CONDITION_NETWORK_MODE_USE_EXISTING.to_string(),
                 equals_ref(PARAM_NETWORK_MODE, "use-existing"),
             );
+            if has_created_network
+                && stack.resources().any(|(_id, entry)| {
+                    entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+                        && entry
+                            .config
+                            .downcast_ref::<alien_core::Postgres>()
+                            .is_some()
+                })
+            {
+                template.conditions.insert(
+                    crate::emitters::aws::helpers::CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS
+                        .to_string(),
+                    CfExpression::or([
+                        equals_ref(PARAM_NETWORK_MODE, "create-new"),
+                        equals_ref(PARAM_NETWORK_MODE, "use-existing"),
+                    ]),
+                );
+            }
         }
     }
     if has_created_network {

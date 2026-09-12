@@ -114,15 +114,19 @@ impl Authz for OssAuthz {
     }
 
     fn can_delete_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
-        // Deletion is workspace-write only — a deployment-group token can
-        // create/update its own deployments, but tearing them down is an
-        // operator action.
+        // A deployment manager owns the complete lifecycle of its exact
+        // deployment. This is the credential retained by setup tools after
+        // their broader deployment-group bootstrap authority expires.
+        // Deployment-group credentials remain unable to tear deployments down.
         if !self.can_read_deployment(s, deployment) {
             return false;
         }
         matches!(
             s.role,
-            Role::WorkspaceAdmin | Role::WorkspaceMember | Role::ProjectDeveloper
+            Role::WorkspaceAdmin
+                | Role::WorkspaceMember
+                | Role::ProjectDeveloper
+                | Role::DeploymentManager
         )
     }
 
@@ -451,6 +455,15 @@ mod tests {
         let dep = deployment("d1", "dg-a");
         assert!(OssAuthz.can_read_deployment(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_read_deployment(&deployment_token("d2"), &dep));
+    }
+
+    #[test]
+    fn deployment_manager_only_deletes_its_own_deployment() {
+        let dep = deployment("d1", "dg-a");
+
+        assert!(OssAuthz.can_delete_deployment(&deployment_token("d1"), &dep));
+        assert!(!OssAuthz.can_delete_deployment(&deployment_token("d2"), &dep));
+        assert!(!OssAuthz.can_delete_deployment(&dg_token("dg-a"), &dep));
     }
 
     #[test]

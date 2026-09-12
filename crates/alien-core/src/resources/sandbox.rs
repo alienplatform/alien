@@ -514,25 +514,19 @@ pub struct Sandbox {
 
 /// Whether the artifact being rendered restricts which network modes it accepts.
 ///
-/// Cloud setup needs explicit subnets for private databases and restricted sandbox connectors.
-/// Kubernetes targets do not emit these cloud backends.
+/// Cloud setup needs explicit subnets for restricted sandbox connectors. Kubernetes targets do
+/// not emit these cloud backends.
 pub fn restricts_network_mode(stack: &crate::Stack, targets_kubernetes: bool) -> bool {
     !targets_kubernetes && stack_needs_named_subnets_at_setup(stack)
 }
 
 /// Whether any setup-owned resource forces setup to name subnets.
 ///
-/// Private databases and restricted sandbox connectors require subnet IDs. Neither generator can
-/// enumerate the account default VPC's subnets. Callers rendering an artifact want
+/// Restricted sandbox connectors require subnet IDs. Callers rendering an artifact want
 /// [`restricts_network_mode`] instead:
 /// this one answers for the declaration, which on a Kubernetes target is not what gets emitted.
 pub fn stack_needs_named_subnets_at_setup(stack: &crate::Stack) -> bool {
     stack.resources().any(|(_resource_id, resource)| {
-        if resource.lifecycle == crate::ResourceLifecycle::Frozen
-            && resource.config.downcast_ref::<crate::Postgres>().is_some()
-        {
-            return true;
-        }
         resource
             .config
             .downcast_ref::<Sandbox>()
@@ -1146,7 +1140,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn private_database_setup_requires_named_subnets() {
+    fn private_database_setup_accepts_the_default_network() {
         for lifecycle in [
             crate::ResourceLifecycle::Frozen,
             crate::ResourceLifecycle::Live,
@@ -1157,10 +1151,7 @@ mod tests {
                     lifecycle,
                 )
                 .build();
-            assert_eq!(
-                restricts_network_mode(&stack, false),
-                lifecycle == crate::ResourceLifecycle::Frozen,
-            );
+            assert!(!restricts_network_mode(&stack, false));
             assert!(!restricts_network_mode(&stack, true));
         }
         assert!(!restricts_network_mode(
