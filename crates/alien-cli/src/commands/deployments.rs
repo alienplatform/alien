@@ -2049,6 +2049,7 @@ async fn create_deployment_task(
             alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
         setup_method: None,
         setup_metadata: None,
+        setup_handoff: ::std::default::Default::default(),
     };
 
     let workspace_param = CreateDeploymentWorkspace::try_from(workspace)
