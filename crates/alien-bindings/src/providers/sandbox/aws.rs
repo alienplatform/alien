@@ -23,7 +23,7 @@ use crate::traits::{
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::AlienError;
+use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -454,16 +454,26 @@ impl Sandbox for AwsSandbox {
         // fails a fraction of the time. Local, Azure and Kubernetes all return a sandbox that can
         // already serve, so this is what makes AWS mean the same thing.
         if let Err(error) = self.wait_until_servable(&microvm_id).await {
-            // The caller never receives this id, so nothing else can terminate it and it bills to
-            // its lifetime ceiling. This error is retryable, so leaving it would leak one MicroVM
-            // per attempt.
-            if let Err(cleanup) = self.microvms.terminate_microvm(&microvm_id).await {
-                warn!(
-                    microvm = %microvm_id,
-                    "could not terminate a MicroVM that never became servable: {cleanup}"
-                );
-            }
-            return Err(error);
+            return Err(match self.microvms.terminate_microvm(&microvm_id).await {
+                Ok(()) => error,
+                Err(cleanup) => {
+                    warn!(
+                        microvm = %microvm_id,
+                        %cleanup,
+                        "could not terminate a MicroVM that never became servable"
+                    );
+                    // Names the leak and refuses a retry: nobody else holds this id, and with no
+                    // declared ceiling `RunMicrovm` carries no `maximumDurationInSeconds`, so
+                    // honouring the wait's retryable error would mint another beside it.
+                    error.context(ErrorData::SandboxCommandFailed {
+                        failure: "sandboxLeftBehind".to_string(),
+                        reason: format!(
+                            "MicroVM '{microvm_id}' was not handed to its caller and could not be \
+                             terminated, so it is still running"
+                        ),
+                    })
+                }
+            });
         }
 
         Ok(self.instance(microvm_id, Some("RUNNING".to_string())))
@@ -1300,6 +1310,50 @@ mod tests {
         .expect_err("no agent answers in a unit test");
 
         assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+    }
+
+    /// A MicroVM that never became servable and could not be terminated is still running, and
+    /// only this error carries its id. The wait's own failure is retryable, so returning it would
+    /// invite a retry that mints a second MicroVM beside the first.
+    #[tokio::test]
+    async fn a_microvm_that_could_not_be_terminated_is_reported_by_id() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_run_microvm()
+            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-orphan", "PENDING")));
+        // Published no endpoint, so the readiness wait gives up, and the cleanup it then tries
+        // is refused — one missing grant refuses both verbs in practice.
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client.expect_terminate_microvm().times(1).returning(|_| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "TerminateMicrovm was refused".to_string(),
+                },
+            ))
+        });
+
+        let error = sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("a MicroVM that never became servable is not a sandbox");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(
+            !error.retryable,
+            "a retry would mint another MicroVM nobody can reach: {error}"
+        );
+        assert!(
+            error.message.contains("sandboxLeftBehind"),
+            "the leak is reported under the label the siblings use: {error}"
+        );
+        // The outermost message, not the rendered chain: the wait's own error names the MicroVM
+        // too, so the chain would read as green with the leak unnamed.
+        assert!(
+            error.message.contains("mvm-orphan"),
+            "only this error can send an operator to the MicroVM left running: {error}"
+        );
     }
 
     /// Observed live: AWS returns the MicroVM a client token previously created **even after it
