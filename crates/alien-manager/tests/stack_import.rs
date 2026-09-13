@@ -776,6 +776,12 @@ async fn deployment_token_activates_its_pending_setup_reservation() {
     body.stack_settings.compute = Some(selected_compute.clone());
     let (status, json) = post_import(&fixture, Some(&deployment_token), &body).await;
     assert_eq!(status, StatusCode::OK, "{json:#}");
+    let response: StackImportResponse = serde_json::from_value(json).unwrap();
+    assert_eq!(
+        response.deployment_token.as_deref(),
+        Some(deployment_token.as_str()),
+        "activation must return the authenticated deployment credential for Terraform state"
+    );
 
     let activated = fixture
         .deployment_store
