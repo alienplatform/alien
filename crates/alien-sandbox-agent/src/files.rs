@@ -297,6 +297,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn writing_to_a_fifo_is_refused_rather_than_piped_away() {
+        use std::os::unix::fs::OpenOptionsExt;
+
         let (_dir, root) = root();
         let path = std::ffi::CString::new(root.join("planted").as_os_str().as_encoded_bytes())
             .expect("no NUL");
