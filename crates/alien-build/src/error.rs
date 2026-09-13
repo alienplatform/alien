@@ -121,6 +121,20 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// Container registry rejected an image push for a deterministic reason.
+    #[error(
+        code = "IMAGE_PUSH_REJECTED",
+        message = "Container registry rejected image '{image}': {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    ImagePushRejected {
+        /// Image name/URI that the registry rejected
+        image: String,
+        /// Safe explanation that excludes registry credentials and signed URLs
+        reason: String,
+    },
+
     /// Template generation failed for the target platform.
     #[error(
         code = "TEMPLATE_GENERATION_FAILED",
