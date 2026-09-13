@@ -1292,6 +1292,10 @@ pub trait Sandbox: Binding {
     async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability>;
 
     /// Pauses a sandbox, preserving state. Requires `pauseResume`.
+    ///
+    /// A command already running is frozen with the guest rather than drained or stopped, and its
+    /// own deadline freezes with it, so nothing inside the sandbox will end it. A caller streaming
+    /// that command's output is failed within a bound rather than held for the length of the pause.
     async fn pause(&self, sandbox_id: &str) -> Result<()>;
 
     /// Resumes a paused sandbox. Requires `pauseResume`.

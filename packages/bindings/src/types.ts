@@ -523,7 +523,13 @@ export interface Sandbox {
   readFile(sandboxId: string, path: string): Promise<Buffer>
   /** Writes files into the sandbox. Requires `files`. Parent directories are created as needed. */
   writeFiles(sandboxId: string, files: Record<string, Buffer | string>): Promise<void>
-  /** Pauses a sandbox, preserving state. Requires `pauseResume`. */
+  /**
+   * Pauses a sandbox, preserving state. Requires `pauseResume`.
+   *
+   * A command already running is frozen with the guest rather than drained or stopped, and its own
+   * deadline freezes with it, so nothing inside the sandbox will end it. A caller streaming that
+   * command's output is rejected within a bound rather than held for the length of the pause.
+   */
   pause(sandboxId: string): Promise<void>
   /** Resumes a paused sandbox. Requires `pauseResume`. */
   resume(sandboxId: string): Promise<void>

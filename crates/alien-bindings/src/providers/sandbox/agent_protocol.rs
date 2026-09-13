@@ -46,6 +46,19 @@ const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_secs(60);
 #[cfg(test)]
 const AGENT_RESPONSE_TIMEOUT: Duration = Duration::from_millis(200);
 
+/// How long past a command's own timeout the agent may still take to write a terminal frame.
+///
+/// A frozen guest — a paused sandbox, most of all — stops the agent's clock with it, so the
+/// command deadline that would produce that frame never fires. Measured from the command's
+/// declared timeout rather than from the last byte, because the agent sends no keepalive: silence
+/// alone says nothing, while silence past the deadline the caller itself set says the sandbox
+/// stopped running.
+#[cfg(not(test))]
+const TERMINAL_FRAME_GRACE: Duration = Duration::from_secs(60);
+/// Short in tests so a frozen sandbox is exercised in milliseconds rather than waited out.
+#[cfg(test)]
+const TERMINAL_FRAME_GRACE: Duration = Duration::from_millis(200);
+
 /// How a backend turns a sandbox id into an authorized request.
 ///
 /// The only thing AWS and Kubernetes disagree on.
@@ -136,7 +149,11 @@ pub async fn run_command<T: AgentTransport + ?Sized>(
     )
     .await?;
 
-    Ok(frame_stream(response, transport.provider()))
+    Ok(frame_stream(
+        response,
+        transport.provider(),
+        request.timeout,
+    ))
 }
 
 /// Starts a command as a job the agent owns until it is polled to its end or cancelled.
@@ -407,9 +424,14 @@ pub async fn send(request: reqwest::RequestBuilder, operation: &str) -> Result<r
 }
 
 /// Turns the agent's NDJSON body into output frames.
+///
+/// `timeout` is the command's own, and the whole body is bounded by it plus
+/// [`TERMINAL_FRAME_GRACE`]: a healthy agent ends every command at that deadline and writes a
+/// terminal frame, so a body still open past it belongs to a sandbox that is no longer running.
 fn frame_stream(
     response: reqwest::Response,
     provider: &'static str,
+    timeout: Duration,
 ) -> BoxStream<'static, Result<CommandOutput>> {
     struct State {
         bytes: BoxStream<'static, reqwest::Result<bytes::Bytes>>,
@@ -417,6 +439,7 @@ fn frame_stream(
         finished: bool,
         saw_terminal: bool,
         provider: &'static str,
+        stall: std::pin::Pin<Box<tokio::time::Sleep>>,
     }
 
     let state = State {
@@ -425,6 +448,11 @@ fn frame_stream(
         finished: false,
         saw_terminal: false,
         provider,
+        // `sleep` saturates a duration with no representable instant, so no timeout a caller can
+        // name overflows this.
+        stall: Box::pin(tokio::time::sleep(
+            timeout.saturating_add(TERMINAL_FRAME_GRACE),
+        )),
     };
 
     futures::stream::unfold(state, |mut state| async move {
@@ -469,7 +497,28 @@ fn frame_stream(
                 return None;
             }
 
-            match state.bytes.next().await {
+            // Biased so a chunk already in hand is read rather than discarded by a deadline
+            // that came due in the same poll.
+            let chunk = tokio::select! {
+                biased;
+                chunk = state.bytes.next() => chunk,
+                () = &mut state.stall => {
+                    state.finished = true;
+                    return Some((
+                        Err(AlienError::new(unanswered(
+                            RUN_COMMAND,
+                            &format!(
+                                "no terminal frame arrived within {}s of the command's timeout, \
+                                 so the sandbox stopped running it",
+                                TERMINAL_FRAME_GRACE.as_secs()
+                            ),
+                        ))),
+                        state,
+                    ));
+                }
+            };
+
+            match chunk {
                 Some(Ok(chunk)) => state.buffer.extend_from_slice(&chunk),
                 // The command has started — frames were arriving — and its end is now unknown.
                 // That is the strongest case for not inviting a retry, so both a failing body and
@@ -601,7 +650,7 @@ mod tests {
             .await
             .expect("responds");
 
-        frame_stream(response, "test-sandbox")
+        frame_stream(response, "test-sandbox", Duration::from_secs(30))
             .collect::<Vec<_>>()
             .await
     }
@@ -722,8 +771,9 @@ mod tests {
         );
     }
 
-    /// The bound is on reaching the agent, not on the command: output that arrives slowly, long
-    /// after the headers, is the ordinary shape of a command that runs for a while.
+    /// Output that arrives slowly, long after the headers, is the ordinary shape of a command
+    /// that runs for a while. Each gap here is longer than `TERMINAL_FRAME_GRACE` and well inside
+    /// the command's own timeout, which is what the body's bound is measured from.
     #[tokio::test]
     async fn a_slow_body_after_prompt_headers_is_not_cut_off() {
         let handler = || async {
@@ -746,7 +796,7 @@ mod tests {
         )
         .await
         .expect("headers arrive at once");
-        let outputs = frame_stream(response, "test-sandbox")
+        let outputs = frame_stream(response, "test-sandbox", Duration::from_secs(30))
             .collect::<Vec<_>>()
             .await;
 
@@ -757,6 +807,64 @@ mod tests {
                 code: 0,
                 truncated: false
             }
+        );
+    }
+
+    /// An agent that writes one frame and then freezes with its guest: the body stays open and
+    /// the command deadline that would have written the terminal frame never fires.
+    async fn frozen_after_one_frame() -> TestTransport {
+        let handler = || async {
+            let frames = futures::stream::iter(vec![Ok::<bytes::Bytes, std::io::Error>(
+                bytes::Bytes::from("{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n"),
+            )])
+            .chain(futures::stream::pending());
+            axum::body::Body::from_stream(frames).into_response()
+        };
+
+        serve(Router::new().route("/v1/exec", post(handler))).await
+    }
+
+    /// Pausing a sandbox freezes the agent with it, so the command deadline that would end the
+    /// stream never fires. A reader holding the stream is refused at the command's own deadline
+    /// rather than held for as long as the pause lasts.
+    #[tokio::test]
+    async fn a_frozen_sandbox_refuses_an_open_stream_rather_than_parking_its_reader() {
+        let transport = frozen_after_one_frame().await;
+
+        let stream = run_command(
+            &transport,
+            "sandbox-1",
+            RunCommandRequest {
+                command: "sleep".to_string(),
+                args: vec!["1".to_string()],
+                cwd: None,
+                env: BTreeMap::new(),
+                timeout: TERMINAL_FRAME_GRACE,
+            },
+        )
+        .await
+        .expect("the agent answers with headers");
+
+        // Scaffolding rather than the property: the bound under test is in `frame_stream`, and
+        // without it this collect never resolves. The outer wait turns that hang into a failure.
+        let outputs = tokio::time::timeout(TERMINAL_FRAME_GRACE * 20, stream.collect::<Vec<_>>())
+            .await
+            .expect("a frozen sandbox must end the stream, not park its reader");
+
+        let error = outputs
+            .last()
+            .expect("the stream ends rather than parking")
+            .as_ref()
+            .expect_err("a body that never ends is a failure, not an end");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+        assert!(
+            !error.retryable,
+            "the command may still be there when the sandbox resumes, so a repeat could run it \
+             twice: {error}"
+        );
+        assert!(
+            error.to_string().contains("no terminal frame"),
+            "the refusal says what was missing: {error}"
         );
     }
 
