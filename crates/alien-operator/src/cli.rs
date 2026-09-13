@@ -171,14 +171,20 @@ pub type OperationsExecLoopHook = fn() -> Option<std::sync::Arc<dyn OperationsEx
 /// Optional fifth hook that lets downstream binaries inject a real
 /// [`OperationsSyncHandler`] (downloads/hot-reloads the plugin registry
 /// toward the sync loop's target bundle set and reports the loaded catalog
-/// back). Defaults to `None`, so the OSS operator reports nothing.
-pub type OperationsSyncHandlerHook = fn() -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
+/// back). Takes the resolved data directory (after CLI/env/default
+/// resolution — see [`OperatorConfig::data_dir`]) so the handler downloads
+/// into the same directory the rest of the operator's state lives in,
+/// rather than independently re-deriving it from `DATA_DIR`/a hardcoded
+/// default and risking a mismatch with `--data-dir`. Defaults to `None`, so
+/// the OSS operator reports nothing.
+pub type OperationsSyncHandlerHook =
+    fn(data_dir: &str) -> Option<std::sync::Arc<dyn OperationsSyncHandler>>;
 
 const NOOP_INIT: InitHook = || {};
 const NOOP_DEBUG_LOOP_HOOK: DebugLoopHook = || None;
 const NOOP_ACCESS_REQUEST_LOOP_HOOK: AccessRequestSyncLoopHook = || None;
 const NOOP_OPERATIONS_EXEC_LOOP_HOOK: OperationsExecLoopHook = || None;
-const NOOP_OPERATIONS_SYNC_HANDLER_HOOK: OperationsSyncHandlerHook = || None;
+const NOOP_OPERATIONS_SYNC_HANDLER_HOOK: OperationsSyncHandlerHook = |_data_dir| None;
 
 #[derive(Debug, PartialEq, Eq)]
 enum StartupDeploymentId {
@@ -546,13 +552,14 @@ async fn run(
             None
         };
 
+    let operations_sync_handler = operations_sync_handler_hook(&operator_config.data_dir);
     run_operator_with_cancel_and_loops(
         operator_config,
         service_provider,
         debug_loop_hook(),
         access_request_loop_hook(),
         operations_exec_loop_hook(),
-        operations_sync_handler_hook(),
+        operations_sync_handler,
         cancel,
     )
     .await?;
