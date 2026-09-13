@@ -955,6 +955,97 @@ fn long_command() -> RunCommandRequest {
     }
 }
 
+/// A job whose every poll answers `poll`, handing each `jobCancel` body it receives back through
+/// the channel so a test can wait for one or wait out its absence.
+fn cancel_watching_client(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let (cancels, seen) = tokio::sync::mpsc::unbounded_channel();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(move |_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&poll).unwrap()),
+            "jobCancel" => {
+                cancels
+                    .send(serde_json::from_slice(input).expect("a cancel body is json"))
+                    .expect("the test still listens for cancels");
+                Ok(b"{}".to_vec())
+            }
+            other => panic!("unexpected op {other}"),
+        });
+    (client, seen)
+}
+
+/// Dropping a command's stream kills the command. A detached job has no transport whose close
+/// says so, so the drop has to send the cancel itself or the job runs to its full timeout with
+/// nobody reading it. Mutation check: empty `JobPollState::drop` and no cancel arrives.
+#[tokio::test(start_paused = true)]
+async fn dropping_a_running_jobs_stream_cancels_the_job() {
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": true,
+        "frames": [stdout_frame(0, b"work")],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let sandbox = provider(client);
+    let mut frames = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts");
+    assert!(
+        matches!(frames.next().await, Some(Ok(CommandOutput::Stdout { .. }))),
+        "the job is running and has produced output"
+    );
+    drop(frames);
+
+    let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the drop cancels the job")
+        .expect("the cancel carries a body");
+    assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+    assert_eq!(cancel["jobId"], "j1", "{cancel}");
+}
+
+/// The cancel is for a job still running: one that reported its exit is spent, and a call naming a
+/// finished job id is a call about nothing. Mutation check: drop the `finished` test in
+/// `JobPollState::drop` and a cancel arrives here.
+#[tokio::test(start_paused = true)]
+async fn a_job_that_reported_its_exit_is_not_cancelled_afterwards() {
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": false,
+        "frames": [stdout_frame(0, b"work")],
+        "exitCode": 0,
+        "truncated": false,
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on, so waiting for one that never comes is a timeout and not a close.
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    assert!(
+        matches!(frames.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))),
+        "the job ended on its own"
+    );
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .is_err(),
+        "a job that ended on its own is not cancelled afterwards"
+    );
+}
+
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
 /// exit code, and the provider surfaces it rather than fabricating a clean exit.
 #[tokio::test(start_paused = true)]

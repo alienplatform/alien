@@ -160,11 +160,10 @@ fn poll_to_js(poll: JobPoll) -> JobPollJs {
 /// A running command's output, pulled one frame at a time.
 ///
 /// The stream is held in an `Option` so it can be dropped on demand: a caller that stops reading
-/// half way through leaves a command running, and dropping the stream closes the transport
-/// carrying its output, which is what tells the backend to kill the command. `close()` is that
-/// signal, and it has to land even while a `next()` is parked on a command that prints nothing —
-/// that `next()` holds the lock, so `close()` cannot wait for it; it fires `closed` and the
-/// parked `next()` drops the stream itself.
+/// half way through leaves a command running, and dropping the stream is what tells the backend to
+/// kill it. `close()` is that signal, and it has to land even while a `next()` is parked on a
+/// command that prints nothing — that `next()` holds the lock, so `close()` cannot wait for it; it
+/// fires `closed` and the parked `next()` drops the stream itself.
 #[napi]
 pub struct CommandStreamHandle {
     frames: Arc<Mutex<Option<BoxStream<'static, alien_bindings::error::Result<CommandOutput>>>>>,

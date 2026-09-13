@@ -1171,6 +1171,56 @@ struct JobPollState {
     deadline_at: tokio::time::Instant,
 }
 
+/// Kills the command a dropped stream stops reading.
+///
+/// Where a command's frames ride a transport the caller can close, that close is the kill. A
+/// detached job has no such transport, so the cancel is sent here or the job runs to its full
+/// timeout, billing, with nobody able to reach it.
+impl Drop for JobPollState {
+    fn drop(&mut self) {
+        // `finished` is set by every path that establishes an outcome, and the deadline path has
+        // already sent its own cancel, so this fires only on a job last seen running.
+        if self.finished {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            warn!(
+                sandbox = %self.sandbox_id,
+                job = %self.job_id,
+                "a job's stream was dropped outside a runtime, so the job runs to its timeout"
+            );
+            return;
+        };
+
+        let client = self.client.clone();
+        let engine = self.engine.clone();
+        let sandbox_id = self.sandbox_id.clone();
+        let job_id = self.job_id.clone();
+        runtime.spawn(async move {
+            // The reader is gone, so a failure has nobody to be returned to; what it leaves
+            // running is named instead.
+            match client
+                .execute(&engine, &sandbox_id, &cancel_body(&job_id))
+                .await
+            {
+                Ok(body) if cancel_confirmed(&body) => {}
+                Ok(body) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    reply = %truncated(&body),
+                    "a dropped job's cancel was refused, so the job runs to its timeout"
+                ),
+                Err(error) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    %error,
+                    "a dropped job's cancel did not land, so the job may run to its timeout"
+                ),
+            }
+        });
+    }
+}
+
 /// A job's output so far, and how it ended once it has. Mirrors the agent's `jobPoll` reply.
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
