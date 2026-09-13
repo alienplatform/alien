@@ -81,7 +81,7 @@ mod tests {
         ImportContext {
             resource_id: "sbx",
             platform: Platform::Azure,
-            region: "swedencentral",
+            region: "westus2",
             stack_settings: settings,
             management_config: None,
             resource,
@@ -91,7 +91,7 @@ mod tests {
     fn import_data() -> AzureSandboxImportData {
         AzureSandboxImportData {
             sandbox_group: "sbg".to_string(),
-            region: "swedencentral".to_string(),
+            region: "westus2".to_string(),
             resource_group: "rg".to_string(),
         }
     }
