@@ -476,6 +476,7 @@ impl GcpAgentPlatformSandbox {
             since_seq: None,
             pending: VecDeque::new(),
             finished: false,
+            stopped: false,
             deadline_at: tokio::time::Instant::now() + timeout + JOB_POLL_GRACE,
         };
 
@@ -1026,6 +1027,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                 }),
             }));
             state.finished = true;
+            state.stopped = true;
             continue;
         }
 
@@ -1092,6 +1094,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             };
             state.pending.push_back(terminal);
             state.finished = true;
+            state.stopped = true;
             continue;
         }
 
@@ -1145,11 +1148,12 @@ fn unanswered_job(
 
 /// Whether a `jobCancel` reply is the cancel landing.
 ///
-/// A reply arriving is not the cancel succeeding: the agent answers `{}` when it cancelled the job
-/// and its own error text when it did not — `JobNotFound`, say — and both come back through a
-/// successful `:execute`.
+/// A reply arriving is not the cancel succeeding: a cancelled job answers with the empty object and
+/// a refusal — `JobNotFound`, say — with the agent's error text, both through a successful
+/// `:execute`. A success body that grew a field then reads as unknown, never a refusal as landed.
 fn cancel_confirmed(body: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+    serde_json::from_slice::<serde_json::Value>(body)
+        .is_ok_and(|value| value.as_object().is_some_and(serde_json::Map::is_empty))
 }
 
 /// The id a started job answers to, as the agent's `jobStart` returns it.
@@ -1168,6 +1172,8 @@ struct JobPollState {
     since_seq: Option<u64>,
     pending: VecDeque<Result<CommandOutput>>,
     finished: bool,
+    /// Set only where the job itself ended, so a stream that ends any other way still cancels.
+    stopped: bool,
     deadline_at: tokio::time::Instant,
 }
 
@@ -1178,9 +1184,7 @@ struct JobPollState {
 /// timeout, billing, with nobody able to reach it.
 impl Drop for JobPollState {
     fn drop(&mut self) {
-        // `finished` is set by every path that establishes an outcome, and the deadline path has
-        // already sent its own cancel, so this fires only on a job last seen running.
-        if self.finished {
+        if self.stopped {
             return;
         }
         let Ok(runtime) = tokio::runtime::Handle::try_current() else {
@@ -1199,22 +1203,30 @@ impl Drop for JobPollState {
         runtime.spawn(async move {
             // The reader is gone, so a failure has nobody to be returned to; what it leaves
             // running is named instead.
-            match client
-                .execute(&engine, &sandbox_id, &cancel_body(&job_id))
-                .await
+            match tokio::time::timeout(
+                AGENT_PROBE_BUDGET,
+                client.execute(&engine, &sandbox_id, &cancel_body(&job_id)),
+            )
+            .await
             {
-                Ok(body) if cancel_confirmed(&body) => {}
-                Ok(body) => warn!(
+                Ok(Ok(body)) if cancel_confirmed(&body) => {}
+                Ok(Ok(body)) => warn!(
                     sandbox = %sandbox_id,
                     job = %job_id,
                     reply = %truncated(&body),
                     "a dropped job's cancel was refused, so the job runs to its timeout"
                 ),
-                Err(error) => warn!(
+                Ok(Err(error)) => warn!(
                     sandbox = %sandbox_id,
                     job = %job_id,
                     %error,
                     "a dropped job's cancel did not land, so the job may run to its timeout"
+                ),
+                Err(_) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    budget_secs = AGENT_PROBE_BUDGET.as_secs(),
+                    "a dropped job's cancel went unanswered, so the job may run to its timeout"
                 ),
             }
         });

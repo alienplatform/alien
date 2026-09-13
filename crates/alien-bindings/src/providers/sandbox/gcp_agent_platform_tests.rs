@@ -955,10 +955,38 @@ fn long_command() -> RunCommandRequest {
     }
 }
 
-/// A job whose every poll answers `poll`, handing each `jobCancel` body it receives back through
-/// the channel so a test can wait for one or wait out its absence.
+/// A job whose every poll answers `poll`.
 fn cancel_watching_client(
     poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    cancel_watching_client_answering(move || Ok(serde_json::to_vec(&poll).unwrap()))
+}
+
+/// A job whose first poll answers `poll` and whose every later poll fails, so the stream ends on a
+/// failure while the job is still running.
+fn cancel_watching_client_failing_after_one_poll(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let polls = AtomicUsize::new(0);
+    cancel_watching_client_answering(move || {
+        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(serde_json::to_vec(&poll).unwrap())
+        } else {
+            Err(execute_refused())
+        }
+    })
+}
+
+/// A job whose `jobPoll` calls answer from `poll`, handing each `jobCancel` body it receives back
+/// through the channel so a test can wait for one or wait out its absence.
+fn cancel_watching_client_answering(
+    mut poll: impl FnMut() -> ClientResult<Vec<u8>> + Send + 'static,
 ) -> (
     MockAgentPlatformApi,
     tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
@@ -969,7 +997,7 @@ fn cancel_watching_client(
         .expect_execute()
         .returning(move |_, _, input| match op_of(input).as_str() {
             "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
-            "jobPoll" => Ok(serde_json::to_vec(&poll).unwrap()),
+            "jobPoll" => poll(),
             "jobCancel" => {
                 cancels
                     .send(serde_json::from_slice(input).expect("a cancel body is json"))
@@ -1013,8 +1041,8 @@ async fn dropping_a_running_jobs_stream_cancels_the_job() {
 }
 
 /// The cancel is for a job still running: one that reported its exit is spent, and a call naming a
-/// finished job id is a call about nothing. Mutation check: drop the `finished` test in
-/// `JobPollState::drop` and a cancel arrives here.
+/// finished job id is a call about nothing. Mutation check: delete `state.stopped = true` from the
+/// `!poll.running` branch and a cancel arrives here.
 #[tokio::test(start_paused = true)]
 async fn a_job_that_reported_its_exit_is_not_cancelled_afterwards() {
     let (client, mut cancels) = cancel_watching_client(serde_json::json!({
@@ -1044,6 +1072,40 @@ async fn a_job_that_reported_its_exit_is_not_cancelled_afterwards() {
             .is_err(),
         "a job that ended on its own is not cancelled afterwards"
     );
+}
+
+/// A poll that fails ends the stream while the job is still running, so the drop cancels it.
+/// Mutation check: guard `JobPollState::drop` on `finished` and no cancel arrives.
+#[tokio::test(start_paused = true)]
+async fn a_stream_that_ended_on_a_failed_poll_still_cancels_the_job() {
+    let (client, mut cancels) = cancel_watching_client_failing_after_one_poll(serde_json::json!({
+        "running": true,
+        "frames": [stdout_frame(0, b"work")],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the failed poll reaches the caller: {frames:?}");
+    };
+    assert!(
+        error.to_string().contains("the job is no longer watched"),
+        "{error}"
+    );
+
+    let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the drop cancels the job the failed poll left running")
+        .expect("the cancel carries a body");
+    assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+    assert_eq!(cancel["jobId"], "j1", "{cancel}");
 }
 
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
