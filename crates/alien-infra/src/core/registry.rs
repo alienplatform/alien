@@ -783,6 +783,17 @@ impl ResourceRegistry {
             >::new()),
         );
 
+        // Register the Azure Sandbox controller, which adopts the sandbox group the setup
+        // package created and heartbeats it; the ADC data plane creates sandboxes inside it.
+        #[cfg(feature = "azure")]
+        registry.register_controller_factory(
+            alien_core::Sandbox::RESOURCE_TYPE,
+            Platform::Azure,
+            Box::new(DefaultControllerFactory::<
+                crate::sandbox::AzureSandboxController,
+            >::new()),
+        );
+
         // Register the GCP Agent Platform reasoning-engine controller.
         #[cfg(feature = "gcp")]
         registry.register_controller_factory(
