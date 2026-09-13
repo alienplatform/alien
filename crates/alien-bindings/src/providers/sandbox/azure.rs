@@ -392,8 +392,8 @@ impl Sandbox for AzureSandbox {
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "timeoutExceeded".to_string(),
                 reason: format!(
-                    "the command exceeded its {}s timeout and was killed; the sandbox is still usable",
-                    request.timeout.as_secs()
+                    "the command exceeded its {}ms timeout and was killed; the sandbox is still usable",
+                    request.timeout.as_millis()
                 ),
             })));
         } else {
@@ -980,16 +980,26 @@ impl AzureSandbox {
         .await
         {
             Ok(inner) => inner.map_err(|error| Self::failed(RUN_COMMAND, error)),
-            Err(_) => {
-                self.terminate(sandbox_id).await?;
-                Err(AlienError::new(ErrorData::SandboxCommandFailed {
+            Err(_) => Err(match self.terminate(sandbox_id).await {
+                Ok(()) => AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "timeoutExceeded".to_string(),
                     reason: format!(
-                        "the command exceeded its {}s timeout and the sandbox could not end it, so the sandbox was terminated",
-                        request.timeout.as_secs()
+                        "the command exceeded its {}ms timeout and the sandbox could not end it, so the sandbox was terminated",
+                        request.timeout.as_millis()
                     ),
-                }))
-            }
+                }),
+                // A terminate that itself fails leaves the command even more likely to be
+                // running, so the outcome is unreported rather than established. Returning the
+                // terminate's own error would mark this retryable, and a retry would start the
+                // command a second time beside the one still going.
+                Err(error) => error.context(ErrorData::SandboxOutcomeUnknown {
+                    operation: "sandbox.runCommand".to_string(),
+                    reason: format!(
+                        "the command exceeded its {}ms timeout and the sandbox could not end it",
+                        request.timeout.as_millis()
+                    ),
+                }),
+            }),
         }
     }
 
@@ -1511,6 +1521,7 @@ mod tests {
     #[derive(Debug)]
     struct ScriptedExec {
         deleted: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        delete_refuses: std::sync::atomic::AtomicBool,
         commands: std::sync::Mutex<Vec<String>>,
         /// One result per exec call, in order; an empty queue hangs.
         results: std::sync::Mutex<
@@ -1524,6 +1535,7 @@ mod tests {
         ) -> std::sync::Arc<Self> {
             std::sync::Arc::new(Self {
                 deleted: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+                delete_refuses: std::sync::atomic::AtomicBool::new(false),
                 commands: std::sync::Mutex::new(Vec::new()),
                 results: std::sync::Mutex::new(results.into_iter().collect()),
             })
@@ -1618,6 +1630,9 @@ mod tests {
             _group: &str,
             _sandbox_id: &str,
         ) -> alien_client_core::Result<()> {
+            if self.delete_refuses.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(http_error(503, "gateway timeout"));
+            }
             self.deleted
                 .store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
@@ -1780,6 +1795,35 @@ mod tests {
         assert!(
             client.deleted.load(std::sync::atomic::Ordering::SeqCst),
             "the sandbox must actually be deleted, not merely reported as terminated"
+        );
+    }
+
+    /// A terminate that itself fails leaves the command even more likely to be running, so the
+    /// unknown outcome has to survive it. Returning the terminate's own error instead would mark
+    /// this retryable, and a caller honouring that would start the command a second time beside
+    /// the one still going.
+    #[tokio::test(start_paused = true)]
+    async fn a_terminate_that_fails_does_not_hide_the_unknown_outcome() {
+        let client = ScriptedExec::new(Vec::new());
+        client
+            .delete_refuses
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        let sandbox = provider(client.clone());
+
+        let error = sandbox
+            .run_command("s1", command(30))
+            .await
+            .err()
+            .expect("a command that outran its deadline has not succeeded");
+
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+        assert!(
+            !error.retryable,
+            "a retry would run the command a second time beside the first: {error}"
+        );
+        assert!(
+            error.to_string().contains("could not end it"),
+            "the deadline stays the headline: {error}"
         );
     }
 

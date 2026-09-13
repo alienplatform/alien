@@ -209,8 +209,8 @@ impl LocalSandbox {
                 Ok(()) => AlienError::new(ErrorData::SandboxCommandFailed {
                     failure: "timeoutExceeded".to_string(),
                     reason: format!(
-                        "the command exceeded its {}s timeout and the sandbox could not end it, so the sandbox was terminated",
-                        request.timeout.as_secs()
+                        "the command exceeded its {}ms timeout and the sandbox could not end it, so the sandbox was terminated",
+                        request.timeout.as_millis()
                     ),
                 }),
                 // A terminate that itself fails leaves the command even more likely to be
@@ -220,8 +220,8 @@ impl LocalSandbox {
                 Err(error) => error.context(ErrorData::SandboxOutcomeUnknown {
                     operation: "sandbox.runCommand".to_string(),
                     reason: format!(
-                        "the command exceeded its {}s timeout and the sandbox could not end it",
-                        request.timeout.as_secs()
+                        "the command exceeded its {}ms timeout and the sandbox could not end it",
+                        request.timeout.as_millis()
                     ),
                 }),
             }),
@@ -394,8 +394,8 @@ impl Sandbox for LocalSandbox {
             frames.push(Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "timeoutExceeded".to_string(),
                 reason: format!(
-                    "the command exceeded its {}s timeout and was killed; the sandbox is still usable",
-                    request.timeout.as_secs()
+                    "the command exceeded its {}ms timeout and was killed; the sandbox is still usable",
+                    request.timeout.as_millis()
                 ),
             })));
         } else {
