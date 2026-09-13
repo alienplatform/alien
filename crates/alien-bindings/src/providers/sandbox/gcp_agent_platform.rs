@@ -1027,7 +1027,9 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                 }),
             }));
             state.finished = true;
-            state.stopped = true;
+            // Only a landed cancel stops the job; the other two arms report an outcome nobody
+            // established, so the drop is left armed to try again.
+            state.stopped = confirmed;
             continue;
         }
 

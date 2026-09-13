@@ -983,6 +983,32 @@ fn cancel_watching_client_failing_after_one_poll(
     })
 }
 
+/// A job whose every poll answers `poll` and whose every cancel fails, handing each `jobCancel`
+/// body it received back through the channel before refusing it.
+fn cancel_refusing_client(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let (cancels, seen) = tokio::sync::mpsc::unbounded_channel();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(move |_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&poll).unwrap()),
+            "jobCancel" => {
+                cancels
+                    .send(serde_json::from_slice(input).expect("a cancel body is json"))
+                    .expect("the test still listens for cancels");
+                Err(execute_refused())
+            }
+            other => panic!("unexpected op {other}"),
+        });
+    (client, seen)
+}
+
 /// A job whose `jobPoll` calls answer from `poll`, handing each `jobCancel` body it receives back
 /// through the channel so a test can wait for one or wait out its absence.
 fn cancel_watching_client_answering(
@@ -1106,6 +1132,74 @@ async fn a_stream_that_ended_on_a_failed_poll_still_cancels_the_job() {
         .expect("the cancel carries a body");
     assert_eq!(cancel["op"], "jobCancel", "{cancel}");
     assert_eq!(cancel["jobId"], "j1", "{cancel}");
+}
+
+/// A deadline only stops the job once its cancel has landed: the refused half leaves the drop
+/// armed, and the landed half is what says the flag is read rather than stuck at false.
+/// Mutation check: set `state.stopped = true` in the deadline branch and the refused half's
+/// second cancel never arrives.
+#[tokio::test(start_paused = true)]
+async fn a_deadline_arms_the_drop_unless_its_cancel_landed() {
+    // No frames, so the loop sleeps between polls and the paused clock reaches the deadline.
+    let (client, mut cancels) = cancel_refusing_client(serde_json::json!({
+        "running": true,
+        "frames": [],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let refused = provider(client);
+    let frames: Vec<_> = refused
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the elapsed deadline reaches the caller: {frames:?}");
+    };
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+    assert!(
+        error.to_string().contains("could not be cancelled"),
+        "{error}"
+    );
+
+    for attempt in ["the deadline", "the drop"] {
+        let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{attempt} cancels the job it could not stop"))
+            .expect("the cancel carries a body");
+        assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+        assert_eq!(cancel["jobId"], "j1", "{cancel}");
+    }
+
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": true,
+        "frames": [],
+    }));
+
+    let landed = provider(client);
+    let frames: Vec<_> = landed
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the elapsed deadline reaches the caller: {frames:?}");
+    };
+    assert!(error.to_string().contains("timeoutExceeded"), "{error}");
+
+    tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the deadline cancels the job")
+        .expect("the cancel carries a body");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .is_err(),
+        "a job whose cancel landed is not cancelled again on drop"
+    );
 }
 
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no

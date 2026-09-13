@@ -353,7 +353,7 @@ impl Sandbox for KubernetesSandbox {
         let response = self
             .client
             .delete(format!(
-                "{}/v1/sandbox/{}/sandboxes/{}",
+                "{}/v1/sandbox/{}/sessions/{}",
                 self.broker_url, self.resource_id, claim.session_id
             ))
             .bearer_auth(self.identity_token().await?)
@@ -380,5 +380,140 @@ impl Sandbox for KubernetesSandbox {
             .remove(sandbox_id);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::bindings::BindingValue;
+    use axum::extract::{Path, Request};
+    use axum::http::StatusCode;
+    use axum::routing::{delete, post};
+    use axum::{Json, Router};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    /// Copied verbatim from `broker_router` in `alien-infra`'s `sandbox::kubernetes_route`, so a
+    /// client path the broker does not route falls through to the fallback below.
+    const BROKER_RELEASE_ROUTE: &str = "/v1/sandbox/{sandbox}/sessions/{session}";
+
+    async fn serve(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        format!("http://{address}")
+    }
+
+    fn sandbox_over(broker: String, token: &tempfile::NamedTempFile) -> KubernetesSandbox {
+        std::fs::write(token.path(), "service-account-token").expect("the token is written");
+        KubernetesSandbox::new(
+            "sbx",
+            &KubernetesSandboxBinding {
+                namespace: BindingValue::Value("alien".to_string()),
+                runtime_class: BindingValue::Value("gvisor".to_string()),
+                selector: BindingValue::Value("alien/sandbox=sbx-pool".to_string()),
+                broker_url: BindingValue::Value(broker),
+                key_name: BindingValue::Value("sandbox-key".to_string()),
+                token_path: BindingValue::Value(token.path().display().to_string()),
+            },
+            "sbx-pool",
+        )
+        .expect("the binding is complete")
+    }
+
+    /// Terminate releases the claim at the route the broker serves, with the resource and the
+    /// session in the order it serves them.
+    ///
+    /// The broker is the only thing that can delete the pod, so a DELETE to a path it does not
+    /// route leaves the sandbox running and the claim held while the caller is told it is gone.
+    /// Mutation check: change the path in `terminate` and the fallback records the request.
+    #[tokio::test]
+    async fn terminate_releases_at_the_route_the_broker_serves() {
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let unrouted = Arc::new(Mutex::new(Vec::new()));
+        let released_seen = Arc::clone(&released);
+        let unrouted_seen = Arc::clone(&unrouted);
+
+        let broker = serve(
+            Router::new()
+                .route(
+                    "/v1/sandbox/sessions",
+                    post(|| async {
+                        Json(serde_json::json!({
+                            "sessionId": "s1",
+                            "endpoint": "http://10.0.0.1:8080",
+                            "capability": "cap",
+                            "expiresAt": chrono::Utc::now().timestamp() + 300,
+                        }))
+                    }),
+                )
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    delete(move |Path(addressed): Path<(String, String)>| {
+                        let released = Arc::clone(&released);
+                        async move {
+                            released
+                                .lock()
+                                .expect("no panic holds this lock")
+                                .push(addressed);
+                            StatusCode::NO_CONTENT
+                        }
+                    }),
+                )
+                .fallback(move |request: Request| {
+                    let unrouted = Arc::clone(&unrouted);
+                    async move {
+                        unrouted
+                            .lock()
+                            .expect("no panic holds this lock")
+                            .push(format!("{} {}", request.method(), request.uri().path()));
+                        StatusCode::NOT_FOUND
+                    }
+                }),
+        )
+        .await;
+
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        let sandbox = sandbox_over(broker, &token);
+
+        let claimed = sandbox
+            .create(CreateSandboxRequest {
+                sandbox_id: Some("s1".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+                ..Default::default()
+            })
+            .await
+            .expect("the broker claims a pod");
+
+        let released_claim = sandbox.terminate(&claimed.sandbox_id).await;
+
+        assert!(
+            unrouted_seen
+                .lock()
+                .expect("no panic holds this lock")
+                .is_empty(),
+            "terminate reached a path the broker does not route: {:?}",
+            unrouted_seen.lock().expect("no panic holds this lock")
+        );
+        released_claim.expect("the broker releases the claim");
+        assert_eq!(
+            *released_seen.lock().expect("no panic holds this lock"),
+            vec![("sbx-pool".to_string(), "s1".to_string())],
+            "the release names the resource and then the session"
+        );
+        assert!(
+            sandbox
+                .get(&claimed.sandbox_id)
+                .await
+                .expect("a released sandbox reads back")
+                .is_none(),
+            "a released sandbox is no longer claimed"
+        );
     }
 }
