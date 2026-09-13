@@ -1296,6 +1296,8 @@ pub trait Sandbox: Binding {
     /// A command already running is frozen with the guest rather than drained or stopped, and its
     /// own deadline freezes with it, so nothing inside the sandbox will end it. A caller streaming
     /// that command's output is failed within a bound rather than held for the length of the pause.
+    /// On Azure the in-guest deadline is what stops an overrunning command, so one frozen by the
+    /// pause is ended by terminating the sandbox instead and a later `resume` finds nothing.
     async fn pause(&self, sandbox_id: &str) -> Result<()>;
 
     /// Resumes a paused sandbox. Requires `pauseResume`.

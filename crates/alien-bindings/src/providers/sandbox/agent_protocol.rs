@@ -504,12 +504,14 @@ fn frame_stream(
                 chunk = state.bytes.next() => chunk,
                 () = &mut state.stall => {
                     state.finished = true;
+                    // Dropping the body is the only signal that stops the command, and a caller
+                    // that catches this error need never drop the stream it came from.
+                    state.bytes = futures::stream::empty().boxed();
                     return Some((
                         Err(AlienError::new(unanswered(
                             RUN_COMMAND,
                             &format!(
-                                "no terminal frame arrived within {}s of the command's timeout, \
-                                 so the sandbox stopped running it",
+                                "no terminal frame arrived within {}s of the command's timeout",
                                 TERMINAL_FRAME_GRACE.as_secs()
                             ),
                         ))),
@@ -866,6 +868,85 @@ mod tests {
             error.to_string().contains("no terminal frame"),
             "the refusal says what was missing: {error}"
         );
+    }
+
+    /// Reporting the stall is not enough: the body has to go with it. Dropping the stream is the
+    /// only thing that stops the command, and a caller that catches this error still holds one,
+    /// so a refusal that kept the transport would leave the command running past its own refusal.
+    #[tokio::test]
+    async fn a_refused_stream_releases_the_transport_when_it_reports() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        let (release, released) = tokio::sync::oneshot::channel::<()>();
+
+        // Raw TCP rather than axum: the property is the socket closing, and a read that reaches
+        // end-of-file is the only direct evidence of it.
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.expect("accept");
+            let mut seen = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !seen.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = socket.read(&mut chunk).await.expect("read the request");
+                assert!(read > 0, "the client left before finishing its request");
+                seen.extend_from_slice(&chunk[..read]);
+            }
+
+            let frame = "{\"t\":\"stdout\",\"seq\":0,\"data\":\"aGk=\"}\n";
+            socket
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\n\
+                         Transfer-Encoding: chunked\r\n\r\n{:x}\r\n{frame}\r\n",
+                        frame.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .expect("write one frame");
+            socket.flush().await.expect("flush");
+
+            // The chunked body is never terminated: this is the frozen agent. End-of-file here
+            // is the client letting the connection go.
+            while socket.read(&mut chunk).await.unwrap_or(0) > 0 {}
+            release.send(()).expect("the test is still waiting");
+        });
+
+        // Held to the end of the test: a dropped client would close the connection by itself,
+        // and the assertion below would then pass whether or not the refusal released anything.
+        let client = reqwest::Client::new();
+        let response = send(
+            client.post(format!("http://{address}/v1/exec")),
+            RUN_COMMAND,
+        )
+        .await
+        .expect("headers arrive at once");
+        let mut stream = frame_stream(response, "test-sandbox", TERMINAL_FRAME_GRACE);
+
+        stream
+            .next()
+            .await
+            .expect("the one frame the agent wrote")
+            .expect("a stdout frame");
+        let error = stream
+            .next()
+            .await
+            .expect("the stall is reported rather than parking the reader")
+            .expect_err("a body that never ends is a failure, not an end");
+        assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
+
+        // `stream` stays alive across this wait on purpose: dropping it releases the body on its
+        // own, which is the very thing the refusal is supposed to have already done.
+        tokio::time::timeout(TERMINAL_FRAME_GRACE * 20, released)
+            .await
+            .expect("the refusal closes the connection to the agent")
+            .expect("the agent reports the release");
+
+        drop(stream);
+        drop(client);
     }
 
     /// Frames emitted one at a time, each after a pause longer than the response bound, so the

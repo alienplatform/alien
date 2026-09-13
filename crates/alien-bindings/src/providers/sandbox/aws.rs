@@ -462,9 +462,8 @@ impl Sandbox for AwsSandbox {
                         %cleanup,
                         "could not terminate a MicroVM that never became servable"
                     );
-                    // Names the leak and refuses a retry: nobody else holds this id, and with no
-                    // declared ceiling `RunMicrovm` carries no `maximumDurationInSeconds`, so
-                    // honouring the wait's retryable error would mint another beside it.
+                    // Names the leak and refuses a retry: no caller holds this MicroVM's id, so
+                    // honouring the wait's retryable error would mint another orphan beside it.
                     error.context(ErrorData::SandboxCommandFailed {
                         failure: "sandboxLeftBehind".to_string(),
                         reason: format!(

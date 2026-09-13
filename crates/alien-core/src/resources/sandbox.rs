@@ -272,8 +272,8 @@ impl SandboxCapabilities {
             }),
             Platform::Azure => Ok(Self::azure()),
             Platform::Gcp => Ok(Self::gcp_agent_platform()),
-            // Preview needs a gateway that validates a sandbox-and-port capability, and that
-            // gateway does not exist yet.
+            // Preview needs a gateway that validates a sandbox-and-port capability, which this
+            // backend has none of.
             Platform::Kubernetes => Ok(Self {
                 files: true,
                 reconnect: true,

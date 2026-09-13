@@ -7,7 +7,7 @@ use alien_core::{
     Stack, StackState,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, permission_set_reaches_a_sandbox_session};
+use alien_permissions::{get_permission_set, permission_set_reaches_a_sandbox};
 use async_trait::async_trait;
 
 pub const REMOTE_BINDINGS_ID: &str = "access";
@@ -276,7 +276,7 @@ fn in_cloud_reach_to(stack: &Stack, sandbox_id: &str, platform: Platform) -> Opt
                 account
                     .stack_permission_sets
                     .iter()
-                    .any(permission_set_reaches_a_sandbox_session)
+                    .any(permission_set_reaches_a_sandbox)
             })
             .map(|_| format!("service account '{id}' can start sessions in it"))
     });
@@ -322,9 +322,9 @@ fn reaches_this_sandbox(
         // pins in the registry — for the two platforms it covers.
         PermissionSetReference::Name(name) => {
             (platform == Platform::Gcp || target == sandbox_id || target == "*")
-                && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox_session)
+                && get_permission_set(name).is_some_and(permission_set_reaches_a_sandbox)
         }
-        PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox_session(set),
+        PermissionSetReference::Inline(set) => permission_set_reaches_a_sandbox(set),
     }
 }
 

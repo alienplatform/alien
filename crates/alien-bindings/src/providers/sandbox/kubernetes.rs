@@ -325,8 +325,8 @@ impl Sandbox for KubernetesSandbox {
     async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
         Err(self.failed(
             "preview",
-            "preview needs a gateway that validates a sandbox-and-port capability, and that \
-             gateway does not exist yet",
+            "preview needs a gateway that validates a sandbox-and-port capability, which this \
+             backend has none of",
         ))
     }
 

@@ -138,7 +138,7 @@ pub const MICROVM_SESSION_LIFECYCLE_ACTIONS: &[&str] = &[
 /// declares. Bindings are skipped — `${stackPrefix}` is uninterpolated this early and ARNs are
 /// free-form, so any comparison is unsound. Checked per-cloud rather than by one verb list: AWS
 /// names actions, Azure grants reach through a role or `dataActions`.
-pub fn permission_set_reaches_a_sandbox_session(
+pub fn permission_set_reaches_a_sandbox(
     permission_set: &alien_core::permissions::PermissionSet,
 ) -> bool {
     let reaches_on_aws = permission_set
@@ -610,7 +610,7 @@ mod tests {
     fn every_session_reaching_set_is_resource_scoped_by_resource_name() {
         for id in list_permission_set_ids() {
             let permission_set = get_permission_set(id).expect("a listed set resolves");
-            if !permission_set_reaches_a_sandbox_session(permission_set) {
+            if !permission_set_reaches_a_sandbox(permission_set) {
                 continue;
             }
             for platform in [alien_core::Platform::Aws, alien_core::Platform::Azure] {
@@ -658,7 +658,7 @@ mod tests {
                 !permission_set_covers_platform("sandbox/remote-execute", platform),
                 "widening sandbox/remote-execute to {platform} must be done together with \
                  alien-manager's resolve route, alien-preflights' platform gate, and \
-                 permission_set_reaches_a_sandbox_session — which has no {platform} branch, so \
+                 permission_set_reaches_a_sandbox — which has no {platform} branch, so \
                  the single-tenancy gate would not see a set that reaches a session there"
             );
         }
@@ -864,7 +864,7 @@ where
                         || {
                             permission_ref
                                 .resolve(|name| get_permission_set(name).cloned())
-                                .is_some_and(|set| permission_set_reaches_a_sandbox_session(&set))
+                                .is_some_and(|set| permission_set_reaches_a_sandbox(&set))
                         },
                     )
                 })

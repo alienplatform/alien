@@ -58,6 +58,7 @@ export {
 export type {
   CommandFrame,
   Container,
+  CreateSandboxOptions,
   JobError,
   JobExit,
   JobPoll,
@@ -66,6 +67,7 @@ export type {
   PostgresConnection,
   PostgresSslMode,
   Queue,
+  ResolvedSandbox,
   RunCommandOptions,
   Sandbox,
   SandboxInstance,
