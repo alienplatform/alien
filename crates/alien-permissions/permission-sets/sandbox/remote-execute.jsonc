@@ -56,7 +56,7 @@
         "description": "Read a sandbox's state and mint the token the sandbox agent protocol travels on.",
         "grant": {
           // The same pair as `sandbox/execute`, and it carries the same weight: minting a MicroVM
-          // auth token is access to session contents. `CreateMicrovmShellAuthToken` stays out for
+          // auth token is access to sandbox contents. `CreateMicrovmShellAuthToken` stays out for
           // the same reason it does there — an interactive shell is not part of this surface.
           //
           // One image serves every sandbox started from it and AWS has no finer ARN, so this pair
@@ -104,7 +104,7 @@
         "description": "Create, drive and tear down sandboxes under the selected reasoning engine.",
         "grant": {
           // The verbs the Agent Platform provider calls, `execute` included — this set and
-          // `sandbox/execute` are the only two that reach session content. Custom role: no
+          // `sandbox/execute` are the only two that reach sandbox content. Custom role: no
           // predefined one isolates `execute` from the rest of Vertex AI, and ten carry it,
           // `roles/owner` and `roles/editor` included.
           "permissions": [

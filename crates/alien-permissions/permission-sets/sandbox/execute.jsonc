@@ -1,19 +1,19 @@
 {
   "id": "sandbox/execute",
-  "description": "Allows running commands and moving files inside an existing sandbox session",
+  "description": "Allows running commands and moving files inside an existing sandbox",
   "platforms": {
     "aws": [
       {
         "grant": {
-          // Minting a MicroVM auth token is the action that grants access to session contents, so
+          // Minting a MicroVM auth token is the action that grants access to sandbox contents, so
           // it belongs here and in `sandbox/remote-execute` alone — management, provision and
-          // heartbeat must never reach inside a session, and
+          // heartbeat must never reach inside a sandbox, and
           // `only_session_reaching_sandbox_sets_mint_microvm_auth_tokens` pins that list.
           // CreateMicrovmShellAuthToken is deliberately excluded: an interactive shell is not
           // part of the resource's surface.
           //
-          // Authorized against the image the session was launched from, which is what bounds
-          // it: a workload can only mint tokens for sessions of its own sandbox.
+          // Authorized against the image the sandbox was launched from, which is what bounds
+          // it: a workload can only mint tokens for sandboxes started from its own image.
           "actions": ["lambda:CreateMicrovmAuthToken"]
         },
         "binding": {
@@ -31,7 +31,7 @@
       },
       {
         "grant": {
-          // State and endpoint of a session this workload already holds a token for. Metadata:
+          // State and endpoint of a sandbox this workload already holds a token for. Metadata:
           // it reveals nothing of what runs inside.
           "actions": ["lambda:GetMicrovm"]
         },
@@ -53,14 +53,14 @@
       {
         "grant": {
           // The predefined role is the one grant Microsoft documents as sufficient for the
-          // sandbox data plane, and it carries session lifecycle and exec together — so this
+          // sandbox data plane, and it carries sandbox lifecycle and exec together — so this
           // set cannot hand out exec without lifecycle. The merge lands here rather than in
-          // sandbox/management, because a set that reaches inside a session must not be one of
+          // sandbox/management, because a set that reaches inside a sandbox must not be one of
           // the implicit-management sets; management grants only the granular lifecycle
           // `dataActions` for the same reason. Subscription Owner returns 403 against this plane.
           "predefinedRoles": ["Container Apps SandboxGroup Data Owner"]
         },
-        // Resource-scoped only. This role reaches inside a session, and the sole stack-level
+        // Resource-scoped only. This role reaches inside a sandbox, and the sole stack-level
         // scope Azure RBAC can express is the resource group — where it would reach inside every
         // sibling sandbox group too. Nothing needs it: a workload is handed this set through a
         // resource link, which binds to the sandbox's own group.
@@ -73,8 +73,8 @@
     ],
     "gcp": [
       {
-        // The one verb that runs code and reads files inside a live session, so it lives here
-        // alone — heartbeat, management and provision must never reach session content. No safe
+        // The one verb that runs code and reads files inside a live sandbox, so it lives here
+        // alone — heartbeat, management and provision must never reach sandbox content. No safe
         // predefined role isolates it, so it is a residual custom-role permission.
         "grant": {
           "permissions": ["aiplatform.sandboxEnvironments.execute"]
