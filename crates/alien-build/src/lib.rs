@@ -38,6 +38,7 @@ use tokio::time::sleep;
 use tracing::{info, warn};
 
 const BASE_IMAGE_BUILD_MAX_ATTEMPTS: usize = 3;
+const IMAGE_PUSH_MAX_ATTEMPTS: usize = 3;
 const ARTIFACT_CACHE_METADATA_FILE: &str = ".alien-build-cache.json";
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
@@ -1598,10 +1599,7 @@ async fn push_resource_images(
     if linux_tarballs.is_empty() {
         for oci_file in &oci_files {
             let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
-            image
-                .push(&image_uri, &push_opts_with_progress)
-                .await
-                .map_dockdash_err()?;
+            push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
         }
         info!(
             "Pushed resource '{}' in {:.2}s",
@@ -1616,10 +1614,7 @@ async fn push_resource_images(
     if let [(_, only)] = linux_tarballs.as_slice() {
         info!("Pushing {} to {}", only.display(), image_uri);
         let image = DockDashImage::from_tarball(only).map_dockdash_err()?;
-        image
-            .push(&image_uri, &push_opts_with_progress)
-            .await
-            .map_dockdash_err()?;
+        push_image_with_retry(&image, &image_uri, &push_opts_with_progress).await?;
         info!(
             "Pushed resource '{}' in {:.2}s",
             display_resource_name,
@@ -1640,10 +1635,7 @@ async fn push_resource_images(
         let child_uri = format!("{}-{}", image_uri, target.runtime_platform_id());
         info!("Pushing {} as {}", oci_file.display(), child_uri);
         let image = DockDashImage::from_tarball(oci_file).map_dockdash_err()?;
-        image
-            .push(&child_uri, &push_opts_with_progress)
-            .await
-            .map_dockdash_err()?;
+        push_image_with_retry(&image, &child_uri, &push_opts_with_progress).await?;
 
         // The index entry's digest+size must reflect the manifest the registry stored
         // (dockdash pushes a converted manifest), so read it back rather than hashing the tarball.
@@ -3070,20 +3062,123 @@ fn base_image_build_retry_delay(attempt: usize) -> Duration {
     }
 }
 
+/// Push an image with a bounded retry for transport and registry availability failures.
+///
+/// Repeating an OCI push is safe: blobs are content-addressed and dockdash checks for
+/// blobs that the registry accepted before a connection was interrupted. We deliberately
+/// do not retry authentication, validation, or local archive failures. Although Dockdash
+/// is maintained by Alien, this retry stays at the build boundary: Dockdash provides a
+/// single-attempt push and preserves the structured transport error, while this caller owns
+/// the attempt budget, progress messages, and final redaction required by `alien build`.
+async fn push_image_with_retry(
+    image: &DockDashImage,
+    image_uri: &str,
+    options: &dockdash::PushOptions,
+) -> Result<()> {
+    for attempt in 1..=IMAGE_PUSH_MAX_ATTEMPTS {
+        match image.push(image_uri, options).await {
+            Ok(_) => return Ok(()),
+            Err(error)
+                if attempt < IMAGE_PUSH_MAX_ATTEMPTS
+                    && is_retryable_dockdash_transport_error(&error) =>
+            {
+                let delay = base_image_build_retry_delay(attempt);
+                warn!(
+                    attempt,
+                    max_attempts = IMAGE_PUSH_MAX_ATTEMPTS,
+                    delay_secs = delay.as_secs(),
+                    image = image_uri,
+                    "Container registry connection was interrupted; retrying image push"
+                );
+                sleep(delay).await;
+            }
+            Err(error @ dockdash::Error::Generic { .. }) => {
+                return Err(image_push_error(image_uri, &error));
+            }
+            Err(error) => return Err(error).map_dockdash_err(),
+        }
+    }
+
+    unreachable!("image push retry loop always returns")
+}
+
+fn image_push_error(image_uri: &str, error: &dockdash::Error) -> AlienError<ErrorData> {
+    if is_retryable_dockdash_transport_error(error) {
+        AlienError::new(ErrorData::ImagePushFailed {
+            image: image_uri.to_string(),
+            reason: format!(
+                "Registry connection was interrupted after {IMAGE_PUSH_MAX_ATTEMPTS} attempts"
+            ),
+        })
+    } else {
+        // Registry errors can contain presigned upload URLs. Do not
+        // attach or format the source error here: query credentials must never
+        // reach terminal output, logs, or serialized Alien errors.
+        AlienError::new(ErrorData::ImagePushRejected {
+            image: image_uri.to_string(),
+            reason: nonretryable_push_reason(error),
+        })
+    }
+}
+
+fn nonretryable_push_reason(error: &dockdash::Error) -> String {
+    let dockdash::Error::Generic { message, source } = error else {
+        return "The upload request was not accepted".to_string();
+    };
+
+    if message.starts_with("Invalid target image reference format") {
+        return "The image reference is invalid".to_string();
+    }
+
+    let Some(source) = source.as_deref() else {
+        return "The upload request was not accepted".to_string();
+    };
+    let mut current = Some(source as &(dyn StdError + 'static));
+    while let Some(source) = current {
+        if let Some(oci_error) = source.downcast_ref::<oci_client::errors::OciDistributionError>() {
+            return match oci_error {
+                oci_client::errors::OciDistributionError::UnauthorizedError { .. } => {
+                    "Registry authentication failed".to_string()
+                }
+                oci_client::errors::OciDistributionError::ServerError { code, .. } => {
+                    format!("Registry returned HTTP {code}")
+                }
+                _ => "The registry rejected the upload request".to_string(),
+            };
+        }
+        current = source.source();
+    }
+
+    "The upload request was not accepted".to_string()
+}
+
 fn is_retryable_dockdash_image_pull_error(error: &dockdash::Error) -> bool {
     match error {
         dockdash::Error::ImagePull { source, .. } => {
             source
                 .as_deref()
-                .map(is_retryable_image_pull_source)
+                .map(is_retryable_transport_source)
                 .unwrap_or(false)
-                || is_retryable_image_pull_text(&error.to_string())
+                || is_retryable_transport_text(&error.to_string())
         }
         _ => false,
     }
 }
 
-fn is_retryable_image_pull_text(message: &str) -> bool {
+fn is_retryable_dockdash_transport_error(error: &dockdash::Error) -> bool {
+    match error {
+        // Dockdash wraps failures from authentication and OCI upload calls in
+        // Generic while retaining the typed oci-client source. Its other
+        // variants represent local archive, configuration, or task failures.
+        dockdash::Error::Generic { source, .. } => source
+            .as_deref()
+            .map(is_retryable_transport_source)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn is_retryable_transport_text(message: &str) -> bool {
     const RETRYABLE_MARKERS: &[&str] = &[
         "error sending request",
         "client error (sendrequest)",
@@ -3105,7 +3200,7 @@ fn is_retryable_image_pull_text(message: &str) -> bool {
         .any(|marker| message.contains(marker))
 }
 
-fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static)) -> bool {
+fn is_retryable_transport_source(source: &(dyn StdError + Send + Sync + 'static)) -> bool {
     let mut current = Some(source as &(dyn StdError + 'static));
 
     while let Some(error) = current {
@@ -3116,6 +3211,8 @@ fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static
         if let Some(reqwest_error) = error.downcast_ref::<reqwest::Error>() {
             return reqwest_error.is_timeout()
                 || reqwest_error.is_connect()
+                || reqwest_error.is_request()
+                || reqwest_error.is_body()
                 || reqwest_error
                     .status()
                     .map(|status| status.is_server_error() || status.as_u16() == 429)
@@ -3123,21 +3220,25 @@ fn is_retryable_image_pull_source(source: &(dyn StdError + Send + Sync + 'static
         }
 
         if let Some(io_error) = error.downcast_ref::<std::io::Error>() {
-            return matches!(
-                io_error.kind(),
-                std::io::ErrorKind::ConnectionAborted
-                    | std::io::ErrorKind::ConnectionReset
-                    | std::io::ErrorKind::Interrupted
-                    | std::io::ErrorKind::TimedOut
-                    | std::io::ErrorKind::UnexpectedEof
-                    | std::io::ErrorKind::WouldBlock
-            );
+            return is_retryable_io_error(io_error);
         }
 
         current = error.source();
     }
 
     false
+}
+
+fn is_retryable_io_error(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::Interrupted
+            | std::io::ErrorKind::TimedOut
+            | std::io::ErrorKind::UnexpectedEof
+            | std::io::ErrorKind::WouldBlock
+    )
 }
 
 fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> bool {
@@ -3148,6 +3249,8 @@ fn is_retryable_oci_error(error: &oci_client::errors::OciDistributionError) -> b
         oci_client::errors::OciDistributionError::RequestError(error) => {
             error.is_timeout()
                 || error.is_connect()
+                || error.is_request()
+                || error.is_body()
                 || error
                     .status()
                     .map(|status| status.is_server_error() || status.as_u16() == 429)
@@ -3675,6 +3778,87 @@ mod tests {
 
         assert!(!is_retryable_dockdash_image_pull_error(&auth_error));
         assert!(!is_retryable_dockdash_image_pull_error(&missing_error));
+    }
+
+    #[test]
+    fn retryable_image_push_detects_interrupted_transport() {
+        let error = dockdash::Error::Generic {
+            message: "Failed to push layer sha256:abc".to_string(),
+            source: Some(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "connection reset",
+            ))),
+        };
+
+        assert!(is_retryable_dockdash_transport_error(&error));
+
+        let source_free_protocol_error = dockdash::Error::Generic {
+            message: "HTTP/2 stream failed with unspecific protocol error".to_string(),
+            source: None,
+        };
+        assert!(!is_retryable_dockdash_transport_error(
+            &source_free_protocol_error
+        ));
+
+        let temporary_registry_error = dockdash::Error::Generic {
+            message: "Failed to push manifest".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::ServerError {
+                    code: 503,
+                    url: "https://registry.example.com/v2/repo/manifests/tag".to_string(),
+                    message: "Service Unavailable".to_string(),
+                },
+            )),
+        };
+        assert!(is_retryable_dockdash_transport_error(
+            &temporary_registry_error
+        ));
+
+        let auth_error = dockdash::Error::Generic {
+            message: "Authentication failed".to_string(),
+            source: Some(Box::new(
+                oci_client::errors::OciDistributionError::UnauthorizedError {
+                    url: "https://registry.example.com/v2/".to_string(),
+                },
+            )),
+        };
+        assert!(!is_retryable_dockdash_transport_error(&auth_error));
+        assert_eq!(
+            nonretryable_push_reason(&auth_error),
+            "Registry authentication failed"
+        );
+
+        let local_archive_error = dockdash::Error::OciArchive {
+            message: "Failed to read local archive".to_string(),
+            source: Some(Box::new(std::io::Error::new(
+                std::io::ErrorKind::ConnectionReset,
+                "local filesystem error",
+            ))),
+        };
+        assert!(!is_retryable_dockdash_transport_error(&local_archive_error));
+    }
+
+    #[test]
+    fn image_push_error_does_not_expose_registry_source_details() {
+        let secret = "signed-registry-credential";
+        let source_url =
+            format!("https://registry.example.com/v2/repo/blobs/uploads/id?_alien_sig={secret}");
+        let error = dockdash::Error::Generic {
+            message: format!("registry request failed for {source_url}"),
+            source: Some(Box::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                source_url,
+            ))),
+        };
+
+        let rendered = image_push_error("registry.example.com/repo:image", &error).to_string();
+        assert!(!rendered.contains(secret));
+        assert!(!rendered.contains("_alien_sig"));
+        assert_eq!(
+            rendered,
+            "IMAGE_PUSH_REJECTED: Container registry rejected image 'registry.example.com/repo:image': The upload request was not accepted"
+        );
+        assert!(!image_push_error("registry.example.com/repo:image", &error).retryable);
     }
 
     #[test]

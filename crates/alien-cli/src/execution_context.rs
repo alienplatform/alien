@@ -1049,12 +1049,21 @@ where
 
 #[cfg(feature = "platform")]
 fn is_retryable_artifact_registry_error(error: &reqwest::Error) -> bool {
-    error.is_timeout() || error.is_connect()
+    // At this boundary the URL and request are already built, so request/body
+    // errors are wire-protocol failures (for example a reset HTTP/2 stream),
+    // not invalid user input.
+    error.is_timeout() || error.is_connect() || error.is_request() || error.is_body()
 }
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "platform")]
+    use super::is_retryable_artifact_registry_error;
     use super::{normalize_base_url, ExecutionMode};
+    #[cfg(feature = "platform")]
+    use tokio::io::AsyncWriteExt;
+    #[cfg(feature = "platform")]
+    use tokio::net::TcpListener;
 
     #[test]
     fn normalize_base_url_removes_trailing_slashes() {
@@ -1074,6 +1083,29 @@ mod tests {
             normalize_base_url("http://localhost:8080"),
             "http://localhost:8080"
         );
+    }
+
+    #[cfg(feature = "platform")]
+    #[tokio::test]
+    async fn artifact_registry_protocol_failures_are_retryable() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test server");
+        let address = listener.local_addr().expect("read test server address");
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.expect("accept request");
+            stream
+                .write_all(b"not an HTTP response")
+                .await
+                .expect("write invalid response");
+        });
+
+        let error = reqwest::get(format!("http://{address}"))
+            .await
+            .expect_err("invalid HTTP response must fail");
+        server.await.expect("test server task");
+
+        assert!(is_retryable_artifact_registry_error(&error));
     }
 
     #[cfg(feature = "platform")]
