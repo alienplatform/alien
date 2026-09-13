@@ -1118,6 +1118,7 @@ async fn re_import_repairs_terminal_initial_failures() {
                     observed_inventory_batches: vec![],
                     capabilities: vec![],
                     operator_version: None,
+                    operations_report: None,
                 },
             )
             .await
