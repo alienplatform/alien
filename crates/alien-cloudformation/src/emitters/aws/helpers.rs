@@ -31,6 +31,8 @@ const CONDITION_NETWORK_AZ3: &str = "NetworkUseAz3";
 pub const CONDITION_HAS_VPC_CIDR: &str = "HasVpcCidr";
 pub const CONDITION_NETWORK_MODE_CREATE: &str = "NetworkModeCreate";
 const CONDITION_NETWORK_MODE_USE_EXISTING: &str = "NetworkModeUseExisting";
+/// True when setup has explicit subnet IDs, either created by the package or supplied by the user.
+pub(crate) const CONDITION_NETWORK_MODE_HAS_NAMED_SUBNETS: &str = "NetworkModeHasNamedSubnets";
 
 pub const INLINE_POLICY_NAME: &str = "deployment-permissions";
 const MAX_MANAGED_POLICY_BYTES: usize = 5_500;
@@ -350,8 +352,8 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> CfExpression {
             CfExpression::ref_(format!("{network_id}Vpc")),
             CfExpression::ref_("VpcId"),
         ),
-        NetworkSettings::UseDefault
-        | NetworkSettings::ByoVpcAws { .. }
+        NetworkSettings::UseDefault => CfExpression::no_value(),
+        NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
         | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_("VpcId"),
     }
@@ -369,8 +371,8 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
             subnet_refs(network_id, "PrivateSubnet"),
             CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
         ),
-        NetworkSettings::UseDefault
-        | NetworkSettings::ByoVpcAws { .. }
+        NetworkSettings::UseDefault => CfExpression::no_value(),
+        NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
         | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
     }
@@ -388,8 +390,8 @@ pub fn public_subnet_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
             subnet_refs(network_id, "PublicSubnet"),
             CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
         ),
-        NetworkSettings::UseDefault
-        | NetworkSettings::ByoVpcAws { .. }
+        NetworkSettings::UseDefault => CfExpression::no_value(),
+        NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
         | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_PUBLIC_SUBNET_IDS),
     }
@@ -410,8 +412,8 @@ pub fn security_group_ids_expr(ctx: &EmitContext<'_>) -> CfExpression {
             )]),
             CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
         ),
-        NetworkSettings::UseDefault
-        | NetworkSettings::ByoVpcAws { .. }
+        NetworkSettings::UseDefault => CfExpression::no_value(),
+        NetworkSettings::ByoVpcAws { .. }
         | NetworkSettings::ByoVpcGcp { .. }
         | NetworkSettings::ByoVnetAzure { .. } => CfExpression::ref_(PARAM_SECURITY_GROUP_IDS),
     }

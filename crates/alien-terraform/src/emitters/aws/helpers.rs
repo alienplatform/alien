@@ -541,9 +541,15 @@ pub fn private_subnet_ids_expr(ctx: &EmitContext<'_>) -> Expression {
         return expr::raw("[]");
     };
     match &network.settings {
+        NetworkSettings::Create { .. } if stack_has_setup_postgres(ctx) => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : data.aws_subnets.{label}_default[0].ids"
+        )),
         NetworkSettings::Create { .. } => expr::raw(format!(
             "var.network_mode == \"create-new\" ? aws_subnet.{label}_private[*].id : var.network_mode == \"use-existing\" ? var.private_subnet_ids : []"
         )),
+        NetworkSettings::UseDefault => {
+            expr::raw(format!("data.aws_subnets.{label}_default.ids"))
+        }
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_private_subnet_ids")),
         _ => expr::raw("[]"),
     }
@@ -570,12 +576,26 @@ pub fn vpc_id_expr(ctx: &EmitContext<'_>) -> Expression {
         return expr::raw("null");
     };
     match &network.settings {
+        NetworkSettings::Create { .. } if stack_has_setup_postgres(ctx) => expr::raw(format!(
+            "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : data.aws_vpc.{label}_default[0].id"
+        )),
         NetworkSettings::Create { .. } => expr::raw(format!(
             "var.network_mode == \"create-new\" ? aws_vpc.{label}[0].id : var.network_mode == \"use-existing\" ? var.vpc_id : null"
         )),
+        NetworkSettings::UseDefault => expr::raw(format!("data.aws_vpc.{label}_default.id")),
         NetworkSettings::ByoVpcAws { .. } => expr::raw(format!("var.{label}_vpc_id")),
         _ => expr::raw("null"),
     }
+}
+
+fn stack_has_setup_postgres(ctx: &EmitContext<'_>) -> bool {
+    ctx.stack.resources().any(|(_id, entry)| {
+        entry.lifecycle == alien_core::ResourceLifecycle::Frozen
+            && entry
+                .config
+                .downcast_ref::<alien_core::Postgres>()
+                .is_some()
+    })
 }
 
 /// Build an IAM `aws_iam_role` resource block with an inline assume role

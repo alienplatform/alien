@@ -98,20 +98,36 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     };
 
-    // The import endpoint is intentionally narrow: a deployment-group token is
-    // the only credential class that has a meaningful "import into this group"
-    // semantic. Workspace/admin tokens could be allowed here too, but every
-    // existing call-site (CloudFormation custom resource, Terraform provider,
-    // Helm bootstrap) mints a DG token at setup time, so widening would only weaken
-    // the audit trail without adding new flows.
+    // Bootstrap may create in a group. A deployment credential may only
+    // re-register its own existing setup; it must never fall through to create.
     let deployment_group_id = match &subject.scope {
         Scope::DeploymentGroup {
             deployment_group_id,
             ..
         } => deployment_group_id.clone(),
+        Scope::Deployment { deployment_id, .. } => {
+            let existing = match state
+                .deployment_store
+                .get_deployment(&subject, deployment_id)
+                .await
+            {
+                Ok(Some(deployment)) => deployment,
+                Ok(None) => return ErrorData::not_found_deployment(deployment_id).into_response(),
+                Err(error) => return error.into_response(),
+            };
+            if existing.name != req.deployment_name.trim()
+                || !state.authz.can_update_deployment(&subject, &existing)
+            {
+                return ErrorData::forbidden("Cannot register setup for another deployment")
+                    .into_response();
+            }
+            existing.deployment_group_id.clone()
+        }
         _ => {
-            return ErrorData::forbidden("Stack import requires a deployment-group-scoped token")
-                .into_response();
+            return ErrorData::forbidden(
+                "Stack import requires a deployment-group or deployment token",
+            )
+            .into_response();
         }
     };
 
@@ -139,16 +155,6 @@ pub async fn stack_import(
     let setup_metadata = match setup_metadata_for_persistence(&req) {
         Ok(metadata) => metadata,
         Err(error) => return error.into_response(),
-    };
-
-    let dg = match state
-        .deployment_store
-        .get_deployment_group(&subject, &deployment_group_id)
-        .await
-    {
-        Ok(Some(dg)) => dg,
-        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
-        Err(e) => return e.into_response(),
     };
 
     let release = match req.release_id.as_deref() {
@@ -269,6 +275,7 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
+            let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
             match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
                 SetupRegistrationReplay::Exact => {
                     let Some(stack_settings) = existing.stack_settings else {
@@ -299,19 +306,47 @@ pub async fn stack_import(
                 }
                 SetupRegistrationReplay::None => {}
             }
-            if let Some(existing_stack_state) = existing.stack_state.as_ref() {
-                stack_state = match merge_reimported_stack_state(
-                    &state,
-                    &req,
-                    &prepared_stack,
-                    existing_stack_state,
-                    stack_state,
-                ) {
-                    Ok(state) => state,
-                    Err(error) => return error.into_response(),
+            let has_registration_operation = setup_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.get(SETUP_REGISTRATION_OPERATION_ID))
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|operation_id| !operation_id.is_empty());
+            if !has_registration_operation
+                && is_idempotent_import(&existing, &stack_state, &release.id, &req)
+            {
+                let Some(stack_settings) = existing.stack_settings else {
+                    return ErrorData::internal("imported deployment is missing stack_settings")
+                        .into_response();
                 };
+                let stack_state = existing.stack_state.unwrap_or(stack_state);
+                return (
+                    StatusCode::OK,
+                    Json(StackImportResponse {
+                        deployment_id: existing.id,
+                        deployment_token: existing.deployment_token,
+                        stack_settings,
+                        stack_state,
+                    }),
+                )
+                    .into_response();
             }
-            if !can_accept_reimport(&existing, &stack_state, &release.id, &req) {
+            if !activates_setup_reservation {
+                if let Some(existing_stack_state) = existing.stack_state.as_ref() {
+                    stack_state = match merge_reimported_stack_state(
+                        &state,
+                        &req,
+                        &prepared_stack,
+                        existing_stack_state,
+                        stack_state,
+                    ) {
+                        Ok(state) => state,
+                        Err(error) => return error.into_response(),
+                    };
+                }
+            }
+            if !activates_setup_reservation
+                && !can_accept_reimport(&existing, &stack_state, &release.id, &req)
+            {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
                         "Imported deployment '{}' is not in a re-importable state and the payload is not idempotent",
@@ -320,7 +355,7 @@ pub async fn stack_import(
                 })
                 .into_response();
             }
-            if !can_reconcile_after_import(&existing) {
+            if !activates_setup_reservation && !can_reconcile_after_import(&existing) {
                 return AlienError::new(ErrorData::ImportedDeploymentConflict {
                     reason: format!(
                         "Imported deployment '{}' is currently reconciling; retry setup after it reaches a stable state",
@@ -354,24 +389,31 @@ pub async fn stack_import(
                     }
                 }
             }
-            let runtime_metadata = match reimport_runtime_metadata(
-                &existing,
-                &prepared_stack,
-                &release.id,
-                &req,
-                imported_gate_answers,
-            ) {
-                Ok(metadata) => metadata,
-                Err(error) => return error.into_response(),
+            let runtime_metadata = if activates_setup_reservation {
+                import_runtime_metadata(&prepared_stack, imported_gate_answers)
+            } else {
+                match reimport_runtime_metadata(
+                    &existing,
+                    &prepared_stack,
+                    &release.id,
+                    &req,
+                    imported_gate_answers,
+                ) {
+                    Ok(metadata) => metadata,
+                    Err(error) => return error.into_response(),
+                }
             };
-            let should_reconcile = import_changes_deployment(
-                &existing,
-                &stack_state,
-                &environment_info,
-                &runtime_metadata,
-                &release.id,
-                &req,
-            );
+            let should_reconcile = !activates_setup_reservation
+                && import_changes_deployment(
+                    &existing,
+                    &stack_state,
+                    &environment_info,
+                    &runtime_metadata,
+                    &release.id,
+                    &req,
+                );
+            let activation_status = activates_setup_reservation
+                .then(|| initial_import_status(&prepared_stack, &stack_state));
             let setup_metadata = merge_setup_metadata(&existing.setup_metadata, setup_metadata);
             let updated = match state
                 .deployment_store
@@ -379,6 +421,7 @@ pub async fn stack_import(
                     &subject,
                     &existing.id,
                     UpdateImportedDeploymentParams {
+                        stack_settings: req.stack_settings.clone(),
                         stack_state: stack_state.clone(),
                         environment_info: environment_info.clone(),
                         runtime_metadata: runtime_metadata.clone(),
@@ -387,6 +430,7 @@ pub async fn stack_import(
                         setup_target: req.setup_target.clone(),
                         setup_fingerprint: req.setup_fingerprint.clone(),
                         setup_fingerprint_version: req.setup_fingerprint_version,
+                        activation_status,
                         schedule_reconciliation: should_reconcile,
                         input_values: req.input_values.clone(),
                     },
@@ -419,6 +463,21 @@ pub async fn stack_import(
         Err(e) => return e.into_response(),
     }
 
+    // The deployment could have been deleted during preparation. Do not turn
+    // a re-registration into a new deployment or issue a replacement credential.
+    if matches!(subject.scope, Scope::Deployment { .. }) {
+        return ErrorData::forbidden("A deployment token cannot create a deployment")
+            .into_response();
+    }
+    let dg = match state
+        .deployment_store
+        .get_deployment_group(&subject, &deployment_group_id)
+        .await
+    {
+        Ok(Some(dg)) => dg,
+        Ok(None) => return ErrorData::not_found_group(&deployment_group_id).into_response(),
+        Err(error) => return error.into_response(),
+    };
     let runtime_metadata = import_runtime_metadata(&prepared_stack, imported_gate_answers);
 
     let create_ctx = crate::auth::DeploymentCreateCtx {
@@ -888,20 +947,61 @@ fn can_accept_reimport(
     release_id: &str,
     req: &StackImportRequest,
 ) -> bool {
-    let idempotent = existing.current_release_id.as_deref() == Some(release_id)
-        && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
-        && imported_resources_are_unchanged(existing, imported_stack_state);
+    is_stable_setup_repair_state(&existing.status)
+        || is_idempotent_import(existing, imported_stack_state, release_id, req)
+}
 
-    matches!(
-        existing.status.as_str(),
-        "running" | "update-failed" | "refresh-failed"
-    ) || idempotent
+fn is_idempotent_import(
+    existing: &DeploymentRecord,
+    imported_stack_state: &StackState,
+    release_id: &str,
+    req: &StackImportRequest,
+) -> bool {
+    existing
+        .desired_release_id
+        .as_deref()
+        .or(existing.current_release_id.as_deref())
+        == Some(release_id)
+        && existing.setup_target.as_deref() == Some(req.setup_target.as_str())
+        && existing.setup_fingerprint.as_deref() == Some(req.setup_fingerprint.as_str())
+        && existing.setup_fingerprint_version == Some(req.setup_fingerprint_version)
+        && existing.stack_settings.as_ref() == Some(&req.stack_settings)
+        && existing.environment_info.as_ref() == infer_import_environment_info(req).as_ref()
+        && existing.input_values == req.input_values
+        && imported_resources_are_unchanged(existing, imported_stack_state)
+}
+
+fn is_pending_setup_reservation(existing: &DeploymentRecord, release_id: &str) -> bool {
+    existing.status == "pending"
+        && existing.current_release_id.is_none()
+        && existing
+            .setup_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.get("setupReservation"))
+            .and_then(|reservation| reservation.get("releaseId"))
+            .and_then(serde_json::Value::as_str)
+            == Some(release_id)
 }
 
 fn can_reconcile_after_import(existing: &DeploymentRecord) -> bool {
+    is_stable_setup_repair_state(&existing.status)
+}
+
+/// Setup may be rerun after a completed deployment or a terminal failure.
+///
+/// These states have no active execution to race. In particular, the initial
+/// failure states must remain repairable: setup owns the frozen resources and
+/// is the only actor that can correct them before provisioning resumes. Active
+/// and deletion states deliberately remain excluded.
+fn is_stable_setup_repair_state(status: &str) -> bool {
     matches!(
-        existing.status.as_str(),
-        "running" | "update-failed" | "refresh-failed"
+        status,
+        "preflights-failed"
+            | "initial-setup-failed"
+            | "provisioning-failed"
+            | "running"
+            | "update-failed"
+            | "refresh-failed"
     )
 }
 
@@ -977,6 +1077,22 @@ fn imported_resources_are_unchanged(
     let Some(existing_stack_state) = existing.stack_state.as_ref() else {
         return false;
     };
+
+    let existing_resource_ids = existing_stack_state
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.lifecycle == Some(ResourceLifecycle::Frozen))
+        .map(|(id, _)| id)
+        .collect::<std::collections::HashSet<_>>();
+    let imported_resource_ids = imported_stack_state
+        .resources
+        .iter()
+        .filter(|(_, resource)| resource.lifecycle == Some(ResourceLifecycle::Frozen))
+        .map(|(id, _)| id)
+        .collect::<std::collections::HashSet<_>>();
+    if existing_resource_ids != imported_resource_ids {
+        return false;
+    }
 
     imported_stack_state.resources.iter().all(|(id, imported)| {
         existing_stack_state
@@ -1503,6 +1619,44 @@ mod setup_update_authorization_tests {
     }
 
     #[test]
+    fn setup_repair_accepts_only_terminal_non_deletion_states() {
+        for status in [
+            "preflights-failed",
+            "initial-setup-failed",
+            "provisioning-failed",
+            "running",
+            "refresh-failed",
+            "update-failed",
+        ] {
+            assert!(
+                is_stable_setup_repair_state(status),
+                "{status} must remain repairable by its owning setup tool"
+            );
+        }
+
+        for status in [
+            "pending",
+            "initial-setup",
+            "provisioning",
+            "waiting-for-machines",
+            "update-pending",
+            "updating",
+            "delete-pending",
+            "deleting",
+            "delete-failed",
+            "teardown-required",
+            "teardown-failed",
+            "deleted",
+            "error",
+        ] {
+            assert!(
+                !is_stable_setup_repair_state(status),
+                "{status} must not accept a concurrent setup repair"
+            );
+        }
+    }
+
+    #[test]
     fn setup_registration_replay_is_exact_for_the_same_operation_and_payload() {
         let mut req = request();
         req.setup_metadata = Some(serde_json::json!({
@@ -1544,6 +1698,62 @@ mod setup_update_authorization_tests {
             &imported_state,
             &None,
             &runtime_metadata,
+            "release",
+            &req,
+        ));
+    }
+
+    #[test]
+    fn idempotent_import_requires_every_persisted_setup_field_to_match() {
+        let prepared = stack("live-worker", "frozen-storage");
+        let existing = record(prepared);
+        let mut req = request();
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let imported_state = existing.stack_state.clone().unwrap();
+
+        assert!(is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+
+        req.setup_target = "different-target".to_string();
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+        req.setup_target = "target".to_string();
+
+        req.setup_fingerprint_version = 2;
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+        req.setup_fingerprint_version = 1;
+
+        req.stack_settings.telemetry = alien_core::TelemetryMode::Off;
+        assert!(!is_idempotent_import(
+            &existing,
+            &imported_state,
+            "release",
+            &req,
+        ));
+
+        req.stack_settings = existing.stack_settings.clone().unwrap();
+        let mut existing_with_environment = existing;
+        existing_with_environment.environment_info =
+            Some(EnvironmentInfo::Aws(AwsEnvironmentInfo {
+                account_id: "123456789012".to_string(),
+                region: "region".to_string(),
+            }));
+        assert!(!is_idempotent_import(
+            &existing_with_environment,
+            &imported_state,
             "release",
             &req,
         ));
