@@ -139,13 +139,42 @@ async fn create_awaits_running_probes_the_agent_and_pins_its_arguments() {
         .withf(|_, sandbox, input| sandbox == "s1" && op_of(input) == "health")
         .returning(|_, _, _| Ok(health_reply()));
 
-    let session = provider(client)
-        .create(CreateSessionRequest::default())
+    let sandbox = provider(client)
+        .create(CreateSandboxRequest::default())
         .await
         .expect("create succeeds");
 
-    assert_eq!(session.session_id, "s1");
-    assert_eq!(session.state, SandboxSessionState::Running);
+    assert_eq!(sandbox.sandbox_id, "s1");
+    assert_eq!(sandbox.state, SandboxState::Running);
+}
+
+/// Pins the unit as well as the value: `timeoutMs` is milliseconds and Agent Platform's `ttl` is
+/// a duration string in seconds, so a missed conversion is 1000x either way. The declared ceiling
+/// (3600s, from `provider`) must not be raised by a request asking for more.
+#[tokio::test]
+async fn a_requested_lifetime_reaches_the_create_body_and_cannot_raise_the_declared_ceiling() {
+    for (timeout_ms, expected) in [(90_000_u64, "90s"), (7_200_000, "3600s")] {
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_create_sandbox()
+            .withf(move |_, request| request.ttl.as_deref() == Some(expected))
+            .times(1)
+            .returning(|_, _| Ok(done_op(serde_json::json!({ "name": sandbox_name("s1") }))));
+        client
+            .expect_get_sandbox()
+            .returning(|_, id| Ok(sandbox_in_state(id, "STATE_RUNNING")));
+        client
+            .expect_execute()
+            .returning(|_, _, _| Ok(health_reply()));
+
+        provider(client)
+            .create(CreateSandboxRequest {
+                timeout_ms: Some(timeout_ms),
+                ..Default::default()
+            })
+            .await
+            .expect("create succeeds");
+    }
 }
 
 /// Delete-on-create-failure: a probe the agent never answers deletes the sandbox the caller never
@@ -170,25 +199,25 @@ async fn create_deletes_the_sandbox_when_its_agent_never_answers() {
         .returning(|_, _| Ok(()));
 
     provider(client)
-        .create(CreateSessionRequest::default())
+        .create(CreateSandboxRequest::default())
         .await
-        .expect_err("a sandbox whose agent is silent is not a usable session");
+        .expect_err("a sandbox whose agent is silent is not a usable sandbox");
 }
 
-/// A per-session environment has no representation, so it is refused rather than dropped — and the
+/// A per-sandbox environment has no representation, so it is refused rather than dropped — and the
 /// create is never sent, so the refusal is before any side effect.
 #[tokio::test]
-async fn create_refuses_a_per_session_environment() {
+async fn create_refuses_a_per_sandbox_environment() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_create_sandbox().never();
 
     let error = provider(client)
-        .create(CreateSessionRequest {
+        .create(CreateSandboxRequest {
             env: BTreeMap::from([("TOKEN".to_string(), "secret".to_string())]),
             ..Default::default()
         })
         .await
-        .expect_err("a session environment must be refused");
+        .expect_err("a sandbox environment must be refused");
     // Same code AWS answers the identical condition with (see the reasoning above create's check).
     assert_eq!(error.code, "OPERATION_NOT_SUPPORTED", "{error}");
     assert!(error.to_string().contains("env"), "{error}");
@@ -212,10 +241,10 @@ async fn get_returns_none_when_the_sandbox_is_gone() {
 }
 
 /// A sandbox reports RUNNING while its agent does not answer, and `get` must not report that as a
-/// usable session. Mutation check: drop the `probe_agent` call in `get` and this returns
+/// usable sandbox. Mutation check: drop the `probe_agent` call in `get` and this returns
 /// `Some(Running)` instead of the unreachable error.
 #[tokio::test]
-async fn get_does_not_report_a_running_session_whose_agent_is_silent() {
+async fn get_does_not_report_a_running_sandbox_whose_agent_is_silent() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_get_sandbox()
@@ -227,17 +256,17 @@ async fn get_does_not_report_a_running_session_whose_agent_is_silent() {
     let error = provider(client)
         .get("s1")
         .await
-        .expect_err("a running record with a silent agent is not a healthy session");
+        .expect_err("a running record with a silent agent is not a healthy sandbox");
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
 }
 
-/// Refuse-don't-destroy: `get_or_create` handed a stale id provisions a fresh session and never
+/// Refuse-don't-destroy: `get_or_create` handed a stale id provisions a fresh sandbox and never
 /// deletes the stale one, which may be another revision's. Mutation check: add a `delete_sandbox`
 /// on the reconnect-failure path and `expect_delete_sandbox().never()` fails.
 #[tokio::test]
-async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
+async fn get_or_create_replaces_a_stale_sandbox_without_deleting_it() {
     let mut client = MockAgentPlatformApi::new();
-    // The stale session reads RUNNING but its agent is silent; the fresh one is healthy.
+    // The stale sandbox reads RUNNING but its agent is silent; the fresh one is healthy.
     client
         .expect_get_sandbox()
         .withf(|_, sandbox| sandbox == "stale")
@@ -263,24 +292,99 @@ async fn get_or_create_replaces_a_stale_session_without_deleting_it() {
 
     client.expect_delete_sandbox().never();
 
-    let session = provider(client)
-        .get_or_create(CreateSessionRequest {
-            session_id: Some("stale".to_string()),
+    let sandbox = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("stale".to_string()),
             ..Default::default()
         })
         .await
-        .expect("a stale session is replaced");
+        .expect("a stale sandbox is replaced");
     assert_eq!(
-        session.session_id, "fresh",
-        "the fresh session is returned, not the stale id"
+        sandbox.sandbox.sandbox_id, "fresh",
+        "the fresh sandbox is returned, not the stale id"
+    );
+    assert!(sandbox.created, "a replacement is a sandbox this call made");
+}
+
+/// A reconnect to a suspended sandbox wakes it and hands it back, rather than creating a second
+/// A reconnect to a sandbox still coming up waits for it. Replacing it would leave the first one
+/// starting, reaching RUNNING and costing its owner, with nobody holding its id — the same leak the
+/// suspended arm avoids. Mutation check: delete the `Starting` arm and `create_sandbox().never()`
+/// fires.
+#[tokio::test]
+async fn get_or_create_waits_for_a_booting_sandbox_rather_than_creating_a_second() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(move |_, id| {
+        // Coming up on the first read, running once it has settled.
+        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(sandbox_in_state(id, "STATE_CREATING"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client
+        .expect_execute()
+        .withf(|_, _, input| op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_create_sandbox().never();
+    client.expect_delete_sandbox().never();
+    client.expect_resume().never();
+
+    let sandbox = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("booting".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a booting sandbox is waited for and handed back");
+
+    assert_eq!(sandbox.sandbox.sandbox_id, "booting");
+    assert_eq!(sandbox.sandbox.state, SandboxState::Running);
+    assert!(
+        !sandbox.created,
+        "whoever started it created it, not this call"
     );
 }
 
-/// A reconnect to a suspended session wakes it and hands it back, rather than creating a second
+/// `STATE_RESUMING` reads as `Starting` too, and it is the reading two callers sharing one id
+/// actually produce: one wakes the sandbox, the other must not answer the wake in progress with a
+/// second sandbox.
+#[tokio::test]
+async fn get_or_create_waits_out_a_wake_someone_else_started() {
+    let reads = Arc::new(AtomicUsize::new(0));
+    let mut client = MockAgentPlatformApi::new();
+    client.expect_get_sandbox().returning(move |_, id| {
+        if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(sandbox_in_state(id, "STATE_RESUMING"))
+        } else {
+            Ok(sandbox_in_state(id, "STATE_RUNNING"))
+        }
+    });
+    client
+        .expect_execute()
+        .withf(|_, _, input| op_of(input) == "health")
+        .returning(|_, _, _| Ok(health_reply()));
+    client.expect_create_sandbox().never();
+    client.expect_delete_sandbox().never();
+    // Not ours to wake: someone else's resume is already in flight.
+    client.expect_resume().never();
+
+    let sandbox = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("waking".to_string()),
+            ..Default::default()
+        })
+        .await
+        .expect("a wake already in flight is waited out");
+
+    assert!(!sandbox.created, "the sandbox existed before this call");
+}
+
 /// sandbox and orphaning the paused one. Mutation check: fold the `Suspended` arm into `Ok(_) =>
 /// {}` and `create_sandbox().never()` fails while a second sandbox is minted.
 #[tokio::test]
-async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second() {
+async fn get_or_create_resumes_a_suspended_sandbox_rather_than_creating_a_second() {
     let reads = Arc::new(AtomicUsize::new(0));
     let mut client = MockAgentPlatformApi::new();
     client.expect_get_sandbox().returning(move |_, id| {
@@ -302,27 +406,31 @@ async fn get_or_create_resumes_a_suspended_session_rather_than_creating_a_second
     client.expect_create_sandbox().never();
     client.expect_delete_sandbox().never();
 
-    let session = provider(client)
-        .get_or_create(CreateSessionRequest {
-            session_id: Some("paused".to_string()),
+    let sandbox = provider(client)
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("paused".to_string()),
             ..Default::default()
         })
         .await
-        .expect("a suspended session is resumed and returned");
-    assert_eq!(session.session_id, "paused");
-    assert_eq!(session.state, SandboxSessionState::Running);
-    // The reconnect path the capability flip promises: a woken session carries a real generation
+        .expect("a suspended sandbox is resumed and returned");
+    assert_eq!(sandbox.sandbox.sandbox_id, "paused");
+    assert_eq!(sandbox.sandbox.state, SandboxState::Running);
+    assert!(
+        !sandbox.created,
+        "waking a sleeping sandbox is not creating one"
+    );
+    // The reconnect path the capability flip promises: a woken sandbox carries a real generation
     // read from the container it came back on, not the unprobed sentinel.
     assert_ne!(
-        session.generation, NO_GENERATION,
-        "a woken session carries its container generation"
+        sandbox.sandbox.generation, NO_GENERATION,
+        "a woken sandbox carries its container generation"
     );
 }
 
 #[tokio::test]
 async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() {
     let mut client = MockAgentPlatformApi::new();
-    // Paused before the wake and paused after it: the wake never brought the session up.
+    // Paused before the wake and paused after it: the wake never brought the sandbox up.
     client
         .expect_get_sandbox()
         .returning(|_, id| Ok(sandbox_in_state(id, "STATE_PAUSED")));
@@ -330,7 +438,7 @@ async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() 
         .expect_resume()
         .times(1)
         .returning(|_, _| Ok(done_op(serde_json::json!({}))));
-    // The compensating suspend fails, so the woken session cannot be put back to sleep.
+    // The compensating suspend fails, so the woken sandbox cannot be put back to sleep.
     client
         .expect_pause()
         .times(1)
@@ -343,21 +451,21 @@ async fn get_or_create_fails_rather_than_leaking_a_resume_it_cannot_roll_back() 
     client.expect_delete_sandbox().never();
 
     let error = provider(client)
-        .get_or_create(CreateSessionRequest {
-            session_id: Some("paused".to_string()),
+        .get_or_create(CreateSandboxRequest {
+            sandbox_id: Some("paused".to_string()),
             ..Default::default()
         })
         .await
-        .expect_err("a resume that cannot be rolled back must fail, not leak a live session");
+        .expect_err("a resume that cannot be rolled back must fail, not leak a live sandbox");
     assert!(
         error.to_string().contains("paused"),
-        "the failure names the woken session so it stays identifiable: {error}"
+        "the failure names the woken sandbox so it stays identifiable: {error}"
     );
 }
 
 // ---- generation and health -------------------------------------------------------------------
 
-/// The generation a `get` reports for a running session answering with `boot_id`.
+/// The generation a `get` reports for a running sandbox answering with `boot_id`.
 async fn generation_for_boot(boot_id: &'static str) -> u64 {
     let mut client = MockAgentPlatformApi::new();
     client
@@ -370,8 +478,8 @@ async fn generation_for_boot(boot_id: &'static str) -> u64 {
     provider(client)
         .get("s1")
         .await
-        .expect("a running session")
-        .expect("a present session")
+        .expect("a running sandbox")
+        .expect("a present sandbox")
         .generation
 }
 
@@ -395,7 +503,7 @@ async fn generation_tracks_the_container_boot_id() {
     );
     assert_ne!(
         first, NO_GENERATION,
-        "a probed running session carries a real generation"
+        "a probed running sandbox carries a real generation"
     );
 }
 
@@ -419,7 +527,7 @@ async fn get_refuses_an_agent_that_reports_an_empty_boot_id() {
     assert_eq!(error.code, "SANDBOX_UNREACHABLE", "{error}");
 }
 
-/// A health reply that omits the boot id entirely is unreadable, so the session is not reported as
+/// A health reply that omits the boot id entirely is unreadable, so the sandbox is not reported as
 /// usable. Mutation check: make `Health.boot_id` an `Option` without a guard and this returns
 /// `Some(Running)`.
 #[tokio::test]
@@ -535,7 +643,7 @@ impl AgentPlatformApi for WedgedAgent {
 // ---- list -------------------------------------------------------------------------------------
 
 #[tokio::test]
-async fn list_maps_sandboxes_to_sessions() {
+async fn list_reports_each_sandbox_with_its_state() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_list_sandboxes().returning(|_| {
         Ok(vec![
@@ -544,21 +652,123 @@ async fn list_maps_sandboxes_to_sessions() {
         ])
     });
 
-    let sessions = provider(client)
+    let sandboxes = provider(client)
         .list()
         .await
         .expect("list is supported here");
-    assert_eq!(sessions.len(), 2);
-    assert_eq!(sessions[0].session_id, "a");
-    assert_eq!(sessions[0].state, SandboxSessionState::Running);
-    assert_eq!(sessions[1].session_id, "b");
-    assert_eq!(sessions[1].state, SandboxSessionState::Suspended);
+    assert_eq!(sandboxes.len(), 2);
+    assert_eq!(sandboxes[0].sandbox_id, "a");
+    assert_eq!(sandboxes[0].state, SandboxState::Running);
+    assert_eq!(sandboxes[1].sandbox_id, "b");
+    assert_eq!(sandboxes[1].state, SandboxState::Paused);
+}
+
+/// Every state word the API sends, mapped onto the binding's four.
+///
+/// The pause family is three words, and only one of them shares a stem with the binding's own
+/// `Paused`: a backend still reporting `STATE_SUSPENDED` has to keep reading as paused, or an
+/// idle sandbox is dropped from `list` as unreadable and an orphan sweep never sees it.
+#[tokio::test]
+async fn every_state_word_the_api_sends_maps_onto_one_of_ours() {
+    for (reported, expected) in [
+        ("STATE_RUNNING", SandboxState::Running),
+        ("STATE_CREATING", SandboxState::Starting),
+        ("STATE_PENDING", SandboxState::Starting),
+        ("STATE_RESUMING", SandboxState::Starting),
+        ("STATE_PAUSED", SandboxState::Paused),
+        ("STATE_PAUSING", SandboxState::Paused),
+        ("STATE_SUSPENDED", SandboxState::Paused),
+        ("STATE_STOPPED", SandboxState::Terminated),
+        ("STATE_FAILED", SandboxState::Terminated),
+        ("STATE_DELETING", SandboxState::Terminated),
+        ("STATE_DELETED", SandboxState::Terminated),
+    ] {
+        let mut client = MockAgentPlatformApi::new();
+        client
+            .expect_list_sandboxes()
+            .returning(move |_| Ok(vec![sandbox_in_state("s1", reported)]));
+
+        let sandboxes = provider(client)
+            .list()
+            .await
+            .unwrap_or_else(|error| panic!("{reported}: {error}"));
+
+        assert_eq!(
+            sandboxes.len(),
+            1,
+            "{reported} was dropped as a state this provider cannot read"
+        );
+        assert_eq!(sandboxes[0].state, expected, "state {reported}");
+    }
+}
+
+/// A word outside that set is a preview API that moved. Guessing which of the four it is is how
+/// a caller ends up sending work to a sandbox that is going away, so a read refuses instead.
+#[tokio::test]
+async fn a_state_word_outside_that_set_is_an_error_rather_than_a_guess() {
+    for reported in [Some("STATE_HIBERNATED"), None] {
+        let mut client = MockAgentPlatformApi::new();
+        client.expect_get_sandbox().returning(move |_, id| {
+            let mut sandbox = sandbox_in_state(id, "STATE_RUNNING");
+            sandbox.state = reported.map(str::to_string);
+            Ok(sandbox)
+        });
+
+        let error = provider(client)
+            .get("s1")
+            .await
+            .expect_err("an unreadable state must not become a sandbox");
+
+        assert_eq!(error.code, "UNEXPECTED_RESPONSE_FORMAT", "{error}");
+    }
+}
+
+// ---- run_command: argv ------------------------------------------------------------------------
+
+/// The agent takes one argv array, so the program and its arguments are rejoined on the way out.
+/// A rejoin that dropped, reordered or duplicated an element would run something other than what
+/// was asked for. Two arguments rather than one: with a single argument an inverted or duplicated
+/// rejoin builds the same array as the correct one.
+#[tokio::test]
+async fn the_program_leads_its_arguments_in_the_envelope() {
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .times(1)
+        .withf(|_, _, input| {
+            let body: serde_json::Value =
+                serde_json::from_slice(input).expect("the envelope is json");
+            body["command"] == serde_json::json!(["python", "-u", "main.py"])
+                && body["cwd"] == serde_json::json!("/work")
+        })
+        .returning(|_, _, _| Ok(ndjson(&[exit_frame(0)])));
+
+    let frames: Vec<_> = provider(client)
+        .run_command(
+            "s1",
+            RunCommandRequest {
+                command: "python".to_string(),
+                args: vec!["-u".to_string(), "main.py".to_string()],
+                cwd: Some("/work".to_string()),
+                env: BTreeMap::new(),
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .await
+        .expect("the command runs")
+        .collect()
+        .await;
+
+    assert!(
+        matches!(frames.last(), Some(Ok(CommandOutput::Exit { code, .. })) if *code == 0),
+        "the command has to reach its exit: {frames:?}"
+    );
 }
 
 // ---- run_command: cap threshold ---------------------------------------------------------------
 
 /// A command inside the synchronous window runs through `exec` and starts no job. Mutation check:
-/// invert the `deadline <= MAX_SYNCHRONOUS_DEADLINE` test and the `jobStart` panic below fires.
+/// invert the `timeout <= MAX_SYNCHRONOUS_TIMEOUT` test and the `jobStart` panic below fires.
 #[tokio::test]
 async fn a_short_command_runs_synchronously_without_a_job() {
     let mut client = MockAgentPlatformApi::new();
@@ -574,10 +784,11 @@ async fn a_short_command_runs_synchronously_without_a_job() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/echo".to_string(), "hi".to_string()],
-                working_directory: None,
+                command: "/bin/echo".to_string(),
+                args: vec!["hi".to_string()],
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(5),
+                timeout: Duration::from_secs(5),
             },
         )
         .await
@@ -630,10 +841,11 @@ async fn a_long_command_uses_the_job_path() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/sleep".to_string(), "40".to_string()],
-                working_directory: None,
+                command: "/bin/sleep".to_string(),
+                args: vec!["40".to_string()],
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(60),
+                timeout: Duration::from_secs(60),
             },
         )
         .await
@@ -735,11 +947,259 @@ async fn a_polled_job_carries_what_run_command_would_have_streamed() {
 
 fn long_command() -> RunCommandRequest {
     RunCommandRequest {
-        command: vec!["/bin/sleep".to_string(), "40".to_string()],
-        working_directory: None,
+        command: "/bin/sleep".to_string(),
+        args: vec!["40".to_string()],
+        cwd: None,
         env: BTreeMap::new(),
-        deadline: Duration::from_secs(60),
+        timeout: Duration::from_secs(60),
     }
+}
+
+/// A job whose every poll answers `poll`.
+fn cancel_watching_client(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    cancel_watching_client_answering(move || Ok(serde_json::to_vec(&poll).unwrap()))
+}
+
+/// A job whose first poll answers `poll` and whose every later poll fails, so the stream ends on a
+/// failure while the job is still running.
+fn cancel_watching_client_failing_after_one_poll(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let polls = AtomicUsize::new(0);
+    cancel_watching_client_answering(move || {
+        if polls.fetch_add(1, Ordering::SeqCst) == 0 {
+            Ok(serde_json::to_vec(&poll).unwrap())
+        } else {
+            Err(execute_refused())
+        }
+    })
+}
+
+/// A job whose every poll answers `poll` and whose every cancel fails, handing each `jobCancel`
+/// body it received back through the channel before refusing it.
+fn cancel_refusing_client(
+    poll: serde_json::Value,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let (cancels, seen) = tokio::sync::mpsc::unbounded_channel();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(move |_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => Ok(serde_json::to_vec(&poll).unwrap()),
+            "jobCancel" => {
+                cancels
+                    .send(serde_json::from_slice(input).expect("a cancel body is json"))
+                    .expect("the test still listens for cancels");
+                Err(execute_refused())
+            }
+            other => panic!("unexpected op {other}"),
+        });
+    (client, seen)
+}
+
+/// A job whose `jobPoll` calls answer from `poll`, handing each `jobCancel` body it receives back
+/// through the channel so a test can wait for one or wait out its absence.
+fn cancel_watching_client_answering(
+    mut poll: impl FnMut() -> ClientResult<Vec<u8>> + Send + 'static,
+) -> (
+    MockAgentPlatformApi,
+    tokio::sync::mpsc::UnboundedReceiver<serde_json::Value>,
+) {
+    let (cancels, seen) = tokio::sync::mpsc::unbounded_channel();
+    let mut client = MockAgentPlatformApi::new();
+    client
+        .expect_execute()
+        .returning(move |_, _, input| match op_of(input).as_str() {
+            "jobStart" => Ok(serde_json::to_vec(&serde_json::json!({ "jobId": "j1" })).unwrap()),
+            "jobPoll" => poll(),
+            "jobCancel" => {
+                cancels
+                    .send(serde_json::from_slice(input).expect("a cancel body is json"))
+                    .expect("the test still listens for cancels");
+                Ok(b"{}".to_vec())
+            }
+            other => panic!("unexpected op {other}"),
+        });
+    (client, seen)
+}
+
+/// Dropping a command's stream kills the command. A detached job has no transport whose close
+/// says so, so the drop has to send the cancel itself or the job runs to its full timeout with
+/// nobody reading it. Mutation check: empty `JobPollState::drop` and no cancel arrives.
+#[tokio::test(start_paused = true)]
+async fn dropping_a_running_jobs_stream_cancels_the_job() {
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": true,
+        "frames": [stdout_frame(0, b"work")],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let sandbox = provider(client);
+    let mut frames = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts");
+    assert!(
+        matches!(frames.next().await, Some(Ok(CommandOutput::Stdout { .. }))),
+        "the job is running and has produced output"
+    );
+    drop(frames);
+
+    let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the drop cancels the job")
+        .expect("the cancel carries a body");
+    assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+    assert_eq!(cancel["jobId"], "j1", "{cancel}");
+}
+
+/// The cancel is for a job still running: one that reported its exit is spent, and a call naming a
+/// finished job id is a call about nothing. Mutation check: delete `state.stopped = true` from the
+/// `!poll.running` branch and a cancel arrives here.
+#[tokio::test(start_paused = true)]
+async fn a_job_that_reported_its_exit_is_not_cancelled_afterwards() {
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": false,
+        "frames": [stdout_frame(0, b"work")],
+        "exitCode": 0,
+        "truncated": false,
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on, so waiting for one that never comes is a timeout and not a close.
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    assert!(
+        matches!(frames.last(), Some(Ok(CommandOutput::Exit { code: 0, .. }))),
+        "the job ended on its own"
+    );
+
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .is_err(),
+        "a job that ended on its own is not cancelled afterwards"
+    );
+}
+
+/// A poll that fails ends the stream while the job is still running, so the drop cancels it.
+/// Mutation check: guard `JobPollState::drop` on `finished` and no cancel arrives.
+#[tokio::test(start_paused = true)]
+async fn a_stream_that_ended_on_a_failed_poll_still_cancels_the_job() {
+    let (client, mut cancels) = cancel_watching_client_failing_after_one_poll(serde_json::json!({
+        "running": true,
+        "frames": [stdout_frame(0, b"work")],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let sandbox = provider(client);
+    let frames: Vec<_> = sandbox
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the failed poll reaches the caller: {frames:?}");
+    };
+    assert!(
+        error.to_string().contains("the job is no longer watched"),
+        "{error}"
+    );
+
+    let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the drop cancels the job the failed poll left running")
+        .expect("the cancel carries a body");
+    assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+    assert_eq!(cancel["jobId"], "j1", "{cancel}");
+}
+
+/// A deadline only stops the job once its cancel has landed: the refused half leaves the drop
+/// armed, and the landed half is what says the flag is read rather than stuck at false.
+/// Mutation check: set `state.stopped = true` in the deadline branch and the refused half's
+/// second cancel never arrives.
+#[tokio::test(start_paused = true)]
+async fn a_deadline_arms_the_drop_unless_its_cancel_landed() {
+    // No frames, so the loop sleeps between polls and the paused clock reaches the deadline.
+    let (client, mut cancels) = cancel_refusing_client(serde_json::json!({
+        "running": true,
+        "frames": [],
+    }));
+
+    // Held for the whole test: it owns the client double, and with it the end of the channel the
+    // cancel would arrive on.
+    let refused = provider(client);
+    let frames: Vec<_> = refused
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the elapsed deadline reaches the caller: {frames:?}");
+    };
+    assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "{error}");
+    assert!(
+        error.to_string().contains("could not be cancelled"),
+        "{error}"
+    );
+
+    for attempt in ["the deadline", "the drop"] {
+        let cancel = tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .unwrap_or_else(|_| panic!("{attempt} cancels the job it could not stop"))
+            .expect("the cancel carries a body");
+        assert_eq!(cancel["op"], "jobCancel", "{cancel}");
+        assert_eq!(cancel["jobId"], "j1", "{cancel}");
+    }
+
+    let (client, mut cancels) = cancel_watching_client(serde_json::json!({
+        "running": true,
+        "frames": [],
+    }));
+
+    let landed = provider(client);
+    let frames: Vec<_> = landed
+        .run_command("s1", long_command())
+        .await
+        .expect("the job starts")
+        .collect()
+        .await;
+    let Some(Err(error)) = frames.last() else {
+        panic!("the elapsed deadline reaches the caller: {frames:?}");
+    };
+    assert!(error.to_string().contains("timeoutExceeded"), "{error}");
+
+    tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+        .await
+        .expect("the deadline cancels the job")
+        .expect("the cancel carries a body");
+    assert!(
+        tokio::time::timeout(Duration::from_secs(5), cancels.recv())
+            .await
+            .is_err(),
+        "a job whose cancel landed is not cancelled again on drop"
+    );
 }
 
 /// A job the agent reports as failing (a deadline, a spawn failure) carries an error object with no
@@ -754,7 +1214,7 @@ async fn a_job_error_object_becomes_a_stream_error() {
             "jobPoll" => Ok(serde_json::to_vec(&serde_json::json!({
                 "running": false,
                 "frames": [],
-                "error": { "code": "deadlineExceeded", "message": "exceeded its 60000ms deadline" },
+                "error": { "code": "timeoutExceeded", "message": "exceeded its 60000ms timeout" },
             }))
             .unwrap()),
             other => panic!("unexpected op {other}"),
@@ -764,10 +1224,11 @@ async fn a_job_error_object_becomes_a_stream_error() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/sleep".to_string(), "99".to_string()],
-                working_directory: None,
+                command: "/bin/sleep".to_string(),
+                args: vec!["99".to_string()],
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(60),
+                timeout: Duration::from_secs(60),
             },
         )
         .await
@@ -780,13 +1241,13 @@ async fn a_job_error_object_becomes_a_stream_error() {
         .expect("a terminal item")
         .as_ref()
         .expect_err("an error object is a failure");
-    assert!(error.to_string().contains("deadlineExceeded"), "{error}");
+    assert!(error.to_string().contains("timeoutExceeded"), "{error}");
 }
 
 /// The write-once / read-retries split, pinned in one test so neither half can pass on the
 /// absence of the other. A mutating `:execute` that fails is delivered exactly once — it may have
 /// already run, so its outcome is unestablished and re-sending it could double a side effect —
-/// while a read is polled until the session settles. Mutation check: give `execute_op` a retry loop and `execute`'s `.times(1)`
+/// while a read is polled until the sandbox settles. Mutation check: give `execute_op` a retry loop and `execute`'s `.times(1)`
 /// fails; remove `terminate`'s poll and the read count collapses to one.
 #[tokio::test(start_paused = true)]
 async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
@@ -817,10 +1278,11 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/true".to_string()],
-                working_directory: None,
+                command: "/bin/true".to_string(),
+                args: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(5),
+                timeout: Duration::from_secs(5),
             },
         )
         .await
@@ -835,18 +1297,18 @@ async fn a_failed_command_is_delivered_once_where_a_read_still_retries() {
 
     sut.terminate("s1")
         .await
-        .expect("the poll confirms the session is gone");
+        .expect("the poll confirms the sandbox is gone");
 
     assert!(
         reads_seen.load(Ordering::SeqCst) > 1,
-        "confirming the session gone took more than one read, so the read path retries"
+        "confirming the sandbox gone took more than one read, so the read path retries"
     );
 }
 
-/// Refuse-don't-destroy: a command against a gone session is refused and nothing is deleted.
+/// Refuse-don't-destroy: a command against a gone sandbox is refused and nothing is deleted.
 /// Mutation check: add a `delete_sandbox` to `run_command`'s failure path and `.never()` fails.
 #[tokio::test]
-async fn a_command_on_a_gone_session_is_refused_and_deletes_nothing() {
+async fn a_command_on_a_gone_sandbox_is_refused_and_deletes_nothing() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_execute()
@@ -858,31 +1320,33 @@ async fn a_command_on_a_gone_session_is_refused_and_deletes_nothing() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/true".to_string()],
-                working_directory: None,
+                command: "/bin/true".to_string(),
+                args: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(5),
+                timeout: Duration::from_secs(5),
             },
         )
         .await
     else {
-        panic!("a command against a gone session is refused");
+        panic!("a command against a gone sandbox is refused");
     };
     assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
-    assert!(error.to_string().contains("sessionGone"), "{error}");
+    assert!(error.to_string().contains("sandboxGone"), "{error}");
 }
 
 #[tokio::test]
-async fn a_command_without_a_deadline_or_program_is_refused() {
+async fn a_command_without_a_timeout_or_program_is_refused() {
     // `run_command`'s Ok is a stream, which is not `Debug`, so the error is matched out by hand.
     let Err(empty) = provider(MockAgentPlatformApi::new())
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec![],
-                working_directory: None,
+                command: String::new(),
+                args: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::from_secs(5),
+                timeout: Duration::from_secs(5),
             },
         )
         .await
@@ -895,17 +1359,18 @@ async fn a_command_without_a_deadline_or_program_is_refused() {
         .run_command(
             "s1",
             RunCommandRequest {
-                command: vec!["/bin/true".to_string()],
-                working_directory: None,
+                command: "/bin/true".to_string(),
+                args: Vec::new(),
+                cwd: None,
                 env: BTreeMap::new(),
-                deadline: Duration::ZERO,
+                timeout: Duration::ZERO,
             },
         )
         .await
     else {
-        panic!("a zero deadline is refused");
+        panic!("a zero timeout is refused");
     };
-    assert!(zero.to_string().contains("deadline"), "{zero}");
+    assert!(zero.to_string().contains("timeout"), "{zero}");
 }
 
 // ---- files ------------------------------------------------------------------------------------
@@ -937,20 +1402,6 @@ async fn write_files_sends_contents_base64_and_accepts_an_empty_body() {
 }
 
 #[tokio::test]
-async fn mkdir_accepts_an_empty_body() {
-    let mut client = MockAgentPlatformApi::new();
-    client
-        .expect_execute()
-        .withf(|_, _, input| op_of(input) == "mkdir")
-        .returning(|_, _, _| Ok(Vec::new()));
-
-    provider(client)
-        .mkdir("s1", "out")
-        .await
-        .expect("mkdir succeeds on an empty body");
-}
-
-#[tokio::test]
 async fn read_file_decodes_the_agent_reply() {
     let mut client = MockAgentPlatformApi::new();
     client
@@ -970,10 +1421,10 @@ async fn read_file_decodes_the_agent_reply() {
     assert_eq!(contents, b"file body");
 }
 
-// ---- suspend / resume / snapshot --------------------------------------------------------------
+// ---- pause / resume / snapshot ----------------------------------------------------------------
 
 #[tokio::test]
-async fn suspend_and_resume_await_their_operations() {
+async fn pause_and_resume_await_their_operations() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_pause()
@@ -985,7 +1436,7 @@ async fn suspend_and_resume_await_their_operations() {
         .returning(|_, _| Ok(done_op(serde_json::json!({}))));
 
     let provider = provider(client);
-    provider.suspend("s1").await.expect("suspend completes");
+    provider.pause("s1").await.expect("pause completes");
     provider.resume("s1").await.expect("resume completes");
 }
 
@@ -1032,11 +1483,11 @@ async fn terminate_confirms_by_polling_to_not_found() {
     provider(client)
         .terminate("s1")
         .await
-        .expect("a session that goes absent is confirmed gone");
+        .expect("a sandbox that goes absent is confirmed gone");
 }
 
 #[tokio::test(start_paused = true)]
-async fn terminate_reports_unconfirmed_when_the_session_stays_present() {
+async fn terminate_reports_unconfirmed_when_the_sandbox_stays_present() {
     let mut client = MockAgentPlatformApi::new();
     client.expect_delete_sandbox().returning(|_, _| Ok(()));
     client
@@ -1046,7 +1497,7 @@ async fn terminate_reports_unconfirmed_when_the_session_stays_present() {
     let error = provider(client)
         .terminate("s1")
         .await
-        .expect_err("a session still present after the poll is not contained");
+        .expect_err("a sandbox still present after the poll is not contained");
     assert!(
         error.to_string().contains("may still be running"),
         "{error}"
@@ -1088,10 +1539,10 @@ fn egress_refuses_domain_scoping_and_names_the_modes() {
     );
 }
 
-/// A session id that could address another sandbox never reaches a URL. Mutation check: weaken
+/// A sandbox id that could address another sandbox never reaches a URL. Mutation check: weaken
 /// `is_addressable_id` to accept '/' and the traversal ids below stop being refused.
 #[tokio::test]
-async fn a_session_id_that_could_escape_its_sandbox_is_refused() {
+async fn a_sandbox_id_that_could_escape_its_sandbox_is_refused() {
     for id in [
         "../other",
         "a/b",
@@ -1206,11 +1657,11 @@ fn a_non_frame_body_is_reported_as_a_refusal() {
 fn not_found_is_read_from_the_source_chain() {
     assert!(
         is_not_found(&not_found()),
-        "a wrapped 404 is a gone session"
+        "a wrapped 404 is a gone sandbox"
     );
     assert!(
         !is_not_found(&execute_refused()),
-        "an ordinary execute failure is not a gone session"
+        "an ordinary execute failure is not a gone sandbox"
     );
 }
 
@@ -1224,7 +1675,7 @@ fn the_engine_is_reduced_to_a_bare_segment() {
     );
 }
 
-// ---- capabilities, session fields and terminate idempotency ------------------------------------
+// ---- capabilities, sandbox fields and terminate idempotency ------------------------------------
 
 /// The access denial in the client's own form: what a delete under an engine this deployment was
 /// not granted returns. The API answers a cross-engine call with `PERMISSION_DENIED` naming the
@@ -1240,7 +1691,7 @@ fn access_denied() -> AlienError<AgentPlatformErrorData> {
     })
 }
 
-/// Pins `capabilities()`'s doc: `sessionLifetime` must stay true even for a session with no
+/// Pins `capabilities()`'s doc: `sandboxLifetime` must stay true even for a sandbox with no
 /// declared ttl, the case a narrowing would get wrong (Agent Platform always sets `expireTime`).
 #[test]
 fn capabilities_describe_the_backend_not_this_declaration() {
@@ -1260,10 +1711,10 @@ fn capabilities_describe_the_backend_not_this_declaration() {
     assert_eq!(
         untimed.capabilities(),
         platform,
-        "a session with no declared ttl still expires, so the row does not change"
+        "a sandbox with no declared ttl still expires, so the row does not change"
     );
     assert!(
-        platform.session_lifetime,
+        platform.sandbox_lifetime,
         "Agent Platform always sets expireTime"
     );
 }
@@ -1276,7 +1727,7 @@ async fn a_tenant_key_is_refused_rather_than_dropped() {
     client.expect_create_sandbox().never();
 
     let error = provider(client)
-        .create(CreateSessionRequest {
+        .create(CreateSandboxRequest {
             tenant_key: Some("tenant-1".to_string()),
             ..Default::default()
         })
@@ -1290,10 +1741,10 @@ async fn a_tenant_key_is_refused_rather_than_dropped() {
     );
 }
 
-/// Terminating an already-gone session succeeds — gone is the state it asks for. The poll is
+/// Terminating an already-gone sandbox succeeds — gone is the state it asks for. The poll is
 /// expected never: reaching it would mean not-found had been treated as a failure.
 #[tokio::test]
-async fn terminate_of_an_absent_session_succeeds() {
+async fn terminate_of_an_absent_sandbox_succeeds() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_delete_sandbox()
@@ -1304,14 +1755,14 @@ async fn terminate_of_an_absent_session_succeeds() {
     provider(client)
         .terminate("s1")
         .await
-        .expect("terminating an absent session succeeds");
+        .expect("terminating an absent sandbox succeeds");
 }
 
-/// A session this deployment cannot reach stays refused: mapping every delete failure to `Ok`
+/// A sandbox this deployment cannot reach stays refused: mapping every delete failure to `Ok`
 /// would report containment for a sandbox under another deployment's engine that was never
 /// deleted. Only not-found may pass.
 #[tokio::test]
-async fn terminate_of_a_session_this_deployment_cannot_reach_is_still_refused() {
+async fn terminate_of_a_sandbox_this_deployment_cannot_reach_is_still_refused() {
     let mut client = MockAgentPlatformApi::new();
     client
         .expect_delete_sandbox()

@@ -9,7 +9,7 @@ use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     ArtifactRegistry, Build, CapacityGroup, ComputeCluster, ErrorData, GcpAgentPlatformEngine,
     Platform, Queue, RemoteBindings, ResourceLifecycle, ResourceRef, Sandbox, SandboxCode,
-    SandboxEgress, SandboxSessionPolicy, ServiceAccount, Stack, StackSettings, Storage, Worker,
+    SandboxEgress, SandboxLifecyclePolicy, ServiceAccount, Stack, StackSettings, Storage, Worker,
     WorkerCode, WorkerTrigger,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
@@ -190,9 +190,9 @@ fn gcp_sandbox_stack(lifecycle: ResourceLifecycle) -> Stack {
                     image: "python:3.12".to_string(),
                 })
                 .egress(SandboxEgress::Deny)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             lifecycle,
@@ -300,9 +300,9 @@ fn a_gcp_remote_sandbox_grants_the_access_identity_its_own_engine_and_nothing_wi
                     image: "python:3.12".to_string(),
                 })
                 .egress(SandboxEgress::Allow)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,
@@ -440,9 +440,9 @@ fn a_gcp_remote_sandbox_management_role_heartbeats_without_reaching_a_session() 
                     image: "python:3.12".to_string(),
                 })
                 .egress(SandboxEgress::Allow)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build(),
             ResourceLifecycle::Frozen,

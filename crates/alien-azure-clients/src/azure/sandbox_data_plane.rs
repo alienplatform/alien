@@ -164,9 +164,9 @@ pub struct CreateSandbox {
     /// Outbound policy, applied from the moment the sandbox starts. Absent leaves the data
     /// plane's own default, which is open.
     pub egress: Option<EgressPolicy>,
-    /// Idle seconds after which the sandbox suspends itself. Absent leaves the data plane's own
-    /// policy rather than asserting one.
-    pub idle_suspend_seconds: Option<u32>,
+    /// Idle seconds after which the sandbox pauses itself, sent as the data plane's
+    /// `autoSuspendPolicy`. Absent leaves its own policy rather than asserting one.
+    pub idle_pause_seconds: Option<u32>,
 }
 
 /// The create body.
@@ -196,7 +196,7 @@ fn create_body(request: &CreateSandbox) -> serde_json::Value {
 
     // `Memory` is the SDK's own default for `auto_suspend_mode`, and the mode a session wants:
     // what `Disk` does differently is not documented, so the default stands rather than a guess.
-    if let Some(seconds) = request.idle_suspend_seconds {
+    if let Some(seconds) = request.idle_pause_seconds {
         body["lifecycle"] = serde_json::json!({
             "autoSuspendPolicy": { "enabled": true, "interval": seconds, "mode": "Memory" }
         });
@@ -704,7 +704,7 @@ mod tests {
                     disk: None,
                     environment: Default::default(),
                     egress: None,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 },
             )
             .await
@@ -967,7 +967,7 @@ mod tests {
                 rules: Vec::new(),
                 traffic_inspection: Some("Full".to_string()),
             }),
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         });
 
         assert_eq!(body["environment"]["TOKEN"], "t");
@@ -998,7 +998,7 @@ mod tests {
     #[test]
     fn the_create_body_nests_the_idle_suspend_policy() {
         let body = create_body(&CreateSandbox {
-            idle_suspend_seconds: Some(900),
+            idle_pause_seconds: Some(900),
             ..CreateSandbox::default()
         });
 

@@ -214,7 +214,7 @@ pub enum ErrorData {
         platform: String,
     },
 
-    /// A sandbox session capability was refused.
+    /// A sandbox capability was refused.
     #[error(
         code = "SANDBOX_CAPABILITY_REFUSED",
         message = "Sandbox capability refused: {reason}",
@@ -223,7 +223,7 @@ pub enum ErrorData {
         http_status_code = 403
     )]
     SandboxCapabilityRefused {
-        /// Why it was refused. Deliberately coarse — it must not reveal which sessions exist.
+        /// Why it was refused. Deliberately coarse — it must not reveal which sandboxes exist.
         reason: String,
     },
 

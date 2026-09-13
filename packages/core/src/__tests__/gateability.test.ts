@@ -44,7 +44,7 @@ const builders: Record<string, () => object> = {
       .code({ type: "image", image: IMAGE })
       .limits({ cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 })
       .egress({ mode: "deny" })
-      .session({ maxLifetimeSeconds: 3600 }),
+      .lifecycle({ maxLifetimeSeconds: 3600 }),
   "experimental/aws-opensearch": () => new alien.experimental.AwsOpenSearch("fixture"),
 }
 

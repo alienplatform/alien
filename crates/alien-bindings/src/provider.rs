@@ -1892,7 +1892,7 @@ impl BindingsProviderApi for BindingsProvider {
                         Arc::new(client),
                         engine,
                         template,
-                        gcp_binding.session_ttl_seconds,
+                        gcp_binding.max_lifetime_seconds,
                     ));
                 Ok(sandbox)
             }
@@ -1960,7 +1960,7 @@ impl BindingsProviderApi for BindingsProvider {
                     group,
                     disk_image,
                     azure_binding.egress,
-                    azure_binding.idle_suspend_seconds,
+                    azure_binding.idle_pause_seconds,
                     cpu.unwrap_or_else(|| DEFAULT_AZURE_CPU.to_string()),
                     memory.unwrap_or_else(|| DEFAULT_AZURE_MEMORY.to_string()),
                     disk,
@@ -2001,13 +2001,13 @@ impl BindingsProviderApi for BindingsProvider {
                     .map_err(|_| invalid("region"))?;
                 if aws_binding.execution_role_arn.is_some() {
                     // A MicroVM started with an execution role serves that role's live
-                    // credentials to the session over link-local instance metadata, which no
+                    // credentials to the sandbox over link-local instance metadata, which no
                     // egress connector governs — measured under `deny` and `allow` alike. A
                     // sandbox runs untrusted code, so the role is refused rather than attached.
                     return Err(AlienError::new(ErrorData::BindingConfigInvalid {
                         binding_name: binding_name.to_string(),
                         env_var: alien_core::bindings::binding_env_var_name(binding_name),
-                        reason: "sandbox binding field 'executionRoleArn' is set; a session can \
+                        reason: "sandbox binding field 'executionRoleArn' is set; a sandbox can \
                                  read that role's credentials from instance metadata, which the \
                                  egress connector does not reach"
                             .to_string(),
@@ -2043,7 +2043,7 @@ impl BindingsProviderApi for BindingsProvider {
                 if egress_connector_arns.is_empty() != aws_binding.allow_egress {
                     let reason = if aws_binding.allow_egress {
                         "sandbox binding declares open egress and also names egress connectors; \
-                         a session cannot be both open and routed through a denying connector"
+                         a sandbox cannot be both open and routed through a denying connector"
                     } else {
                         "sandbox binding field 'egressConnectorArns' is empty; a MicroVM started \
                          with no egress connector reaches the public internet"
@@ -2061,7 +2061,7 @@ impl BindingsProviderApi for BindingsProvider {
                     image_version,
                     egress_connector_arns,
                     aws_binding.preview_ports,
-                    aws_binding.idle_suspend_seconds,
+                    aws_binding.idle_pause_seconds,
                     aws_binding.max_lifetime_seconds,
                 ));
                 Ok(sandbox)
@@ -2101,7 +2101,7 @@ mod tests {
     use super::*;
     use alien_core::ENV_ALIEN_DEPLOYMENT_TYPE;
 
-    /// Pins `DEFAULT_AZURE_CPU`/`DEFAULT_AZURE_MEMORY` as inputs `azure_session_limits` accepts;
+    /// Pins `DEFAULT_AZURE_CPU`/`DEFAULT_AZURE_MEMORY` as inputs `azure_sandbox_limits` accepts;
     /// if a constant changes to a value the rule refuses, the failure moves silently from plan
     /// time to create.
     #[test]
@@ -2117,13 +2117,13 @@ mod tests {
                 max_processes: None,
             })
             .egress(alien_core::SandboxEgress::Allow)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 
-        declared_as_default.azure_session_limits().expect(
+        declared_as_default.azure_sandbox_limits().expect(
             "a sandbox declaring nothing is created with these values, so the rule that would \
              have refused them at plan time must accept them",
         );

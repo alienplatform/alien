@@ -7,7 +7,7 @@ use super::helpers::{
 };
 use alien_core::{
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
@@ -407,9 +407,9 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
             image: image.to_string(),
         })
         .egress(egress)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build()
 }

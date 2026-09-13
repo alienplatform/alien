@@ -671,7 +671,7 @@ mod tests {
     };
     use alien_core::{
         ReleaseInfo, RemoteStackManagement, Resource, ResourceLifecycle, ResourceOutputs,
-        ResourceStatus, SandboxEgress, SandboxSessionPolicy, StackResourceState,
+        ResourceStatus, SandboxEgress, SandboxLifecyclePolicy, StackResourceState,
     };
     use alien_error::AlienError;
     use async_trait::async_trait;
@@ -910,9 +910,9 @@ mod tests {
                         image: image.to_string(),
                     })
                     .egress(SandboxEgress::Allow)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Live,
@@ -1328,9 +1328,9 @@ mod tests {
                             .to_string(),
                     })
                     .egress(SandboxEgress::Allow)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Live,

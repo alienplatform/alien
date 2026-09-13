@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use alien_core::{
     Ai, AwsSandboxBinding, BindingValue, ExternalBinding, ExternalBindings, Platform, Resource,
-    SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack, StackResourceState, StackSettings,
+    SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack, StackResourceState, StackSettings,
     StackState,
 };
 use alien_error::AlienError;
@@ -189,9 +189,9 @@ fn sandbox_resource() -> Sandbox {
             image: "ubuntu:24.04".to_string(),
         })
         .egress(SandboxEgress::Allow)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build()
 }
@@ -279,7 +279,7 @@ fn remote_sandbox_validation_returns_the_topology_a_session_is_started_from() {
     assert_eq!(binding.region, "us-east-1");
     assert_eq!(binding.preview_ports, vec![8080]);
     assert_eq!(binding.max_lifetime_seconds, Some(1800));
-    assert_eq!(binding.idle_suspend_seconds, None);
+    assert_eq!(binding.idle_pause_seconds, None);
     assert!(
         binding.allow_egress,
         "an empty connector list means open egress, and the client re-checks the pair"
@@ -423,7 +423,7 @@ fn remote_sandbox_response_carries_the_service_tag_and_no_extra_credentials() {
     assert_eq!(json["binding"]["allowEgress"], true);
     assert_eq!(json["binding"]["previewPorts"], serde_json::json!([8080]));
     assert!(
-        json["binding"].get("idleSuspendSeconds").is_none(),
+        json["binding"].get("idlePauseSeconds").is_none(),
         "an absent ceiling is omitted rather than sent as null"
     );
     assert_eq!(
@@ -474,7 +474,7 @@ fn a_gcp_remote_sandbox_response_carries_the_agent_platform_tag_and_both_names()
         format!("{GCP_ENGINE}/sandboxEnvironmentTemplates/7")
     );
     assert_eq!(json["binding"]["region"], "us-central1");
-    assert_eq!(json["binding"]["sessionTtlSeconds"], 1800);
+    assert_eq!(json["binding"]["maxLifetimeSeconds"], 1800);
     assert_eq!(json["clientConfig"]["credentials"]["type"], "accessToken");
 }
 

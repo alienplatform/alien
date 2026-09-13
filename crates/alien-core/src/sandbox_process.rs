@@ -39,7 +39,7 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024;
 /// Port the agent listens on inside a sandbox.
 ///
 /// Defined once because two independent copies are a runtime-only failure: the image build places
-/// the agent on one port and the client dials the other, and nothing catches it until a session
+/// the agent on one port and the client dials the other, and nothing catches it until a sandbox
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
@@ -125,7 +125,7 @@ async fn kill_all(child: &mut Child) {
 /// Spawns untrusted code with a fresh environment: `PATH`, plus `environment` and nothing else.
 ///
 /// The ambient environment is not inherited. The agent's own environment names its port, its
-/// session root and its session id, so passing it down hands untrusted code a map to the API that
+/// sandbox root and its sandbox id, so passing it down hands untrusted code a map to the API that
 /// is running it — along with whatever else the runtime happened to set.
 pub fn spawn_sandboxed(
     program: &str,
@@ -147,7 +147,7 @@ pub fn spawn_sandboxed(
 /// the extra output is dropped and the terminal frame says so.
 pub async fn stream(
     mut child: Child,
-    deadline: Duration,
+    timeout: Duration,
     output_cap: usize,
     frames: mpsc::Sender<ProcessFrame>,
 ) {
@@ -183,7 +183,7 @@ pub async fn stream(
     };
 
     let mut connected = true;
-    let outcome = tokio::time::timeout(deadline, async {
+    let outcome = tokio::time::timeout(timeout, async {
         // Racing the channel against the work, not only draining it: `pump` learns the caller
         // left by failing to send, so a command that prints nothing would run to its deadline
         // after everyone stopped listening. `closed()` resolves as soon as the receiver drops,
@@ -227,8 +227,8 @@ pub async fn stream(
         Err(_) => {
             kill_all(&mut child).await;
             ProcessFrame::Failed {
-                code: "deadlineExceeded",
-                message: format!("exceeded its {}ms deadline", deadline.as_millis()),
+                code: "timeoutExceeded",
+                message: format!("exceeded its {}ms timeout", timeout.as_millis()),
             }
         }
     };
@@ -240,10 +240,10 @@ pub async fn stream(
 ///
 /// Safe on unbounded output: [`stream`] blocks on a full channel rather than buffering, and
 /// `output_cap` still applies to what is kept.
-pub async fn run(child: Child, deadline: Duration, output_cap: usize) -> Vec<ProcessFrame> {
+pub async fn run(child: Child, timeout: Duration, output_cap: usize) -> Vec<ProcessFrame> {
     let (sender, mut receiver) = mpsc::channel(FRAME_CHANNEL_DEPTH);
 
-    let produce = stream(child, deadline, output_cap, sender);
+    let produce = stream(child, timeout, output_cap, sender);
     let consume = async {
         let mut frames = Vec::new();
         while let Some(frame) = receiver.recv().await {
@@ -376,7 +376,7 @@ mod tests {
     }
 
     /// A deadline that reaches only the direct child is not a deadline: the command backgrounds a
-    /// process and returns, and that process keeps the session's CPU and files after the caller
+    /// process and returns, and that process keeps the sandbox's CPU and files after the caller
     /// was told the command was killed.
     #[tokio::test]
     #[cfg(unix)]
@@ -402,7 +402,7 @@ mod tests {
             matches!(
                 terminal(&frames),
                 ProcessFrame::Failed {
-                    code: "deadlineExceeded",
+                    code: "timeoutExceeded",
                     ..
                 }
             ),
@@ -538,7 +538,7 @@ mod tests {
         assert!(matches!(
             terminal(&frames),
             ProcessFrame::Failed {
-                code: "deadlineExceeded",
+                code: "timeoutExceeded",
                 ..
             }
         ));

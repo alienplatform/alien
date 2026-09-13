@@ -3094,14 +3094,14 @@
         "properties": {
           "imageIdentifier": {
             "type": "string",
-            "description": "Image the sessions belong to."
+            "description": "Image the sandboxes belong to."
           },
           "imageState": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account."
+            "description": "The image's own lifecycle state, which is where AWS surfaces base-image deprecation.\n\nNo sandbox count sits beside it: counting means `lambda:ListMicrovms`, which authorizes\nagainst no resource type and so cannot be granted without an account-wide reach the\npermission sets refuse. A field only an over-broad grant could fill is a field whose\nimplementer ships AccessDenied into a customer's account."
           },
           "status": {
             "$ref": "#/components/schemas/SandboxHeartbeatStatus"
@@ -5088,7 +5088,7 @@
       },
       "AzureSandboxGroupHeartbeatData": {
         "type": "object",
-        "description": "Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count\nis not available here.",
+        "description": "Azure: the sandbox group's ARM state. The data plane has no list operation, so a sandbox count\nis not available here.",
         "required": [
           "status",
           "sandboxGroup"
@@ -7769,7 +7769,7 @@
       },
       "GcpAgentPlatformSandboxHeartbeatData": {
         "type": "object",
-        "description": "GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.\n\nNo session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management\npermission set holds. No template state either — emission is gated on reading it `ACTIVE`,\nwhich is what `status` already says.",
+        "description": "GCP: the Agent Platform template sandboxes are cut from, and the engine it hangs under.\n\nNo sandbox count: that needs `aiplatform.sandboxEnvironments.list`, which only the management\npermission set holds. No template state either — emission is gated on reading it `ACTIVE`,\nwhich is what `status` already says.",
         "required": [
           "status",
           "engine",
@@ -7785,7 +7785,7 @@
           },
           "templateId": {
             "type": "string",
-            "description": "The template sessions are currently cut from."
+            "description": "The template sandboxes are currently cut from."
           }
         }
       },
@@ -14482,22 +14482,22 @@
             "type": "boolean",
             "description": "Whether the declaration asked for open egress. Always true here, and sent rather than\nimplied so the client's own fail-open check on an empty connector list still has an answer."
           },
-          "idleSuspendSeconds": {
+          "idlePauseSeconds": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int32",
-            "description": "Idle seconds after which a session suspends, where the declaration asked for one.",
+            "description": "Idle seconds after which a sandbox pauses, where the declaration asked for one.",
             "minimum": 0
           },
           "imageArn": {
             "type": "string",
-            "description": "MicroVM image the credential lease authorizes sessions against."
+            "description": "MicroVM image the credential lease authorizes sandboxes against."
           },
           "imageVersion": {
             "type": "string",
-            "description": "Image version sessions are enumerated by together with the image."
+            "description": "Image version sandboxes are enumerated by together with the image."
           },
           "maxLifetimeSeconds": {
             "type": [
@@ -14505,7 +14505,7 @@
               "null"
             ],
             "format": "int32",
-            "description": "Wall-clock ceiling on a session, where the declaration asked for one.",
+            "description": "Wall-clock ceiling on a sandbox, where the declaration asked for one.",
             "minimum": 0
           },
           "previewPorts": {
@@ -14515,7 +14515,7 @@
               "format": "int32",
               "minimum": 0
             },
-            "description": "Ports a session capability may be minted for."
+            "description": "Ports a sandbox capability may be minted for."
           },
           "region": {
             "type": "string",
@@ -14609,7 +14609,7 @@
       },
       "RemoteAzureSandboxBinding": {
         "type": "object",
-        "description": "Concrete sandbox-group topology returned to remote clients.\n\nThe ceilings travel because Azure applies them at create and nowhere else, so a remote caller\nthat does not send them gets the data plane's default rather than the declared size.",
+        "description": "Concrete sandbox-group topology returned to remote clients.\n\nThe ceilings travel because Azure applies them at create and nowhere else, so a remote caller\nthat does not send them gets the data plane's default rather than the declared size. They are\nnot a limit — a holder that ignores them gets whatever the data plane accepts.",
         "required": [
           "sandboxGroup",
           "dataPlaneEndpoint",
@@ -14621,14 +14621,14 @@
         "properties": {
           "allowEgress": {
             "type": "boolean",
-            "description": "Whether the declaration asked for open egress. Always true here, sent explicitly because\nthe remote grant lets its holder create sessions the declared policy never reaches — a\nclient must read this rather than assume it from an absent field."
+            "description": "Whether the declaration asked for open egress. Always true here, sent explicitly because\nthe remote grant lets its holder create sandboxes the declared policy never reaches — a\nclient must read this rather than assume it from an absent field."
           },
           "cpu": {
             "type": [
               "string",
               "null"
             ],
-            "description": "Declared session ceilings, where the declaration named them."
+            "description": "Declared sandbox ceilings, where the declaration named them."
           },
           "dataPlaneEndpoint": {
             "type": "string",
@@ -14642,15 +14642,15 @@
           },
           "diskImage": {
             "type": "string",
-            "description": "Catalog disk image every session is created from."
+            "description": "Catalog disk image every sandbox is created from."
           },
-          "idleSuspendSeconds": {
+          "idlePauseSeconds": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int32",
-            "description": "Idle seconds after which a session suspends, where the declaration asked for one.",
+            "description": "Idle seconds after which a sandbox pauses, where the declaration asked for one.",
             "minimum": 0
           },
           "memory": {
@@ -14669,7 +14669,7 @@
           },
           "sandboxGroup": {
             "type": "string",
-            "description": "Sandbox group the credential lease authorizes sessions against."
+            "description": "Sandbox group the credential lease authorizes sandboxes against."
           }
         },
         "additionalProperties": false
@@ -14772,24 +14772,24 @@
         "properties": {
           "engine": {
             "type": "string",
-            "description": "Reasoning engine the credential lease authorizes sessions under."
+            "description": "Reasoning engine the credential lease authorizes sandboxes under."
           },
-          "region": {
-            "type": "string",
-            "description": "Region selecting the regional aiplatform endpoint."
-          },
-          "sessionTtlSeconds": {
+          "maxLifetimeSeconds": {
             "type": [
               "integer",
               "null"
             ],
             "format": "int32",
-            "description": "Seconds a session may live, where the declaration asked for one.",
+            "description": "Seconds a sandbox may live, where the declaration asked for one.",
             "minimum": 0
+          },
+          "region": {
+            "type": "string",
+            "description": "Region selecting the regional aiplatform endpoint."
           },
           "template": {
             "type": "string",
-            "description": "Environment template every session is created from; it carries the image and the ceilings."
+            "description": "Environment template every sandbox is created from; it carries the image and the ceilings."
           }
         },
         "additionalProperties": false
@@ -16020,7 +16020,7 @@
             ]
           }
         ],
-        "description": "Content-free telemetry about a sandbox's sessions.\n\nNever anything from inside a session. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it."
+        "description": "Content-free telemetry about what a sandbox resource is running.\n\nNever anything from inside a sandbox. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it."
       },
       "SandboxHeartbeatStatus": {
         "type": "object",

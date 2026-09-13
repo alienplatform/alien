@@ -419,7 +419,7 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         client_token: &str,
         execution_role_arn: Option<String>,
         network_connectors: Vec<String>,
-        idle_suspend_seconds: Option<u32>,
+        idle_pause_seconds: Option<u32>,
         max_lifetime_seconds: Option<u32>,
     ) -> Result<Microvm>;
 
@@ -475,7 +475,7 @@ fn run_microvm_body(
     client_token: &str,
     execution_role_arn: Option<String>,
     egress_network_connectors: Vec<String>,
-    idle_suspend_seconds: Option<u32>,
+    idle_pause_seconds: Option<u32>,
     max_lifetime_seconds: Option<u32>,
 ) -> serde_json::Value {
     let mut body = serde_json::json!({
@@ -491,7 +491,7 @@ fn run_microvm_body(
     if !egress_network_connectors.is_empty() {
         body["egressNetworkConnectors"] = serde_json::json!(egress_network_connectors);
     }
-    if let Some(seconds) = idle_suspend_seconds {
+    if let Some(seconds) = idle_pause_seconds {
         // Suspend only. Auto-resume would bring a session back on a stray request after the
         // caller had moved on, which is a bill and a running sandbox nobody is watching.
         body["idlePolicy"] = serde_json::json!({
@@ -816,7 +816,7 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
         client_token: &str,
         execution_role_arn: Option<String>,
         network_connectors: Vec<String>,
-        idle_suspend_seconds: Option<u32>,
+        idle_pause_seconds: Option<u32>,
         max_lifetime_seconds: Option<u32>,
     ) -> Result<Microvm> {
         let body = run_microvm_body(
@@ -825,7 +825,7 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
             client_token,
             execution_role_arn,
             network_connectors,
-            idle_suspend_seconds,
+            idle_pause_seconds,
             max_lifetime_seconds,
         );
 
@@ -1660,7 +1660,7 @@ mod live_deny {
         let mut request = Client::new()
             .post(format!("https://{endpoint}/v1/exec"))
             .header("X-aws-proxy-port", "8971")
-            .json(&serde_json::json!({"command": command, "deadlineMs": 15000}));
+            .json(&serde_json::json!({"command": command, "timeoutMs": 15000}));
         for (name, value) in token.auth_token {
             request = request.header(name, value);
         }

@@ -115,7 +115,7 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Kv, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxSessionPolicy};
+    use alien_core::{Kv, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
 
     fn sandbox(id: &str) -> Sandbox {
         Sandbox::new(id.to_string())
@@ -123,9 +123,9 @@ mod tests {
                 image: "s3://bucket/sandbox.zip".to_string(),
             })
             .egress(SandboxEgress::Allow)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build()
     }

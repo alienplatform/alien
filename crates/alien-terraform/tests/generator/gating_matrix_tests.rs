@@ -11,7 +11,7 @@ use alien_core::{
     ownership_policy_for_resource_type, Ai, AzureResourceGroup, AzureServiceBusNamespace,
     AzureStorageAccount, GcpAgentPlatformEngine, Key, Kv, Network, NetworkSettings,
     PermissionProfile, Platform, Queue, ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLimits, SandboxSessionPolicy, ServiceAccount, Stack, StackBuilder, StackSettings,
+    SandboxLifecyclePolicy, SandboxLimits, ServiceAccount, Stack, StackBuilder, StackSettings,
     Storage, Vault, Worker, WorkerCode,
 };
 use alien_terraform::{TerraformTarget, TfRegistry};
@@ -104,9 +104,9 @@ fn gated_fixture(resource_type: &str, platform: Platform) -> Option<(Stack, Stac
                         max_processes: None,
                     })
                     .egress(SandboxEgress::Deny)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,

@@ -175,18 +175,18 @@ pub enum ResolveBindingResponse {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteAwsSandboxBinding {
-    /// MicroVM image the credential lease authorizes sessions against.
+    /// MicroVM image the credential lease authorizes sandboxes against.
     pub image_arn: String,
-    /// Image version sessions are enumerated by together with the image.
+    /// Image version sandboxes are enumerated by together with the image.
     pub image_version: String,
     /// Region the MicroVMs run in.
     pub region: String,
-    /// Ports a session capability may be minted for.
+    /// Ports a sandbox capability may be minted for.
     pub preview_ports: Vec<u16>,
-    /// Idle seconds after which a session suspends, where the declaration asked for one.
+    /// Idle seconds after which a sandbox pauses, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idle_suspend_seconds: Option<u32>,
-    /// Wall-clock ceiling on a session, where the declaration asked for one.
+    pub idle_pause_seconds: Option<u32>,
+    /// Wall-clock ceiling on a sandbox, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_lifetime_seconds: Option<u32>,
     /// Whether the declaration asked for open egress. Always true here, and sent rather than
@@ -203,7 +203,7 @@ pub struct RemoteAwsSandboxBinding {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteAzureSandboxBinding {
-    /// Sandbox group the credential lease authorizes sessions against.
+    /// Sandbox group the credential lease authorizes sandboxes against.
     pub sandbox_group: String,
     /// Per-region data-plane host, which is separate from the ARM control plane.
     pub data_plane_endpoint: String,
@@ -211,16 +211,16 @@ pub struct RemoteAzureSandboxBinding {
     pub region: String,
     /// Resource group the data-plane path is scoped by.
     pub resource_group: String,
-    /// Catalog disk image every session is created from.
+    /// Catalog disk image every sandbox is created from.
     pub disk_image: String,
-    /// Idle seconds after which a session suspends, where the declaration asked for one.
+    /// Idle seconds after which a sandbox pauses, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub idle_suspend_seconds: Option<u32>,
+    pub idle_pause_seconds: Option<u32>,
     /// Whether the declaration asked for open egress. Always true here, sent explicitly because
-    /// the remote grant lets its holder create sessions the declared policy never reaches — a
+    /// the remote grant lets its holder create sandboxes the declared policy never reaches — a
     /// client must read this rather than assume it from an absent field.
     pub allow_egress: bool,
-    /// Declared session ceilings, where the declaration named them.
+    /// Declared sandbox ceilings, where the declaration named them.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -237,15 +237,15 @@ pub struct RemoteAzureSandboxBinding {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RemoteGcpSandboxBinding {
-    /// Reasoning engine the credential lease authorizes sessions under.
+    /// Reasoning engine the credential lease authorizes sandboxes under.
     pub engine: String,
-    /// Environment template every session is created from; it carries the image and the ceilings.
+    /// Environment template every sandbox is created from; it carries the image and the ceilings.
     pub template: String,
     /// Region selecting the regional aiplatform endpoint.
     pub region: String,
-    /// Seconds a session may live, where the declaration asked for one.
+    /// Seconds a sandbox may live, where the declaration asked for one.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub session_ttl_seconds: Option<u32>,
+    pub max_lifetime_seconds: Option<u32>,
 }
 
 #[derive(Serialize)]
@@ -1386,7 +1386,7 @@ fn remote_sandbox_binding(
     // resolve into an AWS credential lease for a sandbox that is not on AWS.
     match (deployment.platform, binding) {
         (Platform::Aws, SandboxBinding::Aws(binding)) => {
-            // Unreachable, not merely ungranted: starting a session on a connector needs
+            // Unreachable, not merely ungranted: starting a sandbox on a connector needs
             // `lambda:PassNetworkConnector`, which `sandbox/remote-execute` withholds. Refused
             // here rather than as an AccessDenied from inside `create()`.
             if !binding.egress_connector_arns.is_empty() {
@@ -1403,7 +1403,7 @@ fn remote_sandbox_binding(
                 )?,
                 region: concrete_binding_value(&binding.region, "AWS sandbox region")?,
                 preview_ports: binding.preview_ports,
-                idle_suspend_seconds: binding.idle_suspend_seconds,
+                idle_pause_seconds: binding.idle_pause_seconds,
                 max_lifetime_seconds: binding.max_lifetime_seconds,
                 allow_egress: binding.allow_egress,
             }))
@@ -1444,7 +1444,7 @@ fn remote_sandbox_binding(
                 disk_image: concrete_binding_value(&binding.disk_image, "Azure sandbox diskImage")?,
                 // Checked immediately above, so this is the checked value rather than a literal.
                 allow_egress: matches!(binding.egress, alien_core::SandboxEgress::Allow),
-                idle_suspend_seconds: binding.idle_suspend_seconds,
+                idle_pause_seconds: binding.idle_pause_seconds,
                 cpu: optional(binding.cpu, "Azure sandbox cpu")?,
                 memory: optional(binding.memory, "Azure sandbox memory")?,
                 disk: optional(binding.disk, "Azure sandbox disk")?,
@@ -1458,7 +1458,7 @@ fn remote_sandbox_binding(
                 engine: concrete_binding_value(&binding.engine, "GCP sandbox engine")?,
                 template: concrete_binding_value(&binding.template, "GCP sandbox template")?,
                 region: concrete_binding_value(&binding.region, "GCP sandbox region")?,
-                session_ttl_seconds: binding.session_ttl_seconds,
+                max_lifetime_seconds: binding.max_lifetime_seconds,
             }))
         }
         _ => Err(ErrorData::bad_request(format!(

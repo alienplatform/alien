@@ -34,7 +34,7 @@ import type {
   RawRemoteBindingsHandle,
   RawRemoteStorageHandle,
   RawSandboxHandle,
-  RawSandboxSession,
+  RawSandboxInstance,
   RawStorageHandle,
   RawVaultHandle,
 } from "./loader.js"
@@ -56,7 +56,7 @@ import type {
   QueueMessage,
   RemoteStorage,
   Sandbox,
-  SandboxSession,
+  SandboxInstance,
   SignedUrlOptions,
   Storage,
   StoragePutOptions,
@@ -142,8 +142,8 @@ function makeRemoteStorage(handle: () => Promise<RawRemoteStorageHandle>): Remot
   }
 }
 
-/** The session states the addon and this wrapper agree on. */
-const SANDBOX_SESSION_STATES = ["starting", "running", "suspended", "terminated"] as const
+/** The sandbox states the addon and this wrapper agree on. */
+const SANDBOX_STATES = ["starting", "running", "paused", "terminated"] as const
 
 /** The output frame kinds that carry data; `exit` is handled separately. */
 const SANDBOX_STREAM_KINDS = ["stdout", "stderr"] as const
@@ -165,9 +165,9 @@ function narrow<T extends string>(field: string, value: string, expected: readon
 }
 
 function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
-  const session = (raw: RawSandboxSession): SandboxSession => ({
-    sessionId: raw.sessionId,
-    state: narrow("session state", raw.state, SANDBOX_SESSION_STATES),
+  const instance = (raw: RawSandboxInstance): SandboxInstance => ({
+    sandboxId: raw.sandboxId,
+    state: narrow("sandbox state", raw.state, SANDBOX_STATES),
     generation: raw.generation,
   })
 
@@ -184,50 +184,52 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
     capabilities: () => guard(handle, async raw => raw.capabilities()),
     create: options =>
       guard(handle, async raw =>
-        session(
+        instance(
           await raw.create(
-            options?.sessionId ?? null,
+            options?.sandboxId ?? null,
             options?.tenantKey ?? null,
             options?.env ?? null,
+            options?.timeoutMs ?? null,
           ),
         ),
       ),
-    get: sessionId =>
+    get: sandboxId =>
       guard(handle, async raw => {
-        const found = await raw.get(sessionId)
-        return found === null ? null : session(found)
+        const found = await raw.get(sandboxId)
+        return found === null ? null : instance(found)
       }),
     getOrCreate: options =>
-      guard(handle, async raw =>
-        session(
-          await raw.getOrCreate(
-            options?.sessionId ?? null,
-            options?.tenantKey ?? null,
-            options?.env ?? null,
-          ),
-        ),
-      ),
-    list: () => guard(handle, async raw => (await raw.list()).map(session)),
-    startJob: (sessionId, command, options) =>
+      guard(handle, async raw => {
+        const resolved = await raw.getOrCreate(
+          options?.sandboxId ?? null,
+          options?.tenantKey ?? null,
+          options?.env ?? null,
+          options?.timeoutMs ?? null,
+        )
+        return { sandbox: instance(resolved.sandbox), created: resolved.created }
+      }),
+    list: () => guard(handle, async raw => (await raw.list()).map(instance)),
+    startJob: (sandboxId, command, options) =>
       guard(handle, async raw =>
         raw.startJob(
-          sessionId,
+          sandboxId,
           command,
-          options.deadlineMs,
-          options.workingDirectory ?? null,
+          options.args ?? [],
+          options.timeoutMs,
+          options.cwd ?? null,
           options.env ?? null,
         ),
       ),
-    pollJob: (sessionId, jobId, sinceSeq) =>
+    pollJob: (sandboxId, jobId, sinceSeq) =>
       guard(handle, async raw => {
-        const answered = await raw.pollJob(sessionId, jobId, sinceSeq ?? null)
+        const answered = await raw.pollJob(sandboxId, jobId, sinceSeq ?? null)
         const poll: JobPoll = { running: answered.running, frames: answered.frames.map(frame) }
         if (answered.exit) poll.exit = { ...answered.exit }
         if (answered.error) poll.error = { ...answered.error }
         return poll
       }),
-    cancelJob: (sessionId, jobId) => guard(handle, async raw => raw.cancelJob(sessionId, jobId)),
-    runCommand: (sessionId, command, options) => ({
+    cancelJob: (sandboxId, jobId) => guard(handle, async raw => raw.cancelJob(sandboxId, jobId)),
+    runCommand: (sandboxId, command, options) => ({
       [Symbol.asyncIterator](): AsyncIterator<CommandFrame, undefined> {
         let stream: RawCommandStreamHandle | null = null
         let starting: Promise<RawCommandStreamHandle> | null = null
@@ -280,10 +282,11 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
               if (open === null) {
                 starting = guard(handle, raw =>
                   raw.runCommand(
-                    sessionId,
+                    sandboxId,
                     command,
-                    options.deadlineMs,
-                    options.workingDirectory ?? null,
+                    options.args ?? [],
+                    options.timeoutMs,
+                    options.cwd ?? null,
                     options.env ?? null,
                   ),
                 )
@@ -337,21 +340,20 @@ function makeSandbox(handle: () => Promise<RawSandboxHandle>): Sandbox {
         }
       },
     }),
-    readFile: (sessionId, path) => guard(handle, raw => raw.readFile(sessionId, path)),
-    writeFiles: (sessionId, files) =>
+    readFile: (sandboxId, path) => guard(handle, raw => raw.readFile(sandboxId, path)),
+    writeFiles: (sandboxId, files) =>
       guard(handle, async raw => {
         for (const [path, contents] of Object.entries(files)) {
           await raw.writeFile(
-            sessionId,
+            sandboxId,
             path,
             typeof contents === "string" ? Buffer.from(contents, "utf8") : contents,
           )
         }
       }),
-    mkdir: (sessionId, path) => guard(handle, raw => raw.mkdir(sessionId, path)),
-    suspend: sessionId => guard(handle, raw => raw.suspend(sessionId)),
-    resume: sessionId => guard(handle, raw => raw.resume(sessionId)),
-    terminate: sessionId => guard(handle, raw => raw.terminate(sessionId)),
+    pause: sandboxId => guard(handle, raw => raw.pause(sandboxId)),
+    resume: sandboxId => guard(handle, raw => raw.resume(sandboxId)),
+    terminate: sandboxId => guard(handle, raw => raw.terminate(sandboxId)),
   }
 }
 

@@ -2,7 +2,7 @@
 //! protocol.
 //!
 //! The application never holds a cluster credential. It asks the operator's broker for a
-//! session, and gets back a pod address plus a capability scoped to that session. Claiming a pod
+//! sandbox, and gets back a pod address plus a capability scoped to that sandbox. Claiming a pod
 //! is a `PATCH` on pods, which does not belong in the binding: `pods/exec`
 //! would reach every pod in the namespace.
 //!
@@ -19,14 +19,14 @@ use serde::{Deserialize, Serialize};
 use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
+    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::bindings::KubernetesSandboxBinding;
-use alien_core::{Platform, SandboxCapabilities};
+use alien_core::{Platform, SandboxCapabilities, SandboxCapability};
 use alien_error::{AlienError, Context, IntoAlienError};
 
-/// What the broker hands back for a claimed session.
+/// What the broker hands back for a claimed sandbox.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ClaimResponse {
@@ -46,15 +46,15 @@ struct ClaimRequest<'a> {
 /// A Sandbox backed by pods under a sandboxed runtime class.
 #[derive(Debug)]
 pub struct KubernetesSandbox {
-    sandbox_id: String,
+    resource_id: String,
     broker_url: String,
     token_path: String,
     binding_name: String,
     client: reqwest::Client,
-    /// Claims this process has made, so a later call can address the session it already has.
+    /// Claims this process has made, so a later call can address the sandbox it already has.
     ///
     /// The capability is short-lived and the endpoint is a pod IP, so this is a cache of live
-    /// sessions rather than durable state. A session this process did not claim is not
+    /// sandboxes rather than durable state. A sandbox this process did not claim is not
     /// reachable, which is what `reconnect` means here.
     claims: Mutex<BTreeMap<String, ClaimResponse>>,
 }
@@ -64,7 +64,7 @@ impl KubernetesSandbox {
     pub fn new(
         binding_name: &str,
         binding: &KubernetesSandboxBinding,
-        sandbox_id: &str,
+        resource_id: &str,
     ) -> Result<Self> {
         let value = |field: &'static str, value: alien_core::bindings::BindingValue<String>| {
             value.into_value(binding_name, field).map_err(|error| {
@@ -77,7 +77,7 @@ impl KubernetesSandbox {
         };
 
         Ok(Self {
-            sandbox_id: sandbox_id.to_string(),
+            resource_id: resource_id.to_string(),
             broker_url: value("brokerUrl", binding.broker_url.clone())?
                 .trim_end_matches('/')
                 .to_string(),
@@ -106,11 +106,24 @@ impl KubernetesSandbox {
             })
     }
 
-    fn claimed(&self, session_id: &str) -> Option<ClaimResponse> {
+    /// Refused rather than dropped: a claim reaches a pod that is already running under the
+    /// deadline the declaration fixed, so a lifetime accepted here would never be applied.
+    fn refuse_create_time_lifetime(&self, request: &CreateSandboxRequest) -> Result<()> {
+        if request.timeout_ms.is_none() {
+            return Ok(());
+        }
+        Err(self.failed(
+            SandboxCapability::SandboxLifetime.as_str(),
+            "a pod is claimed from a warm pool already running under the deadline the sandbox \
+             declared, so a claim cannot choose its own",
+        ))
+    }
+
+    fn claimed(&self, sandbox_id: &str) -> Option<ClaimResponse> {
         self.claims
             .lock()
             .expect("no panic holds this lock")
-            .get(session_id)
+            .get(sandbox_id)
             .cloned()
     }
 
@@ -126,15 +139,15 @@ impl KubernetesSandbox {
 impl AgentTransport for KubernetesSandbox {
     async fn request(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
-        let claim = self.claimed(session_id).ok_or_else(|| {
+        let claim = self.claimed(sandbox_id).ok_or_else(|| {
             self.failed(
                 "sandbox.agent",
                 &format!(
-                    "session '{session_id}' was not claimed by this process; a pod IP and a \
+                    "sandbox '{sandbox_id}' was not claimed by this process; a pod IP and a \
                      capability are only reachable by the caller that claimed them"
                 ),
             )
@@ -144,7 +157,7 @@ impl AgentTransport for KubernetesSandbox {
             return Err(self.failed(
                 "sandbox.agent",
                 &format!(
-                    "the capability for session '{session_id}' expired; the agent would refuse \
+                    "the capability for sandbox '{sandbox_id}' expired; the agent would refuse \
                      this with a 401 that reads like a broken sandbox"
                 ),
             ));
@@ -169,15 +182,21 @@ impl Sandbox for KubernetesSandbox {
         self
     }
 
+    /// Narrows the platform ceiling to this binding: the pool's pods carry
+    /// `activeDeadlineSeconds` from the declaration and are already running when a claim reaches
+    /// them, so nothing a create says can set a deadline. The declared ceiling still applies.
     fn capabilities(&self) -> SandboxCapabilities {
-        SandboxCapabilities::for_platform(Platform::Kubernetes)
-            .expect("Kubernetes has a sandbox backend")
+        let mut capabilities = SandboxCapabilities::for_platform(Platform::Kubernetes)
+            .expect("Kubernetes has a sandbox backend");
+        capabilities.sandbox_lifetime = false;
+        capabilities
     }
 
     /// Claims a warm pod through the broker.
-    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        let session_id = request
-            .session_id
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        self.refuse_create_time_lifetime(&request)?;
+        let sandbox_id = request
+            .sandbox_id
             .unwrap_or_else(|| uuid::Uuid::new_v4().simple().to_string());
 
         let response = self
@@ -185,8 +204,8 @@ impl Sandbox for KubernetesSandbox {
             .post(format!("{}/v1/sandbox/sessions", self.broker_url))
             .bearer_auth(self.identity_token().await?)
             .json(&ClaimRequest {
-                sandbox_id: &self.sandbox_id,
-                session_id: &session_id,
+                sandbox_id: &self.resource_id,
+                session_id: &sandbox_id,
             })
             .send()
             .await
@@ -221,47 +240,50 @@ impl Sandbox for KubernetesSandbox {
             .expect("no panic holds this lock")
             .insert(claim.session_id.clone(), claim.clone());
 
-        Ok(SandboxSession {
-            session_id: claim.session_id,
-            state: SandboxSessionState::Running,
-            // A released pod is deleted rather than fenced, so a session never outlives its own
+        Ok(SandboxInstance {
+            sandbox_id: claim.session_id,
+            state: SandboxState::Running,
+            // A released pod is deleted rather than fenced, so a sandbox never outlives its own
             // generation.
             generation: 1,
         })
     }
 
-    /// Only sessions this process claimed are addressable.
+    /// Only sandboxes this process claimed are addressable.
     ///
     /// A capability is minted to the caller that claimed the pod, so another process holding the
-    /// same session id has nothing to reach it with. Returning `None` rather than erroring: the
-    /// session may well exist, this caller simply cannot address it.
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
-        Ok(self.claimed(session_id).map(|claim| SandboxSession {
-            session_id: claim.session_id,
-            state: SandboxSessionState::Running,
+    /// same sandbox id has nothing to reach it with. Returning `None` rather than erroring: the
+    /// sandbox may well exist, this caller simply cannot address it.
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        Ok(self.claimed(sandbox_id).map(|claim| SandboxInstance {
+            sandbox_id: claim.session_id,
+            state: SandboxState::Running,
             generation: 1,
         }))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        if let Some(id) = request.session_id.as_deref() {
+    async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        // Refused on the reconnect path too: a claimed pod honors a lifetime no more than a
+        // freshly claimed one would.
+        self.refuse_create_time_lifetime(&request)?;
+        if let Some(id) = request.sandbox_id.as_deref() {
             if let Some(existing) = self.get(id).await? {
-                return Ok(existing);
+                return Ok(ResolvedSandbox::found(existing));
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSandbox::created)
     }
 
-    async fn list(&self) -> Result<Vec<SandboxSession>> {
+    async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Ok(self
             .claims
             .lock()
             .expect("no panic holds this lock")
             .values()
-            .map(|claim| SandboxSession {
-                session_id: claim.session_id.clone(),
-                state: SandboxSessionState::Running,
+            .map(|claim| SandboxInstance {
+                sandbox_id: claim.session_id.clone(),
+                state: SandboxState::Running,
                 generation: 1,
             })
             .collect())
@@ -269,66 +291,62 @@ impl Sandbox for KubernetesSandbox {
 
     async fn run_command(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        agent_protocol::run_command(self, session_id, request).await
+        agent_protocol::run_command(self, sandbox_id, request).await
     }
 
-    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart> {
-        agent_protocol::start_job(self, session_id, request).await
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        agent_protocol::start_job(self, sandbox_id, request).await
     }
 
     async fn poll_job(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         job_id: &str,
         since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        agent_protocol::poll_job(self, session_id, job_id, since_seq).await
+        agent_protocol::poll_job(self, sandbox_id, job_id, since_seq).await
     }
 
-    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()> {
-        agent_protocol::cancel_job(self, session_id, job_id).await
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        agent_protocol::cancel_job(self, sandbox_id, job_id).await
     }
 
-    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
-        agent_protocol::read_file(self, session_id, path).await
+    async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
+        agent_protocol::read_file(self, sandbox_id, path).await
     }
 
-    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
-        agent_protocol::write_files(self, session_id, files).await
+    async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        agent_protocol::write_files(self, sandbox_id, files).await
     }
 
-    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
-        agent_protocol::mkdir(self, session_id, path).await
-    }
-
-    async fn preview(&self, _session_id: &str, _port: u16) -> Result<PreviewCapability> {
+    async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
         Err(self.failed(
             "preview",
-            "preview needs a gateway that validates a session-and-port capability, and that \
-             gateway does not exist yet",
+            "preview needs a gateway that validates a sandbox-and-port capability, which this \
+             backend has none of",
         ))
     }
 
-    async fn suspend(&self, _session_id: &str) -> Result<()> {
-        Err(self.failed("suspendResume", "a pod cannot be suspended and resumed"))
+    async fn pause(&self, _sandbox_id: &str) -> Result<()> {
+        Err(self.failed("pauseResume", "a pod cannot be paused and resumed"))
     }
 
-    async fn resume(&self, _session_id: &str) -> Result<()> {
-        Err(self.failed("suspendResume", "a pod cannot be suspended and resumed"))
+    async fn resume(&self, _sandbox_id: &str) -> Result<()> {
+        Err(self.failed("pauseResume", "a pod cannot be paused and resumed"))
     }
 
-    async fn snapshot(&self, _session_id: &str) -> Result<String> {
+    async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
         Err(self.failed("snapshot", "a pod has no snapshot primitive"))
     }
 
-    /// Releases the session, which deletes its pod.
+    /// Releases the sandbox, which deletes its pod.
     ///
-    /// Idempotent: a session this process never claimed is already in the desired end state.
-    async fn terminate(&self, session_id: &str) -> Result<()> {
-        let Some(claim) = self.claimed(session_id) else {
+    /// Idempotent: a sandbox this process never claimed is already in the desired end state.
+    async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        let Some(claim) = self.claimed(sandbox_id) else {
             return Ok(());
         };
 
@@ -336,7 +354,7 @@ impl Sandbox for KubernetesSandbox {
             .client
             .delete(format!(
                 "{}/v1/sandbox/{}/sessions/{}",
-                self.broker_url, self.sandbox_id, claim.session_id
+                self.broker_url, self.resource_id, claim.session_id
             ))
             .bearer_auth(self.identity_token().await?)
             .send()
@@ -359,8 +377,143 @@ impl Sandbox for KubernetesSandbox {
         self.claims
             .lock()
             .expect("no panic holds this lock")
-            .remove(session_id);
+            .remove(sandbox_id);
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_core::bindings::BindingValue;
+    use axum::extract::{Path, Request};
+    use axum::http::StatusCode;
+    use axum::routing::{delete, post};
+    use axum::{Json, Router};
+    use std::net::SocketAddr;
+    use std::sync::Arc;
+
+    /// Copied verbatim from `broker_router` in `alien-infra`'s `sandbox::kubernetes_route`, so a
+    /// client path the broker does not route falls through to the fallback below.
+    const BROKER_RELEASE_ROUTE: &str = "/v1/sandbox/{sandbox}/sessions/{session}";
+
+    async fn serve(router: Router) -> String {
+        let listener = tokio::net::TcpListener::bind::<SocketAddr>("127.0.0.1:0".parse().unwrap())
+            .await
+            .expect("bind");
+        let address = listener.local_addr().expect("address");
+        tokio::spawn(async move {
+            axum::serve(listener, router).await.expect("serve");
+        });
+        format!("http://{address}")
+    }
+
+    fn sandbox_over(broker: String, token: &tempfile::NamedTempFile) -> KubernetesSandbox {
+        std::fs::write(token.path(), "service-account-token").expect("the token is written");
+        KubernetesSandbox::new(
+            "sbx",
+            &KubernetesSandboxBinding {
+                namespace: BindingValue::Value("alien".to_string()),
+                runtime_class: BindingValue::Value("gvisor".to_string()),
+                selector: BindingValue::Value("alien/sandbox=sbx-pool".to_string()),
+                broker_url: BindingValue::Value(broker),
+                key_name: BindingValue::Value("sandbox-key".to_string()),
+                token_path: BindingValue::Value(token.path().display().to_string()),
+            },
+            "sbx-pool",
+        )
+        .expect("the binding is complete")
+    }
+
+    /// Terminate releases the claim at the route the broker serves, with the resource and the
+    /// session in the order it serves them.
+    ///
+    /// The broker is the only thing that can delete the pod, so a DELETE to a path it does not
+    /// route leaves the sandbox running and the claim held while the caller is told it is gone.
+    /// Mutation check: change the path in `terminate` and the fallback records the request.
+    #[tokio::test]
+    async fn terminate_releases_at_the_route_the_broker_serves() {
+        let released = Arc::new(Mutex::new(Vec::new()));
+        let unrouted = Arc::new(Mutex::new(Vec::new()));
+        let released_seen = Arc::clone(&released);
+        let unrouted_seen = Arc::clone(&unrouted);
+
+        let broker = serve(
+            Router::new()
+                .route(
+                    "/v1/sandbox/sessions",
+                    post(|| async {
+                        Json(serde_json::json!({
+                            "sessionId": "s1",
+                            "endpoint": "http://10.0.0.1:8080",
+                            "capability": "cap",
+                            "expiresAt": chrono::Utc::now().timestamp() + 300,
+                        }))
+                    }),
+                )
+                .route(
+                    BROKER_RELEASE_ROUTE,
+                    delete(move |Path(addressed): Path<(String, String)>| {
+                        let released = Arc::clone(&released);
+                        async move {
+                            released
+                                .lock()
+                                .expect("no panic holds this lock")
+                                .push(addressed);
+                            StatusCode::NO_CONTENT
+                        }
+                    }),
+                )
+                .fallback(move |request: Request| {
+                    let unrouted = Arc::clone(&unrouted);
+                    async move {
+                        unrouted
+                            .lock()
+                            .expect("no panic holds this lock")
+                            .push(format!("{} {}", request.method(), request.uri().path()));
+                        StatusCode::NOT_FOUND
+                    }
+                }),
+        )
+        .await;
+
+        let token = tempfile::NamedTempFile::new().expect("a token file");
+        let sandbox = sandbox_over(broker, &token);
+
+        let claimed = sandbox
+            .create(CreateSandboxRequest {
+                sandbox_id: Some("s1".to_string()),
+                tenant_key: None,
+                env: BTreeMap::new(),
+                ..Default::default()
+            })
+            .await
+            .expect("the broker claims a pod");
+
+        let released_claim = sandbox.terminate(&claimed.sandbox_id).await;
+
+        assert!(
+            unrouted_seen
+                .lock()
+                .expect("no panic holds this lock")
+                .is_empty(),
+            "terminate reached a path the broker does not route: {:?}",
+            unrouted_seen.lock().expect("no panic holds this lock")
+        );
+        released_claim.expect("the broker releases the claim");
+        assert_eq!(
+            *released_seen.lock().expect("no panic holds this lock"),
+            vec![("sbx-pool".to_string(), "s1".to_string())],
+            "the release names the resource and then the session"
+        );
+        assert!(
+            sandbox
+                .get(&claimed.sandbox_id)
+                .await
+                .expect("a released sandbox reads back")
+                .is_none(),
+            "a released sandbox is no longer claimed"
+        );
     }
 }

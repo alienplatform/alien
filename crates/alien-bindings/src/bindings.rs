@@ -201,7 +201,7 @@ impl Bindings {
     /// Loads a linked sandbox for running untrusted code.
     ///
     /// No refreshing wrapper: a sandbox handle addresses a control plane rather than holding
-    /// data-plane credentials, and each session capability is minted per call.
+    /// data-plane credentials, and each sandbox capability is minted per call.
     pub async fn sandbox(&self, binding_name: &str) -> Result<Arc<dyn Sandbox>> {
         self.provider.load_sandbox(binding_name).await
     }

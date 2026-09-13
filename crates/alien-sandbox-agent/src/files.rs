@@ -126,20 +126,6 @@ fn parent_of(requested: &str) -> Option<String> {
     (!parent.trim_matches('/').is_empty()).then(|| parent.to_string())
 }
 
-/// Creates a directory inside the sandbox.
-pub async fn mkdir(root: &Path, requested: &str) -> Result<()> {
-    let root = root.to_path_buf();
-    let requested = requested.to_string();
-
-    tokio::task::spawn_blocking(move || {
-        confine::create_dir_all(&root, &requested)
-            .map_err(|error| refused_or_failed(error, &requested, "creating the directory"))
-    })
-    .await
-    .into_alien_error()
-    .context(failed("mkdir", "", "waiting for the filesystem"))?
-}
-
 /// The kernel refuses an escape with `EXDEV`, and a symlink or `..` in the path with `ELOOP` or
 /// `EXDEV` depending on which rule caught it. Those are the caller's mistake, not ours.
 fn refused_or_failed(
@@ -173,7 +159,6 @@ fn failed(operation: &str, path: &str, purpose: &str) -> ErrorData {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::OpenOptionsExt;
     use std::path::PathBuf;
     use tempfile::TempDir;
 
@@ -312,6 +297,8 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn writing_to_a_fifo_is_refused_rather_than_piped_away() {
+        use std::os::unix::fs::OpenOptionsExt;
+
         let (_dir, root) = root();
         let path = std::ffi::CString::new(root.join("planted").as_os_str().as_encoded_bytes())
             .expect("no NUL");
@@ -362,9 +349,6 @@ mod tests {
         write(&root, "/../evil.txt", b"x")
             .await
             .expect_err("write must refuse traversal");
-        mkdir(&root, "/../evil")
-            .await
-            .expect_err("mkdir must refuse traversal");
     }
 
     #[tokio::test]
@@ -388,7 +372,7 @@ mod tests {
     #[tokio::test]
     async fn reading_a_directory_is_refused_with_a_clear_reason() {
         let (_dir, root) = root();
-        mkdir(&root, "/work").await.expect("mkdir");
+        std::fs::create_dir_all(root.join("work")).expect("work");
 
         let error = read(&root, "/work")
             .await
@@ -414,13 +398,17 @@ mod tests {
         );
     }
 
+    /// Making room for a file must succeed whether or not the directory is already there, which
+    /// is every write after the first into the same directory.
     #[tokio::test]
-    async fn mkdir_is_idempotent() {
+    async fn making_room_for_a_file_is_idempotent() {
         let (_dir, root) = root();
 
-        mkdir(&root, "/work/build").await.expect("creates");
-        mkdir(&root, "/work/build")
+        write(&root, "/work/build/first.txt", b"a")
             .await
-            .expect("creating an existing directory is not a failure");
+            .expect("creates the directory on the way");
+        write(&root, "/work/build/second.txt", b"b")
+            .await
+            .expect("an existing directory is not a failure");
     }
 }

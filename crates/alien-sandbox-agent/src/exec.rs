@@ -35,11 +35,11 @@ pub use alien_core::sandbox_process::FRAME_CHANNEL_DEPTH;
 pub struct ExecRequest {
     /// Command and arguments. Never a shell string — a shell would re-parse hostile input.
     pub command: Vec<String>,
-    /// Wall-clock ceiling in milliseconds. Required.
-    pub deadline_ms: u64,
-    /// Working directory, resolved against the session root before use.
+    /// Wall-clock ceiling on this command, in milliseconds. Required.
+    pub timeout_ms: u64,
+    /// Working directory, resolved against the sandbox root before use.
     #[serde(default)]
-    pub working_directory: Option<String>,
+    pub cwd: Option<String>,
     /// Environment for the command. The agent's own environment is never inherited, so this is
     /// everything the command gets beyond `PATH`.
     #[serde(default)]
@@ -73,7 +73,7 @@ pub enum Frame {
     },
     /// The command did not finish. Also terminal.
     Error {
-        /// Machine-readable cause, e.g. `deadlineExceeded`
+        /// Machine-readable cause, e.g. `timeoutExceeded`
         code: String,
         /// Human-readable detail
         message: String,
@@ -93,15 +93,15 @@ impl Frame {
 impl ExecRequest {
     /// Rejects a request the agent must not act on.
     ///
-    /// A zero deadline is refused rather than defaulted: a defaulted deadline is a hang waiting
+    /// A zero timeout is refused rather than defaulted: a defaulted timeout is a hang waiting
     /// for a slow day, and this process shares a machine with the workload that asked for it.
     pub fn validate(&self) -> Result<()> {
         if self.command.is_empty() {
             return Err(invalid("command is empty"));
         }
 
-        if self.deadline_ms == 0 {
-            return Err(invalid("a command must carry a non-zero deadline"));
+        if self.timeout_ms == 0 {
+            return Err(invalid("a command must carry a non-zero timeout"));
         }
 
         // JSON can carry a NUL, and std panics rather than erroring when building an
@@ -228,7 +228,7 @@ pub async fn stream(
     let (raw, mut incoming) = mpsc::channel(FRAME_CHANNEL_DEPTH);
     let produce = sandbox_process::stream(
         child,
-        Duration::from_millis(request.deadline_ms),
+        Duration::from_millis(request.timeout_ms),
         output_cap,
         raw,
     );
@@ -321,11 +321,11 @@ fn invalid(reason: &str) -> AlienError<ErrorData> {
 mod tests {
     use super::*;
 
-    fn request(command: &[&str], deadline_ms: u64) -> ExecRequest {
+    fn request(command: &[&str], timeout_ms: u64) -> ExecRequest {
         ExecRequest {
             command: command.iter().map(|s| s.to_string()).collect(),
-            deadline_ms,
-            working_directory: None,
+            timeout_ms,
+            cwd: None,
             env: BTreeMap::new(),
         }
     }
@@ -378,7 +378,7 @@ mod tests {
         assert!(matches!(terminal(&frames), Frame::Exit { code: 3, .. }));
     }
 
-    /// The deadline is enforced, not advisory — this is the rule that stops hostile code
+    /// The timeout is enforced, not advisory — this is the rule that stops hostile code
     /// occupying a session forever.
     #[tokio::test]
     async fn a_command_that_overruns_is_killed_and_reported() {
@@ -391,13 +391,13 @@ mod tests {
         .await;
 
         match terminal(&frames) {
-            Frame::Error { code, .. } => assert_eq!(code, "deadlineExceeded"),
-            other => panic!("expected a deadline error, got {other:?}"),
+            Frame::Error { code, .. } => assert_eq!(code, "timeoutExceeded"),
+            other => panic!("expected a timeout error, got {other:?}"),
         }
     }
 
     #[tokio::test]
-    async fn a_request_without_a_deadline_is_refused_before_spawning() {
+    async fn a_request_without_a_timeout_is_refused_before_spawning() {
         let frames = run(
             &request(&["/bin/echo", "hi"], 0),
             None,
@@ -408,7 +408,7 @@ mod tests {
 
         match terminal(&frames) {
             Frame::Error { code, .. } => assert_eq!(code, "requestInvalid"),
-            other => panic!("a zero deadline must be refused, got {other:?}"),
+            other => panic!("a zero timeout must be refused, got {other:?}"),
         }
         assert_eq!(frames.len(), 1, "nothing should have been spawned");
     }

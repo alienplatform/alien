@@ -7,7 +7,7 @@
 
 use alien_core::{
     PermissionProfile, PermissionsConfig, Platform, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLimits, SandboxSessionPolicy, Stack, Worker, WorkerCode,
+    SandboxLifecyclePolicy, SandboxLimits, Stack, Worker, WorkerCode,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -35,9 +35,9 @@ fn sandbox(limits: Option<SandboxLimits>) -> Sandbox {
             image: "ubuntu".to_string(),
         })
         .egress(SandboxEgress::Deny)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         });
     match limits {
         Some(limits) => builder.limits(limits).build(),

@@ -315,20 +315,25 @@ impl CfEmitter for AwsSandboxEmitter {
             ),
             ("region".to_string(), CfExpression::ref_("AWS::Region")),
         ];
-        if let Some(seconds) = sandbox.session.idle_suspend_seconds {
-            fields.push((
-                "idleSuspendSeconds".to_string(),
-                CfExpression::Integer(i64::from(seconds)),
-            ));
-        }
-        if let Some(seconds) = sandbox.session.max_lifetime_seconds {
-            fields.push((
-                "maxLifetimeSeconds".to_string(),
-                CfExpression::Integer(i64::from(seconds)),
-            ));
-        }
+        fields.extend(lifecycle_fields(sandbox));
         Ok(Some(CfExpression::object(fields)))
     }
+}
+
+/// The declared lifecycle ceilings a linked workload's binding reads.
+///
+/// Each is emitted only where the declaration named it, matching `AwsSandboxBinding`'s
+/// `skip_serializing_if` so the template and the type never disagree on whether the key is present.
+fn lifecycle_fields(sandbox: &Sandbox) -> Vec<(String, CfExpression)> {
+    [
+        ("idlePauseSeconds", sandbox.lifecycle.idle_pause_seconds),
+        ("maxLifetimeSeconds", sandbox.lifecycle.max_lifetime_seconds),
+    ]
+    .into_iter()
+    .filter_map(|(key, seconds)| {
+        seconds.map(|seconds| (key.to_string(), CfExpression::Integer(i64::from(seconds))))
+    })
+    .collect()
 }
 
 /// Attaches this sandbox's remote grant to the stack's shared Remote Bindings identity.
@@ -905,6 +910,60 @@ mod tests {
         text
     }
 
+    /// The ceilings reach the template under exactly the names `AwsSandboxBinding` reads, carrying
+    /// the declared seconds. A key spelled differently on one side deserializes as absent in the
+    /// workload, so a declared ceiling would be dropped rather than refused.
+    #[test]
+    fn the_declared_ceilings_reach_the_binding_under_the_names_the_type_reads() {
+        let declared = |idle, lifetime| {
+            let sandbox = Sandbox::new("agents".to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: lifetime,
+                    idle_pause_seconds: idle,
+                })
+                .build();
+            lifecycle_fields(&sandbox)
+                .into_iter()
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+
+        let emitted = declared(Some(600), Some(1800));
+        let typed = serde_json::to_value(alien_core::AwsSandboxBinding {
+            image_arn: alien_core::BindingValue::Value("arn".to_string()),
+            image_version: alien_core::BindingValue::Value("1".to_string()),
+            region: alien_core::BindingValue::Value("us-east-2".to_string()),
+            execution_role_arn: None,
+            egress_connector_arns: Vec::new(),
+            preview_ports: Vec::new(),
+            idle_pause_seconds: Some(600),
+            max_lifetime_seconds: Some(1800),
+            allow_egress: true,
+        })
+        .expect("the binding type serializes");
+
+        for (key, seconds) in [("idlePauseSeconds", 600_i64), ("maxLifetimeSeconds", 1800)] {
+            assert_eq!(
+                emitted.get(key),
+                Some(&CfExpression::Integer(seconds)),
+                "the template must emit {key} = {seconds}"
+            );
+            assert_eq!(
+                typed.get(key).and_then(serde_json::Value::as_i64),
+                Some(seconds),
+                "the binding type must read {key}"
+            );
+        }
+
+        assert!(
+            declared(None, None).is_empty(),
+            "an undeclared ceiling must not reach the template at all"
+        );
+    }
+
     /// A URI carrying no token must stay a plain string. Routing it through `Sub` would rewrite
     /// every template already in the field for no rendered change.
     #[test]
@@ -954,9 +1013,9 @@ mod tests {
                 max_processes: None,
             })
             .egress(SandboxEgress::Allow)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build()
     }
@@ -1025,9 +1084,9 @@ mod tests {
                 max_processes: None,
             })
             .egress(SandboxEgress::Allow)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
 

@@ -270,10 +270,10 @@ impl ResolvedRemoteBinding {
                         execution_role_arn: None,
                         egress_connector_arns: Vec::new(),
                         preview_ports,
-                        idle_suspend_seconds: binding
-                            .idle_suspend_seconds
+                        idle_pause_seconds: binding
+                            .idle_pause_seconds
                             .map(|seconds| {
-                                narrow_manager_number(seconds, "idleSuspendSeconds", resource_id)
+                                narrow_manager_number(seconds, "idlePauseSeconds", resource_id)
                             })
                             .transpose()?,
                         max_lifetime_seconds: binding
@@ -327,10 +327,10 @@ impl ResolvedRemoteBinding {
                         resource_group: alien_core::BindingValue::Value(binding.resource_group),
                         disk_image: alien_core::BindingValue::Value(binding.disk_image),
                         egress: alien_core::SandboxEgress::Allow,
-                        idle_suspend_seconds: binding
-                            .idle_suspend_seconds
+                        idle_pause_seconds: binding
+                            .idle_pause_seconds
                             .map(|seconds| {
-                                narrow_manager_number(seconds, "idleSuspendSeconds", resource_id)
+                                narrow_manager_number(seconds, "idlePauseSeconds", resource_id)
                             })
                             .transpose()?,
                         cpu: binding.cpu.map(alien_core::BindingValue::Value),
@@ -359,10 +359,10 @@ impl ResolvedRemoteBinding {
                         engine: alien_core::BindingValue::Value(binding.engine),
                         template: alien_core::BindingValue::Value(binding.template),
                         region: alien_core::BindingValue::Value(binding.region),
-                        session_ttl_seconds: binding
-                            .session_ttl_seconds
+                        max_lifetime_seconds: binding
+                            .max_lifetime_seconds
                             .map(|seconds| {
-                                narrow_manager_number(seconds, "sessionTtlSeconds", resource_id)
+                                narrow_manager_number(seconds, "maxLifetimeSeconds", resource_id)
                             })
                             .transpose()?,
                     }),

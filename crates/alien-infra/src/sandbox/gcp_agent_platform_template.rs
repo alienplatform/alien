@@ -135,7 +135,7 @@ pub struct GcpAgentPlatformTemplateController {
     /// Region selecting the regional endpoint, kept for the binding.
     pub(crate) region: Option<String>,
     /// Session lifetime from the declaration, carried into the binding.
-    pub(crate) session_ttl_seconds: Option<u32>,
+    pub(crate) max_lifetime_seconds: Option<u32>,
 }
 
 #[controller]
@@ -171,7 +171,7 @@ impl GcpAgentPlatformTemplateController {
         self.engine = Some(engine.clone());
         self.project_id = Some(gcp_config.project_id.clone());
         self.region = Some(gcp_config.region.clone());
-        self.session_ttl_seconds = config.session.max_lifetime_seconds;
+        self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
 
         info!(id=%config.id, engine=%engine, "Creating sandbox environment template");
         let operation =
@@ -558,7 +558,7 @@ impl GcpAgentPlatformTemplateController {
             BindingValue::value(engine_name),
             BindingValue::value(template_name),
             BindingValue::value(region.clone()),
-            self.session_ttl_seconds,
+            self.max_lifetime_seconds,
         );
         Ok(Some(
             serde_json::to_value(binding).into_alien_error().context(
@@ -589,7 +589,7 @@ impl GcpAgentPlatformTemplateController {
         self.pending_template_id = None;
         self.project_id = None;
         self.region = None;
-        self.session_ttl_seconds = None;
+        self.max_lifetime_seconds = None;
     }
 
     fn engine_and_template(&self, resource_id: &str) -> Result<(String, String)> {
@@ -627,7 +627,7 @@ impl GcpAgentPlatformTemplateController {
             pending_template_id: None,
             project_id: Some("test-project-123".to_string()),
             region: Some("us-central1".to_string()),
-            session_ttl_seconds: None,
+            max_lifetime_seconds: None,
             _internal_stay_count: None,
         }
     }
@@ -646,7 +646,7 @@ mod tests {
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::MockPlatformServiceProvider;
     use alien_core::Platform;
-    use alien_core::{SandboxEgress, SandboxSessionPolicy};
+    use alien_core::{SandboxEgress, SandboxLifecyclePolicy};
     use alien_gcp_clients::agent_platform::MockAgentPlatformApi;
     use alien_gcp_clients::longrunning::{Operation, OperationResult};
     use std::sync::{Arc, Mutex};
@@ -662,9 +662,9 @@ mod tests {
                 image: image.to_string(),
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: ttl,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             });
         match limits {
             Some(limits) => builder.limits(limits).build(),
@@ -960,7 +960,7 @@ mod tests {
                     .into_value("gcp-agent-platform", "region")
                     .expect("region is a literal in a test");
                 assert_eq!(region, "us-central1");
-                assert_eq!(b.session_ttl_seconds, Some(3600));
+                assert_eq!(b.max_lifetime_seconds, Some(3600));
                 let template = b
                     .template
                     .into_value("gcp-agent-platform", "template")

@@ -150,9 +150,9 @@ impl TfEmitter for AzureSandboxEmitter {
             ("egress", egress(sandbox)),
         ];
 
-        if let Some(seconds) = sandbox.session.idle_suspend_seconds {
+        if let Some(seconds) = sandbox.lifecycle.idle_pause_seconds {
             fields.push((
-                "idleSuspendSeconds",
+                "idlePauseSeconds",
                 Expression::Number(i64::from(seconds).into()),
             ));
         }
@@ -268,7 +268,7 @@ mod tests {
     use super::*;
     use alien_core::bindings::{AzureSandboxBinding, BindingValue};
     use alien_core::SandboxCode;
-    use alien_core::{ResourceLifecycle, SandboxSessionPolicy, Stack, StackSettings};
+    use alien_core::{ResourceLifecycle, SandboxLifecyclePolicy, Stack, StackSettings};
     use indexmap::IndexMap;
 
     fn binding_for(egress: SandboxEgress) -> String {
@@ -283,9 +283,9 @@ mod tests {
                         image: "ubuntu".to_string(),
                     })
                     .egress(SandboxEgress::Allow)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds: None,
+                        idle_pause_seconds: None,
                     })
                     .build(),
                 lifecycle,
@@ -310,7 +310,7 @@ mod tests {
         AzureSandboxEmitter.emit(&ctx).expect("the sandbox renders")
     }
 
-    fn binding_with(egress: SandboxEgress, idle_suspend_seconds: Option<u32>) -> String {
+    fn binding_with(egress: SandboxEgress, idle_pause_seconds: Option<u32>) -> String {
         let stack = Stack::new("acme".to_string())
             .add(
                 Sandbox::new("agents".to_string())
@@ -327,9 +327,9 @@ mod tests {
                         max_processes: None,
                     })
                     .egress(egress)
-                    .session(SandboxSessionPolicy {
+                    .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
-                        idle_suspend_seconds,
+                        idle_pause_seconds,
                     })
                     .build(),
                 ResourceLifecycle::Frozen,
@@ -403,7 +403,7 @@ mod tests {
             region: BindingValue::Value("eastus".to_string()),
             resource_group: BindingValue::Value("rg".to_string()),
             egress: SandboxEgress::Allow,
-            idle_suspend_seconds: Some(900),
+            idle_pause_seconds: Some(900),
             disk_image: BindingValue::Value("ubuntu".to_string()),
             cpu: Some(BindingValue::Value("1000m".to_string())),
             memory: Some(BindingValue::Value("2048Mi".to_string())),
@@ -423,16 +423,16 @@ mod tests {
         );
     }
 
-    /// The idle-suspend policy travels the same way, and only when it was declared.
+    /// The idle-pause policy travels the same way, and only when it was declared.
     ///
-    /// Azure takes it at create, so a number that stops at the emitter leaves the session on the
+    /// Azure takes it at create, so a number that stops at the emitter leaves the sandbox on the
     /// service default — and an emitted zero would be a policy nobody asked for.
     #[test]
-    fn the_binding_carries_a_declared_idle_suspend_and_nothing_otherwise() {
+    fn the_binding_carries_a_declared_idle_pause_and_nothing_otherwise() {
         let declared = binding_with(SandboxEgress::Allow, Some(900));
-        assert!(declared.contains("idleSuspendSeconds = 900"), "{declared}");
+        assert!(declared.contains("idlePauseSeconds = 900"), "{declared}");
 
         let undeclared = binding_with(SandboxEgress::Allow, None);
-        assert!(!undeclared.contains("idleSuspendSeconds"), "{undeclared}");
+        assert!(!undeclared.contains("idlePauseSeconds"), "{undeclared}");
     }
 }

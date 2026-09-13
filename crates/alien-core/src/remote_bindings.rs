@@ -59,7 +59,7 @@ const DEFINITIONS: &[RemoteBindingDefinition] = &[
         permission_set: "sandbox/remote-execute",
         kind: RemoteBindingKind::Sandbox,
         description:
-            "Create and terminate sessions in this sandbox, and run arbitrary code inside them",
+            "Create and terminate sandboxes in this sandbox resource, and run arbitrary code inside them",
         // A sandbox's parent is the MicroVM image its own emitter builds, and an open-egress
         // sandbox attaches no VPC connector, so setup owes this binding no other resource.
         setup_support_resource_types: &[],
@@ -92,7 +92,7 @@ pub fn remote_binding_for_entry(entry: &ResourceEntry) -> Option<&'static Remote
 ///
 /// **Egress.** The same refusal on every cloud that publishes a sandbox remotely, for mechanisms
 /// that are worth telling apart. On AWS the declared connector is *unreachable*: starting a
-/// session is additionally authorized as `lambda:PassNetworkConnector` and the remote grant
+/// sandbox is additionally authorized as `lambda:PassNetworkConnector` and the remote grant
 /// passes only AWS's own connectors. On Azure it is *bypassable*: the grant is the
 /// `SandboxGroup Data Owner` data-plane role, so its holder creates sandboxes against the group
 /// directly and the provider that would have applied the declared policy never runs. The Azure
@@ -115,14 +115,14 @@ pub fn remote_binding_undeliverable_reason(entry: &ResourceEntry) -> Option<&'st
     if !matches!(sandbox.egress, SandboxEgress::Allow) {
         return Some(
             "a remotely published sandbox must declare egress 'allow'; the remote grant either \
-             cannot pass a declared connector or lets its holder create sessions that ignore the \
+             cannot pass a declared connector or lets its holder create sandboxes that ignore the \
              declared policy, so the declaration would not bound the remote caller",
         );
     }
 
     if !sandbox.preview_ports.is_empty() {
         return Some(
-            "a remotely published sandbox must declare no previewPorts; the session token mint \
+            "a remotely published sandbox must declare no previewPorts; the sandbox token mint \
              carries no port condition, so the list bounds a caller reaching the sandbox through \
              its binding but not a holder of the remote credentials",
         );
@@ -140,17 +140,17 @@ pub fn remote_binding_is_deliverable(entry: &ResourceEntry) -> bool {
 /// identity rather than the deployment's.
 ///
 /// The binding's own set always does. A sandbox binding additionally claims anything that reaches
-/// a session, because the remote caller drives those; `reaches_a_session` decides that, so the
+/// a sandbox, because the remote caller drives those; `reaches_a_sandbox` decides that, so the
 /// permission registry stays the single place the verbs are named.
 pub fn remote_binding_claims_management_set<'a>(
     resources: impl IntoIterator<Item = &'a ResourceEntry>,
     permission_set_id: &str,
-    reaches_a_session: impl Fn() -> bool,
+    reaches_a_sandbox: impl Fn() -> bool,
 ) -> bool {
     resources.into_iter().any(|entry| {
         remote_binding_for_entry(entry).is_some_and(|definition| {
             permission_set_id == definition.permission_set
-                || (definition.kind == RemoteBindingKind::Sandbox && reaches_a_session())
+                || (definition.kind == RemoteBindingKind::Sandbox && reaches_a_sandbox())
         })
     })
 }
@@ -162,7 +162,7 @@ pub fn remote_binding_definitions() -> &'static [RemoteBindingDefinition] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ResourceLifecycle, Sandbox, SandboxCode, SandboxLimits, SandboxSessionPolicy};
+    use crate::{ResourceLifecycle, Sandbox, SandboxCode, SandboxLifecyclePolicy, SandboxLimits};
 
     fn remote_sandbox(egress: SandboxEgress, preview_ports: Vec<u16>) -> ResourceEntry {
         let sandbox = Sandbox::new("agent-sbx".to_string())
@@ -176,9 +176,9 @@ mod tests {
                 max_processes: None,
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .preview_ports(preview_ports)
             .build();

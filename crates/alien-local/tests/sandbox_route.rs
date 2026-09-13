@@ -70,7 +70,7 @@ impl Harness {
 
 #[tokio::test]
 #[ignore = "requires a real Docker daemon"]
-async fn the_full_session_lifecycle_works_over_the_loopback_route() {
+async fn the_full_sandbox_lifecycle_works_over_the_loopback_route() {
     let harness = Harness::start().await;
 
     let created = harness

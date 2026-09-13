@@ -177,12 +177,12 @@ resource "google_service_account_iam_member" "access_manager_user" {
 }
 
 === agents.tf ===
-resource "google_project_iam_custom_role" "gcp_role_session_lifecycle_and_exec" {
+resource "google_project_iam_custom_role" "gcp_role_sandbox_lifecycle_and_exec" {
   count       = var.gcp_manage_custom_roles ? 1 : 0
   project     = var.gcp_project
-  role_id     = format("role_%s_session_lifecycle_and_exec", local.gcp_custom_role_prefix)
-  title       = "${local.deployment_name}: Session Lifecycle And Exec"
-  description = "Used by ${local.deployment_name}. Create, drive and tear down sessions under the selected sandbox's reasoning engine. Resource prefix: ${local.resource_prefix}."
+  role_id     = format("role_%s_sandbox_lifecycle_and_exec", local.gcp_custom_role_prefix)
+  title       = "${local.deployment_name}: Sandbox Lifecycle And Exec"
+  description = "Used by ${local.deployment_name}. Create, drive and tear down sandboxes under the selected reasoning engine. Resource prefix: ${local.resource_prefix}."
   stage       = "GA"
   permissions = [
     "aiplatform.sandboxEnvironments.create",
@@ -195,10 +195,10 @@ resource "google_project_iam_custom_role" "gcp_role_session_lifecycle_and_exec" 
   ]
 }
 
-resource "google_vertex_ai_reasoning_engine_iam_member" "gcp_role_session_lifecycle_and_exec_agents_engine_access_0" {
+resource "google_vertex_ai_reasoning_engine_iam_member" "gcp_role_sandbox_lifecycle_and_exec_agents_engine_access_0" {
   provider         = google-beta
   reasoning_engine = google_vertex_ai_reasoning_engine.agents_engine.name
-  role             = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_session_lifecycle_and_exec[0].name : format("projects/%s/roles/role_%s_session_lifecycle_and_exec", var.gcp_project, local.gcp_custom_role_prefix)
+  role             = var.gcp_manage_custom_roles ? google_project_iam_custom_role.gcp_role_sandbox_lifecycle_and_exec[0].name : format("projects/%s/roles/role_%s_sandbox_lifecycle_and_exec", var.gcp_project, local.gcp_custom_role_prefix)
   member           = "serviceAccount:${google_service_account.access.email}"
 }
 
@@ -208,7 +208,7 @@ resource "time_sleep" "gcp_iam_propagation" {
   depends_on = [
     google_service_account_iam_member.access_manager_token_creator,
     google_service_account_iam_member.access_manager_user,
-    google_vertex_ai_reasoning_engine_iam_member.gcp_role_session_lifecycle_and_exec_agents_engine_access_0
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_lifecycle_and_exec_agents_engine_access_0
   ]
 }
 
@@ -234,8 +234,8 @@ resource "terraform_data" "deployment_registration" {
     google_service_account.access,
     google_service_account_iam_member.access_manager_token_creator,
     google_service_account_iam_member.access_manager_user,
-    google_project_iam_custom_role.gcp_role_session_lifecycle_and_exec,
-    google_vertex_ai_reasoning_engine_iam_member.gcp_role_session_lifecycle_and_exec_agents_engine_access_0,
+    google_project_iam_custom_role.gcp_role_sandbox_lifecycle_and_exec,
+    google_vertex_ai_reasoning_engine_iam_member.gcp_role_sandbox_lifecycle_and_exec_agents_engine_access_0,
     time_sleep.gcp_iam_propagation
   ]
 }
@@ -304,11 +304,11 @@ The setup creates one narrow application access identity. It can access only the
 
 ## `agents` (sandbox)
 
-Create and terminate sessions in this sandbox, and run arbitrary code inside them.
+Create and terminate sandboxes in this sandbox resource, and run arbitrary code inside them.
 
 Permission set: `sandbox/remote-execute` (revision 1).
 
-- Create, drive and tear down sessions under the selected sandbox's reasoning engine.
+- Create, drive and tear down sandboxes under the selected reasoning engine.
   Scope: `projects/${var.gcp_project}/locations/${var.gcp_region}/reasoningEngines/(the id assigned at apply to ${local.resource_prefix}-agents-engine)`
   - `aiplatform.sandboxEnvironments.create`
   - `aiplatform.sandboxEnvironments.get`

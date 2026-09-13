@@ -2,14 +2,14 @@ import { describe, expect, it } from "vitest"
 import { Sandbox } from "../sandbox.js"
 
 const limits = { cpu: "1", memory: "2Gi", disk: "20Gi", maxProcesses: 256 }
-const session = { maxLifetimeSeconds: 3600 }
+const lifecycle = { maxLifetimeSeconds: 3600 }
 
 function complete() {
   return new Sandbox("agent")
     .code({ type: "image", image: "ubuntu:24.04" })
     .limits(limits)
     .egress({ mode: "deny" })
-    .session(session)
+    .lifecycle(lifecycle)
 }
 
 describe("Sandbox", () => {
@@ -29,7 +29,7 @@ describe("Sandbox", () => {
     const sandbox = new Sandbox("agent")
       .code({ type: "image", image: "ubuntu:24.04" })
       .egress({ mode: "deny" })
-      .session(session)
+      .lifecycle(lifecycle)
 
     expect(sandbox.build().config.limits).toBeUndefined()
   })
@@ -38,7 +38,7 @@ describe("Sandbox", () => {
     const sandbox = new Sandbox("agent")
       .code({ type: "image", image: "ubuntu:24.04" })
       .limits(limits)
-      .session(session)
+      .lifecycle(lifecycle)
 
     expect(() => sandbox.build()).toThrow()
   })

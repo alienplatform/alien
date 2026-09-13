@@ -34,7 +34,7 @@ pub use postgres::{PostgresConnectionJs, PostgresHandle};
 pub use queue::QueueHandle;
 #[cfg(feature = "platform-sdk")]
 pub use remote_storage::RemoteStorageHandle;
-pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxSessionJs};
+pub use sandbox::{CommandFrameJs, CommandStreamHandle, SandboxHandle, SandboxInstanceJs};
 pub use storage::StorageHandle;
 pub use vault::VaultHandle;
 

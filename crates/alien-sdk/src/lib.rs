@@ -82,8 +82,8 @@ pub mod presigned {
 /// through storage/KV/queue/vault/container calls).
 pub mod traits {
     pub use alien_bindings::traits::{
-        CommandOutput, CreateSessionRequest, Kv, KvEntry, MessagePayload, PutCondition, PutOptions,
-        QueueMessage, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState, ScanResult,
+        CommandOutput, CreateSandboxRequest, Kv, KvEntry, MessagePayload, PutCondition, PutOptions,
+        QueueMessage, RunCommandRequest, Sandbox, SandboxInstance, SandboxState, ScanResult,
         Storage, Vault,
     };
     pub use alien_bindings::{BoundQueue as Queue, Container};

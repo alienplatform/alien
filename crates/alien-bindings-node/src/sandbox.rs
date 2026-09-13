@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::traits::{
-    CommandOutput, CreateSessionRequest, JobPoll, RunCommandRequest, Sandbox, SandboxSession,
+    CommandOutput, CreateSandboxRequest, JobPoll, RunCommandRequest, Sandbox, SandboxInstance,
 };
 use futures::channel::oneshot;
 use futures::future::{select, Either, FutureExt, Shared};
@@ -32,28 +32,37 @@ fn into_env(env: Option<std::collections::HashMap<String, String>>) -> BTreeMap<
     env.map(|env| env.into_iter().collect()).unwrap_or_default()
 }
 
-/// A live sandbox session.
+/// A live sandbox.
 #[napi(object)]
-pub struct SandboxSessionJs {
-    /// Session id, which is what every later call addresses.
-    pub session_id: String,
-    /// Lifecycle state: `starting`, `running`, `suspended` or `terminated`.
+pub struct SandboxInstanceJs {
+    /// Sandbox id, which is what every later call addresses.
+    pub sandbox_id: String,
+    /// Lifecycle state: `starting`, `running`, `paused` or `terminated`.
     pub state: String,
-    /// Increments when a session is replaced, so a stale handle is detectable.
+    /// Increments when a sandbox is replaced, so a stale handle is detectable.
     pub generation: i64,
 }
 
-fn session_to_js(session: SandboxSession) -> SandboxSessionJs {
-    SandboxSessionJs {
-        session_id: session.session_id,
-        state: match session.state {
-            alien_bindings::traits::SandboxSessionState::Starting => "starting",
-            alien_bindings::traits::SandboxSessionState::Running => "running",
-            alien_bindings::traits::SandboxSessionState::Suspended => "suspended",
-            alien_bindings::traits::SandboxSessionState::Terminated => "terminated",
+/// A sandbox from `getOrCreate`, and which of the two things happened.
+#[napi(object)]
+pub struct ResolvedSandboxJs {
+    /// The sandbox, whether it was made here or found.
+    pub sandbox: SandboxInstanceJs,
+    /// Whether this call is what created it, so a caller knows if its first-run setup has run.
+    pub created: bool,
+}
+
+fn sandbox_to_js(sandbox: SandboxInstance) -> SandboxInstanceJs {
+    SandboxInstanceJs {
+        sandbox_id: sandbox.sandbox_id,
+        state: match sandbox.state {
+            alien_bindings::traits::SandboxState::Starting => "starting",
+            alien_bindings::traits::SandboxState::Running => "running",
+            alien_bindings::traits::SandboxState::Paused => "paused",
+            alien_bindings::traits::SandboxState::Terminated => "terminated",
         }
         .to_string(),
-        generation: session.generation as i64,
+        generation: sandbox.generation as i64,
     }
 }
 
@@ -127,7 +136,7 @@ pub struct JobExitJs {
 /// Why a job ended without its command exiting.
 #[napi(object)]
 pub struct JobErrorJs {
-    /// Machine-readable cause, e.g. `deadlineExceeded`
+    /// Machine-readable cause, e.g. `timeoutExceeded`
     pub code: String,
     /// Human-readable detail
     pub message: String,
@@ -151,11 +160,10 @@ fn poll_to_js(poll: JobPoll) -> JobPollJs {
 /// A running command's output, pulled one frame at a time.
 ///
 /// The stream is held in an `Option` so it can be dropped on demand: a caller that stops reading
-/// half way through leaves a command running, and dropping the stream closes the transport
-/// carrying its output, which is what tells the backend to kill the command. `close()` is that
-/// signal, and it has to land even while a `next()` is parked on a command that prints nothing —
-/// that `next()` holds the lock, so `close()` cannot wait for it; it fires `closed` and the
-/// parked `next()` drops the stream itself.
+/// half way through leaves a command running, and dropping the stream is what tells the backend to
+/// kill it. `close()` is that signal, and it has to land even while a `next()` is parked on a
+/// command that prints nothing — that `next()` holds the lock, so `close()` cannot wait for it; it
+/// fires `closed` and the parked `next()` drops the stream itself.
 #[napi]
 pub struct CommandStreamHandle {
     frames: Arc<Mutex<Option<BoxStream<'static, alien_bindings::error::Result<CommandOutput>>>>>,
@@ -261,13 +269,13 @@ impl SandboxHandle {
             reconnect,
             jobs,
             preview: _,
-            suspend_resume,
+            pause_resume,
             snapshot: _,
             domain_egress_rules,
             egress_deny,
             enforced_limits,
             process_limit,
-            session_lifetime,
+            sandbox_lifetime,
             supervisor_pid_namespace,
             supervisor_isolation,
         } = self.inner.capabilities();
@@ -276,12 +284,12 @@ impl SandboxHandle {
             (files, "files"),
             (reconnect, "reconnect"),
             (jobs, "jobs"),
-            (suspend_resume, "suspendResume"),
+            (pause_resume, "pauseResume"),
             (domain_egress_rules, "domainEgressRules"),
             (egress_deny, "egressDeny"),
             (enforced_limits, "enforcedLimits"),
             (process_limit, "processLimit"),
-            (session_lifetime, "sessionLifetime"),
+            (sandbox_lifetime, "sandboxLifetime"),
             (supervisor_pid_namespace, "supervisorPidNamespace"),
             (supervisor_isolation, "supervisorIsolation"),
         ]
@@ -291,86 +299,102 @@ impl SandboxHandle {
         .collect()
     }
 
-    /// Creates a session.
+    /// Creates a sandbox.
+    ///
+    /// `timeoutMs` is the wall-clock lifetime the platform terminates the sandbox at. Only a
+    /// backend reporting `sandboxLifetime` takes one; the rest raise rather than run on past it.
     #[napi]
     pub async fn create(
         &self,
-        session_id: Option<String>,
+        sandbox_id: Option<String>,
         tenant_key: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
-    ) -> napi::Result<SandboxSessionJs> {
+        timeout_ms: Option<u32>,
+    ) -> napi::Result<SandboxInstanceJs> {
         let sandbox = self.inner.clone();
-        let session = sandbox
-            .create(CreateSessionRequest {
-                session_id,
+        let created = sandbox
+            .create(CreateSandboxRequest {
+                sandbox_id,
                 tenant_key,
                 env: into_env(env),
+                timeout_ms: timeout_ms.map(u64::from),
             })
             .await
             .map_err(map_alien_error)?;
-        Ok(session_to_js(session))
+        Ok(sandbox_to_js(created))
     }
 
-    /// Fetches a session, or `null` if it does not exist.
+    /// Fetches a sandbox, or `null` if it does not exist.
     #[napi]
-    pub async fn get(&self, session_id: String) -> napi::Result<Option<SandboxSessionJs>> {
+    pub async fn get(&self, sandbox_id: String) -> napi::Result<Option<SandboxInstanceJs>> {
         let sandbox = self.inner.clone();
-        let session = sandbox.get(&session_id).await.map_err(map_alien_error)?;
-        Ok(session.map(session_to_js))
+        let found = sandbox.get(&sandbox_id).await.map_err(map_alien_error)?;
+        Ok(found.map(sandbox_to_js))
     }
 
-    /// Fetches a session, creating it if absent.
+    /// Fetches a sandbox, creating it if absent, and reports which it did.
+    ///
+    /// `timeoutMs` bounds a sandbox this call creates; one that is found keeps the lifetime it
+    /// was created with, and `created` is how a caller tells the two apart.
     #[napi]
     pub async fn get_or_create(
         &self,
-        session_id: Option<String>,
+        sandbox_id: Option<String>,
         tenant_key: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
-    ) -> napi::Result<SandboxSessionJs> {
+        timeout_ms: Option<u32>,
+    ) -> napi::Result<ResolvedSandboxJs> {
         let sandbox = self.inner.clone();
-        let session = sandbox
-            .get_or_create(CreateSessionRequest {
-                session_id,
+        let resolved = sandbox
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id,
                 tenant_key,
                 env: into_env(env),
+                timeout_ms: timeout_ms.map(u64::from),
             })
             .await
             .map_err(map_alien_error)?;
-        Ok(session_to_js(session))
+        Ok(ResolvedSandboxJs {
+            sandbox: sandbox_to_js(resolved.sandbox),
+            created: resolved.created,
+        })
     }
 
-    /// Lists this sandbox's sessions.
+    /// Lists this binding's sandboxes.
     #[napi]
-    pub async fn list(&self) -> napi::Result<Vec<SandboxSessionJs>> {
+    pub async fn list(&self) -> napi::Result<Vec<SandboxInstanceJs>> {
         let sandbox = self.inner.clone();
-        let sessions = sandbox.list().await.map_err(map_alien_error)?;
-        Ok(sessions.into_iter().map(session_to_js).collect())
+        let instances = sandbox.list().await.map_err(map_alien_error)?;
+        Ok(instances.into_iter().map(sandbox_to_js).collect())
     }
 
     /// Runs a command, returning a stream of output frames.
     ///
-    /// `deadlineMs` is required rather than defaulted: a defaulted deadline is a hang waiting
-    /// for a slow day, in a process the caller shares with untrusted code. It bounds the command
-    /// rather than the call: backends with no timeout of their own end the session and return
-    /// once that is confirmed, others kill the process group and leave the session usable.
+    /// `timeoutMs` is required rather than defaulted: a defaulted timeout is a hang waiting
+    /// for a slow day, in a process the caller shares with untrusted code. It bounds this command
+    /// rather than the call, and is unrelated to `create`'s own `timeoutMs`, which is the
+    /// sandbox's wall-clock lifetime: backends with no timeout of their own end the sandbox and
+    /// return once that is confirmed, others kill the process group and leave the sandbox usable.
     #[napi]
     pub async fn run_command(
         &self,
-        session_id: String,
-        command: Vec<String>,
-        deadline_ms: u32,
-        working_directory: Option<String>,
+        sandbox_id: String,
+        command: String,
+        args: Vec<String>,
+        timeout_ms: u32,
+        cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
     ) -> napi::Result<CommandStreamHandle> {
         let sandbox = self.inner.clone();
         let frames = sandbox
             .run_command(
-                &session_id,
+                &sandbox_id,
                 RunCommandRequest {
                     command,
-                    working_directory,
+                    args,
+                    cwd,
                     env: into_env(env),
-                    deadline: Duration::from_millis(u64::from(deadline_ms)),
+                    timeout: Duration::from_millis(u64::from(timeout_ms)),
                 },
             )
             .await
@@ -386,21 +410,23 @@ impl SandboxHandle {
     #[napi]
     pub async fn start_job(
         &self,
-        session_id: String,
-        command: Vec<String>,
-        deadline_ms: u32,
-        working_directory: Option<String>,
+        sandbox_id: String,
+        command: String,
+        args: Vec<String>,
+        timeout_ms: u32,
+        cwd: Option<String>,
         env: Option<std::collections::HashMap<String, String>>,
     ) -> napi::Result<String> {
         let sandbox = self.inner.clone();
         let started = sandbox
             .start_job(
-                &session_id,
+                &sandbox_id,
                 RunCommandRequest {
                     command,
-                    working_directory,
+                    args,
+                    cwd,
                     env: into_env(env),
-                    deadline: Duration::from_millis(u64::from(deadline_ms)),
+                    timeout: Duration::from_millis(u64::from(timeout_ms)),
                 },
             )
             .await
@@ -416,7 +442,7 @@ impl SandboxHandle {
     #[napi]
     pub async fn poll_job(
         &self,
-        session_id: String,
+        sandbox_id: String,
         job_id: String,
         since_seq: Option<i64>,
     ) -> napi::Result<JobPollJs> {
@@ -435,7 +461,7 @@ impl SandboxHandle {
 
         let sandbox = self.inner.clone();
         let poll = sandbox
-            .poll_job(&session_id, &job_id, since_seq)
+            .poll_job(&sandbox_id, &job_id, since_seq)
             .await
             .map_err(map_alien_error)?;
 
@@ -444,20 +470,20 @@ impl SandboxHandle {
 
     /// Cancels a job, stopping its command.
     #[napi]
-    pub async fn cancel_job(&self, session_id: String, job_id: String) -> napi::Result<()> {
+    pub async fn cancel_job(&self, sandbox_id: String, job_id: String) -> napi::Result<()> {
         let sandbox = self.inner.clone();
         sandbox
-            .cancel_job(&session_id, &job_id)
+            .cancel_job(&sandbox_id, &job_id)
             .await
             .map_err(map_alien_error)
     }
 
     /// Reads a file out of the sandbox.
     #[napi]
-    pub async fn read_file(&self, session_id: String, path: String) -> napi::Result<Buffer> {
+    pub async fn read_file(&self, sandbox_id: String, path: String) -> napi::Result<Buffer> {
         let sandbox = self.inner.clone();
         let contents = sandbox
-            .read_file(&session_id, &path)
+            .read_file(&sandbox_id, &path)
             .await
             .map_err(map_alien_error)?;
         Ok(Buffer::from(contents))
@@ -470,47 +496,37 @@ impl SandboxHandle {
     #[napi]
     pub async fn write_file(
         &self,
-        session_id: String,
+        sandbox_id: String,
         path: String,
         contents: Buffer,
     ) -> napi::Result<()> {
         let sandbox = self.inner.clone();
         sandbox
-            .write_files(&session_id, BTreeMap::from([(path, contents.to_vec())]))
+            .write_files(&sandbox_id, BTreeMap::from([(path, contents.to_vec())]))
             .await
             .map_err(map_alien_error)
     }
 
-    /// Creates a directory inside the sandbox.
+    /// Pauses a sandbox, preserving its state. Requires the `pauseResume` capability.
     #[napi]
-    pub async fn mkdir(&self, session_id: String, path: String) -> napi::Result<()> {
+    pub async fn pause(&self, sandbox_id: String) -> napi::Result<()> {
+        let sandbox = self.inner.clone();
+        sandbox.pause(&sandbox_id).await.map_err(map_alien_error)
+    }
+
+    /// Resumes a paused sandbox. Requires the `pauseResume` capability.
+    #[napi]
+    pub async fn resume(&self, sandbox_id: String) -> napi::Result<()> {
+        let sandbox = self.inner.clone();
+        sandbox.resume(&sandbox_id).await.map_err(map_alien_error)
+    }
+
+    /// Destroys a sandbox. Idempotent: a sandbox already gone is the desired end state.
+    #[napi]
+    pub async fn terminate(&self, sandbox_id: String) -> napi::Result<()> {
         let sandbox = self.inner.clone();
         sandbox
-            .mkdir(&session_id, &path)
-            .await
-            .map_err(map_alien_error)
-    }
-
-    /// Suspends a session, preserving its state. Requires the `suspendResume` capability.
-    #[napi]
-    pub async fn suspend(&self, session_id: String) -> napi::Result<()> {
-        let sandbox = self.inner.clone();
-        sandbox.suspend(&session_id).await.map_err(map_alien_error)
-    }
-
-    /// Resumes a suspended session. Requires the `suspendResume` capability.
-    #[napi]
-    pub async fn resume(&self, session_id: String) -> napi::Result<()> {
-        let sandbox = self.inner.clone();
-        sandbox.resume(&session_id).await.map_err(map_alien_error)
-    }
-
-    /// Destroys a session. Idempotent: a session already gone is the desired end state.
-    #[napi]
-    pub async fn terminate(&self, session_id: String) -> napi::Result<()> {
-        let sandbox = self.inner.clone();
-        sandbox
-            .terminate(&session_id)
+            .terminate(&sandbox_id)
             .await
             .map_err(map_alien_error)
     }
@@ -519,6 +535,28 @@ impl SandboxHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_bindings::traits::SandboxState;
+
+    /// The wire word for every lifecycle state, pinned against the union in
+    /// `packages/bindings/src/types.ts`. The mapping is a hand-written literal, so a variant
+    /// whose name changes in `alien-bindings` still compiles here while emitting a word no
+    /// TypeScript caller can narrow — a failure neither `cargo` nor `tsc` would report.
+    #[test]
+    fn every_state_reaches_javascript_as_the_word_typescript_declares() {
+        for (state, word) in [
+            (SandboxState::Starting, "starting"),
+            (SandboxState::Running, "running"),
+            (SandboxState::Paused, "paused"),
+            (SandboxState::Terminated, "terminated"),
+        ] {
+            let js = sandbox_to_js(SandboxInstance {
+                sandbox_id: "s1".to_string(),
+                state,
+                generation: 1,
+            });
+            assert_eq!(js.state, word, "{state:?}");
+        }
+    }
 
     /// A command that never prints parks `next()` on the lock; `close()` must still end it,
     /// or the caller that gave up cannot cancel a silent command.

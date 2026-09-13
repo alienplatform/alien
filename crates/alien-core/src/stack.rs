@@ -397,9 +397,9 @@ mod tests {
                 image: "s3://alien-bundles/sandbox/bundle.zip".to_string(),
             })
             .egress(crate::SandboxEgress::Allow)
-            .session(crate::SandboxSessionPolicy {
+            .lifecycle(crate::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
         assert!(resource_entry(sandbox, ResourceLifecycle::Live, true).has_remote_bindings());

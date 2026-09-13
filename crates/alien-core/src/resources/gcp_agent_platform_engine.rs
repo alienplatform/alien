@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::any::Any;
 
 /// A Gemini Agent Platform reasoning engine: the durable parent that sandbox
-/// environment templates and sessions hang under. One per sandbox, provisioned
+/// environment templates and sandboxes hang under. One per sandbox, provisioned
 /// once and addressed by the server-assigned id its controller records.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Builder)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

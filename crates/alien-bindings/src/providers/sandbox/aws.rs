@@ -6,7 +6,7 @@
 //! Authorization is the endpoint token, not an Alien capability. `CreateMicrovmAuthToken` is
 //! minted with the workload's own IAM identity and scoped to one MicroVM, an explicit port set
 //! and an expiry — a request to a port outside it is refused at the proxy. One MicroVM is one
-//! session, so that scope is exactly the one a capability would express.
+//! sandbox, so that scope is exactly the one a capability would express.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -18,12 +18,12 @@ use crate::error::{ErrorData, Result};
 use crate::providers::sandbox::agent_protocol::{self, AgentTransport, AGENT_PORT};
 use crate::providers::sandbox::refusal::Unreachable;
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, JobPoll, JobStart, PreviewCapability,
-    RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSandboxRequest, JobPoll, JobStart, PreviewCapability,
+    ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_aws_clients::aws::lambda_microvms::{LambdaMicrovmsApi, Microvm, MAX_AUTH_TOKEN_MINUTES};
 use alien_core::{Platform, SandboxCapabilities};
-use alien_error::AlienError;
+use alien_error::{AlienError, ContextError};
 use tracing::warn;
 
 /// Header the proxy reads to decide which port inside the MicroVM a request reaches.
@@ -35,15 +35,15 @@ const PROXY_PORT_HEADER: &str = "X-aws-proxy-port";
 /// snapshot is being restored", so the window is short; this is generous enough that a slow
 /// restore reads as slow rather than broken.
 #[cfg(not(test))]
-const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 #[cfg(not(test))]
-const SESSION_READY_POLL: std::time::Duration = std::time::Duration::from_millis(500);
+const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(500);
 
 // A unit test has no reachable agent, so the budget only decides how long it takes to say so.
 #[cfg(test)]
-const SESSION_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(20);
+const SANDBOX_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(20);
 #[cfg(test)]
-const SESSION_READY_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+const SANDBOX_READY_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Side-effect free, which is what makes it safe to repeat while `run_command` is not.
 const HEALTH_PATH: &str = "/v1/health";
@@ -71,7 +71,7 @@ pub struct AwsSandbox {
     microvms: Arc<dyn LambdaMicrovmsApi>,
     image_identifier: String,
     image_version: String,
-    /// Connectors every session starts with. Empty means the public internet is reachable, so
+    /// Connectors every sandbox starts with. Empty means the public internet is reachable, so
     /// `deny` is a connector rather than the absence of one.
     egress_connector_arns: Vec<String>,
     /// Ports preview may be minted for. `CreateMicrovmAuthToken` carries no port condition key
@@ -79,8 +79,8 @@ pub struct AwsSandbox {
     /// provider; a Remote Bindings caller holding the raw credential is not bounded by it.
     preview_ports: Vec<u16>,
     /// Idle seconds before AWS suspends the MicroVM, where the declaration asked for it.
-    idle_suspend_seconds: Option<u32>,
-    /// Wall-clock ceiling on a session, where the declaration asked for one. Lambda terminates
+    idle_pause_seconds: Option<u32>,
+    /// Wall-clock ceiling on a sandbox, where the declaration asked for one. Lambda terminates
     /// the MicroVM when it elapses.
     max_lifetime_seconds: Option<u32>,
     agent: reqwest::Client,
@@ -94,7 +94,7 @@ impl AwsSandbox {
         image_version: impl Into<String>,
         egress_connector_arns: Vec<String>,
         preview_ports: Vec<u16>,
-        idle_suspend_seconds: Option<u32>,
+        idle_pause_seconds: Option<u32>,
         max_lifetime_seconds: Option<u32>,
     ) -> Self {
         Self {
@@ -103,19 +103,32 @@ impl AwsSandbox {
             image_version: image_version.into(),
             egress_connector_arns,
             preview_ports,
-            idle_suspend_seconds,
+            idle_pause_seconds,
             max_lifetime_seconds,
             agent: reqwest::Client::new(),
         }
     }
 
-    /// Reads a session's record, with no ownership check: absent is `None`, and whose it is
-    /// stays for the caller to ask [`Self::owns`]. Read off the session itself rather than by
+    /// The lifetime `RunMicrovm` is asked for: what the caller asked for, never above what the
+    /// declaration allows. AWS cannot move a running MicroVM's deadline, so this is the only
+    /// point at which it can be chosen.
+    fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
+        match timeout_ms {
+            Some(timeout_ms) => {
+                super::requested_lifetime_seconds(timeout_ms, self.max_lifetime_seconds, operation)
+                    .map(Some)
+            }
+            None => Ok(self.max_lifetime_seconds),
+        }
+    }
+
+    /// Reads a sandbox's record, with no ownership check: absent is `None`, and whose it is
+    /// stays for the caller to ask [`Self::owns`]. Read off the sandbox itself rather than by
     /// enumerating the image, because listing would need an account-wide grant.
-    async fn fetched_microvm(&self, session_id: &str) -> Result<Option<Microvm>> {
-        let microvm = match self.microvms.get_microvm(session_id).await {
+    async fn fetched_microvm(&self, operation: &str, sandbox_id: &str) -> Result<Option<Microvm>> {
+        let microvm = match self.microvms.get_microvm(sandbox_id).await {
             Ok(microvm) => microvm,
-            // A session id that names nothing is absent, not a failure — `get` reports that as
+            // A sandbox id that names nothing is absent, not a failure — `get` reports that as
             // `None`. Read as the variant rather than as `http_status_code`: the client's own
             // status-bearing variant declares no status of its own, so every error would arrive
             // as 500 and this arm would never match.
@@ -128,17 +141,15 @@ impl AwsSandbox {
                 return Ok(None)
             }
             Err(error) => {
-                return Err(error).unreachable(
-                    "sandbox.session",
-                    &format!("could not read session '{session_id}'"),
-                )
+                return Err(error)
+                    .unreachable(operation, &format!("could not read sandbox '{sandbox_id}'"))
             }
         };
 
         Ok(Some(microvm))
     }
 
-    /// Whether a fetched record is one of this sandbox's own sessions.
+    /// Whether a fetched record is one of this binding's own sandboxes.
     ///
     /// The image ARN is the boundary — one per declared sandbox by construction, and IAM does not
     /// draw this line: the token mint is scoped to `microvm-image:<stack prefix>-*`, which matches
@@ -151,60 +162,65 @@ impl AwsSandbox {
             .is_some_and(|image| image == self.image_identifier)
     }
 
-    /// The session's record if it exists *and* is this sandbox's own; absent and someone else's
+    /// The sandbox's record if it exists *and* is this binding's own; absent and someone else's
     /// collapse to `None`, which is what every operation except `terminate` wants.
-    async fn owned_microvm(&self, session_id: &str) -> Result<Option<Microvm>> {
+    async fn owned_microvm(&self, operation: &str, sandbox_id: &str) -> Result<Option<Microvm>> {
         Ok(self
-            .fetched_microvm(session_id)
+            .fetched_microvm(operation, sandbox_id)
             .await?
             .filter(|microvm| self.owns(microvm)))
     }
 
-    /// Refuses a session that is absent or not one of this sandbox's own.
-    async fn ensure_owned(&self, session_id: &str) -> Result<()> {
-        if self.owned_microvm(session_id).await?.is_none() {
+    /// Refuses a sandbox that is absent or not one of this binding's own.
+    async fn ensure_owned(&self, operation: &str, sandbox_id: &str) -> Result<()> {
+        if self.owned_microvm(operation, sandbox_id).await?.is_none() {
             return Err(AlienError::new(ErrorData::SandboxUnreachable {
-                operation: "sandbox.session".to_string(),
-                reason: format!("session '{session_id}' does not belong to this sandbox"),
+                operation: operation.to_string(),
+                reason: format!("sandbox '{sandbox_id}' does not belong to this sandbox resource"),
             }));
         }
         Ok(())
     }
 
-    /// Builds a request to the agent inside one session, authorised and port-scoped.
+    /// Builds a request to the agent inside one sandbox, authorised and port-scoped.
     ///
     /// This is the whole of what AWS does differently; everything after it is the shared agent
     /// protocol. Two AWS calls per request, because the mint response carries no expiry — without
     /// one, caching a token means guessing how long it stays valid.
     async fn authorized_request(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
-        // One read serves both: the record that proves the session is ours also carries the
+        // One read serves both: the record that proves the sandbox is ours also carries the
         // endpoint to reach it.
-        let microvm = self.owned_microvm(session_id).await?.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxUnreachable {
-                operation: "sandbox.agent".to_string(),
-                reason: format!("session '{session_id}' does not belong to this sandbox"),
-            })
-        })?;
+        let microvm = self
+            .owned_microvm("sandbox.agent", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.agent".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
 
         let endpoint = microvm.endpoint.ok_or_else(|| {
             AlienError::new(ErrorData::SandboxUnreachable {
                 operation: "sandbox.agent".to_string(),
-                reason: format!("MicroVM '{session_id}' has no endpoint yet"),
+                reason: format!("MicroVM '{sandbox_id}' has no endpoint yet"),
             })
         })?;
 
         let token = self
             .microvms
-            .create_microvm_auth_token(session_id, vec![AGENT_PORT], AGENT_TOKEN_MINUTES)
+            .create_microvm_auth_token(sandbox_id, vec![AGENT_PORT], AGENT_TOKEN_MINUTES)
             .await
             .unreachable(
                 "sandbox.agent",
-                &format!("could not mint an endpoint token for '{session_id}'"),
+                &format!("could not mint an endpoint token for '{sandbox_id}'"),
             )?;
 
         let mut request = self
@@ -221,11 +237,11 @@ impl AwsSandbox {
         Ok(request)
     }
 
-    fn session(&self, microvm_id: String, state: Option<String>) -> SandboxSession {
-        SandboxSession {
-            session_id: microvm_id,
-            state: session_state(state.as_deref()),
-            // Terminate destroys the MicroVM rather than fencing it, so a session never outlives
+    fn instance(&self, microvm_id: String, state: Option<String>) -> SandboxInstance {
+        SandboxInstance {
+            sandbox_id: microvm_id,
+            state: sandbox_state(state.as_deref()),
+            // Terminate destroys the MicroVM rather than fencing it, so a sandbox never outlives
             // its own generation and there is nothing for a second one to mean.
             generation: 1,
         }
@@ -233,49 +249,72 @@ impl AwsSandbox {
 }
 
 /// Maps a MicroVM lifecycle state onto the binding's.
-fn session_state(state: Option<&str>) -> SandboxSessionState {
+fn sandbox_state(state: Option<&str>) -> SandboxState {
     match state {
-        Some("RUNNING") => SandboxSessionState::Running,
-        Some("SUSPENDED") => SandboxSessionState::Suspended,
-        Some("TERMINATED") | Some("TERMINATING") => SandboxSessionState::Terminated,
+        Some("RUNNING") => SandboxState::Running,
+        Some("SUSPENDED") => SandboxState::Paused,
+        Some("TERMINATED") | Some("TERMINATING") => SandboxState::Terminated,
         // Anything else is a MicroVM on its way up. Reporting Running would tell a caller to
         // start sending commands to something that cannot answer yet.
-        _ => SandboxSessionState::Starting,
+        _ => SandboxState::Starting,
     }
 }
 
 impl AwsSandbox {
-    /// Blocks until the agent answers, so `create` returns a session that can take work.
-    async fn wait_until_servable(&self, session_id: &str) -> Result<()> {
-        let deadline = std::time::Instant::now() + SESSION_READY_TIMEOUT;
+    /// Reads one of this binding's own sandboxes, or `None` if there is no such sandbox.
+    ///
+    /// `operation` is the verb the caller invoked, not this lookup: `get_or_create` reconnects
+    /// through here, and reporting its failure as `sandbox.get` would name a call the caller
+    /// never made.
+    async fn fetch(&self, sandbox_id: &str, operation: &str) -> Result<Option<SandboxInstance>> {
+        let Some(microvm) = self.owned_microvm(operation, sandbox_id).await? else {
+            return Ok(None);
+        };
 
-        // Only the endpoint's absence is worth waiting on. A refused token mint, a session that is
+        // Echoing the caller's own id when the response carried none would report a sandbox the
+        // client could not parse as a sandbox it read — the same substitution `owned_microvm`
+        // refuses for the image.
+        let microvm_id = microvm.microvm_id.ok_or_else(|| {
+            AlienError::new(ErrorData::SandboxUnreachable {
+                operation: operation.to_string(),
+                reason: format!("the record for sandbox '{sandbox_id}' carried no id"),
+            })
+        })?;
+
+        Ok(Some(self.instance(microvm_id, microvm.state)))
+    }
+
+    /// Blocks until the agent answers, so `create` returns a sandbox that can take work.
+    async fn wait_until_servable(&self, sandbox_id: &str) -> Result<()> {
+        let deadline = std::time::Instant::now() + SANDBOX_READY_TIMEOUT;
+
+        // Only the endpoint's absence is worth waiting on. A refused token mint, a sandbox that is
         // not ours, an API error — none of those resolve by waiting, and folding them into the
         // timeout would report a permission problem as a slow boot a minute later.
         let probe = loop {
             let published = self
-                .owned_microvm(session_id)
+                .owned_microvm("sandbox.create", sandbox_id)
                 .await?
                 .is_some_and(|microvm| microvm.endpoint.is_some());
 
             if published {
                 break self
-                    .authorized_request(session_id, reqwest::Method::GET, HEALTH_PATH)
+                    .authorized_request(sandbox_id, reqwest::Method::GET, HEALTH_PATH)
                     .await?;
             }
             if std::time::Instant::now() >= deadline {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
                     operation: "sandbox.create".to_string(),
                     reason: format!(
-                        "MicroVM '{session_id}' published no endpoint within {}s",
-                        SESSION_READY_TIMEOUT.as_secs()
+                        "MicroVM '{sandbox_id}' published no endpoint within {}s",
+                        SANDBOX_READY_TIMEOUT.as_secs()
                     ),
                 }));
             }
-            tokio::time::sleep(SESSION_READY_POLL).await;
+            tokio::time::sleep(SANDBOX_READY_POLL).await;
         };
 
-        Self::poll_until_healthy(probe, deadline, session_id).await
+        Self::poll_until_healthy(probe, deadline, sandbox_id).await
     }
 
     /// Repeats the health probe until it answers or the deadline passes.
@@ -285,7 +324,7 @@ impl AwsSandbox {
     async fn poll_until_healthy(
         probe: reqwest::RequestBuilder,
         deadline: std::time::Instant,
-        session_id: &str,
+        sandbox_id: &str,
     ) -> Result<()> {
         let mut last_seen;
         loop {
@@ -308,11 +347,11 @@ impl AwsSandbox {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
                     operation: "sandbox.create".to_string(),
                     reason: format!(
-                        "MicroVM '{session_id}' did not become servable in time: {last_seen}"
+                        "MicroVM '{sandbox_id}' did not become servable in time: {last_seen}"
                     ),
                 }));
             }
-            tokio::time::sleep(SESSION_READY_POLL).await;
+            tokio::time::sleep(SANDBOX_READY_POLL).await;
         }
     }
 }
@@ -321,11 +360,11 @@ impl AwsSandbox {
 impl AgentTransport for AwsSandbox {
     async fn request(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         method: reqwest::Method,
         path: &str,
     ) -> Result<reqwest::RequestBuilder> {
-        self.authorized_request(session_id, method, path).await
+        self.authorized_request(sandbox_id, method, path).await
     }
 
     fn provider(&self) -> &'static str {
@@ -335,17 +374,14 @@ impl AgentTransport for AwsSandbox {
 
 impl Binding for AwsSandbox {}
 
-/// Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a session-level
-/// value that silently never applies is worse than no session. Per-command `env` on
+/// Refused rather than dropped: `RunMicrovm` has nowhere to put either, and a sandbox-level
+/// value that silently never applies is worse than no sandbox. Per-command `env` on
 /// `RunCommandRequest` is the path that works here.
-fn refuse_unsupported_session_fields(
-    request: &CreateSessionRequest,
-    operation: &str,
-) -> Result<()> {
+fn refuse_unsupported_create_fields(request: &CreateSandboxRequest, operation: &str) -> Result<()> {
     if !request.env.is_empty() {
         return Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: operation.to_string(),
-            reason: "AWS sandboxes take no session-level env; set env per command instead"
+            reason: "AWS sandboxes take no sandbox-level env; set env per command instead"
                 .to_string(),
         }));
     }
@@ -373,14 +409,15 @@ impl Sandbox for AwsSandbox {
 
     /// Starts a MicroVM.
     ///
-    /// The client token is fresh per attempt and is **never** the caller's `session_id`. AWS
+    /// The client token is fresh per attempt and is **never** the caller's `sandbox_id`. AWS
     /// returns the MicroVM a token previously created even after it has been terminated, so a
-    /// caller reusing a session id would receive a dead MicroVM and wait for one that will never
-    /// start — observed against the live API. Reconnecting to an existing session is
+    /// caller reusing a sandbox id would receive a dead MicroVM and wait for one that will never
+    /// start — observed against the live API. Reconnecting to an existing sandbox is
     /// [`Sandbox::get`]'s job, not an idempotency key's.
-    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        let _ = request.session_id;
-        refuse_unsupported_session_fields(&request, "sandbox.create")?;
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        let _ = request.sandbox_id;
+        refuse_unsupported_create_fields(&request, "sandbox.create")?;
+        let max_lifetime_seconds = self.lifetime_seconds(request.timeout_ms, "sandbox.create")?;
         let client_token = uuid::Uuid::new_v4().simple().to_string();
 
         let microvm = self
@@ -389,12 +426,12 @@ impl Sandbox for AwsSandbox {
                 &self.image_identifier,
                 &self.image_version,
                 &client_token,
-                // Never a role: a session reads an attached role's credentials from instance
+                // Never a role: a sandbox reads an attached role's credentials from instance
                 // metadata, which the egress connector does not govern.
                 None,
                 self.egress_connector_arns.clone(),
-                self.idle_suspend_seconds,
-                self.max_lifetime_seconds,
+                self.idle_pause_seconds,
+                max_lifetime_seconds,
             )
             .await
             .unreachable(
@@ -413,61 +450,58 @@ impl Sandbox for AwsSandbox {
 
         // RunMicrovm returns once the MicroVM is accepted, not once it can serve: AWS restores the
         // snapshot afterwards and its proxy answers 502 until that finishes. Returning here hands
-        // back a session whose first command races that window, which is invisible to a caller and
-        // fails a fraction of the time. Local, Azure and Kubernetes all return a session that can
+        // back a sandbox whose first command races that window, which is invisible to a caller and
+        // fails a fraction of the time. Local, Azure and Kubernetes all return a sandbox that can
         // already serve, so this is what makes AWS mean the same thing.
         if let Err(error) = self.wait_until_servable(&microvm_id).await {
-            // The caller never receives this id, so nothing else can terminate it and it bills to
-            // its lifetime ceiling. This error is retryable, so leaving it would leak one MicroVM
-            // per attempt.
-            if let Err(cleanup) = self.microvms.terminate_microvm(&microvm_id).await {
-                warn!(
-                    microvm = %microvm_id,
-                    "could not terminate a MicroVM that never became servable: {cleanup}"
-                );
-            }
-            return Err(error);
-        }
-
-        Ok(self.session(microvm_id, Some("RUNNING".to_string())))
-    }
-
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
-        let Some(microvm) = self.owned_microvm(session_id).await? else {
-            return Ok(None);
-        };
-
-        // Echoing the caller's own id when the response carried none would report a session the
-        // client could not parse as a session it read — the same substitution `owned_microvm`
-        // refuses for the image.
-        let microvm_id = microvm.microvm_id.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxUnreachable {
-                operation: "sandbox.session".to_string(),
-                reason: format!("the record for session '{session_id}' carried no id"),
-            })
-        })?;
-
-        Ok(Some(self.session(microvm_id, microvm.state)))
-    }
-
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        // Refused on the reconnect path too: an existing session honors these fields no more
-        // than a fresh one would.
-        refuse_unsupported_session_fields(&request, "sandbox.getOrCreate")?;
-        if let Some(id) = request.session_id.as_deref() {
-            if let Some(existing) = self.get(id).await? {
-                // Reaching a session someone else started still has to mean what `create` means,
-                // or the guarantee holds only for whoever won the race. Waited for here rather
-                // than in `get`, which reports a session's state and does not promise one.
-                if matches!(existing.state, SandboxSessionState::Starting) {
-                    self.wait_until_servable(id).await?;
-                    return Ok(self.session(id.to_string(), Some("RUNNING".to_string())));
+            return Err(match self.microvms.terminate_microvm(&microvm_id).await {
+                Ok(()) => error,
+                Err(cleanup) => {
+                    warn!(
+                        microvm = %microvm_id,
+                        %cleanup,
+                        "could not terminate a MicroVM that never became servable"
+                    );
+                    // Names the leak and refuses a retry: no caller holds this MicroVM's id, so
+                    // honouring the wait's retryable error would mint another orphan beside it.
+                    error.context(ErrorData::SandboxCommandFailed {
+                        failure: "sandboxLeftBehind".to_string(),
+                        reason: format!(
+                            "MicroVM '{microvm_id}' was not handed to its caller and could not be \
+                             terminated, so it is still running"
+                        ),
+                    })
                 }
-                return Ok(existing);
+            });
+        }
+
+        Ok(self.instance(microvm_id, Some("RUNNING".to_string())))
+    }
+
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        self.fetch(sandbox_id, "sandbox.get").await
+    }
+
+    async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        // Refused on the reconnect path too: an existing sandbox honors these fields no more
+        // than a fresh one would.
+        refuse_unsupported_create_fields(&request, "sandbox.getOrCreate")?;
+        if let Some(id) = request.sandbox_id.as_deref() {
+            if let Some(existing) = self.fetch(id, "sandbox.getOrCreate").await? {
+                // Reaching a sandbox someone else started still has to mean what `create` means,
+                // or the guarantee holds only for whoever won the race. Waited for here rather
+                // than in `get`, which reports a sandbox's state and does not promise one.
+                if matches!(existing.state, SandboxState::Starting) {
+                    self.wait_until_servable(id).await?;
+                    return Ok(ResolvedSandbox::found(
+                        self.instance(id.to_string(), Some("RUNNING".to_string())),
+                    ));
+                }
+                return Ok(ResolvedSandbox::found(existing));
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSandbox::created)
     }
 
     /// Not offered, as on Azure and GCP.
@@ -480,59 +514,56 @@ impl Sandbox for AwsSandbox {
     /// endpoint a MicroVM is suspended after the idle duration and terminated after the suspended
     /// one, both 300s unless the declaration widens the first — and an orphan receives no traffic
     /// by definition. A declared `maxLifetimeSeconds` bounds it outright. Reconnecting to a
-    /// session whose id *is* known is `get`, which reads it directly.
-    async fn list(&self) -> Result<Vec<SandboxSession>> {
+    /// sandbox whose id *is* known is `get`, which reads it directly.
+    async fn list(&self) -> Result<Vec<SandboxInstance>> {
         Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "sandbox.list".to_string(),
-            reason: "enumerating sessions would need an account-wide grant; reach a known session \
+            reason:
+                "enumerating sandboxes would need an account-wide grant; reach a known sandbox \
                      with get, and Lambda terminates one nobody reaches"
-                .to_string(),
+                    .to_string(),
         }))
     }
 
     async fn run_command(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        agent_protocol::run_command(self, session_id, request).await
+        agent_protocol::run_command(self, sandbox_id, request).await
     }
 
-    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart> {
-        agent_protocol::start_job(self, session_id, request).await
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        agent_protocol::start_job(self, sandbox_id, request).await
     }
 
     async fn poll_job(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         job_id: &str,
         since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        agent_protocol::poll_job(self, session_id, job_id, since_seq).await
+        agent_protocol::poll_job(self, sandbox_id, job_id, since_seq).await
     }
 
-    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()> {
-        agent_protocol::cancel_job(self, session_id, job_id).await
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        agent_protocol::cancel_job(self, sandbox_id, job_id).await
     }
 
-    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
-        agent_protocol::read_file(self, session_id, path).await
+    async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
+        agent_protocol::read_file(self, sandbox_id, path).await
     }
 
-    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
-        agent_protocol::write_files(self, session_id, files).await
+    async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        agent_protocol::write_files(self, sandbox_id, files).await
     }
 
-    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
-        agent_protocol::mkdir(self, session_id, path).await
-    }
-
-    /// Mints a capability to reach one port inside the session.
+    /// Mints a capability to reach one port inside the sandbox.
     ///
     /// The endpoint is never returned bare: a caller cannot reach it without the token headers
     /// and the port header, and handing over a URL would push them into building the auth
     /// themselves.
-    async fn preview(&self, session_id: &str, port: u16) -> Result<PreviewCapability> {
+    async fn preview(&self, sandbox_id: &str, port: u16) -> Result<PreviewCapability> {
         // Port first, ownership second: an undeclared port is refused without spending a call.
         if !self.preview_ports.contains(&port) {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
@@ -546,23 +577,28 @@ impl Sandbox for AwsSandbox {
         }
 
         // One read again: ownership and the endpoint come off the same record.
-        let microvm = self.owned_microvm(session_id).await?.ok_or_else(|| {
-            AlienError::new(ErrorData::SandboxUnreachable {
-                operation: "sandbox.preview".to_string(),
-                reason: format!("session '{session_id}' does not belong to this sandbox"),
-            })
-        })?;
+        let microvm = self
+            .owned_microvm("sandbox.preview", sandbox_id)
+            .await?
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::SandboxUnreachable {
+                    operation: "sandbox.preview".to_string(),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
+                })
+            })?;
 
         let endpoint = microvm.endpoint.ok_or_else(|| {
             AlienError::new(ErrorData::SandboxUnreachable {
                 operation: "sandbox.preview".to_string(),
-                reason: format!("MicroVM '{session_id}' has no endpoint yet"),
+                reason: format!("MicroVM '{sandbox_id}' has no endpoint yet"),
             })
         })?;
 
         let token = self
             .microvms
-            .create_microvm_auth_token(session_id, vec![port], PREVIEW_TOKEN_MINUTES)
+            .create_microvm_auth_token(sandbox_id, vec![port], PREVIEW_TOKEN_MINUTES)
             .await
             .unreachable(
                 "sandbox.preview",
@@ -580,52 +616,57 @@ impl Sandbox for AwsSandbox {
         })
     }
 
-    async fn suspend(&self, session_id: &str) -> Result<()> {
-        self.ensure_owned(session_id).await?;
+    async fn pause(&self, sandbox_id: &str) -> Result<()> {
+        self.ensure_owned("sandbox.pause", sandbox_id).await?;
 
-        self.microvms.suspend_microvm(session_id).await.unreachable(
-            "sandbox.suspend",
-            &format!("could not suspend MicroVM '{session_id}'"),
+        self.microvms.suspend_microvm(sandbox_id).await.unreachable(
+            "sandbox.pause",
+            &format!("could not pause MicroVM '{sandbox_id}'"),
         )
     }
 
-    async fn resume(&self, session_id: &str) -> Result<()> {
-        self.ensure_owned(session_id).await?;
+    async fn resume(&self, sandbox_id: &str) -> Result<()> {
+        self.ensure_owned("sandbox.resume", sandbox_id).await?;
 
-        self.microvms.resume_microvm(session_id).await.unreachable(
+        self.microvms.resume_microvm(sandbox_id).await.unreachable(
             "sandbox.resume",
-            &format!("could not resume MicroVM '{session_id}'"),
+            &format!("could not resume MicroVM '{sandbox_id}'"),
         )
     }
 
-    async fn snapshot(&self, _session_id: &str) -> Result<String> {
+    async fn snapshot(&self, _sandbox_id: &str) -> Result<String> {
         Err(AlienError::new(ErrorData::OperationNotSupported {
             operation: "sandbox.snapshot".to_string(),
             reason: "Lambda MicroVMs expose no snapshot API".to_string(),
         }))
     }
 
-    /// Idempotent per the trait: a session AWS has already reaped is terminated, not an error.
+    /// Idempotent per the trait: a sandbox AWS has already reaped is terminated, not an error.
     /// Absence and "someone else's" part ways here alone — every other operation needs the
-    /// session to exist, so for them the two are the same refusal.
-    async fn terminate(&self, session_id: &str) -> Result<()> {
-        match self.fetched_microvm(session_id).await? {
+    /// sandbox to exist, so for them the two are the same refusal.
+    async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        match self
+            .fetched_microvm("sandbox.terminate", sandbox_id)
+            .await?
+        {
             None => return Ok(()),
             Some(microvm) if !self.owns(&microvm) => {
                 return Err(AlienError::new(ErrorData::SandboxUnreachable {
                     operation: "sandbox.terminate".to_string(),
-                    reason: format!("session '{session_id}' does not belong to this sandbox"),
+                    reason: format!(
+                        "sandbox '{sandbox_id}' does not belong to this sandbox resource"
+                    ),
                 }))
             }
             Some(_) => {}
         }
 
         self.microvms
-            .terminate_microvm(session_id)
+            .terminate_microvm(sandbox_id)
             .await
             .unreachable(
                 "sandbox.terminate",
-                &format!("could not terminate MicroVM '{session_id}'"),
+                &format!("could not terminate MicroVM '{sandbox_id}'"),
             )
     }
 
@@ -653,7 +694,7 @@ mod tests {
     }
 
     /// A MicroVM belonging to this sandbox's image. Ownership is now a field on the record, so
-    /// every fixture has to say whose session it is.
+    /// every fixture has to say whose sandbox it is.
     fn owned(id: &str, state: &str) -> Microvm {
         Microvm {
             microvm_id: Some(id.to_string()),
@@ -683,7 +724,7 @@ mod tests {
     /// AWS reaps the microvm record after termination, so pinning idempotent-on-absent keeps a
     /// caller's retry loop from flaking once the record is gone.
     #[tokio::test]
-    async fn terminating_an_absent_session_succeeds() {
+    async fn terminating_an_absent_sandbox_succeeds() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|id| {
             Err(alien_error::AlienError::new(
@@ -700,7 +741,90 @@ mod tests {
         sandbox
             .terminate("already-reaped")
             .await
-            .expect("an absent session is already terminated");
+            .expect("an absent sandbox is already terminated");
+    }
+
+    /// Reconnecting must not report a sandbox this call did not make, or a caller runs its
+    /// first-run setup a second time on a sandbox that already had it.
+    #[tokio::test]
+    async fn reconnecting_to_a_running_sandbox_reports_found() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client.expect_run_microvm().never();
+
+        let resolved = sandbox(client)
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("already-up".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect("a running sandbox is handed back");
+
+        assert_eq!(resolved.sandbox.sandbox_id, "already-up");
+        assert!(
+            !resolved.created,
+            "the sandbox was already running, so this call did not create it"
+        );
+    }
+
+    /// The reconnect read is `get_or_create`'s, not `get`'s. Naming the helper it happens to
+    /// share would point a reader at a call the caller never made.
+    #[tokio::test]
+    async fn a_failed_reconnect_reports_the_verb_the_caller_used() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm().returning(|_| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "GetMicrovm was throttled".to_string(),
+                },
+            ))
+        });
+        client.expect_run_microvm().never();
+
+        let error = sandbox(client)
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("unreadable".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a read that fails is not a sandbox that is absent");
+
+        assert!(
+            error.to_string().contains("sandbox.getOrCreate"),
+            "the reconnect failure names getOrCreate, not get: {error}"
+        );
+    }
+
+    /// The branch that waits: a MicroVM still coming up is waited for, and the wait failing is
+    /// answered with the failure rather than with a second MicroVM nobody holds an id for.
+    ///
+    /// Pins only the never-create half. Carrying the wait through to success needs a TLS listener,
+    /// because `authorized_request` builds an `https://` URL — the readiness poll itself is covered
+    /// directly by `the_readiness_poll_outlasts_the_snapshot_restore_window`.
+    #[tokio::test]
+    async fn a_booting_sandbox_is_never_answered_with_a_second_microvm() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        // Coming up, and with no endpoint published yet, so the wait runs and then gives up.
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "PENDING")));
+        client.expect_run_microvm().never();
+
+        let error = sandbox(client)
+            .get_or_create(CreateSandboxRequest {
+                sandbox_id: Some("still-booting".to_string()),
+                ..Default::default()
+            })
+            .await
+            .expect_err("a sandbox that never publishes an endpoint cannot be served");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+        assert!(
+            error.to_string().contains("still-booting"),
+            "the failure names the sandbox it waited on: {error}"
+        );
     }
 
     /// See `capabilities()` for why this tracks `preview_ports`.
@@ -720,23 +844,23 @@ mod tests {
 
     /// See `create()` for why these are refused rather than silently dropped.
     #[tokio::test]
-    async fn unsupported_session_fields_are_refused_not_dropped() {
+    async fn unsupported_sandbox_fields_are_refused_not_dropped() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_run_microvm().never();
 
         let sandbox = sandbox(client);
 
-        let with_env = CreateSessionRequest {
+        let with_env = CreateSandboxRequest {
             env: [("KEY".to_string(), "value".to_string())].into(),
             ..Default::default()
         };
         let error = sandbox
             .create(with_env)
             .await
-            .expect_err("a session-level env must be refused");
+            .expect_err("a sandbox-level env must be refused");
         assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
 
-        let with_tenant = CreateSessionRequest {
+        let with_tenant = CreateSandboxRequest {
             tenant_key: Some("tenant-1".to_string()),
             ..Default::default()
         };
@@ -749,17 +873,17 @@ mod tests {
 
     /// IAM cannot draw this line: the stack binding scopes the token mint to
     /// `microvm-image:<stack prefix>-*`, which matches every sibling sandbox in the stack, so a
-    /// workload passing a sibling's session id would be authorised for it. The session's own
+    /// workload passing a sibling's sandbox id would be authorised for it. The sandbox's own
     /// `imageArn` is what says whose it is.
     #[tokio::test]
-    async fn a_session_from_another_sandbox_is_refused_before_anything_is_minted() {
+    async fn a_sandbox_from_another_declaration_is_refused_before_anything_is_minted() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|id| {
             Ok(Microvm {
                 microvm_id: Some(id.to_string()),
                 endpoint: Some("vm.example.invalid".to_string()),
                 state: Some("RUNNING".to_string()),
-                // A live session, reachable, running — and belonging to a different sandbox.
+                // A live sandbox, reachable, running — and belonging to a different declaration.
                 image_arn: Some("someone-elses-image".to_string()),
                 image_version: Some("1".to_string()),
             })
@@ -771,11 +895,11 @@ mod tests {
         let sandbox = sandbox_previewing(client, vec![8080]);
 
         for outcome in [
-            sandbox.preview("a-siblings-session", 8080).await.err(),
-            sandbox.terminate("a-siblings-session").await.err(),
-            sandbox.suspend("a-siblings-session").await.err(),
+            sandbox.preview("a-siblings-sandbox", 8080).await.err(),
+            sandbox.terminate("a-siblings-sandbox").await.err(),
+            sandbox.pause("a-siblings-sandbox").await.err(),
         ] {
-            let error = outcome.expect("a session this sandbox does not own is refused");
+            let error = outcome.expect("a sandbox this sandbox does not own is refused");
             assert!(
                 error
                     .to_string()
@@ -786,20 +910,20 @@ mod tests {
 
         assert!(
             sandbox
-                .get("a-siblings-session")
+                .get("a-siblings-sandbox")
                 .await
                 .expect("reading it is not an error")
                 .is_none(),
-            "a sibling's session reads as absent rather than as one of ours"
+            "a sibling's sandbox reads as absent rather than as one of ours"
         );
     }
 
-    /// The absent-session path, built the way the client builds it rather than by hand. `get`
-    /// must report a session that does not exist as `None`, because `get_or_create` reads that
+    /// The absent-sandbox path, built the way the client builds it rather than by hand. `get`
+    /// must report a sandbox that does not exist as `None`, because `get_or_create` reads that
     /// answer to decide whether to create one — an error there means a caller supplying a fresh
-    /// id can never create a session at all.
+    /// id can never create a sandbox at all.
     #[tokio::test]
-    async fn a_session_that_does_not_exist_reads_as_absent_rather_than_as_a_failure() {
+    async fn a_sandbox_that_does_not_exist_reads_as_absent_rather_than_as_a_failure() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|_| {
             Err(alien_error::AlienError::new(
@@ -813,14 +937,14 @@ mod tests {
         assert!(sandbox(client)
             .get("never-existed")
             .await
-            .expect("an absent session is an answer, not an error")
+            .expect("an absent sandbox is an answer, not an error")
             .is_none());
     }
 
-    /// A read that genuinely failed is not an absent session. Flattening it into `None` would
-    /// have `get_or_create` start a second session while the first is still running.
+    /// A read that genuinely failed is not an absent sandbox. Flattening it into `None` would
+    /// have `get_or_create` start a second sandbox while the first is still running.
     #[tokio::test]
-    async fn a_failed_read_is_not_reported_as_an_absent_session() {
+    async fn a_failed_read_is_not_reported_as_an_absent_sandbox() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|_| {
             Err(alien_error::AlienError::new(
@@ -833,13 +957,13 @@ mod tests {
         sandbox(client)
             .get("ours")
             .await
-            .expect_err("a throttle is not an absent session");
+            .expect_err("a throttle is not an absent sandbox");
     }
 
     /// A response the client could not parse an image out of must not pass as ours. Defaulting
-    /// the other way would make every unparsed session belong to whoever asked.
+    /// the other way would make every unparsed sandbox belong to whoever asked.
     #[tokio::test]
-    async fn a_session_with_no_image_is_not_assumed_to_be_ours() {
+    async fn a_sandbox_with_no_image_is_not_assumed_to_be_ours() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|id| {
             Ok(Microvm {
@@ -855,7 +979,7 @@ mod tests {
         let error = sandbox_previewing(client, vec![8080])
             .preview("unlabelled", 8080)
             .await
-            .expect_err("an unattributable session is refused");
+            .expect_err("an unattributable sandbox is refused");
         assert!(error
             .to_string()
             .contains("does not belong to this sandbox"));
@@ -865,7 +989,7 @@ mod tests {
     /// Enumerating instead would need `ListMicrovms`, which that set does not carry — an app
     /// linked to a sandbox would fail on its first command.
     #[tokio::test]
-    async fn reaching_a_session_does_not_enumerate_the_image() {
+    async fn reaching_a_sandbox_does_not_enumerate_the_image() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_list_microvms().never();
         client.expect_list_microvm_image_versions().never();
@@ -873,18 +997,18 @@ mod tests {
             .expect_get_microvm()
             .returning(|id| Ok(owned(id, "RUNNING")));
 
-        let session = sandbox(client)
+        let instance = sandbox(client)
             .get("ours")
             .await
-            .expect("reading our own session succeeds")
+            .expect("reading our own sandbox succeeds")
             .expect("it is present");
-        assert_eq!(session.session_id, "ours");
+        assert_eq!(instance.sandbox_id, "ours");
     }
 
     /// A bare URL would be unusable: the endpoint refuses anything without the token headers and
     /// the port header, so a caller handed only a string would have to rebuild the auth.
     /// AWS answers 502 at the proxy while a MicroVM's snapshot restores, so the wait exists to
-    /// outlast that window rather than to hand the first command a session that cannot serve.
+    /// outlast that window rather than to hand the first command a sandbox that cannot serve.
     /// Served over plain HTTP against a local listener: what is under test is the polling, not
     /// the transport that reaches a real MicroVM.
     #[tokio::test]
@@ -926,9 +1050,9 @@ mod tests {
         );
     }
 
-    /// The counterpart: a MicroVM that never answers has to fail, and say which session.
+    /// The counterpart: a MicroVM that never answers has to fail, and say which sandbox.
     #[tokio::test]
-    async fn the_readiness_poll_gives_up_on_a_session_that_never_answers() {
+    async fn the_readiness_poll_gives_up_on_a_sandbox_that_never_answers() {
         let router = axum::Router::new().route(
             HEALTH_PATH,
             axum::routing::get(|| async { axum::http::StatusCode::BAD_GATEWAY }),
@@ -946,11 +1070,11 @@ mod tests {
 
         let error = AwsSandbox::poll_until_healthy(probe, deadline, "mvm-dead")
             .await
-            .expect_err("a session that never answers must not be reported as ready");
+            .expect_err("a sandbox that never answers must not be reported as ready");
         assert_eq!(error.code, "SANDBOX_UNREACHABLE");
         assert!(
             error.to_string().contains("mvm-dead") && error.to_string().contains("502"),
-            "the failure has to name the session and what it last saw: {error}"
+            "the failure has to name the sandbox and what it last saw: {error}"
         );
     }
 
@@ -1049,26 +1173,26 @@ mod tests {
     }
 
     /// The lifecycle states AWS reports, mapped onto the binding's. Read through `get`, which is
-    /// the only way a session is reached now that enumeration is gone.
+    /// the only way a sandbox is reached now that enumeration is gone.
     #[tokio::test]
     async fn a_microvm_that_is_not_running_yet_is_reported_as_starting() {
         for (aws_state, expected) in [
-            ("PENDING", SandboxSessionState::Starting),
-            ("RUNNING", SandboxSessionState::Running),
-            ("SUSPENDED", SandboxSessionState::Suspended),
-            ("TERMINATED", SandboxSessionState::Terminated),
+            ("PENDING", SandboxState::Starting),
+            ("RUNNING", SandboxState::Running),
+            ("SUSPENDED", SandboxState::Paused),
+            ("TERMINATED", SandboxState::Terminated),
         ] {
             let mut client = MockLambdaMicrovmsApi::new();
             client
                 .expect_get_microvm()
                 .returning(move |id| Ok(owned(id, aws_state)));
 
-            let session = sandbox(client)
+            let instance = sandbox(client)
                 .get("s1")
                 .await
                 .expect("reads")
                 .expect("present");
-            assert_eq!(session.state, expected, "AWS state {aws_state}");
+            assert_eq!(instance.state, expected, "AWS state {aws_state}");
         }
     }
 
@@ -1082,7 +1206,7 @@ mod tests {
             .expect_run_microvm()
             .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(1800))
             .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
-        // The wait reads the session back; with no endpoint published it stays unreachable,
+        // The wait reads the sandbox back; with no endpoint published it stays unreachable,
         // which is all a unit test can offer. Create then terminates what it started.
         client
             .expect_get_microvm()
@@ -1101,10 +1225,11 @@ mod tests {
             None,
             Some(1800),
         )
-        .create(CreateSessionRequest {
-            session_id: None,
+        .create(CreateSandboxRequest {
+            sandbox_id: None,
             tenant_key: None,
             env: BTreeMap::new(),
+            ..Default::default()
         })
         .await;
 
@@ -1118,11 +1243,123 @@ mod tests {
         );
     }
 
+    /// AWS cannot move a running MicroVM's deadline, so a lifetime the caller asked for is only
+    /// ever applied here. Pins the unit as well as the value: `timeoutMs` is milliseconds and
+    /// `maximumDurationInSeconds` is seconds, and a missed conversion is 1000x either way.
+    #[tokio::test]
+    async fn a_requested_lifetime_reaches_the_run_call_in_seconds() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_run_microvm()
+            .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(90))
+            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let error = sandbox(client)
+            .create(CreateSandboxRequest {
+                timeout_ms: Some(90_000),
+                ..Default::default()
+            })
+            .await
+            .expect_err("no agent answers in a unit test");
+
+        // `withf` above is the assertion: a run carrying anything but 90 seconds matches no
+        // expectation and panics. Create then waits for an agent a unit test cannot serve.
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+    }
+
+    /// The declared ceiling is the deployment's, not the caller's. A request that could raise it
+    /// would let an application outlive the limit its own stack declared, which is the one
+    /// direction this field must never move.
+    #[tokio::test]
+    async fn a_requested_lifetime_cannot_raise_the_declared_ceiling() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_run_microvm()
+            .withf(|_, _, _, _, _, _, max_lifetime| *max_lifetime == Some(1800))
+            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-1", "PENDING")));
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client
+            .expect_terminate_microvm()
+            .times(1)
+            .returning(|_| Ok(()));
+
+        let error = AwsSandbox::new(
+            std::sync::Arc::new(client),
+            "sbx-image",
+            "3",
+            vec!["connector".to_string()],
+            Vec::new(),
+            None,
+            Some(1800),
+        )
+        .create(CreateSandboxRequest {
+            timeout_ms: Some(7_200_000),
+            ..Default::default()
+        })
+        .await
+        .expect_err("no agent answers in a unit test");
+
+        assert_eq!(error.code, "SANDBOX_UNREACHABLE");
+    }
+
+    /// A MicroVM that never became servable and could not be terminated is still running, and
+    /// only this error carries its id. The wait's own failure is retryable, so returning it would
+    /// invite a retry that mints a second MicroVM beside the first.
+    #[tokio::test]
+    async fn a_microvm_that_could_not_be_terminated_is_reported_by_id() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_run_microvm()
+            .returning(|_, _, _, _, _, _, _| Ok(owned("mvm-orphan", "PENDING")));
+        // Published no endpoint, so the readiness wait gives up, and the cleanup it then tries
+        // is refused — one missing grant refuses both verbs in practice.
+        client
+            .expect_get_microvm()
+            .returning(|id| Ok(owned(id, "RUNNING")));
+        client.expect_terminate_microvm().times(1).returning(|_| {
+            Err(alien_error::AlienError::new(
+                alien_client_core::ErrorData::RemoteServiceUnavailable {
+                    message: "TerminateMicrovm was refused".to_string(),
+                },
+            ))
+        });
+
+        let error = sandbox(client)
+            .create(CreateSandboxRequest::default())
+            .await
+            .expect_err("a MicroVM that never became servable is not a sandbox");
+
+        assert_eq!(error.code, "SANDBOX_COMMAND_FAILED", "{error}");
+        assert!(
+            !error.retryable,
+            "a retry would mint another MicroVM nobody can reach: {error}"
+        );
+        assert!(
+            error.message.contains("sandboxLeftBehind"),
+            "the leak is reported under the label the siblings use: {error}"
+        );
+        // The outermost message, not the rendered chain: the wait's own error names the MicroVM
+        // too, so the chain would read as green with the leak unnamed.
+        assert!(
+            error.message.contains("mvm-orphan"),
+            "only this error can send an operator to the MicroVM left running: {error}"
+        );
+    }
+
     /// Observed live: AWS returns the MicroVM a client token previously created **even after it
-    /// is terminated**. Using the caller's session id as that token hands back a dead MicroVM
+    /// is terminated**. Using the caller's sandbox id as that token hands back a dead MicroVM
     /// and then waits for it to start, which is a hang, not an error.
     #[tokio::test]
-    async fn a_caller_supplied_session_id_is_never_the_client_token() {
+    async fn a_caller_supplied_sandbox_id_is_never_the_client_token() {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_run_microvm()
@@ -1138,7 +1375,7 @@ mod tests {
                     image_version: Some("1".to_string()),
                 })
             });
-        // The wait reads the session back; with no endpoint published it stays unreachable,
+        // The wait reads the sandbox back; with no endpoint published it stays unreachable,
         // which is all a unit test can offer. Create then terminates what it started.
         client
             .expect_get_microvm()
@@ -1152,10 +1389,11 @@ mod tests {
             .returning(|_| Ok(()));
 
         let result = sandbox(client)
-            .create(CreateSessionRequest {
-                session_id: Some("caller-chosen".to_string()),
+            .create(CreateSandboxRequest {
+                sandbox_id: Some("caller-chosen".to_string()),
                 tenant_key: None,
                 env: BTreeMap::new(),
+                ..Default::default()
             })
             .await;
 
@@ -1170,32 +1408,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_command_without_a_deadline_is_refused_before_any_aws_call() {
+    async fn a_command_without_a_timeout_is_refused_before_any_aws_call() {
         // No expectations set: a call to AWS here would fail the mock, which is the assertion.
         let outcome = sandbox(MockLambdaMicrovmsApi::new())
             .run_command(
                 "mvm-1",
                 RunCommandRequest {
-                    command: vec!["/bin/echo".to_string()],
-                    working_directory: None,
+                    command: "/bin/echo".to_string(),
+                    args: Vec::new(),
+                    cwd: None,
                     env: BTreeMap::new(),
-                    deadline: Duration::ZERO,
+                    timeout: Duration::ZERO,
                 },
             )
             .await;
 
         match outcome {
-            Ok(_) => panic!("a zero deadline must be refused"),
-            Err(error) => assert!(error.to_string().contains("non-zero deadline"), "{error}"),
+            Ok(_) => panic!("a zero timeout must be refused"),
+            Err(error) => assert!(error.to_string().contains("non-zero timeout"), "{error}"),
         }
     }
 
-    /// A rolled image version does not end the sessions running on the previous one, and does
+    /// A rolled image version does not end the sandboxes running on the previous one, and does
     /// not change whose they are. Comparing the version as well as the image would make `get`
-    /// return None for a live session after a roll, which a caller reads as expired — the exact
+    /// return None for a live sandbox after a roll, which a caller reads as expired — the exact
     /// false negative GCP's capability set refuses to ship.
     #[tokio::test]
-    async fn a_session_on_a_previous_image_version_is_still_ours() {
+    async fn a_sandbox_on_a_previous_image_version_is_still_ours() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_get_microvm().returning(|id| {
             Ok(Microvm {
@@ -1203,7 +1442,7 @@ mod tests {
                 endpoint: None,
                 state: Some("RUNNING".to_string()),
                 image_arn: Some("sbx-image".to_string()),
-                // The binding is pinned to version 3; this session predates the roll.
+                // The binding is pinned to version 3; this sandbox predates the roll.
                 image_version: Some("2".to_string()),
             })
         });
@@ -1212,9 +1451,9 @@ mod tests {
             .get("older")
             .await
             .expect("reads")
-            .expect("a session on the previous version is still live and still ours");
+            .expect("a sandbox on the previous version is still live and still ours");
 
-        assert_eq!(found.session_id, "older");
+        assert_eq!(found.sandbox_id, "older");
     }
 
     /// Enumeration would cost an account-wide `ListMicrovms`, and the case it would serve —
@@ -1222,7 +1461,7 @@ mod tests {
     /// is already handled by Lambda: no traffic reaches an orphan's endpoint, so it suspends
     /// after the idle duration and is terminated after the suspended one.
     #[tokio::test]
-    async fn sessions_are_not_enumerable_and_nothing_asks_aws_to_be() {
+    async fn sandboxes_are_not_enumerable_and_nothing_asks_aws_to_be() {
         let mut client = MockLambdaMicrovmsApi::new();
         client.expect_list_microvms().never();
         client.expect_list_microvm_image_versions().never();
@@ -1272,13 +1511,14 @@ mod tests {
         client.expect_terminate_microvm().never();
 
         let error = sandbox(client)
-            .create(CreateSessionRequest {
-                session_id: None,
+            .create(CreateSandboxRequest {
+                sandbox_id: None,
                 tenant_key: None,
                 env: BTreeMap::new(),
+                ..Default::default()
             })
             .await
-            .expect_err("a refused RunMicrovm cannot produce a session");
+            .expect_err("a refused RunMicrovm cannot produce a sandbox");
 
         assert_eq!(error.code, "SANDBOX_UNREACHABLE");
         assert!(

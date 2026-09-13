@@ -81,7 +81,7 @@ fn engine_name(ctx: &EmitContext<'_>, label: &str) -> Result<String> {
 ///
 /// The template id is assigned when the controller creates it, after apply, so the path below is
 /// what setup can name and the controller replaces it in the binding it publishes.
-/// `sessionTtlSeconds` is present only when the declaration set a lifetime, matching the binding's
+/// `maxLifetimeSeconds` is present only when the declaration set a lifetime, matching the binding's
 /// `skip_serializing_if`.
 fn agent_platform_fields(
     ctx: &EmitContext<'_>,
@@ -97,9 +97,9 @@ fn agent_platform_fields(
         ),
         ("region", expr::raw("var.gcp_region")),
     ];
-    if let Some(seconds) = sandbox.session.max_lifetime_seconds {
+    if let Some(seconds) = sandbox.lifecycle.max_lifetime_seconds {
         fields.push((
-            "sessionTtlSeconds",
+            "maxLifetimeSeconds",
             Expression::Number(hcl::Number::from(seconds as i64)),
         ));
     }
@@ -226,7 +226,7 @@ mod tests {
         use super::super::*;
         use alien_core::bindings::SandboxBinding;
         use alien_core::{
-            ResourceLifecycle, SandboxCode, SandboxEgress, SandboxSessionPolicy, Stack,
+            ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
             StackSettings,
         };
         use hcl::structure::Structure;
@@ -246,9 +246,9 @@ mod tests {
                     image: "ubuntu".to_string(),
                 })
                 .egress(egress)
-                .session(SandboxSessionPolicy {
+                .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: ttl,
-                    idle_suspend_seconds: None,
+                    idle_pause_seconds: None,
                 })
                 .build();
             let builder = Stack::new("acme".to_string()).add(
@@ -445,23 +445,40 @@ mod tests {
             }
         }
 
-        /// A declared lifetime reaches the binding; an absent one is omitted, matching the binding's
-        /// `skip_serializing_if` so the two never disagree on whether the key is present.
+        /// A declared lifetime reaches the binding under the name the type reads, and an absent
+        /// one is omitted to match the binding's `skip_serializing_if`. Both sides are asserted:
+        /// a key spelled differently on one of them deserializes as absent in the workload, so a
+        /// declared ceiling would be dropped rather than refused.
         #[test]
-        fn session_ttl_is_present_only_when_declared() {
+        fn a_lifetime_ceiling_is_present_only_when_declared() {
             let with_ttl = emit_binding(SandboxEgress::Deny, Some(1800))
                 .expect("renders")
                 .expect("binding");
             assert!(
-                object_keys(&with_ttl).contains("sessionTtlSeconds"),
+                object_keys(&with_ttl).contains("maxLifetimeSeconds"),
                 "a declared lifetime reaches the binding"
+            );
+
+            let typed = serde_json::to_value(alien_core::GcpAgentPlatformSandboxBinding {
+                engine: alien_core::BindingValue::Value("engine".to_string()),
+                template: alien_core::BindingValue::Value("template".to_string()),
+                region: alien_core::BindingValue::Value("us-central1".to_string()),
+                max_lifetime_seconds: Some(1800),
+            })
+            .expect("the binding type serializes");
+            assert_eq!(
+                typed
+                    .get("maxLifetimeSeconds")
+                    .and_then(serde_json::Value::as_i64),
+                Some(1800),
+                "the binding type must read the name the module emits"
             );
 
             let without = emit_binding(SandboxEgress::Deny, None)
                 .expect("renders")
                 .expect("binding");
             assert!(
-                !object_keys(&without).contains("sessionTtlSeconds"),
+                !object_keys(&without).contains("maxLifetimeSeconds"),
                 "an undeclared lifetime is absent from the binding"
             );
         }

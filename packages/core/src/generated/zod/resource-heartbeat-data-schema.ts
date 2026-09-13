@@ -140,7 +140,7 @@ export const ResourceHeartbeatDataSchema = z.union([z.object({
 "resourceType": z.enum(["key"])
     }), z.object({
     get "data"(){
-                return SandboxHeartbeatDataSchema.describe("Content-free telemetry about a sandbox's sessions.\n\nNever anything from inside a session. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
+                return SandboxHeartbeatDataSchema.describe("Content-free telemetry about what a sandbox resource is running.\n\nNever anything from inside a sandbox. A controller reaches only the cloud's management APIs,\nand the whole point of the resource is that the control plane cannot see what runs in it.")
               },
 "resourceType": z.enum(["sandbox"])
     })])

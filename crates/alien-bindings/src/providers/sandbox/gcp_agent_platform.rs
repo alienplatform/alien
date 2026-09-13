@@ -1,6 +1,6 @@
 //! GCP Agent Platform sandbox provider.
 //!
-//! Sessions are `sandboxEnvironments` created under a durable reasoning engine and reached from
+//! Sandboxes are `sandboxEnvironments` created under a durable reasoning engine and reached from
 //! outside the guest through the `:execute` proxy, which forwards one request to the agent's
 //! `POST /` envelope and returns its body verbatim. So every command, file operation and health
 //! check is one envelope over that proxy, and the lifecycle verbs are long-running operations
@@ -20,8 +20,8 @@ use tracing::warn;
 
 use crate::error::{ErrorData, Result};
 use crate::traits::{
-    Binding, CommandOutput, CreateSessionRequest, JobError, JobExit, JobPoll, JobStart,
-    PreviewCapability, RunCommandRequest, Sandbox, SandboxSession, SandboxSessionState,
+    Binding, CommandOutput, CreateSandboxRequest, JobError, JobExit, JobPoll, JobStart,
+    PreviewCapability, ResolvedSandbox, RunCommandRequest, Sandbox, SandboxInstance, SandboxState,
 };
 use alien_core::{SandboxCapabilities, SandboxEgress};
 use alien_error::{AlienError, Context, ContextError};
@@ -39,15 +39,15 @@ const AGENT_PROTOCOL_VERSION: u32 = 1;
 /// is within it runs synchronously and anything longer is detached as a job and polled. Set below
 /// the measured ceiling, because a command that overruns a synchronous execute is lost, where an
 /// overrun job is still reachable by a later poll.
-const MAX_SYNCHRONOUS_DEADLINE: Duration = Duration::from_secs(30);
+const MAX_SYNCHRONOUS_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Longest session id this provider will place in a proxy URL. A bound on what is handed back to a
+/// Longest sandbox id this provider will place in a proxy URL. A bound on what is handed back to a
 /// caller, not on what the API mints — the names seen are far shorter.
-const MAX_SESSION_ID: usize = 63;
+const MAX_SANDBOX_ID: usize = 63;
 
 /// How long a created sandbox has to reach `STATE_RUNNING`, and how often that is checked.
-const SESSION_READY_ATTEMPTS: u32 = 150;
-const SESSION_READY_INTERVAL: Duration = Duration::from_secs(2);
+const SANDBOX_READY_ATTEMPTS: u32 = 150;
+const SANDBOX_READY_INTERVAL: Duration = Duration::from_secs(2);
 
 /// How long a lifecycle operation (`create`, `:pause`, `:resume`, `:snapshot`) is polled before it
 /// is reported incomplete rather than waited on forever.
@@ -76,18 +76,18 @@ const JOB_POLL: &str = "sandbox.jobPoll";
 const JOB_CANCEL: &str = "sandbox.jobCancel";
 const TERMINATE: &str = "sandbox.terminate";
 
-/// The generation of a session whose live container identity was not established: a state with no
-/// reachable agent, or a bulk `list` that does not probe each session. Never a value
+/// The generation of a sandbox whose live container identity was not established: a state with no
+/// reachable agent, or a bulk `list` that does not probe each sandbox. Never a value
 /// `generation_from_boot_id` returns, so a real identity is always distinguishable from an
 /// unprobed one.
 const NO_GENERATION: u64 = 0;
 
 /// A single health probe is bounded to this, because the client sets no per-request timeout and an
 /// agent that accepts the connection but never answers would otherwise hang `get()` and `create()`
-/// forever. Set above the proxy's ~30s synchronous window (see `MAX_SYNCHRONOUS_DEADLINE`) rather
-/// than tight to the round trip: too tight reports a healthy session unreachable, and
+/// forever. Set above the proxy's ~30s synchronous window (see `MAX_SYNCHRONOUS_TIMEOUT`) rather
+/// than tight to the round trip: too tight reports a healthy sandbox unreachable, and
 /// `get_or_create` then provisions a fresh sandbox and loses the caller's filesystem — the failure
-/// this task exists to prevent — where too loose only delays an already-broken session.
+/// this task exists to prevent — where too loose only delays an already-broken sandbox.
 const AGENT_PROBE_BUDGET: Duration = Duration::from_secs(60);
 
 /// Maps a declared egress mode onto the template's `egressControlConfig`, or refuses one the API
@@ -126,13 +126,25 @@ pub struct GcpAgentPlatformSandbox {
     /// Bare reasoning-engine id the client interpolates into its paths. The binding may carry a
     /// full resource name, so it is reduced to its last segment once, here.
     engine: String,
-    /// Template every session is cut from, as a resource name the create body carries unchanged.
+    /// Template every sandbox is cut from, as a resource name the create body carries unchanged.
     template: String,
-    /// Session lifetime in seconds, from the declaration; absent takes the service default.
-    session_ttl_seconds: Option<u32>,
+    /// Sandbox lifetime in seconds, from the declaration; absent takes the service default.
+    max_lifetime_seconds: Option<u32>,
 }
 
 impl GcpAgentPlatformSandbox {
+    /// The `ttl` a create is sent with: what the caller asked for, never above what the
+    /// declaration allows.
+    fn lifetime_seconds(&self, timeout_ms: Option<u64>, operation: &str) -> Result<Option<u32>> {
+        match timeout_ms {
+            Some(timeout_ms) => {
+                super::requested_lifetime_seconds(timeout_ms, self.max_lifetime_seconds, operation)
+                    .map(Some)
+            }
+            None => Ok(self.max_lifetime_seconds),
+        }
+    }
+
     /// Builds a provider bound to one engine and template.
     ///
     /// The engine is normalised to its last path segment because the client builds the full
@@ -141,14 +153,14 @@ impl GcpAgentPlatformSandbox {
         client: Arc<dyn AgentPlatformApi>,
         engine: String,
         template: String,
-        session_ttl_seconds: Option<u32>,
+        max_lifetime_seconds: Option<u32>,
     ) -> Self {
         let engine = engine.rsplit('/').next().unwrap_or(&engine).to_string();
         Self {
             client,
             engine,
             template,
-            session_ttl_seconds,
+            max_lifetime_seconds,
         }
     }
 
@@ -166,22 +178,22 @@ impl GcpAgentPlatformSandbox {
         })
     }
 
-    /// A session id that stays a single path segment.
+    /// A sandbox id that stays a single path segment.
     ///
     /// The id is interpolated into the proxy URL, so one carrying `/`, `..`, `?` or `#` would
     /// address a different sandbox — a resource the same engine grant can reach. The API mints
     /// these; this bounds the ones a caller hands back.
-    fn checked_session_id(operation: &str, session_id: &str) -> Result<()> {
-        if is_addressable_id(session_id) {
+    fn checked_sandbox_id(operation: &str, sandbox_id: &str) -> Result<()> {
+        if is_addressable_id(sandbox_id) {
             return Ok(());
         }
         Err(AlienError::new(ErrorData::InvalidInput {
             operation_context: operation.to_string(),
             details: format!(
-                "session id '{session_id}' must be a single segment of letters, digits, '-' and \
-                 '_', at most {MAX_SESSION_ID} characters"
+                "sandbox id '{sandbox_id}' must be a single segment of letters, digits, '-' and \
+                 '_', at most {MAX_SANDBOX_ID} characters"
             ),
-            field_name: Some("sessionId".to_string()),
+            field_name: Some("sandboxId".to_string()),
         }))
     }
 
@@ -189,9 +201,9 @@ impl GcpAgentPlatformSandbox {
     async fn read_sandbox(
         &self,
         operation: &str,
-        session_id: &str,
+        sandbox_id: &str,
     ) -> Result<Option<SandboxEnvironment>> {
-        match self.client.get_sandbox(&self.engine, session_id).await {
+        match self.client.get_sandbox(&self.engine, sandbox_id).await {
             Ok(sandbox) => Ok(Some(sandbox)),
             Err(error) if is_not_found(&error) => Ok(None),
             Err(error) => Err(error.context(ErrorData::SandboxUnreachable {
@@ -248,10 +260,10 @@ impl GcpAgentPlatformSandbox {
     ///
     /// A client error is a transport failure — the proxy could not deliver or the API refused. A
     /// body the op's parser cannot read is the agent's own reason, handled by each verb. A
-    /// not-found is reported as a gone session so a caller does not read it as a live one.
+    /// not-found is reported as a gone sandbox so a caller does not read it as a live one.
     async fn execute_op(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         operation: &str,
         envelope: serde_json::Value,
     ) -> Result<Vec<u8>> {
@@ -262,7 +274,7 @@ impl GcpAgentPlatformSandbox {
         })?;
 
         self.client
-            .execute(&self.engine, session_id, &body)
+            .execute(&self.engine, sandbox_id, &body)
             .await
             .map_err(|error| Self::execute_failed(operation, error))
     }
@@ -273,8 +285,8 @@ impl GcpAgentPlatformSandbox {
     ) -> AlienError<ErrorData> {
         if is_not_found(&error) {
             return error.context(ErrorData::SandboxCommandFailed {
-                failure: "sessionGone".to_string(),
-                reason: format!("{operation}: the session does not exist"),
+                failure: "sandboxGone".to_string(),
+                reason: format!("{operation}: the sandbox does not exist"),
             });
         }
         // The client does not tell a delivered-but-failed call apart from an undelivered one, so
@@ -284,26 +296,26 @@ impl GcpAgentPlatformSandbox {
         if operation == RUN_COMMAND || operation == JOB_START {
             return error.context(ErrorData::SandboxOutcomeUnknown {
                 operation: operation.to_string(),
-                reason: "the session did not complete the call".to_string(),
+                reason: "the sandbox did not complete the call".to_string(),
             });
         }
         error.context(ErrorData::SandboxCommandFailed {
             failure: "executeFailed".to_string(),
-            reason: format!("{operation} could not be completed against the session"),
+            reason: format!("{operation} could not be completed against the sandbox"),
         })
     }
 
-    /// Confirms the agent answers and speaks the protocol, and returns the session's generation.
+    /// Confirms the agent answers and speaks the protocol, and returns the sandbox's generation.
     ///
     /// A sandbox can report `STATE_RUNNING` while every `:execute` fails, so a state read is not a
-    /// health check; the agent has to answer for the session to be usable. The reply carries the
+    /// health check; the agent has to answer for the sandbox to be usable. The reply carries the
     /// container boot id, from which the generation is derived so a caller can detect a container
-    /// that was replaced under a stable session name.
-    async fn probe_agent(&self, operation: &str, session_id: &str) -> Result<u64> {
+    /// that was replaced under a stable sandbox name.
+    async fn probe_agent(&self, operation: &str, sandbox_id: &str) -> Result<u64> {
         // Mapped to unreachable whatever the failure — a refused delivery, a probe that outran its
         // budget, an unparseable body, a protocol mismatch — because a health probe is idempotent
         // and the caller acts on the same thing each way: the agent cannot be reached, so
-        // `get_or_create` provisions a fresh one rather than destroying a session it did not create.
+        // `get_or_create` provisions a fresh one rather than destroying a sandbox it did not create.
         let unreachable = |reason: String| {
             AlienError::new(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
@@ -315,7 +327,7 @@ impl GcpAgentPlatformSandbox {
             AGENT_PROBE_BUDGET,
             self.client.execute(
                 &self.engine,
-                session_id,
+                sandbox_id,
                 &serde_json::to_vec(&json!({ "v": AGENT_PROTOCOL_VERSION, "op": "health" }))
                     .unwrap_or_default(),
             ),
@@ -323,14 +335,14 @@ impl GcpAgentPlatformSandbox {
         .await
         .map_err(|_| {
             unreachable(format!(
-                "the session's agent did not answer a health probe within {}s",
+                "the sandbox's agent did not answer a health probe within {}s",
                 AGENT_PROBE_BUDGET.as_secs()
             ))
         })?
         .map_err(|error| {
             error.context(ErrorData::SandboxUnreachable {
                 operation: operation.to_string(),
-                reason: "the session's agent did not answer a health probe".to_string(),
+                reason: "the sandbox's agent did not answer a health probe".to_string(),
             })
         })?;
 
@@ -343,7 +355,7 @@ impl GcpAgentPlatformSandbox {
 
         let health: Health = serde_json::from_slice(&body).map_err(|_| {
             unreachable(format!(
-                "the session's agent answered a health probe with a body this provider cannot \
+                "the sandbox's agent answered a health probe with a body this provider cannot \
                  read: {}",
                 truncated(&body)
             ))
@@ -351,15 +363,15 @@ impl GcpAgentPlatformSandbox {
 
         if health.protocol_version != AGENT_PROTOCOL_VERSION {
             return Err(unreachable(format!(
-                "the session's agent speaks protocol {} where this provider speaks {}",
+                "the sandbox's agent speaks protocol {} where this provider speaks {}",
                 health.protocol_version, AGENT_PROTOCOL_VERSION
             )));
         }
         // An agent that answers without a boot id cannot be told apart from a replaced container,
-        // so the session is refused rather than reconnected to a possibly-blank one.
+        // so the sandbox is refused rather than reconnected to a possibly-blank one.
         if health.boot_id.is_empty() {
             return Err(unreachable(
-                "the session's agent reported no container boot id, so its identity cannot be \
+                "the sandbox's agent reported no container boot id, so its identity cannot be \
                  established"
                     .to_string(),
             ));
@@ -374,63 +386,63 @@ impl GcpAgentPlatformSandbox {
     /// that caused it. A not-found delete is already success in the client.
     async fn discard(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         reason: AlienError<ErrorData>,
     ) -> AlienError<ErrorData> {
-        let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await else {
+        let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await else {
             return reason;
         };
         warn!(
-            session = %session_id,
+            sandbox = %sandbox_id,
             %error,
             "could not delete a sandbox that was never handed to its caller"
         );
         reason.context(ErrorData::SandboxCommandFailed {
             failure: "sandboxLeftBehind".to_string(),
             reason: format!(
-                "session '{session_id}' was not handed to its caller and could not be deleted, so \
+                "sandbox '{sandbox_id}' was not handed to its caller and could not be deleted, so \
                  it is still running"
             ),
         })
     }
 
     /// Waits for a created sandbox to reach `STATE_RUNNING`, confirms its agent answers, and returns
-    /// the session's generation.
+    /// the sandbox's generation.
     ///
     /// The running record is judged, not the create accept: a sandbox still coming up need not be
     /// addressable yet, and reading that as a failure would delete every one that answered early.
-    async fn settle(&self, session_id: &str) -> Result<u64> {
-        for _ in 0..SESSION_READY_ATTEMPTS {
-            let Some(sandbox) = self.read_sandbox(CREATE, session_id).await? else {
+    async fn settle(&self, sandbox_id: &str) -> Result<u64> {
+        for _ in 0..SANDBOX_READY_ATTEMPTS {
+            let Some(sandbox) = self.read_sandbox(CREATE, sandbox_id).await? else {
                 return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                    failure: "sessionGone".to_string(),
-                    reason: format!("session '{session_id}' disappeared while it was coming up"),
+                    failure: "sandboxGone".to_string(),
+                    reason: format!("sandbox '{sandbox_id}' disappeared while it was coming up"),
                 }));
             };
-            match session_state(CREATE, sandbox.state.as_deref())? {
-                SandboxSessionState::Running => {
-                    return self.probe_agent(CREATE, session_id).await;
+            match sandbox_state(CREATE, sandbox.state.as_deref())? {
+                SandboxState::Running => {
+                    return self.probe_agent(CREATE, sandbox_id).await;
                 }
-                SandboxSessionState::Terminated => {
+                SandboxState::Terminated => {
                     return Err(AlienError::new(ErrorData::SandboxCommandFailed {
-                        failure: "sessionTerminated".to_string(),
+                        failure: "sandboxTerminated".to_string(),
                         reason: format!(
-                            "session '{session_id}' reached a terminal state while starting"
+                            "sandbox '{sandbox_id}' reached a terminal state while starting"
                         ),
                     }));
                 }
                 // Waited on rather than woken: a fresh sandbox has no idle-suspend policy to pause
                 // it before its first command — the binding carries no such field — so a suspended
                 // reading here is a transient step on the way up, not a resting state to resume.
-                SandboxSessionState::Starting | SandboxSessionState::Suspended => {}
+                SandboxState::Starting | SandboxState::Paused => {}
             }
-            tokio::time::sleep(SESSION_READY_INTERVAL).await;
+            tokio::time::sleep(SANDBOX_READY_INTERVAL).await;
         }
         Err(AlienError::new(ErrorData::SandboxUnreachable {
             operation: CREATE.to_string(),
             reason: format!(
-                "session '{session_id}' was not running after {}s",
-                SESSION_READY_ATTEMPTS as u64 * SESSION_READY_INTERVAL.as_secs()
+                "sandbox '{sandbox_id}' was not running after {}s",
+                SANDBOX_READY_ATTEMPTS as u64 * SANDBOX_READY_INTERVAL.as_secs()
             ),
         }))
     }
@@ -438,11 +450,11 @@ impl GcpAgentPlatformSandbox {
     /// Runs a command inside the proxy's synchronous window, streaming the buffered NDJSON body.
     async fn run_synchronous(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: &RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        let envelope = exec_envelope("exec", session_id, request);
-        let body = self.execute_op(session_id, RUN_COMMAND, envelope).await?;
+        let envelope = exec_envelope("exec", sandbox_id, request);
+        let body = self.execute_op(sandbox_id, RUN_COMMAND, envelope).await?;
         let frames = parse_exec_frames(&body)?;
         Ok(Box::pin(stream::iter(frames)))
     }
@@ -450,21 +462,22 @@ impl GcpAgentPlatformSandbox {
     /// Runs a command as a detached job whose output is polled for until it ends.
     async fn run_detached(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        let deadline = request.deadline;
-        let started = self.start_job(session_id, request).await?;
+        let timeout = request.timeout;
+        let started = self.start_job(sandbox_id, request).await?;
 
         let state = JobPollState {
             client: self.client.clone(),
             engine: self.engine.clone(),
-            session_id: session_id.to_string(),
+            sandbox_id: sandbox_id.to_string(),
             job_id: started.job_id,
             since_seq: None,
             pending: VecDeque::new(),
             finished: false,
-            deadline_at: tokio::time::Instant::now() + deadline + JOB_POLL_GRACE,
+            stopped: false,
+            deadline_at: tokio::time::Instant::now() + timeout + JOB_POLL_GRACE,
         };
 
         Ok(Box::pin(stream::unfold(state, job_poll_step)))
@@ -480,12 +493,12 @@ impl GcpAgentPlatformSandbox {
             }));
         }
         // Refused rather than defaulted, and refused where it floors to zero milliseconds too: the
-        // agent rejects a `deadlineMs` of 0, and a defaulted deadline is a hang waiting for a slow
-        // day in a session running code the caller does not control.
-        if deadline_millis(request.deadline) == 0 {
+        // agent rejects a `timeoutMs` of 0, and a defaulted timeout is a hang waiting for a slow
+        // day in a sandbox running code the caller does not control.
+        if timeout_millis(request.timeout) == 0 {
             return Err(AlienError::new(ErrorData::SandboxCommandFailed {
                 failure: "invalidRequest".to_string(),
-                reason: "a command must carry a deadline of at least one millisecond".to_string(),
+                reason: "a command must carry a timeout of at least one millisecond".to_string(),
             }));
         }
         Ok(())
@@ -500,15 +513,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
         self
     }
 
-    /// The platform's row, unnarrowed. `sessionLifetime` stays true even with no declared ttl:
-    /// the API always sets `expireTime` on output, so an undeclared session still carries a
+    /// The platform's row, unnarrowed. `sandboxLifetime` stays true even with no declared ttl:
+    /// the API always sets `expireTime` on output, so an undeclared sandbox still carries a
     /// deadline the platform enforces.
     fn capabilities(&self) -> SandboxCapabilities {
         SandboxCapabilities::gcp_agent_platform()
     }
 
-    async fn create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        // A session inherits no per-session environment: `SandboxCreateRequest` has no env field,
+    async fn create(&self, request: CreateSandboxRequest) -> Result<SandboxInstance> {
+        // A sandbox takes no environment of its own: `SandboxCreateRequest` has no env field,
         // so silently dropping one would run the caller's code without the variables it asked for.
         // They travel per command through `run_command` instead.
         // `OperationNotSupported`, not `InvalidInput`: the value is fine, the backend has nowhere
@@ -517,7 +530,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         if !request.env.is_empty() {
             return Err(AlienError::new(ErrorData::OperationNotSupported {
                 operation: CREATE.to_string(),
-                reason: "Agent Platform sandboxes take no session-level env; set env per command \
+                reason: "Agent Platform sandboxes take no sandbox-level env; set env per command \
                          instead"
                     .to_string(),
             }));
@@ -534,17 +547,19 @@ impl Sandbox for GcpAgentPlatformSandbox {
             }));
         }
 
+        let ttl = self
+            .lifetime_seconds(request.timeout_ms, CREATE)?
+            .map(|seconds| format!("{seconds}s"));
+
         let started = self
             .client
             .create_sandbox(
                 &self.engine,
                 SandboxCreateRequest {
-                    display_name: request.session_id.clone(),
+                    display_name: request.sandbox_id.clone(),
                     sandbox_environment_template: Some(self.template.clone()),
                     sandbox_environment_snapshot: None,
-                    ttl: self
-                        .session_ttl_seconds
-                        .map(|seconds| format!("{seconds}s")),
+                    ttl,
                 },
             )
             .await
@@ -569,7 +584,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         // last segment is the id every later verb addresses it by. One this client cannot send is
         // one nothing can reach or reap, so an unreadable name is reported without a delete it
         // cannot target.
-        let Some(session_id) = created.name.as_deref().and_then(session_segment) else {
+        let Some(sandbox_id) = created.name.as_deref().and_then(sandbox_segment) else {
             return Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
                 provider: "gcp-agent-platform".to_string(),
                 binding_name: CREATE.to_string(),
@@ -577,71 +592,71 @@ impl Sandbox for GcpAgentPlatformSandbox {
                 response_json: format!("{:?}", created.name),
             }));
         };
-        let session_id = session_id.to_string();
+        let sandbox_id = sandbox_id.to_string();
 
         // Past here a sandbox exists the caller has no id for, so every failure deletes it.
-        match self.settle(&session_id).await {
-            Ok(generation) => Ok(SandboxSession {
-                session_id,
-                state: SandboxSessionState::Running,
+        match self.settle(&sandbox_id).await {
+            Ok(generation) => Ok(SandboxInstance {
+                sandbox_id,
+                state: SandboxState::Running,
                 generation,
             }),
-            Err(error) => Err(self.discard(&session_id, error).await),
+            Err(error) => Err(self.discard(&sandbox_id, error).await),
         }
     }
 
-    async fn get(&self, session_id: &str) -> Result<Option<SandboxSession>> {
-        Self::checked_session_id(GET, session_id)?;
-        let Some(sandbox) = self.read_sandbox(GET, session_id).await? else {
+    async fn get(&self, sandbox_id: &str) -> Result<Option<SandboxInstance>> {
+        Self::checked_sandbox_id(GET, sandbox_id)?;
+        let Some(sandbox) = self.read_sandbox(GET, sandbox_id).await? else {
             return Ok(None);
         };
 
-        let state = session_state(GET, sandbox.state.as_deref())?;
-        // Only a running session carries a reachable agent, and a state read is not health: a
+        let state = sandbox_state(GET, sandbox.state.as_deref())?;
+        // Only a running sandbox carries a reachable agent, and a state read is not health: a
         // running record whose agent does not answer is not reported as usable. A non-running
-        // session has no live container to identify, so it carries no generation.
-        let generation = if state == SandboxSessionState::Running {
-            self.probe_agent(GET, session_id).await?
+        // sandbox has no live container to identify, so it carries no generation.
+        let generation = if state == SandboxState::Running {
+            self.probe_agent(GET, sandbox_id).await?
         } else {
             NO_GENERATION
         };
 
-        Ok(Some(SandboxSession {
-            session_id: session_id.to_string(),
+        Ok(Some(SandboxInstance {
+            sandbox_id: sandbox_id.to_string(),
             state,
             generation,
         }))
     }
 
-    async fn get_or_create(&self, request: CreateSessionRequest) -> Result<SandboxSession> {
-        if let Some(id) = request.session_id.as_deref() {
-            // A running, reachable session is handed back; anything else is served by a fresh
-            // session rather than by destroying one this call did not create, which may be
+    async fn get_or_create(&self, request: CreateSandboxRequest) -> Result<ResolvedSandbox> {
+        if let Some(id) = request.sandbox_id.as_deref() {
+            // A running, reachable sandbox is handed back; anything else is served by a fresh
+            // sandbox rather than by destroying one this call did not create, which may be
             // another revision's.
             match self.get(id).await {
-                Ok(Some(session)) if session.state == SandboxSessionState::Running => {
-                    return Ok(session)
+                Ok(Some(sandbox)) if sandbox.state == SandboxState::Running => {
+                    return Ok(ResolvedSandbox::found(sandbox))
                 }
-                // The ordinary resting state for a reconnect: a suspended session is woken and
+                // The ordinary resting state for a reconnect: a suspended sandbox is woken and
                 // confirmed, and handed back if it comes up healthy. A wake this call made that
-                // cannot be confirmed is put back to sleep before a fresh session is provisioned —
+                // cannot be confirmed is put back to sleep before a fresh sandbox is provisioned —
                 // the paused one may be another revision's, and a second live sandbox beside it is
                 // a leak the caller never receives an id for.
-                Ok(Some(session)) if session.state == SandboxSessionState::Suspended => {
+                Ok(Some(sandbox)) if sandbox.state == SandboxState::Paused => {
                     if self.resume(id).await.is_ok() {
                         match self.get(id).await {
-                            Ok(Some(woken)) if woken.state == SandboxSessionState::Running => {
-                                return Ok(woken)
+                            Ok(Some(woken)) if woken.state == SandboxState::Running => {
+                                return Ok(ResolvedSandbox::found(woken))
                             }
                             _ => {
                                 // The wake could not be undone: leaving it live beside a fresh
-                                // session is a leak the caller gets no id for. Fail so the woken
-                                // session stays identifiable rather than provisioning a second one.
-                                if let Err(error) = self.suspend(id).await {
+                                // sandbox is a leak the caller gets no id for. Fail so the woken
+                                // sandbox stays identifiable rather than provisioning a second one.
+                                if let Err(error) = self.pause(id).await {
                                     return Err(error.context(ErrorData::SandboxCommandFailed {
                                         failure: "resumeRollbackFailed".to_string(),
                                         reason: format!(
-                                            "{GET_OR_CREATE}: woke session '{id}' but could not \
+                                            "{GET_OR_CREATE}: woke sandbox '{id}' but could not \
                                              confirm it healthy or put it back to sleep"
                                         ),
                                     }));
@@ -650,21 +665,33 @@ impl Sandbox for GcpAgentPlatformSandbox {
                         }
                     }
                 }
+                // Still coming up, or already being woken by someone else. Waited for rather than
+                // replaced: the sandbox keeps starting either way, and a second one beside it is
+                // the leak the arm above exists to avoid. A slow data plane is answered with the
+                // failure, never by provisioning more of it.
+                Ok(Some(sandbox)) if sandbox.state == SandboxState::Starting => {
+                    let generation = self.settle(id).await?;
+                    return Ok(ResolvedSandbox::found(SandboxInstance {
+                        sandbox_id: id.to_string(),
+                        state: SandboxState::Running,
+                        generation,
+                    }));
+                }
                 Ok(_) => {}
                 Err(error) if error.code == "SANDBOX_UNREACHABLE" => {}
                 Err(error) => {
                     return Err(error.context(ErrorData::SandboxCommandFailed {
                         failure: "getOrCreateFailed".to_string(),
-                        reason: format!("{GET_OR_CREATE}: reaching session '{id}' failed"),
+                        reason: format!("{GET_OR_CREATE}: reaching sandbox '{id}' failed"),
                     }))
                 }
             }
         }
 
-        self.create(request).await
+        self.create(request).await.map(ResolvedSandbox::created)
     }
 
-    async fn list(&self) -> Result<Vec<SandboxSession>> {
+    async fn list(&self) -> Result<Vec<SandboxInstance>> {
         let sandboxes = self.client.list_sandboxes(&self.engine).await.context(
             ErrorData::SandboxUnreachable {
                 operation: "sandbox.list".to_string(),
@@ -679,12 +706,12 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Ok(sandboxes
             .into_iter()
             .filter_map(|sandbox| {
-                let session_id = sandbox.name.as_deref().and_then(session_segment)?;
-                let state = session_state("sandbox.list", sandbox.state.as_deref()).ok()?;
+                let sandbox_id = sandbox.name.as_deref().and_then(sandbox_segment)?;
+                let state = sandbox_state("sandbox.list", sandbox.state.as_deref()).ok()?;
                 // A bulk list does not probe each agent, so it reports no generation; a caller that
-                // needs one reads the single session through `get`.
-                Some(SandboxSession {
-                    session_id: session_id.to_string(),
+                // needs one reads the single sandbox through `get`.
+                Some(SandboxInstance {
+                    sandbox_id: sandbox_id.to_string(),
                     state,
                     generation: NO_GENERATION,
                 })
@@ -694,27 +721,27 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn run_command(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         request: RunCommandRequest,
     ) -> Result<BoxStream<'static, Result<CommandOutput>>> {
-        Self::checked_session_id(RUN_COMMAND, session_id)?;
+        Self::checked_sandbox_id(RUN_COMMAND, sandbox_id)?;
         Self::checked_command(RUN_COMMAND, &request)?;
 
         // The synchronous window is the proxy's, not the command's: a command that outlives one
         // `:execute` is detached as a job so a later poll can still reach its output.
-        if request.deadline <= MAX_SYNCHRONOUS_DEADLINE {
-            self.run_synchronous(session_id, &request).await
+        if request.timeout <= MAX_SYNCHRONOUS_TIMEOUT {
+            self.run_synchronous(sandbox_id, &request).await
         } else {
-            self.run_detached(session_id, request).await
+            self.run_detached(sandbox_id, request).await
         }
     }
 
-    async fn start_job(&self, session_id: &str, request: RunCommandRequest) -> Result<JobStart> {
-        Self::checked_session_id(JOB_START, session_id)?;
+    async fn start_job(&self, sandbox_id: &str, request: RunCommandRequest) -> Result<JobStart> {
+        Self::checked_sandbox_id(JOB_START, sandbox_id)?;
         Self::checked_command(JOB_START, &request)?;
 
-        let envelope = exec_envelope("jobStart", session_id, &request);
-        let body = self.execute_op(session_id, JOB_START, envelope).await?;
+        let envelope = exec_envelope("jobStart", sandbox_id, &request);
+        let body = self.execute_op(sandbox_id, JOB_START, envelope).await?;
 
         // The `:execute` succeeded, so the job was accepted and is running; only its id could not
         // be read. Nothing can poll or cancel it after this, and the command's own deadline is
@@ -740,15 +767,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
 
     async fn poll_job(
         &self,
-        session_id: &str,
+        sandbox_id: &str,
         job_id: &str,
         since_seq: Option<u64>,
     ) -> Result<JobPoll> {
-        Self::checked_session_id(JOB_POLL, session_id)?;
+        Self::checked_sandbox_id(JOB_POLL, sandbox_id)?;
         let reply = poll_once(
             self.client.as_ref(),
             &self.engine,
-            session_id,
+            sandbox_id,
             job_id,
             since_seq,
         )
@@ -772,11 +799,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
         })
     }
 
-    async fn cancel_job(&self, session_id: &str, job_id: &str) -> Result<()> {
-        Self::checked_session_id(JOB_CANCEL, session_id)?;
+    async fn cancel_job(&self, sandbox_id: &str, job_id: &str) -> Result<()> {
+        Self::checked_sandbox_id(JOB_CANCEL, sandbox_id)?;
         let body = self
             .client
-            .execute(&self.engine, session_id, &cancel_body(job_id))
+            .execute(&self.engine, sandbox_id, &cancel_body(job_id))
             .await
             .map_err(|error| unanswered_job(JOB_CANCEL, error))?;
 
@@ -790,11 +817,11 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Ok(())
     }
 
-    async fn read_file(&self, session_id: &str, path: &str) -> Result<Vec<u8>> {
-        Self::checked_session_id("sandbox.readFile", session_id)?;
+    async fn read_file(&self, sandbox_id: &str, path: &str) -> Result<Vec<u8>> {
+        Self::checked_sandbox_id("sandbox.readFile", sandbox_id)?;
         let body = self
             .execute_op(
-                session_id,
+                sandbox_id,
                 "sandbox.readFile",
                 json!({ "v": AGENT_PROTOCOL_VERSION, "op": "readFile", "path": path }),
             )
@@ -824,15 +851,15 @@ impl Sandbox for GcpAgentPlatformSandbox {
             })
     }
 
-    async fn write_files(&self, session_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
-        Self::checked_session_id("sandbox.writeFiles", session_id)?;
+    async fn write_files(&self, sandbox_id: &str, files: BTreeMap<String, Vec<u8>>) -> Result<()> {
+        Self::checked_sandbox_id("sandbox.writeFiles", sandbox_id)?;
         // One request per path, stopping at the first failure — the partial application every
         // backend performs, so a caller sees one contract rather than several. The agent's field
         // is `contentsBase64`; `contents` is dropped silently.
         for (path, contents) in files {
             let body = self
                 .execute_op(
-                    session_id,
+                    sandbox_id,
                     "sandbox.writeFiles",
                     json!({
                         "v": AGENT_PROTOCOL_VERSION,
@@ -847,62 +874,50 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Ok(())
     }
 
-    async fn mkdir(&self, session_id: &str, path: &str) -> Result<()> {
-        Self::checked_session_id("sandbox.mkdir", session_id)?;
-        let body = self
-            .execute_op(
-                session_id,
-                "sandbox.mkdir",
-                json!({ "v": AGENT_PROTOCOL_VERSION, "op": "mkdir", "path": path }),
-            )
-            .await?;
-        confirm_empty_ok("sandbox.mkdir", &body)
-    }
-
-    async fn preview(&self, _session_id: &str, _port: u16) -> Result<PreviewCapability> {
+    async fn preview(&self, _sandbox_id: &str, _port: u16) -> Result<PreviewCapability> {
         Err(self.unsupported(
             "preview",
             "Agent Platform mints no port-scoped ingress capability; the only ingress is :execute",
         ))
     }
 
-    async fn suspend(&self, session_id: &str) -> Result<()> {
-        Self::checked_session_id("sandbox.suspend", session_id)?;
-        let started = self.client.pause(&self.engine, session_id).await.context(
+    async fn pause(&self, sandbox_id: &str) -> Result<()> {
+        Self::checked_sandbox_id("sandbox.pause", sandbox_id)?;
+        let started = self.client.pause(&self.engine, sandbox_id).await.context(
             ErrorData::SandboxCommandFailed {
-                failure: "suspendFailed".to_string(),
-                reason: format!("sandbox.suspend: session '{session_id}' could not be paused"),
+                failure: "pauseFailed".to_string(),
+                reason: format!("sandbox.pause: sandbox '{sandbox_id}' could not be paused"),
             },
         )?;
-        self.await_operation("sandbox.suspend", started).await?;
+        self.await_operation("sandbox.pause", started).await?;
         Ok(())
     }
 
-    async fn resume(&self, session_id: &str) -> Result<()> {
-        Self::checked_session_id("sandbox.resume", session_id)?;
-        let started = self.client.resume(&self.engine, session_id).await.context(
+    async fn resume(&self, sandbox_id: &str) -> Result<()> {
+        Self::checked_sandbox_id("sandbox.resume", sandbox_id)?;
+        let started = self.client.resume(&self.engine, sandbox_id).await.context(
             ErrorData::SandboxCommandFailed {
                 failure: "resumeFailed".to_string(),
-                reason: format!("sandbox.resume: session '{session_id}' could not be resumed"),
+                reason: format!("sandbox.resume: sandbox '{sandbox_id}' could not be resumed"),
             },
         )?;
         self.await_operation("sandbox.resume", started).await?;
         Ok(())
     }
 
-    async fn snapshot(&self, session_id: &str) -> Result<String> {
-        Self::checked_session_id("sandbox.snapshot", session_id)?;
+    async fn snapshot(&self, sandbox_id: &str) -> Result<String> {
+        Self::checked_sandbox_id("sandbox.snapshot", sandbox_id)?;
         // A generated display name, because the API takes one and the caller does not supply it.
         // The trait has no restore verb, so the returned name is not yet consumable through it —
         // restore is `create` from a snapshot, which this backend can do but the trait cannot ask.
         let display_name = format!("snap-{}", uuid::Uuid::new_v4().simple());
         let started = self
             .client
-            .snapshot(&self.engine, session_id, &display_name)
+            .snapshot(&self.engine, sandbox_id, &display_name)
             .await
             .context(ErrorData::SandboxCommandFailed {
                 failure: "snapshotFailed".to_string(),
-                reason: format!("sandbox.snapshot: session '{session_id}' could not be captured"),
+                reason: format!("sandbox.snapshot: sandbox '{sandbox_id}' could not be captured"),
             })?;
 
         let snapshot: SandboxSnapshot =
@@ -928,31 +943,31 @@ impl Sandbox for GcpAgentPlatformSandbox {
         })
     }
 
-    async fn terminate(&self, session_id: &str) -> Result<()> {
-        Self::checked_session_id(TERMINATE, session_id)?;
+    async fn terminate(&self, sandbox_id: &str) -> Result<()> {
+        Self::checked_sandbox_id(TERMINATE, sandbox_id)?;
         // Accepted, not completed: the client returns before the sandbox is gone. Returning here
         // would report containment while the code may still run, which is the whole point of
         // terminate — so the delete is confirmed by polling to not-found.
-        // A session that is already gone is the state terminate exists to reach, so not-found is
+        // A sandbox that is already gone is the state terminate exists to reach, so not-found is
         // success. Narrowed to exactly that: mapping any failure to `Ok` would report containment
-        // for a session another deployment owns and this one was refused.
-        if let Err(error) = self.client.delete_sandbox(&self.engine, session_id).await {
+        // for a sandbox another deployment owns and this one was refused.
+        if let Err(error) = self.client.delete_sandbox(&self.engine, sandbox_id).await {
             if !is_not_found(&error) {
                 return Err(error.context(ErrorData::SandboxUnreachable {
                     operation: TERMINATE.to_string(),
-                    reason: format!("the delete of session '{session_id}' was not accepted"),
+                    reason: format!("the delete of sandbox '{sandbox_id}' was not accepted"),
                 }));
             }
             return Ok(());
         }
 
         for _ in 0..TERMINATE_POLL_ATTEMPTS {
-            match self.client.get_sandbox(&self.engine, session_id).await {
+            match self.client.get_sandbox(&self.engine, sandbox_id).await {
                 Err(error) if is_not_found(&error) => return Ok(()),
-                // A read that fails is not a session that is gone, and one throttled response must
+                // A read that fails is not a sandbox that is gone, and one throttled response must
                 // not end the poll: the attempt budget decides.
                 Err(error) => {
-                    warn!(session = %session_id, %error, "could not confirm a sandbox is gone")
+                    warn!(sandbox = %sandbox_id, %error, "could not confirm a sandbox is gone")
                 }
                 Ok(_) => {}
             }
@@ -962,7 +977,7 @@ impl Sandbox for GcpAgentPlatformSandbox {
         Err(AlienError::new(ErrorData::SandboxUnreachable {
             operation: TERMINATE.to_string(),
             reason: format!(
-                "deletion of '{session_id}' was accepted but the session was still present after \
+                "deletion of '{sandbox_id}' was accepted but the sandbox was still present after \
                  {}s; it may still be running",
                 TERMINATE_POLL_ATTEMPTS as u64 * TERMINATE_POLL_INTERVAL.as_secs()
             ),
@@ -989,14 +1004,14 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                 .client
                 .execute(
                     &state.engine,
-                    &state.session_id,
+                    &state.sandbox_id,
                     &cancel_body(&state.job_id),
                 )
                 .await;
             let confirmed = cancelled.as_ref().is_ok_and(|body| cancel_confirmed(body));
             state.pending.push_back(Err(match cancelled {
                 Ok(_) if confirmed => AlienError::new(ErrorData::SandboxCommandFailed {
-                    failure: "deadlineExceeded".to_string(),
+                    failure: "timeoutExceeded".to_string(),
                     reason: "the command's deadline elapsed before its job reported an outcome"
                         .to_string(),
                 }),
@@ -1012,13 +1027,16 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
                 }),
             }));
             state.finished = true;
+            // Only a landed cancel stops the job; the other two arms report an outcome nobody
+            // established, so the drop is left armed to try again.
+            state.stopped = confirmed;
             continue;
         }
 
         let poll = match poll_once(
             state.client.as_ref(),
             &state.engine,
-            &state.session_id,
+            &state.sandbox_id,
             &state.job_id,
             state.since_seq,
         )
@@ -1078,6 +1096,7 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
             };
             state.pending.push_back(terminal);
             state.finished = true;
+            state.stopped = true;
             continue;
         }
 
@@ -1087,17 +1106,17 @@ async fn job_poll_step(mut state: JobPollState) -> Option<(Result<CommandOutput>
     }
 }
 
-/// One `jobPoll` against a session, classified as a standalone poll: nothing about the job
+/// One `jobPoll` against a sandbox, classified as a standalone poll: nothing about the job
 /// changes, so a call that fails is worth repeating. `run_command`'s loop re-contexts it.
 async fn poll_once(
     client: &dyn AgentPlatformApi,
     engine: &str,
-    session_id: &str,
+    sandbox_id: &str,
     job_id: &str,
     since_seq: Option<u64>,
 ) -> Result<JobPollReply> {
     let body = client
-        .execute(engine, session_id, &poll_body(job_id, since_seq))
+        .execute(engine, sandbox_id, &poll_body(job_id, since_seq))
         .await
         .map_err(|error| unanswered_job(JOB_POLL, error))?;
 
@@ -1112,30 +1131,31 @@ async fn poll_once(
 }
 
 /// A poll or cancel that did not complete. Both leave the job exactly as it was, so unlike a
-/// command they carry the retry signal; a session that is gone is an answer rather than a failure.
+/// command they carry the retry signal; a sandbox that is gone is an answer rather than a failure.
 fn unanswered_job(
     operation: &str,
     error: AlienError<AgentPlatformErrorData>,
 ) -> AlienError<ErrorData> {
     if is_not_found(&error) {
         return error.context(ErrorData::SandboxCommandFailed {
-            failure: "sessionGone".to_string(),
-            reason: format!("{operation}: the session does not exist"),
+            failure: "sandboxGone".to_string(),
+            reason: format!("{operation}: the sandbox does not exist"),
         });
     }
     error.context(ErrorData::SandboxUnreachable {
         operation: operation.to_string(),
-        reason: "the session did not complete the call".to_string(),
+        reason: "the sandbox did not complete the call".to_string(),
     })
 }
 
 /// Whether a `jobCancel` reply is the cancel landing.
 ///
-/// A reply arriving is not the cancel succeeding: the agent answers `{}` when it cancelled the job
-/// and its own error text when it did not — `JobNotFound`, say — and both come back through a
-/// successful `:execute`.
+/// A reply arriving is not the cancel succeeding: a cancelled job answers with the empty object and
+/// a refusal — `JobNotFound`, say — with the agent's error text, both through a successful
+/// `:execute`. A success body that grew a field then reads as unknown, never a refusal as landed.
 fn cancel_confirmed(body: &[u8]) -> bool {
-    serde_json::from_slice::<serde_json::Value>(body).is_ok_and(|value| value.is_object())
+    serde_json::from_slice::<serde_json::Value>(body)
+        .is_ok_and(|value| value.as_object().is_some_and(serde_json::Map::is_empty))
 }
 
 /// The id a started job answers to, as the agent's `jobStart` returns it.
@@ -1149,12 +1169,70 @@ struct JobStartReply {
 struct JobPollState {
     client: Arc<dyn AgentPlatformApi>,
     engine: String,
-    session_id: String,
+    sandbox_id: String,
     job_id: String,
     since_seq: Option<u64>,
     pending: VecDeque<Result<CommandOutput>>,
     finished: bool,
+    /// Set only where the job itself ended, so a stream that ends any other way still cancels.
+    stopped: bool,
     deadline_at: tokio::time::Instant,
+}
+
+/// Kills the command a dropped stream stops reading.
+///
+/// Where a command's frames ride a transport the caller can close, that close is the kill. A
+/// detached job has no such transport, so the cancel is sent here or the job runs to its full
+/// timeout, billing, with nobody able to reach it.
+impl Drop for JobPollState {
+    fn drop(&mut self) {
+        if self.stopped {
+            return;
+        }
+        let Ok(runtime) = tokio::runtime::Handle::try_current() else {
+            warn!(
+                sandbox = %self.sandbox_id,
+                job = %self.job_id,
+                "a job's stream was dropped outside a runtime, so the job runs to its timeout"
+            );
+            return;
+        };
+
+        let client = self.client.clone();
+        let engine = self.engine.clone();
+        let sandbox_id = self.sandbox_id.clone();
+        let job_id = self.job_id.clone();
+        runtime.spawn(async move {
+            // The reader is gone, so a failure has nobody to be returned to; what it leaves
+            // running is named instead.
+            match tokio::time::timeout(
+                AGENT_PROBE_BUDGET,
+                client.execute(&engine, &sandbox_id, &cancel_body(&job_id)),
+            )
+            .await
+            {
+                Ok(Ok(body)) if cancel_confirmed(&body) => {}
+                Ok(Ok(body)) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    reply = %truncated(&body),
+                    "a dropped job's cancel was refused, so the job runs to its timeout"
+                ),
+                Ok(Err(error)) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    %error,
+                    "a dropped job's cancel did not land, so the job may run to its timeout"
+                ),
+                Err(_) => warn!(
+                    sandbox = %sandbox_id,
+                    job = %job_id,
+                    budget_secs = AGENT_PROBE_BUDGET.as_secs(),
+                    "a dropped job's cancel went unanswered, so the job may run to its timeout"
+                ),
+            }
+        });
+    }
 }
 
 /// A job's output so far, and how it ended once it has. Mirrors the agent's `jobPoll` reply.
@@ -1324,15 +1402,15 @@ fn parse_exec_frames(body: &[u8]) -> Result<Vec<Result<CommandOutput>>> {
     Ok(frames)
 }
 
-/// The envelope for `exec` or `jobStart`. `deadlineMs` is the field the agent reads; both ops take
+/// The envelope for `exec` or `jobStart`. `timeoutMs` is the field the agent reads; both ops take
 /// the identical body.
-fn exec_envelope(op: &str, _session_id: &str, request: &RunCommandRequest) -> serde_json::Value {
+fn exec_envelope(op: &str, _sandbox_id: &str, request: &RunCommandRequest) -> serde_json::Value {
     json!({
         "v": AGENT_PROTOCOL_VERSION,
         "op": op,
-        "command": request.command,
-        "deadlineMs": deadline_millis(request.deadline),
-        "workingDirectory": request.working_directory,
+        "command": request.argv(),
+        "timeoutMs": timeout_millis(request.timeout),
+        "cwd": request.cwd,
         "env": request.env,
     })
 }
@@ -1356,15 +1434,15 @@ fn cancel_body(job_id: &str) -> Vec<u8> {
     .unwrap_or_default()
 }
 
-/// Milliseconds, saturated: a deadline long enough to overflow `u64` ms is not one anyone meant,
+/// Milliseconds, saturated: a timeout long enough to overflow `u64` ms is not one anyone meant,
 /// and wrapping it would turn "effectively forever" into "immediately".
-fn deadline_millis(deadline: Duration) -> u64 {
-    u64::try_from(deadline.as_millis()).unwrap_or(u64::MAX)
+fn timeout_millis(timeout: Duration) -> u64 {
+    u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
 }
 
-/// Reads a `writeFile`/`mkdir` reply, which succeeds with an empty body.
+/// Reads a `writeFile` reply, which succeeds with an empty body.
 ///
-/// A non-empty body from these ops is the agent's error text, not a success shape, so it is
+/// A non-empty body from the op is the agent's error text, not a success shape, so it is
 /// surfaced as a refusal rather than ignored.
 fn confirm_empty_ok(operation: &str, body: &[u8]) -> Result<()> {
     if body.iter().all(|byte| byte.is_ascii_whitespace()) {
@@ -1377,14 +1455,14 @@ fn confirm_empty_ok(operation: &str, body: &[u8]) -> Result<()> {
 }
 
 /// The last path segment, if it is a usable id. Used for both minted names and listed ones.
-fn session_segment(name: &str) -> Option<&str> {
+fn sandbox_segment(name: &str) -> Option<&str> {
     let segment = name.rsplit('/').next()?;
     is_addressable_id(segment).then_some(segment)
 }
 
 fn is_addressable_id(id: &str) -> bool {
     !id.is_empty()
-        && id.len() <= MAX_SESSION_ID
+        && id.len() <= MAX_SANDBOX_ID
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
@@ -1408,17 +1486,13 @@ fn generation_from_boot_id(boot_id: &str) -> u64 {
 
 /// The API's runtime states, in ours. An unrecognised one is an error rather than a default,
 /// because every default here is a lie a caller acts on.
-fn session_state(operation: &str, state: Option<&str>) -> Result<SandboxSessionState> {
+fn sandbox_state(operation: &str, state: Option<&str>) -> Result<SandboxState> {
     match state {
-        Some("STATE_RUNNING") => Ok(SandboxSessionState::Running),
-        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_RESUMING") => {
-            Ok(SandboxSessionState::Starting)
-        }
-        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => {
-            Ok(SandboxSessionState::Suspended)
-        }
+        Some("STATE_RUNNING") => Ok(SandboxState::Running),
+        Some("STATE_CREATING" | "STATE_PENDING" | "STATE_RESUMING") => Ok(SandboxState::Starting),
+        Some("STATE_PAUSED" | "STATE_PAUSING" | "STATE_SUSPENDED") => Ok(SandboxState::Paused),
         Some("STATE_STOPPED" | "STATE_FAILED" | "STATE_DELETING" | "STATE_DELETED") => {
-            Ok(SandboxSessionState::Terminated)
+            Ok(SandboxState::Terminated)
         }
         other => Err(AlienError::new(ErrorData::UnexpectedResponseFormat {
             provider: "gcp-agent-platform".to_string(),

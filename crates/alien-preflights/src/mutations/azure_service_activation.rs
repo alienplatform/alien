@@ -256,9 +256,9 @@ mod tests {
                 image: "ubuntu".to_string(),
             })
             .egress(alien_core::SandboxEgress::Allow)
-            .session(alien_core::SandboxSessionPolicy {
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             })
             .build();
         let stack = Stack::new("test".to_string())

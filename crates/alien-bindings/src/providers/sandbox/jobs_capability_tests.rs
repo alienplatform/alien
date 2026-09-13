@@ -27,10 +27,11 @@ use super::local::LocalSandbox;
 
 fn command() -> RunCommandRequest {
     RunCommandRequest {
-        command: vec!["/bin/sleep".to_string(), "600".to_string()],
-        working_directory: None,
+        command: "/bin/sleep".to_string(),
+        args: vec!["600".to_string()],
+        cwd: None,
         env: BTreeMap::new(),
-        deadline: Duration::from_secs(600),
+        timeout: Duration::from_secs(600),
     }
 }
 
@@ -95,14 +96,14 @@ async fn job_agent(hits: Arc<AtomicUsize>) -> String {
 
 /// AWS reaches its agent over TLS, so what is observable in-process is the call that authorizes
 /// the request: reaching it at all is what tells a capability refusal apart from a backend that
-/// tried. The session read is what fails here, which is a long way past a refusal.
+/// tried. The sandbox read is what fails here, which is a long way past a refusal.
 #[tokio::test]
 async fn aws_declares_jobs_and_starting_one_reaches_the_backend() {
     let mut microvms = alien_aws_clients::aws::lambda_microvms::MockLambdaMicrovmsApi::new();
     microvms
         .expect_get_microvm()
         .times(1)
-        // A record with no image is nobody's session, so the call fails on ownership — well past
+        // A record with no image is nobody's sandbox, so the call fails on ownership — well past
         // any refusal a capability would have made.
         .returning(|_| {
             Ok(alien_aws_clients::aws::lambda_microvms::Microvm {
@@ -128,15 +129,15 @@ async fn aws_declares_jobs_and_starting_one_reaches_the_backend() {
     let error = sandbox
         .start_job("s1", command())
         .await
-        .expect_err("the fixture's session belongs to nobody");
+        .expect_err("the fixture's sandbox belongs to nobody");
     assert_ne!(
         error.code, "OPERATION_NOT_SUPPORTED",
-        "the failure has to be the session's, not a capability's: {error}"
+        "the failure has to be the sandbox's, not a capability's: {error}"
     );
 }
 
 /// Kubernetes reaches its agent over the pod IP the broker hands back, so the whole path runs
-/// here: claim a session, start a job on it, and the agent answers with the id.
+/// here: claim a sandbox, start a job on it, and the agent answers with the id.
 #[tokio::test]
 async fn kubernetes_declares_jobs_and_starts_one_end_to_end() {
     let hits = Arc::new(AtomicUsize::new(0));
@@ -178,10 +179,11 @@ async fn kubernetes_declares_jobs_and_starts_one_end_to_end() {
 
     assert!(sandbox.capabilities().jobs);
     sandbox
-        .create(crate::traits::CreateSessionRequest {
-            session_id: Some("s1".to_string()),
+        .create(crate::traits::CreateSandboxRequest {
+            sandbox_id: Some("s1".to_string()),
             tenant_key: None,
             env: BTreeMap::new(),
+            ..Default::default()
         })
         .await
         .expect("the broker claims a pod");

@@ -197,50 +197,58 @@ export interface RawJobPoll {
   error?: { code: string; message: string } | null
 }
 
-/** A live sandbox session, as the addon returns it. */
-export interface RawSandboxSession {
-  sessionId: string
+/** A live sandbox, as the addon returns it. */
+export interface RawSandboxInstance {
+  sandboxId: string
   state: string
   generation: number
+}
+
+export interface RawResolvedSandbox {
+  sandbox: RawSandboxInstance
+  created: boolean
 }
 
 /** Raw napi sandbox handle. */
 export interface RawSandboxHandle {
   capabilities(): string[]
   create(
-    sessionId?: string | null,
+    sandboxId?: string | null,
     tenantKey?: string | null,
     env?: Record<string, string> | null,
-  ): Promise<RawSandboxSession>
-  get(sessionId: string): Promise<RawSandboxSession | null>
+    timeoutMs?: number | null,
+  ): Promise<RawSandboxInstance>
+  get(sandboxId: string): Promise<RawSandboxInstance | null>
   getOrCreate(
-    sessionId?: string | null,
+    sandboxId?: string | null,
     tenantKey?: string | null,
     env?: Record<string, string> | null,
-  ): Promise<RawSandboxSession>
-  list(): Promise<RawSandboxSession[]>
+    timeoutMs?: number | null,
+  ): Promise<RawResolvedSandbox>
+  list(): Promise<RawSandboxInstance[]>
   runCommand(
-    sessionId: string,
-    command: string[],
-    deadlineMs: number,
-    workingDirectory?: string | null,
+    sandboxId: string,
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string | null,
     env?: Record<string, string> | null,
   ): Promise<RawCommandStreamHandle>
   startJob(
-    sessionId: string,
-    command: string[],
-    deadlineMs: number,
-    workingDirectory?: string | null,
+    sandboxId: string,
+    command: string,
+    args: string[],
+    timeoutMs: number,
+    cwd?: string | null,
     env?: Record<string, string> | null,
   ): Promise<string>
-  pollJob(sessionId: string, jobId: string, sinceSeq?: number | null): Promise<RawJobPoll>
-  cancelJob(sessionId: string, jobId: string): Promise<void>
-  readFile(sessionId: string, path: string): Promise<Buffer>
-  writeFile(sessionId: string, path: string, contents: Buffer): Promise<void>
-  mkdir(sessionId: string, path: string): Promise<void>
-  suspend(sessionId: string): Promise<void>
-  resume(sessionId: string): Promise<void>
-  terminate(sessionId: string): Promise<void>
+  pollJob(sandboxId: string, jobId: string, sinceSeq?: number | null): Promise<RawJobPoll>
+  cancelJob(sandboxId: string, jobId: string): Promise<void>
+  readFile(sandboxId: string, path: string): Promise<Buffer>
+  writeFile(sandboxId: string, path: string, contents: Buffer): Promise<void>
+  pause(sandboxId: string): Promise<void>
+  resume(sandboxId: string): Promise<void>
+  terminate(sandboxId: string): Promise<void>
 }
 
 /** Raw napi bindings entry point. Construction validates the environment. */

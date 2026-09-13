@@ -6,11 +6,11 @@
 import * as z from "zod";
 import { SandboxCodeSchema } from "./sandbox-code-schema.js";
 import { SandboxEgressSchema } from "./sandbox-egress-schema.js";
+import { SandboxLifecyclePolicySchema } from "./sandbox-lifecycle-policy-schema.js";
 import { SandboxLimitsSchema } from "./sandbox-limits-schema.js";
-import { SandboxSessionPolicySchema } from "./sandbox-session-policy-schema.js";
 
 /**
- * @description An isolated environment for running untrusted code, created per session at runtime.
+ * @description An isolated environment for running untrusted code, created at runtime.
  */
 export const SandboxSchema = z.object({
     get "code"(){
@@ -20,13 +20,13 @@ get "egress"(){
                 return SandboxEgressSchema.describe("Outbound network policy for a sandbox.")
               },
 "id": z.string().describe("Identifier for the sandbox. Must contain only alphanumeric characters, hyphens, and\nunderscores ([A-Za-z0-9-_]). Maximum 64 characters."),
+get "lifecycle"(){
+                return SandboxLifecyclePolicySchema.describe("How long a sandbox may live and when it is paused.\n\nDeclaration-time ceilings, not per-request values: every sandbox created through this\ndeclaration's binding is held to them, whatever a caller asks for at runtime.")
+              },
 get "limits"(){
                 return z.union([SandboxLimitsSchema, z.null()]).optional()
               },
-"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.")),
-get "session"(){
-                return SandboxSessionPolicySchema.describe("How long a session may live and when it is suspended.")
-              }
-    }).describe("An isolated environment for running untrusted code, created per session at runtime.")
+"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none."))
+    }).describe("An isolated environment for running untrusted code, created at runtime.")
 
 export type Sandbox = z.infer<typeof SandboxSchema>

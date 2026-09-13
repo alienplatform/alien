@@ -129,7 +129,7 @@ mod tests {
             SandboxOperationClass::Execute,
             NOW,
         )
-        .expect("a token this key signed, for this session, is valid");
+        .expect("a token this key signed, for this sandbox, is valid");
 
         assert_eq!(verified, claims());
     }
@@ -173,7 +173,7 @@ mod tests {
     }
 
     /// The claim checks are not bypassed by a good signature: a correctly signed capability
-    /// for another session is still refused.
+    /// for another sandbox is still refused.
     #[test]
     fn a_validly_signed_token_still_fails_its_claim_checks() {
         let keys = keypair();
@@ -189,7 +189,7 @@ mod tests {
             NOW,
         )
         .expect_err("a signature does not make a capability applicable");
-        assert!(error.to_string().contains("different session"));
+        assert!(error.to_string().contains("different sandbox"));
     }
 
     #[test]

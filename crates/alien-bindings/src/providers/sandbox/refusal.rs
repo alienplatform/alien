@@ -195,8 +195,8 @@ mod tests {
                 resource_type: "Microvm".to_string(),
                 resource_name: "GetMicrovm".to_string(),
             }),
-            "sandbox.session",
-            "could not read session 'mvm-1'",
+            "sandbox.sandbox",
+            "could not read sandbox 'mvm-1'",
         );
         assert!(
             !external.internal,

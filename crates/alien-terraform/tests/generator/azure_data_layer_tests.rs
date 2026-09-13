@@ -15,8 +15,8 @@ use super::helpers::{assert_terraform_valid, render, snapshot_module};
 use alien_core::{
     Ai, AzureResourceGroup, AzureServiceBusNamespace, AzureStorageAccount, Key, Kv, LifecycleRule,
     PermissionProfile, Queue, RemoteBindings, RemoteStackManagement, ResourceLifecycle,
-    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxSessionPolicy, ServiceAccount, Stack,
-    StackSettings, Storage, Vault,
+    ResourceRef, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
+    Stack, StackSettings, Storage, Vault,
 };
 use alien_terraform::{generate_terraform_module, TerraformOptions, TerraformTarget, TfRegistry};
 
@@ -553,9 +553,9 @@ fn azure_remote_sandbox_grants_the_access_identity_its_own_group_and_nothing_wid
             image: "ubuntu".to_string(),
         })
         .egress(SandboxEgress::Allow)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -688,9 +688,9 @@ fn an_aks_package_is_not_told_about_a_sandbox_group_it_does_not_get() {
             image: "ubuntu".to_string(),
         })
         .egress(SandboxEgress::Allow)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())
@@ -741,9 +741,9 @@ fn an_azure_remote_sandbox_renders_without_any_other_resource_declared() {
             image: "ubuntu".to_string(),
         })
         .egress(SandboxEgress::Allow)
-        .session(SandboxSessionPolicy {
+        .lifecycle(SandboxLifecyclePolicy {
             max_lifetime_seconds: None,
-            idle_suspend_seconds: None,
+            idle_pause_seconds: None,
         })
         .build();
     let stack = Stack::new("byo-sandbox".to_string())

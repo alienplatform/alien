@@ -51,8 +51,8 @@ impl CompileTimeCheck for SandboxPlatformSupportCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLimits,
-        SandboxSessionPolicy,
+        ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        SandboxLimits,
     };
     use indexmap::IndexMap;
 
@@ -85,9 +85,9 @@ mod tests {
                 image: "ubuntu".to_string(),
             })
             .egress(egress)
-            .session(SandboxSessionPolicy {
+            .lifecycle(SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
-                idle_suspend_seconds: None,
+                idle_pause_seconds: None,
             });
         match limits {
             Some(limits) => builder.limits(limits).build(),

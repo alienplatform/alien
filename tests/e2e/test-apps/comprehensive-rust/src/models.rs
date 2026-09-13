@@ -113,9 +113,9 @@ pub struct PostgresTestResponse {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxSessionsResponse {
-    /// Whether the backend can enumerate sessions at all; false is a shrug, not a zero.
+    /// Whether the backend can enumerate sandboxes at all; false is a shrug, not a zero.
     pub enumerable: bool,
-    /// Ids of the sessions still present, when enumerable.
+    /// Ids of the sandboxes still present, when enumerable.
     pub session_ids: Vec<String>,
 }
 

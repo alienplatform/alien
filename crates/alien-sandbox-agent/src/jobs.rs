@@ -40,7 +40,7 @@ pub enum JobOutcome {
     },
     /// The command did not exit normally — a deadline, a failed spawn, or a cancellation.
     Failed {
-        /// Machine-readable cause, e.g. `deadlineExceeded`
+        /// Machine-readable cause, e.g. `timeoutExceeded`
         code: String,
         /// Human-readable detail
         message: String,
@@ -340,19 +340,19 @@ mod tests {
         ExecIdentity { uid: 0, gid: 0 }
     }
 
-    fn request(command: &[&str], deadline_ms: u64) -> ExecRequest {
+    fn request(command: &[&str], timeout_ms: u64) -> ExecRequest {
         ExecRequest {
             command: command.iter().map(|s| s.to_string()).collect(),
-            deadline_ms,
-            working_directory: None,
+            timeout_ms,
+            cwd: None,
             env: BTreeMap::new(),
         }
     }
 
-    fn start(registry: &JobRegistry, command: &[&str], deadline_ms: u64) -> String {
+    fn start(registry: &JobRegistry, command: &[&str], timeout_ms: u64) -> String {
         registry
             .start(
-                request(command, deadline_ms),
+                request(command, timeout_ms),
                 std::env::temp_dir(),
                 same_identity(),
                 1 << 20,
