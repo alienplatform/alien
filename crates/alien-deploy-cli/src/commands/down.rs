@@ -168,7 +168,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     let run_client_side_deletion = requires_client_side_deletion(platform);
     let total_steps = if run_client_side_deletion { 3 } else { 2 };
 
-    if matches!(deployment_status, "teardown-required" | "teardown-failed") {
+    if !should_request_deletion(deployment_status) {
         output::step(
             1,
             total_steps,
@@ -271,6 +271,12 @@ fn requires_client_side_deletion(platform: Platform) -> bool {
     platform != Platform::Machines
 }
 
+fn should_request_deletion(status: &str) -> bool {
+    // Teardown-required already has active setup-owned work. Teardown-failed does not: its delete
+    // operation is terminal, so a retry must explicitly schedule a fresh attempt before acquiring.
+    status != "teardown-required"
+}
+
 fn resolve_token(
     explicit_token: Option<String>,
     token_file: Option<&PathBuf>,
@@ -330,5 +336,11 @@ mod tests {
         assert!(requires_client_side_deletion(Platform::Aws));
         assert!(requires_client_side_deletion(Platform::Gcp));
         assert!(requires_client_side_deletion(Platform::Azure));
+    }
+
+    #[test]
+    fn failed_setup_teardown_requests_a_new_delete_attempt() {
+        assert!(!should_request_deletion("teardown-required"));
+        assert!(should_request_deletion("teardown-failed"));
     }
 }
