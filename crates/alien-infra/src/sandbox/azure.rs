@@ -93,12 +93,15 @@ impl AzureSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         // Refresh the binding inputs against the declaration, but do not gate the heartbeat on
         // them: a bad `code.image` is a declaration error the create and update paths already
-        // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here.
-        self.egress = Some(config.egress.clone());
-        self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
-        self.limits = config.limits.clone();
-        if let Ok(image) = config.azure_catalog_image() {
-            self.disk_image = Some(image.to_string());
+        // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here. The
+        // capture is all-or-nothing, so a refusal cannot pair a new policy or size with an
+        // older image.
+        if let Err(error) = self.capture_session_inputs(&config) {
+            debug!(
+                sandbox_id = %config.id,
+                %error,
+                "the declaration did not capture, so the binding keeps the one it has"
+            );
         }
 
         // The data plane has no list operation, so the heartbeat carries the group's ARM
