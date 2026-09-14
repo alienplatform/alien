@@ -205,7 +205,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         || async {
             output::step(1, total_steps, "Requesting deployment deletion...");
 
-            client
+            let response = client
                 .delete_deployment()
                 .id(&deployment_id)
                 .body(alien_manager_api::types::DeleteDeploymentRequest {
@@ -218,7 +218,9 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                     operation: "request deletion".to_string(),
                 })?;
 
-            Ok(())
+            // Older managers do not report whether they completed deletion.
+            // Preserve their safe behavior by continuing setup teardown.
+            Ok(response.cleanup_required.unwrap_or(true))
         },
         || async {
             output::step(
@@ -304,17 +306,23 @@ async fn run_setup_owned_deletion<Request, RequestFuture, Acquire, AcquireFuture
 ) -> Result<()>
 where
     Request: FnOnce() -> RequestFuture,
-    RequestFuture: Future<Output = Result<()>>,
+    RequestFuture: Future<Output = Result<bool>>,
     Acquire: FnOnce() -> AcquireFuture,
     AcquireFuture: Future<Output = Result<()>>,
 {
     // Teardown-required already has active setup-owned work. A teardown-failed delete operation is
     // terminal, so the manager API must re-arm that canonical operation before the CLI acquires it.
-    if status != "teardown-required" {
-        request_deletion().await?;
+    let cleanup_required = if status == "teardown-required" {
+        true
+    } else {
+        request_deletion().await?
+    };
+
+    if cleanup_required {
+        acquire_and_delete().await?;
     }
 
-    acquire_and_delete().await
+    Ok(())
 }
 
 fn resolve_token(
@@ -386,7 +394,7 @@ mod tests {
             "teardown-failed",
             || async {
                 actions.lock().unwrap().push("request");
-                Ok(())
+                Ok(true)
             },
             || async {
                 actions.lock().unwrap().push("acquire");
@@ -407,7 +415,7 @@ mod tests {
             "teardown-required",
             || async {
                 actions.lock().unwrap().push("request");
-                Ok(())
+                Ok(true)
             },
             || async {
                 actions.lock().unwrap().push("acquire");
@@ -418,5 +426,26 @@ mod tests {
         .expect("active teardown should continue");
 
         assert_eq!(*actions.lock().unwrap(), ["acquire"]);
+    }
+
+    #[tokio::test]
+    async fn completed_manager_cleanup_skips_setup_teardown() {
+        let actions = std::sync::Mutex::new(Vec::new());
+
+        run_setup_owned_deletion(
+            "preflights-failed",
+            || async {
+                actions.lock().unwrap().push("request");
+                Ok(false)
+            },
+            || async {
+                actions.lock().unwrap().push("acquire");
+                Ok(())
+            },
+        )
+        .await
+        .expect("completed manager cleanup should need no setup teardown");
+
+        assert_eq!(*actions.lock().unwrap(), ["request"]);
     }
 }

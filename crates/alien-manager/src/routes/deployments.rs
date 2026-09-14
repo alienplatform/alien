@@ -165,6 +165,37 @@ pub struct DeleteDeploymentRequest {
 #[derive(Debug, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
+pub struct DeleteDeploymentResponse {
+    /// Accepted deletion action.
+    pub action: DeleteDeploymentAction,
+    /// Whether the caller must continue deleting setup-owned resources.
+    pub cleanup_required: Option<bool>,
+    /// Human-readable summary of the accepted operation.
+    pub message: String,
+}
+
+fn cleanup_delete_response(
+    action: DeleteDeploymentAction,
+    deployment_status: &str,
+    cleanup_required: bool,
+) -> DeleteDeploymentResponse {
+    let message = match deployment_status {
+        "teardown-required" => "Runtime cleanup complete; setup teardown required",
+        "teardown-failed" => "Setup teardown failed; retry setup teardown with setup credentials",
+        _ if cleanup_required => "Deployment deletion accepted",
+        _ => "Deployment deleted",
+    };
+
+    DeleteDeploymentResponse {
+        action,
+        cleanup_required: Some(cleanup_required),
+        message: message.to_string(),
+    }
+}
+
+#[derive(Debug, Serialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct DeploymentInfoResponse {
     pub commands: CommandsInfo,
     pub resources: std::collections::HashMap<String, ResourceEntry>,
@@ -746,7 +777,7 @@ async fn get_deployment_info(
     ),
     request_body = DeleteDeploymentRequest,
     responses(
-        (status = 202, description = "Deployment deletion enqueued"),
+        (status = 202, description = "Deployment deletion accepted", body = DeleteDeploymentResponse),
         (status = 401, description = "Unauthorized"),
         (status = 403, description = "Forbidden"),
         (status = 404, description = "Not found"),
@@ -772,7 +803,7 @@ async fn delete_deployment(
         return ErrorData::forbidden("Cannot delete deployment").into_response();
     }
 
-    let message = match &req.action {
+    let response = match &req.action {
         DeleteDeploymentAction::Cleanup => {
             if let Err(e) = state
                 .deployment_store
@@ -781,13 +812,12 @@ async fn delete_deployment(
             {
                 return e.into_response();
             }
-            match deployment.status.as_str() {
-                "teardown-required" => "Runtime cleanup complete; setup teardown required",
-                "teardown-failed" => {
-                    "Setup teardown failed; retry setup teardown with setup credentials"
-                }
-                _ => "Deployment deletion accepted",
-            }
+            let cleanup_required = match state.deployment_store.get_deployment(&subject, &id).await
+            {
+                Ok(deployment) => deployment.is_some(),
+                Err(error) => return error.into_response(),
+            };
+            cleanup_delete_response(req.action, &deployment.status, cleanup_required)
         }
         DeleteDeploymentAction::Detach | DeleteDeploymentAction::Forget => {
             if let Err(e) = state
@@ -797,18 +827,15 @@ async fn delete_deployment(
             {
                 return e.into_response();
             }
-            "Deployment deletion accepted"
+            DeleteDeploymentResponse {
+                action: req.action,
+                cleanup_required: Some(false),
+                message: "Deployment deletion accepted".to_string(),
+            }
         }
     };
 
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({
-            "action": req.action,
-            "message": message
-        })),
-    )
-        .into_response()
+    (StatusCode::ACCEPTED, Json(response)).into_response()
 }
 
 #[cfg_attr(feature = "openapi", utoipa::path(
@@ -913,7 +940,239 @@ async fn redeploy(
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashMap, sync::Arc};
+
+    use alien_bindings::providers::{kv::local::LocalKv, storage::local::LocalStorage};
+    use alien_commands::{
+        dispatchers::NullCommandDispatcher,
+        server::{CommandDispatcher, CommandRegistry, CommandServer},
+        InMemoryCommandRegistry,
+    };
+    use alien_error::AlienError;
+    use async_trait::async_trait;
+    use axum::{
+        body::{to_bytes, Body},
+        http::Request,
+    };
+    use chrono::Utc;
+    use mockall::Sequence;
+    use tower::ServiceExt;
+
     use super::*;
+    use crate::{
+        auth::Subject,
+        config::ManagerConfig,
+        providers::{local_credentials::LocalCredentialResolver, NullTelemetryBackend, OssAuthz},
+        routes::registry_proxy::{CredentialCache, PullValidationCache, RegistryRoutingTable},
+        traits::{
+            deployment_store::MockDeploymentStore, CreateReleaseParams, CreateTokenParams,
+            ReleaseRecord, ReleaseStore, TokenRecord, TokenStore,
+        },
+    };
+
+    struct UnusedReleaseStore;
+
+    #[async_trait]
+    impl ReleaseStore for UnusedReleaseStore {
+        async fn create_release(
+            &self,
+            _caller: &Subject,
+            _params: CreateReleaseParams,
+        ) -> Result<ReleaseRecord, AlienError> {
+            unreachable!("deployment deletion must not create a release")
+        }
+
+        async fn get_release(
+            &self,
+            _caller: &Subject,
+            _id: &str,
+        ) -> Result<Option<ReleaseRecord>, AlienError> {
+            unreachable!("deployment deletion must not read a release")
+        }
+
+        async fn get_latest_release(
+            &self,
+            _caller: &Subject,
+        ) -> Result<Option<ReleaseRecord>, AlienError> {
+            unreachable!("deployment deletion must not read a release")
+        }
+
+        async fn list_releases(&self, _caller: &Subject) -> Result<Vec<ReleaseRecord>, AlienError> {
+            unreachable!("deployment deletion must not list releases")
+        }
+    }
+
+    struct UnusedTokenStore;
+
+    #[async_trait]
+    impl TokenStore for UnusedTokenStore {
+        async fn create_token(
+            &self,
+            _params: CreateTokenParams,
+        ) -> Result<TokenRecord, AlienError> {
+            unreachable!("deployment deletion must not create a token")
+        }
+
+        async fn validate_token(&self, _key_hash: &str) -> Result<Option<TokenRecord>, AlienError> {
+            unreachable!("permissive test authentication must not validate a token")
+        }
+
+        async fn delete_token(&self, _id: &str) -> Result<(), AlienError> {
+            unreachable!("deployment deletion must not delete a token")
+        }
+
+        async fn list_tokens(&self) -> Result<Vec<TokenRecord>, AlienError> {
+            unreachable!("deployment deletion must not list tokens")
+        }
+    }
+
+    fn deployment_record() -> DeploymentRecord {
+        DeploymentRecord {
+            id: "deployment-1".to_string(),
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            name: "deployment-1".to_string(),
+            deployment_group_id: "group-1".to_string(),
+            platform: Platform::Aws,
+            deployment_protocol_version: 1,
+            base_platform: None,
+            status: "preflights-failed".to_string(),
+            stack_settings: None,
+            stack_state: None,
+            environment_info: None,
+            runtime_metadata: None,
+            current_release_id: None,
+            desired_release_id: None,
+            import_source: None,
+            setup_method: None,
+            setup_metadata: None,
+            setup_target: None,
+            setup_fingerprint: None,
+            setup_fingerprint_version: None,
+            user_environment_variables: None,
+            management_config: None,
+            deployment_config: None,
+            deployment_token: None,
+            input_values: HashMap::new(),
+            retry_requested: false,
+            locked_by: None,
+            locked_at: None,
+            created_at: Utc::now(),
+            updated_at: None,
+            error: None,
+        }
+    }
+
+    async fn cleanup_route_response(deployment_remains: bool) -> (StatusCode, serde_json::Value) {
+        let deployment = deployment_record();
+        let mut deployment_store = MockDeploymentStore::new();
+        let mut sequence = Sequence::new();
+
+        let initial = deployment.clone();
+        deployment_store
+            .expect_get_deployment()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_, _| Ok(Some(initial)));
+        deployment_store
+            .expect_set_delete_pending()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(|_, _| Ok(()));
+        deployment_store
+            .expect_get_deployment()
+            .times(1)
+            .in_sequence(&mut sequence)
+            .return_once(move |_, _| Ok(deployment_remains.then_some(deployment)));
+
+        let temp = tempfile::tempdir().expect("test directory should be created");
+        let kv: Arc<dyn alien_bindings::traits::Kv> = Arc::new(
+            LocalKv::new(temp.path().join("kv"))
+                .await
+                .expect("test KV should initialize"),
+        );
+        let command_storage: Arc<dyn alien_bindings::traits::Storage> = Arc::new(
+            LocalStorage::new(temp.path().join("storage").to_string_lossy().to_string())
+                .expect("test command storage should initialize"),
+        );
+        let command_dispatcher: Arc<dyn CommandDispatcher> = Arc::new(NullCommandDispatcher);
+        let command_registry: Arc<dyn CommandRegistry> =
+            Arc::new(InMemoryCommandRegistry::default());
+        let command_server = Arc::new(CommandServer::new(
+            kv.clone(),
+            command_storage,
+            command_dispatcher,
+            command_registry,
+            "http://localhost:0/v1".to_string(),
+            b"test-signing-key".to_vec(),
+        ));
+
+        let state = AppState {
+            deployment_store: Arc::new(deployment_store),
+            release_store: Arc::new(UnusedReleaseStore),
+            token_store: Arc::new(UnusedTokenStore),
+            auth_validator: Arc::new(
+                crate::providers::permissive_auth::PermissiveAuthValidator::new(),
+            ),
+            authz: Arc::new(OssAuthz),
+            telemetry_backend: Arc::new(NullTelemetryBackend),
+            credential_resolver: Arc::new(LocalCredentialResolver::new(temp.path().to_path_buf())),
+            command_server,
+            config: Arc::new(ManagerConfig::default()),
+            bindings_provider: None,
+            target_bindings_providers: HashMap::new(),
+            kv,
+            http_client: reqwest::Client::new(),
+            credential_cache: Arc::new(CredentialCache::new()),
+            pull_validation_cache: Arc::new(PullValidationCache::new()),
+            registry_routing_table: Arc::new(
+                RegistryRoutingTable::new(vec![])
+                    .expect("empty registry routing table should initialize"),
+            ),
+            import_registry: Arc::new(alien_infra::ImporterRegistry::built_in()),
+        };
+        let request = Request::builder()
+            .method("POST")
+            .uri("/v1/deployments/deployment-1/delete")
+            .header(http::header::AUTHORIZATION, "Bearer test-token")
+            .header(http::header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"action":"cleanup"}"#))
+            .expect("request should build");
+        let response = router()
+            .with_state(state)
+            .oneshot(request)
+            .await
+            .expect("route should respond");
+        let status = response.status();
+        let body = to_bytes(response.into_body(), 1024 * 1024)
+            .await
+            .expect("response body should load");
+
+        (
+            status,
+            serde_json::from_slice(&body).expect("response should contain JSON"),
+        )
+    }
+
+    #[tokio::test]
+    async fn cleanup_route_requires_setup_teardown_while_deployment_remains() {
+        let (status, json) = cleanup_route_response(true).await;
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(json["action"], "cleanup");
+        assert_eq!(json["cleanupRequired"], true);
+        assert_eq!(json["message"], "Deployment deletion accepted");
+    }
+
+    #[tokio::test]
+    async fn cleanup_route_reports_completed_deletion_when_record_is_gone() {
+        let (status, json) = cleanup_route_response(false).await;
+
+        assert_eq!(status, StatusCode::ACCEPTED);
+        assert_eq!(json["action"], "cleanup");
+        assert_eq!(json["cleanupRequired"], false);
+        assert_eq!(json["message"], "Deployment deleted");
+    }
 
     #[test]
     fn local_deployments_default_to_push_for_embedded_dev_loop() {

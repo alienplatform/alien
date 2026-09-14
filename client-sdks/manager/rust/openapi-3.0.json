@@ -876,7 +876,14 @@
         },
         "responses": {
           "202": {
-            "description": "Deployment deletion enqueued"
+            "description": "Deployment deletion accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeleteDeploymentResponse"
+                }
+              }
+            }
           },
           "401": {
             "description": "Unauthorized"
@@ -6473,6 +6480,28 @@
         "properties": {
           "action": {
             "$ref": "#/components/schemas/DeleteDeploymentAction"
+          }
+        }
+      },
+      "DeleteDeploymentResponse": {
+        "type": "object",
+        "required": [
+          "action",
+          "message"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/DeleteDeploymentAction",
+            "description": "Accepted deletion action."
+          },
+          "cleanupRequired": {
+            "type": "boolean",
+            "description": "Whether the caller must continue deleting setup-owned resources.",
+            "nullable": true
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable summary of the accepted operation."
           }
         }
       },
