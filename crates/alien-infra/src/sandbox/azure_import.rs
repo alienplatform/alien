@@ -28,9 +28,9 @@ impl ResourceImporter for AzureSandboxImporter {
         data: AzureSandboxImportData,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        // The import data does not carry the image, egress or idle-pause; they come from the
-        // declaration, so an imported group publishes a complete binding at import rather than
-        // waiting for the first reconcile.
+        // The import data carries none of the session inputs; they come from the declaration, so
+        // an imported group publishes a complete binding at import rather than waiting for the
+        // first reconcile.
         let sandbox = ctx
             .resource
             .config
@@ -50,6 +50,7 @@ impl ResourceImporter for AzureSandboxImporter {
             disk_image: Some(sandbox.azure_catalog_image()?.to_string()),
             egress: Some(sandbox.egress.clone()),
             idle_pause_seconds: sandbox.lifecycle.idle_pause_seconds,
+            limits: sandbox.limits.clone(),
             _internal_stay_count: None,
         };
         make_imported_state_with_status(controller, ctx, ResourceStatus::Running)
@@ -61,7 +62,7 @@ mod tests {
     use super::*;
     use alien_core::{
         Resource, ResourceEntry, ResourceLifecycle, SandboxCode, SandboxEgress,
-        SandboxLifecyclePolicy, StackSettings, ToolchainConfig,
+        SandboxLifecyclePolicy, SandboxLimits, StackSettings, ToolchainConfig,
     };
 
     fn entry(config: Resource) -> ResourceEntry {
@@ -96,9 +97,9 @@ mod tests {
         }
     }
 
-    /// The image, egress and idle-pause are not in the Azure import data — they come from the
-    /// declaration — so the import must capture them into state, or the binding stays incomplete
-    /// until a reconcile. Pinning each keeps that capture from silently regressing.
+    /// None of the session inputs are in the Azure import data — they come from the declaration —
+    /// so the import must capture them into state, or the binding stays incomplete until a
+    /// reconcile. Pinning each keeps that capture from silently regressing.
     #[test]
     fn azure_sandbox_import_captures_the_session_fields_from_the_declaration() {
         let resource = entry(Resource::new(
@@ -107,6 +108,12 @@ mod tests {
                     image: "ubuntu".to_string(),
                 })
                 .egress(SandboxEgress::Deny)
+                .limits(SandboxLimits {
+                    cpu: "4000m".to_string(),
+                    memory: "8192Mi".to_string(),
+                    disk: "40960Mi".to_string(),
+                    max_processes: None,
+                })
                 .lifecycle(SandboxLifecyclePolicy {
                     max_lifetime_seconds: None,
                     idle_pause_seconds: Some(300),
@@ -127,6 +134,9 @@ mod tests {
         assert_eq!(internal["diskImage"], "ubuntu");
         assert_eq!(internal["egress"]["mode"], "deny");
         assert_eq!(internal["idlePauseSeconds"], 300);
+        assert_eq!(internal["limits"]["cpu"], "4000m");
+        assert_eq!(internal["limits"]["memory"], "8192Mi");
+        assert_eq!(internal["limits"]["disk"], "40960Mi");
     }
 
     /// Azure creates a sandbox only from a catalog image, so a source-built sandbox is refused at

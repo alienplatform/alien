@@ -8,9 +8,9 @@
 //!
 //! The group itself is setup-owned: the package creates it, which is what lets a role assignment
 //! name it at apply, and `terraform destroy` removes it. This controller adopts the imported
-//! group and heartbeats it. It cannot prove the app's data-plane access by probing with its own
-//! credential (which lacks Data Owner by design); the execute grant that opens the data plane is
-//! authored on the linking resource's permission set by a preflight, not verified here.
+//! group and heartbeats it. It cannot prove the linking resource's data-plane access by probing
+//! with its own credential (which lacks Data Owner by design); the execute grant that opens the
+//! data plane is authored on that resource's permission set by a preflight, not verified here.
 
 use std::time::Duration;
 
@@ -19,9 +19,10 @@ use tracing::{debug, info};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use alien_core::{
-    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxOutputs,
+    ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxEgress, SandboxLimits,
+    SandboxOutputs,
 };
-use alien_error::{AlienError, Context};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 
 /// Azure Sandbox controller.
@@ -42,6 +43,9 @@ pub struct AzureSandboxController {
     /// Idle seconds after which a sandbox pauses, if the declaration asked for one.
     #[serde(default)]
     pub(crate) idle_pause_seconds: Option<u32>,
+    /// Ceilings every sandbox is created with, from the declaration.
+    #[serde(default)]
+    pub(crate) limits: Option<SandboxLimits>,
 }
 
 #[controller]
@@ -60,14 +64,14 @@ impl AzureSandboxController {
         // Reached only when the import did not seed this controller at Ready, which means the
         // setup package predates the group emitter. Creating one here would take ownership of a
         // resource a regenerated package then creates under the same name.
-        let (group, region, resource_group) = self.identity(&config.id).map_err(|_| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: "the Azure sandbox group is created by the setup package and arrives \
-                          through its import; regenerate the package and rerun setup"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
+        let (group, region, resource_group) =
+            self.identity(&config.id)
+                .context(ErrorData::CloudPlatformError {
+                    message: "the Azure sandbox group is created by the setup package and arrives \
+                              through its import; regenerate the package and rerun setup"
+                        .to_string(),
+                    resource_id: Some(config.id.clone()),
+                })?;
         self.capture_session_inputs(config)?;
         self.sandbox_group = Some(group.clone());
         self.region = Some(region);
@@ -92,6 +96,7 @@ impl AzureSandboxController {
         // fail on, and must not flip a serving sandbox to a terminal RefreshFailed here.
         self.egress = Some(config.egress.clone());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
+        self.limits = config.limits.clone();
         if let Ok(image) = config.azure_catalog_image() {
             self.disk_image = Some(image.to_string());
         }
@@ -106,30 +111,31 @@ impl AzureSandboxController {
             // sandboxGroups/read is granted, so a failure here is transient rather than a
             // permission gap. Report it as a partial collection instead of a default-Healthy
             // status that would claim a read happened.
-            if let Ok(azure_config) = ctx.get_azure_config() {
-                if let Ok(arm) = ctx
+            match ctx.get_azure_config() {
+                Ok(azure_config) => match ctx
                     .service_provider
                     .get_azure_sandbox_groups_client(azure_config)
                 {
-                    match arm.get_sandbox_group(&resource_group, &group).await {
+                    Ok(arm) => match arm.get_sandbox_group(&resource_group, &group).await {
                         Ok(sandbox_group) => {
                             provisioning_state = sandbox_group
                                 .properties
                                 .and_then(|properties| properties.provisioning_state);
                         }
-                        Err(error) => {
-                            status.partial = true;
-                            status.collection_issues.push(alien_core::HeartbeatCollectionIssue {
-                                source: "provisioningState".to_string(),
-                                reason: alien_core::HeartbeatCollectionIssueReason::CollectionFailed,
-                                severity: alien_core::HeartbeatIssueSeverity::Warning,
-                                message: format!(
-                                    "could not read the sandbox group's ARM state: {error}"
-                                ),
-                            });
-                        }
-                    }
-                }
+                        Err(error) => record_collection_issue(
+                            &mut status,
+                            format!("could not read the sandbox group's ARM state: {error}"),
+                        ),
+                    },
+                    Err(error) => record_collection_issue(
+                        &mut status,
+                        format!("could not build the ARM client for the sandbox group: {error}"),
+                    ),
+                },
+                Err(error) => record_collection_issue(
+                    &mut status,
+                    format!("could not read the Azure client config: {error}"),
+                ),
             }
 
             ctx.emit_heartbeat(alien_core::ResourceHeartbeat {
@@ -231,9 +237,9 @@ impl AzureSandboxController {
 
         // The data plane is per-region and separate from ARM; a caller cannot derive it from
         // the Azure client config, so the binding carries it.
-        let binding = SandboxBinding::azure(
+        let mut binding = SandboxBinding::azure(
             BindingValue::value(group.clone()),
-            BindingValue::value(format!("https://management.{region}.azuredevcompute.io")),
+            BindingValue::value(data_plane_endpoint(region)),
             BindingValue::value(region.clone()),
             BindingValue::value(resource_group.clone()),
             BindingValue::value(disk_image.clone()),
@@ -241,12 +247,25 @@ impl AzureSandboxController {
             self.idle_pause_seconds,
         );
 
-        Ok(Some(serde_json::to_value(binding).map_err(|error| {
-            AlienError::new(ErrorData::CloudPlatformError {
-                message: format!("failed to serialize the sandbox binding: {error}"),
-                resource_id: None,
-            })
-        })?))
+        let SandboxBinding::Azure(azure) = &mut binding else {
+            unreachable!("SandboxBinding::azure builds the Azure variant");
+        };
+        // All three or none, as the declaration has them: the data plane reads a missing ceiling
+        // as its own default, so filling one in alone would assert a size nobody declared.
+        if let Some(limits) = self.limits.as_ref() {
+            azure.cpu = Some(BindingValue::value(limits.cpu.clone()));
+            azure.memory = Some(BindingValue::value(limits.memory.clone()));
+            azure.disk = Some(BindingValue::value(limits.disk.clone()));
+        }
+
+        Ok(Some(
+            serde_json::to_value(binding).into_alien_error().context(
+                ErrorData::ResourceStateSerializationFailed {
+                    resource_id: "binding".to_string(),
+                    message: "Failed to serialize the sandbox binding".to_string(),
+                },
+            )?,
+        ))
     }
 
     // ─────────────── HELPER METHODS ──────────────────────────────────────
@@ -256,34 +275,34 @@ impl AzureSandboxController {
             CoreResourceOutputs::new(SandboxOutputs {
                 parent_name: group.clone(),
                 identifier: self.resource_group.clone(),
-                endpoint: self
-                    .region
-                    .as_ref()
-                    .map(|region| format!("https://management.{region}.azuredevcompute.io")),
+                endpoint: self.region.as_deref().map(data_plane_endpoint),
             })
         })
     }
 }
 
 impl AzureSandboxController {
-    /// Captures the image, egress and idle-pause the binding carries from the declaration.
+    /// Captures the image, egress, idle-pause and ceilings the binding carries from the
+    /// declaration.
     ///
     /// The data plane takes them only at sandbox-create and `get_binding_params` has no config to
     /// read, so they live in state; a change to any must reach the binding on the next reconcile.
     pub(crate) fn capture_session_inputs(&mut self, config: &Sandbox) -> Result<()> {
-        // Egress and idle-pause are set before the fallible image lookup so a partial capture on
-        // a bad declaration errs tight rather than leaving a stale, looser egress behind.
+        // The image is resolved before anything is assigned: the executor persists this controller
+        // and republishes its binding on the error branch too, so a capture that stopped halfway
+        // would leave half a declaration applied on every retry.
+        let disk_image = config
+            .azure_catalog_image()
+            .context(ErrorData::CloudPlatformError {
+                message: "sandbox code.image is not a valid Azure catalog image".to_string(),
+                resource_id: Some(config.id.clone()),
+            })?
+            .to_string();
+
+        self.disk_image = Some(disk_image);
         self.egress = Some(config.egress.clone());
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
-        self.disk_image = Some(
-            config
-                .azure_catalog_image()
-                .context(ErrorData::CloudPlatformError {
-                    message: "sandbox code.image is not a valid Azure catalog image".to_string(),
-                    resource_id: Some(config.id.clone()),
-                })?
-                .to_string(),
-        );
+        self.limits = config.limits.clone();
         Ok(())
     }
 
@@ -298,14 +317,45 @@ impl AzureSandboxController {
             }
             // A half import is refused rather than filled in: deriving the missing parts would
             // address a different group from the one setup created, and both would provision.
-            _ => Err(AlienError::new(ErrorData::CloudPlatformError {
-                message: "no complete sandbox group recorded: group, region and resource group \
-                          are all needed before sandboxes can be created"
-                    .to_string(),
-                resource_id: Some(sandbox_id.to_string()),
-            })),
+            _ => {
+                let mut missing = Vec::new();
+                if self.sandbox_group.is_none() {
+                    missing.push("sandbox group");
+                }
+                if self.region.is_none() {
+                    missing.push("region");
+                }
+                if self.resource_group.is_none() {
+                    missing.push("resource group");
+                }
+                Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "no complete sandbox group recorded: {} missing, and all three are \
+                         needed before sandboxes can be created",
+                        missing.join(", ")
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                }))
+            }
         }
     }
+}
+
+/// ADC data-plane host for a region. The plane is per-region, so the region selects it.
+fn data_plane_endpoint(region: &str) -> String {
+    format!("https://management.{region}.azuredevcompute.io")
+}
+
+fn record_collection_issue(status: &mut alien_core::SandboxHeartbeatStatus, message: String) {
+    status.partial = true;
+    status
+        .collection_issues
+        .push(alien_core::HeartbeatCollectionIssue {
+            source: "provisioningState".to_string(),
+            reason: alien_core::HeartbeatCollectionIssueReason::CollectionFailed,
+            severity: alien_core::HeartbeatIssueSeverity::Warning,
+            message,
+        });
 }
 
 #[cfg(test)]
@@ -316,7 +366,9 @@ mod tests {
         deserialize_controller, serialize_controller, MockPlatformServiceProvider,
         ResourceController, ResourceRegistry,
     };
-    use alien_core::{Platform, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy};
+    use alien_core::{
+        Platform, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy, ToolchainConfig,
+    };
     use std::sync::Arc;
 
     /// The ADC data plane is per-region and separate from ARM, so a caller cannot derive the
@@ -331,6 +383,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Deny),
             idle_pause_seconds: Some(300),
+            limits: None,
             _internal_stay_count: None,
         };
 
@@ -374,6 +427,7 @@ mod tests {
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Allow),
             idle_pause_seconds: None,
+            limits: None,
             _internal_stay_count: None,
         };
 
@@ -422,6 +476,7 @@ mod tests {
             "diskImage": "ubuntu",
             "egress": { "mode": "allowDomains", "domains": ["api.example.com"] },
             "idlePauseSeconds": 300,
+            "limits": { "cpu": "4000m", "memory": "8192Mi", "disk": "40960Mi" },
         }))
         .expect("a persisted sandbox row deserializes");
 
@@ -437,6 +492,15 @@ mod tests {
             })
         );
         assert_eq!(restored.idle_pause_seconds, Some(300));
+        assert_eq!(
+            restored.limits,
+            Some(SandboxLimits {
+                cpu: "4000m".to_string(),
+                memory: "8192Mi".to_string(),
+                disk: "40960Mi".to_string(),
+                max_processes: None,
+            })
+        );
     }
 
     /// Resolving a controller for a new deployment is a different path from deserializing
@@ -465,10 +529,113 @@ mod tests {
         let error = controller
             .identity("agent")
             .expect_err("a group without its region cannot be addressed");
+        let message = error.to_string();
         assert!(
-            error.to_string().contains("region"),
-            "the refusal must name what is missing: {error}"
+            message.contains("region"),
+            "the refusal must name what is missing: {message}"
         );
+        assert!(
+            !message.contains("resource group"),
+            "the refusal must not name a field that is present: {message}"
+        );
+    }
+
+    /// The executor persists this controller and republishes its binding on the error branch too,
+    /// so a capture that gave up halfway would serve half a declaration on every retry.
+    #[test]
+    fn a_failed_capture_leaves_the_declaration_whole() {
+        let mut controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("sbg".to_string()),
+            region: Some("westus2".to_string()),
+            resource_group: Some("rg".to_string()),
+            disk_image: Some("ubuntu".to_string()),
+            egress: Some(SandboxEgress::Deny),
+            idle_pause_seconds: None,
+            limits: None,
+            _internal_stay_count: None,
+        };
+        let config = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain: ToolchainConfig::Docker {
+                    dockerfile: None,
+                    build_args: None,
+                    target: None,
+                },
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: Some(300),
+            })
+            .build();
+
+        controller
+            .capture_session_inputs(&config)
+            .expect_err("a source-built sandbox has no Azure catalog image");
+
+        assert_eq!(controller.egress, Some(SandboxEgress::Deny));
+        assert_eq!(controller.idle_pause_seconds, None);
+        assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
+    }
+
+    /// Preflight validates the declared ceilings against Azure's own steps and then has nothing
+    /// more to do with them: this binding is the only channel to the data plane, which takes them
+    /// at sandbox-create and nowhere else.
+    #[test]
+    fn the_binding_carries_the_declared_ceilings() {
+        let controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("sbg".to_string()),
+            region: Some("westus2".to_string()),
+            resource_group: Some("rg".to_string()),
+            disk_image: Some("ubuntu".to_string()),
+            egress: Some(SandboxEgress::Deny),
+            idle_pause_seconds: Some(300),
+            limits: Some(SandboxLimits {
+                cpu: "4000m".to_string(),
+                memory: "8192Mi".to_string(),
+                disk: "40960Mi".to_string(),
+                max_processes: None,
+            }),
+            _internal_stay_count: None,
+        };
+
+        let params = controller
+            .get_binding_params()
+            .expect("binding params")
+            .expect("a fully imported sandbox group publishes a binding");
+
+        assert_eq!(params["cpu"], "4000m");
+        assert_eq!(params["memory"], "8192Mi");
+        assert_eq!(params["disk"], "40960Mi");
+    }
+
+    /// A declaration naming no ceilings must not have any invented for it: the data plane reads an
+    /// absent field as its own default, which is not the same as a size the binding asserts.
+    #[test]
+    fn a_sandbox_without_declared_ceilings_publishes_none() {
+        let controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("sbg".to_string()),
+            region: Some("westus2".to_string()),
+            resource_group: Some("rg".to_string()),
+            disk_image: Some("ubuntu".to_string()),
+            egress: Some(SandboxEgress::Deny),
+            idle_pause_seconds: None,
+            limits: None,
+            _internal_stay_count: None,
+        };
+
+        let params = controller
+            .get_binding_params()
+            .expect("binding params")
+            .expect("a fully imported sandbox group publishes a binding");
+
+        assert!(params.get("cpu").is_none());
+        assert!(params.get("memory").is_none());
+        assert!(params.get("disk").is_none());
     }
 
     /// `AllowDomains` is the one egress variant carrying a payload, and Azure is the backend that
@@ -485,6 +652,7 @@ mod tests {
                 domains: vec!["api.example.com".to_string()],
             }),
             idle_pause_seconds: None,
+            limits: None,
             _internal_stay_count: None,
         };
 
