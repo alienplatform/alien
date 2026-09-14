@@ -107,6 +107,10 @@ impl Modify for BearerSecurity {
         crate::routes::sync::AgentSyncResponse,
         crate::routes::sync::InitializeRequest,
         crate::routes::sync::InitializeResponse,
+        alien_core::sync::ReportedOperation,
+        alien_core::sync::OperationsReport,
+        alien_core::sync::OperationsBundleDownload,
+        alien_core::sync::TargetOperationsBundleSet,
         // Credentials types
         crate::routes::credentials::MintCredentialsRequest,
         crate::routes::credentials::MintCredentialsResponse,

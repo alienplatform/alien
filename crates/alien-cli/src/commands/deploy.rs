@@ -1331,6 +1331,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                                 initial_desired_release: alien_platform_api::types::NewDeploymentRequestInitialDesiredRelease::Active,
                                 setup_method: None,
                                 setup_metadata: None,
+                                setup_handoff: ::std::default::Default::default(),
                             })
                             .send()
                             .await

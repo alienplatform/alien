@@ -135,6 +135,7 @@ mod tests {
             config,
             db,
             service_provider: None,
+            operations_sync_handler: None,
             cancel: cancel.clone(),
         });
 
