@@ -278,6 +278,7 @@ pub async fn stack_import(
             let activates_setup_reservation = is_pending_setup_reservation(&existing, &release.id);
             match setup_registration_replay(&existing.setup_metadata, &setup_metadata) {
                 SetupRegistrationReplay::Exact => {
+                    let deployment_token = response_deployment_token(&subject, &existing);
                     let Some(stack_settings) = existing.stack_settings else {
                         return ErrorData::internal(
                             "imported deployment is missing stack_settings",
@@ -288,7 +289,7 @@ pub async fn stack_import(
                         StatusCode::OK,
                         Json(StackImportResponse {
                             deployment_id: existing.id,
-                            deployment_token: existing.deployment_token,
+                            deployment_token,
                             stack_settings,
                             stack_state,
                         }),
@@ -314,6 +315,7 @@ pub async fn stack_import(
             if !has_registration_operation
                 && is_idempotent_import(&existing, &stack_state, &release.id, &req)
             {
+                let deployment_token = response_deployment_token(&subject, &existing);
                 let Some(stack_settings) = existing.stack_settings else {
                     return ErrorData::internal("imported deployment is missing stack_settings")
                         .into_response();
@@ -323,7 +325,7 @@ pub async fn stack_import(
                     StatusCode::OK,
                     Json(StackImportResponse {
                         deployment_id: existing.id,
-                        deployment_token: existing.deployment_token,
+                        deployment_token,
                         stack_settings,
                         stack_state,
                     }),
@@ -441,6 +443,7 @@ pub async fn stack_import(
                 Err(e) => return e.into_response(),
             };
 
+            let deployment_token = response_deployment_token(&subject, &updated);
             let stack_settings = match updated.stack_settings {
                 Some(settings) => settings,
                 None => {
@@ -452,7 +455,7 @@ pub async fn stack_import(
                 StatusCode::OK,
                 Json(StackImportResponse {
                     deployment_id: updated.id,
-                    deployment_token: updated.deployment_token,
+                    deployment_token,
                     stack_settings,
                     stack_state,
                 }),
@@ -562,6 +565,22 @@ pub async fn stack_import(
         }),
     )
         .into_response()
+}
+
+/// Return the credential a setup driver must persist after registration.
+///
+/// A deployment-scoped caller already presented the durable credential for
+/// this exact deployment. Echo it from request scope rather than requiring a
+/// deployment store to expose plaintext credentials.
+fn response_deployment_token(subject: &Subject, deployment: &DeploymentRecord) -> Option<String> {
+    match &subject.scope {
+        Scope::Deployment { deployment_id, .. }
+            if deployment_id == &deployment.id && !subject.bearer_token.is_empty() =>
+        {
+            Some(subject.bearer_token.clone())
+        }
+        _ => deployment.deployment_token.clone(),
+    }
 }
 
 /// PR #156 carried the Remote Bindings identity inside the management import
