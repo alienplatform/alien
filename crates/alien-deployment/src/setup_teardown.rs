@@ -154,12 +154,14 @@ async fn run_setup_teardown_after_handoff_inner(
             StackStatus::Pending | StackStatus::InProgress | StackStatus::Running => {}
         }
 
-        let current_stack_state = state.stack_state.take().ok_or_else(|| {
+        // Keep the last checkpoint in `state` while the cloud operation is in flight. Lease loss
+        // cancels this future; retaining the checkpoint lets the next owner resume safely even if
+        // cancellation happens after the provider has started a long-running deletion.
+        let current_stack_state = state.stack_state.clone().ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
                 message: "Stack state required for setup teardown step".to_string(),
             })
         })?;
-        let stack_state_before_step = current_stack_state.clone();
         let step_result = match executor.step(current_stack_state).await.context(
             ErrorData::StackExecutionFailed {
                 message: "Failed to execute setup teardown step".to_string(),
@@ -167,7 +169,6 @@ async fn run_setup_teardown_after_handoff_inner(
         ) {
             Ok(step_result) => step_result,
             Err(error) => {
-                state.stack_state = Some(stack_state_before_step);
                 fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
                 return Err(error);
             }
