@@ -26,6 +26,7 @@ use crate::output::print_json;
 #[serde(rename_all = "camelCase")]
 struct UploadUrlRequest {
     name: String,
+    version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -622,6 +623,7 @@ pub async fn publish_task(
         .request(Method::POST, upload_url_endpoint.clone())
         .json(&UploadUrlRequest {
             name: manifest.name.clone(),
+            version: manifest.version.clone(),
         })
         .send()
         .await

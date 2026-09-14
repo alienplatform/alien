@@ -524,6 +524,7 @@ impl DeploymentLoop {
                                 capabilities: Vec::new(),
                                 operator_version: None,
                                 execution_claim: execution_claim.clone(),
+                                operations_report: None,
                             },
                         )
                         .await?;

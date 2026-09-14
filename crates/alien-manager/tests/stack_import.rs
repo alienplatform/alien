@@ -1024,6 +1024,7 @@ async fn re_import_replaces_stack_state() {
                 observed_inventory_batches: vec![],
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await
@@ -1117,6 +1118,7 @@ async fn re_import_repairs_terminal_initial_failures() {
                     observed_inventory_batches: vec![],
                     capabilities: vec![],
                     operator_version: None,
+                    operations_report: None,
                 },
             )
             .await
@@ -1211,6 +1213,7 @@ async fn re_import_advances_setup_registration_replay_baseline() {
                 observed_inventory_batches: vec![],
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await
@@ -1583,6 +1586,7 @@ async fn a_reimport_flipping_a_frozen_gate_answer_is_refused() {
                 observed_inventory_batches: vec![],
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await
@@ -1675,6 +1679,7 @@ async fn a_gate_introduced_by_a_later_release_records_its_first_answer_on_reimpo
                 observed_inventory_batches: vec![],
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await

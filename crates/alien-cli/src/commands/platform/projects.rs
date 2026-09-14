@@ -460,7 +460,8 @@ fn remote_sandbox_request(
     Ok(ConfigureRemoteSandboxRequest {
         base_image: Some(base_image),
         image_bundle_uri: None,
-        max_session_lifetime_seconds,
+        azure: None,
+        max_session_lifetime_seconds: Some(max_session_lifetime_seconds),
     })
 }
 
