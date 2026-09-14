@@ -853,9 +853,12 @@ mod tests {
             .await
             .expect("a frozen sandbox must end the stream, not park its reader");
 
-        let error = outputs
-            .last()
-            .expect("the stream ends rather than parking")
+        assert_eq!(
+            outputs.len(),
+            2,
+            "the frame that did arrive is kept: {outputs:?}"
+        );
+        let error = outputs[1]
             .as_ref()
             .expect_err("a body that never ends is a failure, not an end");
         assert_eq!(error.code, "SANDBOX_OUTCOME_UNKNOWN", "got: {error}");
