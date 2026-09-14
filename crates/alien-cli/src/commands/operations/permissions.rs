@@ -222,13 +222,11 @@ mod tests {
 
     #[test]
     fn generates_an_aws_policy_for_a_real_permission_set() {
-        let real_id = alien_permissions::list_permission_set_ids()
-            .into_iter()
-            .find(|id| {
-                alien_permissions::get_permission_set(id)
-                    .is_some_and(|set| set.platforms.aws.is_some())
-            })
-            .expect("at least one permission set must support AWS for this test to be meaningful");
+        // Operations run against one resource, so this command deliberately asks the
+        // generator for a resource binding. Use a permission set that promises that
+        // scope instead of selecting an arbitrary AWS set: some valid AWS sets are
+        // stack-only and should be rejected here.
+        let real_id = "postgres/heartbeat";
 
         let temp = tempfile::tempdir().expect("create temp dir");
         write_manifest(
