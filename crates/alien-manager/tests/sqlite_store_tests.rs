@@ -139,6 +139,7 @@ fn test_reconcile_data(
         observed_inventory_batches: vec![],
         capabilities: vec![],
         operator_version: None,
+        operations_report: None,
     }
 }
 
@@ -1005,6 +1006,7 @@ async fn reconcile_succeeds_under_other_session_lock() {
                 suggested_delay_ms: None,
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await
@@ -1197,6 +1199,7 @@ async fn reconcile_refreshes_owned_lock_lease() {
                 suggested_delay_ms: None,
                 capabilities: vec![],
                 operator_version: None,
+                operations_report: None,
             },
         )
         .await

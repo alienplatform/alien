@@ -88,6 +88,7 @@ pub async fn run_operator_with_cancel_and_debug_loop(
         debug_session_loop,
         None,
         None,
+        None,
         cancel,
     )
     .await
@@ -104,12 +105,16 @@ pub async fn run_operator_with_cancel_and_debug_loop(
 /// - `operations_exec_loop` — the pull-mode operations-execution loop (runs
 ///   authorized `<plugin>/<operation>` commands the customer approved; OSS
 ///   builds inject none and run nothing).
+/// - `operations_sync_handler` — downloads/hot-reloads the plugin registry
+///   toward the sync loop's target bundle set and reports the loaded
+///   catalog back; OSS builds inject none and report nothing.
 pub async fn run_operator_with_cancel_and_loops(
     config: OperatorConfig,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
     access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
     operations_exec_loop: Option<Arc<dyn loops::operations_exec::OperationsExecLoop>>,
+    operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
     use tracing::{info, warn};
@@ -139,6 +144,7 @@ pub async fn run_operator_with_cancel_and_loops(
         config: config.clone(),
         db: db.clone(),
         service_provider,
+        operations_sync_handler,
         cancel: cancel.clone(),
     });
 
@@ -440,6 +446,10 @@ pub struct OperatorState {
     /// Platform service provider for deployment operations.
     /// When running on local platform, this should contain a LocalBindingsProvider.
     pub service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    /// Drives the plugin registry toward the sync loop's target bundle set
+    /// and reports what's loaded. `None` in OSS builds, which have no
+    /// registry.
+    pub operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     /// Cancellation token for graceful shutdown.
     pub cancel: CancellationToken,
 }

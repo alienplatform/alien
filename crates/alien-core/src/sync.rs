@@ -36,6 +36,70 @@ pub struct OperatorCapabilityReport {
     pub detail: Option<String>,
 }
 
+/// A single operation the Operator currently has loaded. Opaque identifiers
+/// only — no tier, description, or other plugin business logic crosses into
+/// this public crate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ReportedOperation {
+    /// Name of the plugin that owns this operation.
+    pub plugin: String,
+    /// Version of the plugin that owns this operation.
+    pub plugin_version: String,
+    /// Name of the operation within the plugin.
+    pub name: String,
+}
+
+/// Report-only summary of the operations the Operator has loaded, used to
+/// confirm a bundle sync actually took effect.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperationsReport {
+    /// Hash of the enabled-plugin bundle set the Operator currently has
+    /// loaded. Compared against the platform's target hash to detect drift.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub loaded_bundle_hash: Option<String>,
+    /// Operations currently loaded and executable by the Operator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub operations: Vec<ReportedOperation>,
+}
+
+/// One bundle the Operator needs to download to reach `targetBundleHash`.
+/// The manager mints a short-lived presigned GET URL per bundle — the
+/// Operator never holds real cloud storage credentials, mirroring the OCI
+/// registry proxy's credential-injection pattern.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperationsBundleDownload {
+    /// Plugin name this bundle provides.
+    pub plugin: String,
+    /// Plugin version this bundle provides.
+    pub plugin_version: String,
+    /// Presigned URL to GET the bundle ZIP from. Short-lived.
+    pub url: String,
+}
+
+/// Target operations-bundle set for the Operator to converge its loaded
+/// plugin registry toward, independent of any release/config target — a
+/// plugin can be enabled with no release change, so this is not nested under
+/// `TargetDeployment`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct TargetOperationsBundleSet {
+    /// Hash identifying this exact enabled-plugin set. Compare against
+    /// `OperationsReport.loadedBundleHash` to detect drift.
+    pub hash: String,
+    /// Presigned downloads for every bundle in the target set. The Operator
+    /// fetches only the ones it doesn't already have loaded at the right
+    /// version; already-loaded bundles are harmless to re-download.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bundles: Vec<OperationsBundleDownload>,
+}
+
 /// Request sent by the agent to the manager during periodic sync.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -74,6 +138,11 @@ pub struct SyncRequest {
     /// Version of the Operator binary reporting this sync.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub operator_version: Option<String>,
+    /// Report-only summary of the operations the Operator currently has
+    /// loaded. Absent means the Operator does not yet support reporting
+    /// this (older Operator versions), not that it has no operations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub operations_report: Option<OperationsReport>,
 }
 
 /// Response from the manager to the agent sync request.
@@ -100,6 +169,13 @@ pub struct SyncResponse {
     /// When absent, the agent falls back to its sync URL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commands_url: Option<String>,
+    /// Target operations-bundle set the Operator should converge its loaded
+    /// plugin registry toward. None means no enabled plugin set has ever
+    /// been established for this project (nothing to sync), not that the
+    /// Operator is up to date — compare `hash` against the Operator's own
+    /// loaded hash to decide whether to download anything.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_operations_bundle_set: Option<TargetOperationsBundleSet>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -135,6 +211,7 @@ mod tests {
             observed_inventory_batches: Vec::new(),
             capabilities: Vec::new(),
             operator_version: None,
+            operations_report: None,
         };
 
         let json = serde_json::to_value(&req).unwrap();
@@ -145,6 +222,7 @@ mod tests {
         assert!(json.get("resourceHeartbeats").is_none());
         assert!(json.get("capabilities").is_none());
         assert!(json.get("operatorVersion").is_none());
+        assert!(json.get("operationsReport").is_none());
     }
 
     #[test]
@@ -159,6 +237,7 @@ mod tests {
         assert!(req.observed_inventory_batches.is_empty());
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
+        assert!(req.operations_report.is_none());
     }
 
     #[test]
@@ -168,11 +247,13 @@ mod tests {
             current_state: None,
             target: None,
             commands_url: None,
+            target_operations_bundle_set: None,
         };
         let json = serde_json::to_value(&resp).unwrap();
         // target is None → should be omitted
         assert!(json.get("target").is_none());
         assert!(json.get("currentState").is_none());
+        assert!(json.get("targetOperationsBundleSet").is_none());
     }
 
     #[test]
@@ -182,6 +263,7 @@ mod tests {
             current_state: None,
             target: None,
             commands_url: None,
+            target_operations_bundle_set: None,
         };
         let serialized = serde_json::to_string(&resp).unwrap();
         let deserialized: SyncResponse = serde_json::from_str(&serialized).unwrap();
@@ -274,6 +356,7 @@ mod tests {
             current_state: Some(state),
             target: None,
             commands_url: None,
+            target_operations_bundle_set: None,
         };
 
         let serialized = serde_json::to_string(&resp).unwrap();
@@ -283,5 +366,101 @@ mod tests {
         assert_eq!(current_state.status, crate::DeploymentStatus::Running);
         assert!(!current_state.has_desired());
         assert!(deserialized.target.is_none());
+    }
+
+    #[test]
+    fn test_sync_request_operations_report_absent_by_default() {
+        // Simulates an old Operator that doesn't know about operationsReport:
+        // the field must default to None, never be required.
+        let json = r#"{"deploymentId": "dep_old_operator", "operatorVersion": "0.9.0"}"#;
+        let req: SyncRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(req.operator_version.as_deref(), Some("0.9.0"));
+        assert!(req.operations_report.is_none());
+    }
+
+    #[test]
+    fn test_sync_request_operations_report_roundtrip() {
+        let req = SyncRequest {
+            deployment_id: "dep_1".to_string(),
+            session: String::new(),
+            supports_execution_claims: false,
+            execution_claim: None,
+            current_state: None,
+            heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: Some("1.2.3".to_string()),
+            operations_report: Some(OperationsReport {
+                loaded_bundle_hash: Some("builtin:s3@1.0.0:key|".to_string()),
+                operations: vec![ReportedOperation {
+                    plugin: "s3".to_string(),
+                    plugin_version: "1.0.0".to_string(),
+                    name: "list-buckets".to_string(),
+                }],
+            }),
+        };
+
+        let json = serde_json::to_value(&req).unwrap();
+        assert_eq!(
+            json["operationsReport"]["loadedBundleHash"],
+            "builtin:s3@1.0.0:key|"
+        );
+        assert_eq!(json["operationsReport"]["operations"][0]["plugin"], "s3");
+        assert_eq!(
+            json["operationsReport"]["operations"][0]["pluginVersion"],
+            "1.0.0"
+        );
+        assert_eq!(
+            json["operationsReport"]["operations"][0]["name"],
+            "list-buckets"
+        );
+
+        let deserialized: SyncRequest = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            deserialized.operations_report.as_ref().unwrap().loaded_bundle_hash,
+            req.operations_report.as_ref().unwrap().loaded_bundle_hash
+        );
+        assert_eq!(
+            deserialized.operations_report.unwrap().operations,
+            req.operations_report.unwrap().operations
+        );
+    }
+
+    #[test]
+    fn test_sync_response_target_operations_bundle_set_roundtrip() {
+        let resp = SyncResponse {
+            execution_claim: None,
+            current_state: None,
+            target: None,
+            commands_url: None,
+            target_operations_bundle_set: Some(TargetOperationsBundleSet {
+                hash: "builtin:s3@1.0.0:key|".to_string(),
+                bundles: vec![OperationsBundleDownload {
+                    plugin: "s3".to_string(),
+                    plugin_version: "1.0.0".to_string(),
+                    url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
+                }],
+            }),
+        };
+
+        let json = serde_json::to_value(&resp).unwrap();
+        assert_eq!(json["targetOperationsBundleSet"]["hash"], "builtin:s3@1.0.0:key|");
+        assert_eq!(
+            json["targetOperationsBundleSet"]["bundles"][0]["plugin"],
+            "s3"
+        );
+
+        let deserialized: SyncResponse = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            deserialized.target_operations_bundle_set,
+            resp.target_operations_bundle_set
+        );
+    }
+
+    #[test]
+    fn test_sync_response_target_operations_bundle_set_absent_by_default() {
+        let json = serde_json::json!({});
+        let resp: SyncResponse = serde_json::from_value(json).unwrap();
+        assert!(resp.target_operations_bundle_set.is_none());
     }
 }

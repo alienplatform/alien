@@ -1193,6 +1193,74 @@ impl OperatorDb {
 
         Ok(())
     }
+
+    /// Get the target operations-bundle set from the manager's last sync
+    /// response, so a restart doesn't lose it for a full extra tick.
+    pub async fn get_target_operations_bundle_set(
+        &self,
+    ) -> Result<Option<alien_core::sync::TargetOperationsBundleSet>> {
+        let conn = self.conn.lock().await;
+
+        let mut rows = conn
+            .query(
+                "SELECT value FROM state WHERE key = 'target_operations_bundle_set'",
+                (),
+            )
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to query target_operations_bundle_set".to_string(),
+            })?;
+
+        let Some(row) = rows
+            .next()
+            .await
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to fetch target_operations_bundle_set row".to_string(),
+            })?
+        else {
+            return Ok(None);
+        };
+        let value: String =
+            row.get(0)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to read target_operations_bundle_set value".to_string(),
+                })?;
+        let target = serde_json::from_str(&value)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to parse target_operations_bundle_set".to_string(),
+            })?;
+        Ok(Some(target))
+    }
+
+    /// Set the target operations-bundle set from the manager's sync response.
+    pub async fn set_target_operations_bundle_set(
+        &self,
+        target: &alien_core::sync::TargetOperationsBundleSet,
+    ) -> Result<()> {
+        let conn = self.conn.lock().await;
+
+        let value = serde_json::to_string(target)
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize target_operations_bundle_set".to_string(),
+            })?;
+        conn.execute(
+            "INSERT INTO state (key, value, updated_at) VALUES ('target_operations_bundle_set', ?, datetime('now'))
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+            (value,),
+        )
+        .await
+        .into_alien_error()
+        .context(ErrorData::DatabaseError {
+            message: "Failed to set target_operations_bundle_set".to_string(),
+        })?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -1308,6 +1376,50 @@ mod tests {
                 .target
                 .and_then(|target| target.release_info.release_id),
             Some("rel_a".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn target_operations_bundle_set_persists_across_reopen() {
+        use alien_core::sync::{OperationsBundleDownload, TargetOperationsBundleSet};
+
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is utf-8");
+
+        let target = TargetOperationsBundleSet {
+            hash: "builtin:s3@1.0.0:key|".to_string(),
+            bundles: vec![OperationsBundleDownload {
+                plugin: "s3".to_string(),
+                plugin_version: "1.0.0".to_string(),
+                url: "https://storage.example.com/bundle.zip?sig=abc".to_string(),
+            }],
+        };
+
+        {
+            let db = OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+                .await
+                .expect("open encrypted operator db");
+
+            assert_eq!(
+                db.get_target_operations_bundle_set()
+                    .await
+                    .expect("read missing target"),
+                None
+            );
+
+            db.set_target_operations_bundle_set(&target)
+                .await
+                .expect("store target");
+        }
+
+        let db = OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("reopen encrypted operator db");
+        assert_eq!(
+            db.get_target_operations_bundle_set()
+                .await
+                .expect("read target after reopen"),
+            Some(target)
         );
     }
 }
