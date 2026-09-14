@@ -10,6 +10,16 @@ mod aws_import;
 #[cfg(feature = "aws")]
 pub use aws_import::*;
 
+#[cfg(feature = "azure")]
+mod azure;
+#[cfg(feature = "azure")]
+pub use azure::*;
+
+#[cfg(feature = "azure")]
+mod azure_import;
+#[cfg(feature = "azure")]
+pub use azure_import::*;
+
 #[cfg(feature = "kubernetes")]
 mod kubernetes_eligibility;
 #[cfg(feature = "kubernetes")]
