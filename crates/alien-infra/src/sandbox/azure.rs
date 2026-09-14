@@ -378,7 +378,7 @@ mod tests {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Deny),
@@ -394,7 +394,7 @@ mod tests {
 
         assert_eq!(
             params["dataPlaneEndpoint"],
-            "https://management.westus2.azuredevcompute.io"
+            "https://management.swedencentral.azuredevcompute.io"
         );
         assert_eq!(params["resourceGroup"], "rg");
         assert_eq!(params["diskImage"], "ubuntu");
@@ -422,7 +422,7 @@ mod tests {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Allow),
@@ -451,7 +451,7 @@ mod tests {
     fn controller_round_trips_by_tag() {
         let controller = AzureSandboxController {
             sandbox_group: Some("sbg1".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             ..Default::default()
         };
@@ -471,7 +471,7 @@ mod tests {
         let restored: AzureSandboxController = serde_json::from_value(serde_json::json!({
             "state": "ready",
             "sandboxGroup": "sbg",
-            "region": "westus2",
+            "region": "swedencentral",
             "resourceGroup": "rg",
             "diskImage": "ubuntu",
             "egress": { "mode": "allowDomains", "domains": ["api.example.com"] },
@@ -482,7 +482,7 @@ mod tests {
 
         assert!(matches!(restored.state, AzureSandboxState::Ready));
         assert_eq!(restored.sandbox_group.as_deref(), Some("sbg"));
-        assert_eq!(restored.region.as_deref(), Some("westus2"));
+        assert_eq!(restored.region.as_deref(), Some("swedencentral"));
         assert_eq!(restored.resource_group.as_deref(), Some("rg"));
         assert_eq!(restored.disk_image.as_deref(), Some("ubuntu"));
         assert_eq!(
@@ -547,7 +547,7 @@ mod tests {
         let mut controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Deny),
@@ -588,7 +588,7 @@ mod tests {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Deny),
@@ -619,7 +619,7 @@ mod tests {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::Deny),
@@ -645,7 +645,7 @@ mod tests {
         let controller = AzureSandboxController {
             state: AzureSandboxState::Ready,
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             disk_image: Some("ubuntu".to_string()),
             egress: Some(SandboxEgress::AllowDomains {
@@ -671,7 +671,7 @@ mod tests {
     fn state_without_the_session_fields_loads_and_publishes_no_binding() {
         let mut value = serde_json::to_value(AzureSandboxController {
             sandbox_group: Some("sbg".to_string()),
-            region: Some("westus2".to_string()),
+            region: Some("swedencentral".to_string()),
             resource_group: Some("rg".to_string()),
             ..Default::default()
         })
