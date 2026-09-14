@@ -1124,6 +1124,7 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         .expect("update should contain a failed resource");
     assert!(failed_resource.retry_attempt > 0);
     assert!(failed_resource.last_failed_state.is_some());
+    let exhausted_retry_attempt = failed_resource.retry_attempt;
     assert!(
         state
             .runtime_metadata
@@ -1168,18 +1169,16 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         .values()
         .find(|resource| resource.config.id() == "test-function-v2")
         .expect("retried resource should remain in stack state");
-    assert_eq!(
-        retried_resource.retry_attempt, 0,
-        "manual retry should grant the resource a fresh retry budget"
-    );
     assert!(
-        retried_resource.error.is_none(),
-        "manual retry should clear the exhausted attempt error"
+        matches!(
+            retried_resource.status,
+            alien_core::ResourceStatus::ProvisionFailed
+                | alien_core::ResourceStatus::UpdateFailed
+                | alien_core::ResourceStatus::RefreshFailed
+        ),
+        "UpdatePending must retain the failed checkpoint until the final desired stack is prepared"
     );
-    assert!(
-        retried_resource.last_failed_state.is_none(),
-        "manual retry should consume the saved failed handler"
-    );
+    assert!(retried_resource.last_failed_state.is_some());
     assert!(
         result
             .state
@@ -1191,9 +1190,35 @@ async fn test_update_failed_retry_gate_returns_to_update_pending() {
         "retry preparation must not consume setup authorization"
     );
 
+    // Preflight first prepares the exact desired stack. Only the following
+    // Updating step may decide that the failed resource is unchanged and
+    // resume its saved controller with a fresh retry budget.
+    let result = alien_deployment::step(result.state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("retry preflight should succeed");
+    assert_eq!(result.state.status, DeploymentStatus::Updating);
+
+    let result = alien_deployment::step(result.state, config.clone(), ClientConfig::Test, None)
+        .await
+        .expect("unchanged failed resource should resume");
+    let resumed_resource = result
+        .state
+        .stack_state
+        .as_ref()
+        .unwrap()
+        .resources
+        .values()
+        .find(|resource| resource.config.id() == "test-function-v2")
+        .expect("resumed resource should remain in stack state");
+    assert!(
+        resumed_resource.retry_attempt < exhausted_retry_attempt,
+        "resuming the unchanged failure should grant it a fresh retry budget"
+    );
+
     // A newly selected corrective release enters UpdatePending directly rather
-    // than passing through the manual UpdateFailed retry handler. It must still
-    // reset the failed controller before reconciling the corrected config.
+    // than passing through the manual UpdateFailed retry handler. The executor
+    // must compare the fully prepared desired config with the failed config and
+    // restart planning instead of resuming the superseded polling checkpoint.
     corrective_state.status = DeploymentStatus::UpdatePending;
     corrective_state.retry_requested = false;
     corrective_state.target_release = Some(ReleaseInfo {

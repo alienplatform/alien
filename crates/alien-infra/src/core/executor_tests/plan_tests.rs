@@ -4,7 +4,7 @@ use super::helpers::*;
 use crate::core::state_utils::StackResourceStateExt;
 use crate::error::Result;
 use crate::worker::{TestWorkerController, TestWorkerState};
-use alien_core::{ResourceLifecycle, ResourceStatus, Stack};
+use alien_core::{ResourceLifecycle, ResourceRef, ResourceStatus, Stack, Worker};
 
 /// Tests that plan identifies resources to create.
 #[tokio::test]
@@ -166,8 +166,7 @@ async fn test_plan_basic_changes() -> Result<()> {
     Ok(())
 }
 
-/// Tests plan handles provision failed resources with config change.
-/// ProvisionFailed resources with config changes go to creates (restart creation).
+/// A changed failed create reconciles in place when its saved checkpoint supports updates.
 #[tokio::test]
 async fn test_plan_provision_failed_with_config_change() -> Result<()> {
     // State has func1 with image-v1 that failed
@@ -176,6 +175,10 @@ async fn test_plan_provision_failed_with_config_change() -> Result<()> {
     let mut failed_state = create_provision_failed_function_state("func1");
     // Manually set the config to v1
     failed_state.config = alien_core::Resource::new(func1_v1);
+    let mut failed_checkpoint = TestWorkerController::default();
+    failed_checkpoint.state = TestWorkerState::CreateWorkerPolling;
+    failed_checkpoint.identifier = Some("existing-worker".to_string());
+    failed_state.set_last_failed_controller(Some(Box::new(failed_checkpoint)))?;
     state.resources.insert("func1".to_string(), failed_state);
 
     // Desired stack has func1 with image-v2 (different config)
@@ -187,11 +190,102 @@ async fn test_plan_provision_failed_with_config_change() -> Result<()> {
     let executor = new_executor(&stack)?;
     let plan = executor.plan(&state)?;
 
-    // ProvisionFailed resource with config change goes to creates (restart)
+    // The saved create checkpoint opts into updates, so preserve and repair the
+    // already-created remote resource instead of issuing another create.
     assert!(
-        plan.creates.contains(&"func1".to_string()),
-        "ProvisionFailed resource with config change should be marked for create (restart)"
+        plan.updates.contains_key("func1"),
+        "ProvisionFailed resource with a recoverable checkpoint should be updated"
     );
+    assert!(!plan.creates.contains(&"func1".to_string()));
+
+    let result = executor.step(state).await?;
+    let repaired = result.next_state.resources.get("func1").unwrap();
+    assert_eq!(repaired.status, ResourceStatus::Updating);
+    assert_eq!(repaired.config, alien_core::Resource::new(func1_v2));
+    assert_eq!(
+        repaired
+            .get_internal_controller_typed::<TestWorkerController>()?
+            .state,
+        TestWorkerState::UpdateCodePolling
+    );
+    assert!(repaired.last_failed_state.is_none());
+
+    Ok(())
+}
+
+/// An in-place repair must obey the same dependency gate as an ordinary update.
+#[tokio::test]
+async fn test_plan_defers_failed_create_repair_until_dependency_is_ready() -> Result<()> {
+    let dependency = test_function("dependency");
+    let func_v1 = test_function_with_image("func1", "image-v1");
+    let func_v2 = test_function_with_image("func1", "image-v2");
+    let mut state = new_test_state();
+    let mut failed_state = create_provision_failed_function_state("func1");
+    failed_state.config = alien_core::Resource::new(func_v1);
+    failed_state.dependencies = vec![ResourceRef::new(Worker::RESOURCE_TYPE, "dependency")];
+
+    let mut failed_checkpoint = TestWorkerController::default();
+    failed_checkpoint.state = TestWorkerState::CreateWorkerPolling;
+    failed_checkpoint.identifier = Some("existing-worker".to_string());
+    failed_state.set_last_failed_controller(Some(Box::new(failed_checkpoint)))?;
+    state.resources.insert("func1".to_string(), failed_state);
+
+    let stack = Stack::new("deferred-provision-repair-test".to_owned())
+        .add(dependency, ResourceLifecycle::Live)
+        .add_with_dependencies(
+            func_v2,
+            ResourceLifecycle::Live,
+            vec![ResourceRef::new(Worker::RESOURCE_TYPE, "dependency")],
+        )
+        .build();
+    let executor = new_executor(&stack)?;
+    let plan = executor.plan(&state)?;
+
+    assert!(plan.creates.contains(&"dependency".to_string()));
+    assert!(!plan.updates.contains_key("func1"));
+    assert!(!plan.creates.contains(&"func1".to_string()));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_same_config_retry_resumes_exact_failed_provision_handler() -> Result<()> {
+    let func = test_function_with_image("func1", "image-v1");
+    let stack = Stack::new("same-config-provision-retry-test".to_owned())
+        .add(func.clone(), ResourceLifecycle::Live)
+        .build();
+    let executor = new_update_executor(&stack)?;
+    let mut state = executor.step(new_test_state()).await?.next_state;
+    let resource_state = state.resources.get_mut("func1").unwrap();
+
+    let mut failed_terminal = resource_state
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+    let mut failed_poll = failed_terminal.clone();
+    failed_poll.state = TestWorkerState::CreateWorkerPolling;
+    failed_poll.identifier = Some("test:worker:func1".to_string());
+    failed_poll.create_poll_count = 1;
+    failed_terminal.state = TestWorkerState::CreateFailed;
+    resource_state.status = ResourceStatus::ProvisionFailed;
+    resource_state.set_internal_controller(Some(Box::new(failed_terminal)))?;
+    resource_state.set_last_failed_controller(Some(Box::new(failed_poll)))?;
+
+    let result = executor.step(state).await?;
+    let retried = result.next_state.resources.get("func1").unwrap();
+    let retried_controller = retried
+        .get_internal_controller_typed::<TestWorkerController>()
+        .unwrap();
+
+    assert_eq!(retried.status, ResourceStatus::Provisioning);
+    assert_eq!(
+        retried_controller.state,
+        TestWorkerState::CreateWorkerPolling
+    );
+    assert_eq!(
+        retried_controller.create_poll_count, 2,
+        "the saved provisioning poll should resume and execute one step"
+    );
+    assert!(retried.last_failed_state.is_none());
 
     Ok(())
 }
@@ -289,7 +383,7 @@ async fn test_same_config_retry_resumes_exact_failed_update_handler() -> Result<
     resource_state.set_internal_controller(Some(Box::new(failed_terminal)))?;
     resource_state.set_last_failed_controller(Some(Box::new(failed_poll)))?;
 
-    let result = new_executor(&stack)?.step(state).await?;
+    let result = new_update_executor(&stack)?.step(state).await?;
     let retried = result.next_state.resources.get("func1").unwrap();
     let retried_controller = retried
         .get_internal_controller_typed::<TestWorkerController>()

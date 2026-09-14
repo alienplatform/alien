@@ -99,6 +99,15 @@ pub fn new_executor(stack: &Stack) -> Result<StackExecutor> {
     StackExecutor::new(stack, ClientConfig::Test, None)
 }
 
+/// Create an executor at the update-orchestration boundary, where the exact
+/// desired stack is known and unchanged failed checkpoints may be resumed.
+pub fn new_update_executor(stack: &Stack) -> Result<StackExecutor> {
+    StackExecutor::builder(stack, ClientConfig::Test)
+        .deployment_config(&default_deployment_config())
+        .resume_unchanged_failed_resources(true)
+        .build()
+}
+
 /// Create a new StackExecutor with lifecycle filter.
 pub fn new_executor_with_filter(
     stack: &Stack,
