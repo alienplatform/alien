@@ -8,7 +8,7 @@ use alien_core::{ClientConfig, Platform};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
-use std::{path::PathBuf, str::FromStr};
+use std::{future::Future, path::PathBuf, str::FromStr};
 
 use super::up::{create_manager_client, push_deletion, read_token_file};
 
@@ -168,30 +168,30 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
     let run_client_side_deletion = requires_client_side_deletion(platform);
     let total_steps = if run_client_side_deletion { 3 } else { 2 };
 
-    if !should_request_deletion(deployment_status) {
-        output::step(
-            1,
-            total_steps,
-            "Deletion already requested; continuing setup teardown...",
-        );
-    } else {
-        output::step(1, total_steps, "Requesting deployment deletion...");
-
-        client
-            .delete_deployment()
-            .id(&deployment_id)
-            .body(alien_manager_api::types::DeleteDeploymentRequest {
-                action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
-            })
-            .send()
-            .await
-            .into_alien_error()
-            .context(ErrorData::DeploymentFailed {
-                operation: "request deletion".to_string(),
-            })?;
-    }
-
     if !run_client_side_deletion {
+        if deployment_status == "teardown-required" {
+            output::step(
+                1,
+                total_steps,
+                "Deletion already requested; continuing setup teardown...",
+            );
+        } else {
+            output::step(1, total_steps, "Requesting deployment deletion...");
+
+            client
+                .delete_deployment()
+                .id(&deployment_id)
+                .body(alien_manager_api::types::DeleteDeploymentRequest {
+                    action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+                })
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::DeploymentFailed {
+                    operation: "request deletion".to_string(),
+                })?;
+        }
+
         tracker.remove(&args.name)?;
 
         output::step(total_steps, total_steps, "Done!");
@@ -200,25 +200,51 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         return Ok(());
     }
 
-    output::step(
-        2,
-        total_steps,
-        "Loading target credentials and running deletion...",
-    );
+    run_setup_owned_deletion(
+        deployment_status,
+        || async {
+            output::step(1, total_steps, "Requesting deployment deletion...");
 
-    let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
+            client
+                .delete_deployment()
+                .id(&deployment_id)
+                .body(alien_manager_api::types::DeleteDeploymentRequest {
+                    action: alien_manager_api::types::DeleteDeploymentAction::Cleanup,
+                })
+                .send()
+                .await
+                .into_alien_error()
+                .context(ErrorData::DeploymentFailed {
+                    operation: "request deletion".to_string(),
+                })?;
 
-    if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
-        output::info("Stopping local operator service before cleanup...");
-        super::operator::stop_service_if_running().context(ErrorData::OperatorServiceError {
-            message: format!(
-                "Failed to stop local operator service before cleanup for data directory '{}'",
-                local.data_dir
-            ),
-        })?;
-    }
+            Ok(())
+        },
+        || async {
+            output::step(
+                2,
+                total_steps,
+                "Loading target credentials and running deletion...",
+            );
 
-    push_deletion(&client, &deployment_id, platform, client_config).await?;
+            let client_config = destroy_client_config(platform, tracked_local.as_ref()).await?;
+
+            if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
+                output::info("Stopping local operator service before cleanup...");
+                super::operator::stop_service_if_running().context(
+                    ErrorData::OperatorServiceError {
+                        message: format!(
+                            "Failed to stop local operator service before cleanup for data directory '{}'",
+                            local.data_dir
+                        ),
+                    },
+                )?;
+            }
+
+            push_deletion(&client, &deployment_id, platform, client_config).await
+        },
+    )
+    .await?;
 
     if let Some(local) = tracked_local.as_ref().filter(|local| local.service_managed) {
         output::info("Uninstalling local operator service...");
@@ -271,10 +297,24 @@ fn requires_client_side_deletion(platform: Platform) -> bool {
     platform != Platform::Machines
 }
 
-fn should_request_deletion(status: &str) -> bool {
-    // Teardown-required already has active setup-owned work. Teardown-failed does not: its delete
-    // operation is terminal, so a retry must explicitly schedule a fresh attempt before acquiring.
-    status != "teardown-required"
+async fn run_setup_owned_deletion<Request, RequestFuture, Acquire, AcquireFuture>(
+    status: &str,
+    request_deletion: Request,
+    acquire_and_delete: Acquire,
+) -> Result<()>
+where
+    Request: FnOnce() -> RequestFuture,
+    RequestFuture: Future<Output = Result<()>>,
+    Acquire: FnOnce() -> AcquireFuture,
+    AcquireFuture: Future<Output = Result<()>>,
+{
+    // Teardown-required already has active setup-owned work. A teardown-failed delete operation is
+    // terminal, so the manager API must re-arm that canonical operation before the CLI acquires it.
+    if status != "teardown-required" {
+        request_deletion().await?;
+    }
+
+    acquire_and_delete().await
 }
 
 fn resolve_token(
@@ -338,9 +378,45 @@ mod tests {
         assert!(requires_client_side_deletion(Platform::Azure));
     }
 
-    #[test]
-    fn failed_setup_teardown_requests_a_new_delete_attempt() {
-        assert!(!should_request_deletion("teardown-required"));
-        assert!(should_request_deletion("teardown-failed"));
+    #[tokio::test]
+    async fn failed_setup_teardown_rearms_before_acquiring() {
+        let actions = std::sync::Mutex::new(Vec::new());
+
+        run_setup_owned_deletion(
+            "teardown-failed",
+            || async {
+                actions.lock().unwrap().push("request");
+                Ok(())
+            },
+            || async {
+                actions.lock().unwrap().push("acquire");
+                Ok(())
+            },
+        )
+        .await
+        .expect("failed teardown should be retried");
+
+        assert_eq!(*actions.lock().unwrap(), ["request", "acquire"]);
+    }
+
+    #[tokio::test]
+    async fn active_setup_teardown_continues_directly_to_acquisition() {
+        let actions = std::sync::Mutex::new(Vec::new());
+
+        run_setup_owned_deletion(
+            "teardown-required",
+            || async {
+                actions.lock().unwrap().push("request");
+                Ok(())
+            },
+            || async {
+                actions.lock().unwrap().push("acquire");
+                Ok(())
+            },
+        )
+        .await
+        .expect("active teardown should continue");
+
+        assert_eq!(*actions.lock().unwrap(), ["acquire"]);
     }
 }
