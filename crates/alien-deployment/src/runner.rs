@@ -31,6 +31,7 @@ use crate::{
 };
 use alien_core::{ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, StackState};
 use alien_error::{AlienError, ContextError as _};
+use std::future::Future;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::{debug, info, warn};
@@ -179,18 +180,35 @@ async fn run_step_loop_inner(
     on_progress: Option<&ProgressCallback>,
     allow_initial_running_step: bool,
 ) -> Result<RunnerResult> {
-    let loop_future = run_step_loop_body(
-        state,
-        config,
-        client_config,
+    run_with_lease_renewal(
         deployment_id,
-        policy,
         transport,
-        service_provider,
-        on_progress,
-        allow_initial_running_step,
-    );
-    tokio::pin!(loop_future);
+        run_step_loop_body(
+            state,
+            config,
+            client_config,
+            deployment_id,
+            policy,
+            transport,
+            service_provider,
+            on_progress,
+            allow_initial_running_step,
+        ),
+    )
+    .await
+}
+
+/// Runs an already-owned deployment operation while renewing its lease.
+///
+/// The operation is cancelled if Alien cannot confirm ownership before the
+/// lease safety deadline. Callers remain responsible for acquiring and
+/// releasing the lease.
+pub(crate) async fn run_with_lease_renewal<T>(
+    deployment_id: &str,
+    transport: &dyn DeploymentLoopTransport,
+    operation: impl Future<Output = Result<T>>,
+) -> Result<T> {
+    tokio::pin!(operation);
     let mut renew_interval = tokio::time::interval(LEASE_RENEW_INTERVAL);
     renew_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     renew_interval.tick().await;
@@ -198,7 +216,7 @@ async fn run_step_loop_inner(
 
     loop {
         tokio::select! {
-            result = &mut loop_future => return result,
+            result = &mut operation => return result,
             _ = renew_interval.tick() => {
                 match tokio::time::timeout(
                     LEASE_RENEW_REQUEST_TIMEOUT,
@@ -595,6 +613,11 @@ mod tests {
         attempts: AtomicUsize,
     }
 
+    #[derive(Debug, Default)]
+    struct CountingRenewalTransport {
+        renewals: AtomicUsize,
+    }
+
     #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
     enum TestTransportError {
         #[error(
@@ -655,6 +678,47 @@ mod tests {
                 message: "the deployment lease is no longer owned".to_string(),
             }))
         }
+    }
+
+    #[async_trait]
+    impl DeploymentLoopTransport for CountingRenewalTransport {
+        async fn renew_lease(
+            &self,
+            _deployment_id: &str,
+        ) -> std::result::Result<(), alien_error::AlienError> {
+            self.renewals.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            _state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, alien_error::AlienError> {
+            Ok(StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn lease_wrapper_renews_while_operation_is_in_flight() {
+        let transport = CountingRenewalTransport::default();
+
+        run_with_lease_renewal("dep_test", &transport, async {
+            tokio::time::sleep(LEASE_RENEW_INTERVAL + Duration::from_secs(1)).await;
+            Ok(())
+        })
+        .await
+        .expect("operation should complete while its lease is renewed");
+
+        assert_eq!(transport.renewals.load(Ordering::SeqCst), 1);
     }
 
     fn test_stack() -> Stack {

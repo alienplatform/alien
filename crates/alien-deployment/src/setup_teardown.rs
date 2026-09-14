@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
-    runner::{DelayStrategy, RunnerPolicy, RunnerResult},
+    runner::{run_with_lease_renewal, DelayStrategy, RunnerPolicy, RunnerResult},
     transport::DeploymentLoopTransport,
     ErrorData, Result,
 };
@@ -23,6 +23,32 @@ use crate::{
 /// managers and agents stop at `TeardownRequired`, while setup-authority
 /// callers such as the CLI can continue with their own credentials.
 pub async fn run_setup_teardown_after_handoff(
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &dyn DeploymentLoopTransport,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+) -> Result<Option<RunnerResult>> {
+    run_with_lease_renewal(
+        deployment_id,
+        transport,
+        run_setup_teardown_after_handoff_inner(
+            state,
+            config,
+            client_config,
+            deployment_id,
+            policy,
+            transport,
+            service_provider,
+        ),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_setup_teardown_after_handoff_inner(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
