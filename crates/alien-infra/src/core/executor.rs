@@ -131,6 +131,7 @@ pub struct StackExecutor {
     runtime_cleanup_filter: bool,
     running_resource_policy: RunningResourcePolicy,
     step_out_of_scope_resources: bool,
+    resume_unchanged_failed_resources: bool,
     desired_stack: Stack,
 
     // --- Stored from config for use during step() ---
@@ -265,6 +266,13 @@ pub struct StackExecutorConfig<'a> {
     #[builder(default = true)]
     step_out_of_scope_resources: bool,
 
+    /// Resume saved failed-controller checkpoints whose desired configuration
+    /// is unchanged. Update orchestration enables this only after preflights
+    /// and mutations have produced the exact desired stack; ordinary create
+    /// and setup steps must continue to surface terminal failures.
+    #[builder(default = false)]
+    resume_unchanged_failed_resources: bool,
+
     /// Custom resource registry (defaults to built-in registry)
     #[builder(default = Arc::new(ResourceRegistry::with_built_ins()))]
     resource_registry: Arc<ResourceRegistry>,
@@ -362,6 +370,7 @@ impl StackExecutor {
                     RunningResourcePolicy::None
                 });
         let step_out_of_scope_resources = config.step_out_of_scope_resources;
+        let resume_unchanged_failed_resources = config.resume_unchanged_failed_resources;
         let initial_setup_authority = config.initial_setup_authority;
         let platform = client_config.platform();
         let base_platform = deployment_config.base_platform;
@@ -492,6 +501,7 @@ impl StackExecutor {
             runtime_cleanup_filter,
             running_resource_policy,
             step_out_of_scope_resources,
+            resume_unchanged_failed_resources,
             desired_stack: stack.clone(),
             client_config,
             resource_registry,
@@ -936,14 +946,61 @@ impl StackExecutor {
                                 }
                             }
                             ResourceStatus::ProvisionFailed => {
-                                info!(
-                                    "Restarting CREATE for '{}' due to config change during ProvisionFailed",
-                                    resource_id
-                                );
-                                plan_result.creates.push(resource_id.clone());
-                                plan_result.updates.remove(resource_id); // Ensure no conflicting update plan
-                                plan_result.deletes.retain(|id| id != resource_id);
-                                // Ensure no conflicting delete plan
+                                // A failed create may already own a durable remote resource. If
+                                // the failed checkpoint explicitly supports entering its update
+                                // flow, reconcile that resource in place rather than issuing a
+                                // second create. Controllers opt in by listing the relevant create
+                                // checkpoint in their Update flow's `from` states.
+                                let can_reconcile_in_place = current_resource_state
+                                    .get_last_failed_controller()?
+                                    .is_some_and(|mut controller| {
+                                        controller.transition_to_update().is_ok()
+                                    });
+                                let dependencies_ready =
+                                    desired_config.dependencies.iter().all(|dependency| {
+                                        state.resources.get(dependency.id()).is_some_and(
+                                            |resource| {
+                                                matches!(
+                                                    resource.status,
+                                                    ResourceStatus::Running
+                                                        | ResourceStatus::Deleted
+                                                )
+                                            },
+                                        )
+                                    });
+
+                                if can_reconcile_in_place && dependencies_ready {
+                                    current_resource_state
+                                        .config
+                                        .validate_update(&desired_config.resource)
+                                        .context(ErrorData::ResourceConfigInvalid {
+                                            message: "Resource cannot be updated".to_string(),
+                                            resource_id: Some(resource_id.clone()),
+                                        })?;
+                                    info!(
+                                        "Reconciling partially provisioned resource '{}' through its update flow",
+                                        resource_id
+                                    );
+                                    plan_result.updates.insert(
+                                        resource_id.clone(),
+                                        desired_config.resource.clone(),
+                                    );
+                                    plan_result.creates.retain(|id| id != resource_id);
+                                    plan_result.deletes.retain(|id| id != resource_id);
+                                } else if can_reconcile_in_place {
+                                    debug!(
+                                        "Deferring in-place reconciliation for '{}' until its dependencies are ready",
+                                        resource_id
+                                    );
+                                } else {
+                                    info!(
+                                        "Restarting CREATE for '{}' due to config change during ProvisionFailed",
+                                        resource_id
+                                    );
+                                    plan_result.creates.push(resource_id.clone());
+                                    plan_result.updates.remove(resource_id);
+                                    plan_result.deletes.retain(|id| id != resource_id);
+                                }
                             }
                             ResourceStatus::DeleteFailed => {
                                 warn!(
@@ -1235,20 +1292,28 @@ impl StackExecutor {
         validate_stack_controller_state_versions(&state)?;
 
         let mut state = state;
-        if apply_plan {
+        if apply_plan && self.resume_unchanged_failed_resources {
             for (resource_id, resource_state) in &mut state.resources {
-                if resource_state.status != ResourceStatus::UpdateFailed {
+                if !matches!(
+                    resource_state.status,
+                    ResourceStatus::ProvisionFailed
+                        | ResourceStatus::UpdateFailed
+                        | ResourceStatus::RefreshFailed
+                ) {
                     continue;
                 }
                 let Some(desired) = self.resources.get(resource_id) else {
                     continue;
                 };
-                if resource_state.config != desired.resource {
+                if resource_state.config != desired.resource
+                    || resource_state.dependencies != desired.dependencies
+                    || self.external_binding_drifted(resource_id, resource_state)?
+                {
                     continue;
                 }
                 if resource_state.retry_failed()? {
                     debug!(
-                        "Resumed unchanged failed update for '{}' before planning",
+                        "Resumed unchanged failed resource '{}' before planning",
                         resource_id
                     );
                 }
@@ -1516,7 +1581,13 @@ impl StackExecutor {
                 };
 
                 // Try to get the controller and transition to update
-                match update_state.get_internal_controller() {
+                let controller = if current_state.status == ResourceStatus::ProvisionFailed {
+                    update_state.get_last_failed_controller()
+                } else {
+                    update_state.get_internal_controller()
+                };
+
+                match controller {
                     Ok(Some(mut controller)) => {
                         match controller.transition_to_update() {
                             Ok(()) => {

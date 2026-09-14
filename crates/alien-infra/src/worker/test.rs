@@ -372,7 +372,7 @@ impl TestWorkerController {
     }
 
     // ─────────────── UPDATE FLOW ──────────────────────────────
-    #[flow_entry(Update, from = [Ready])]
+    #[flow_entry(Update, from = [Ready, CreateWorkerPolling])]
     #[handler(
         state = UpdateStart,
         on_failure = UpdateFailed,
