@@ -11,7 +11,7 @@ use tracing::{debug, info, warn};
 
 use crate::{
     loop_contract::{LoopOperation, LoopOutcome, LoopResult, LoopStopReason},
-    runner::{DelayStrategy, RunnerPolicy, RunnerResult},
+    runner::{run_with_lease_renewal, DelayStrategy, RunnerPolicy, RunnerResult},
     transport::DeploymentLoopTransport,
     ErrorData, Result,
 };
@@ -23,6 +23,32 @@ use crate::{
 /// managers and agents stop at `TeardownRequired`, while setup-authority
 /// callers such as the CLI can continue with their own credentials.
 pub async fn run_setup_teardown_after_handoff(
+    state: &mut DeploymentState,
+    config: &mut DeploymentConfig,
+    client_config: &ClientConfig,
+    deployment_id: &str,
+    policy: &RunnerPolicy,
+    transport: &dyn DeploymentLoopTransport,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+) -> Result<Option<RunnerResult>> {
+    run_with_lease_renewal(
+        deployment_id,
+        transport,
+        run_setup_teardown_after_handoff_inner(
+            state,
+            config,
+            client_config,
+            deployment_id,
+            policy,
+            transport,
+            service_provider,
+        ),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_setup_teardown_after_handoff_inner(
     state: &mut DeploymentState,
     config: &mut DeploymentConfig,
     client_config: &ClientConfig,
@@ -128,12 +154,14 @@ pub async fn run_setup_teardown_after_handoff(
             StackStatus::Pending | StackStatus::InProgress | StackStatus::Running => {}
         }
 
-        let current_stack_state = state.stack_state.take().ok_or_else(|| {
+        // Keep the last checkpoint in `state` while the cloud operation is in flight. Lease loss
+        // cancels this future; retaining the checkpoint lets the next owner resume safely even if
+        // cancellation happens after the provider has started a long-running deletion.
+        let current_stack_state = state.stack_state.clone().ok_or_else(|| {
             AlienError::new(ErrorData::MissingConfiguration {
                 message: "Stack state required for setup teardown step".to_string(),
             })
         })?;
-        let stack_state_before_step = current_stack_state.clone();
         let step_result = match executor.step(current_stack_state).await.context(
             ErrorData::StackExecutionFailed {
                 message: "Failed to execute setup teardown step".to_string(),
@@ -141,7 +169,6 @@ pub async fn run_setup_teardown_after_handoff(
         ) {
             Ok(step_result) => step_result,
             Err(error) => {
-                state.stack_state = Some(stack_state_before_step);
                 fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
                 return Err(error);
             }
