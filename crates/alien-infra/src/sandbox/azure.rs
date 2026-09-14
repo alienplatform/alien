@@ -580,6 +580,50 @@ mod tests {
         assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
     }
 
+    /// The same refusal in the tightening direction, which is the one worth stating outright: a
+    /// declaration that narrows egress does not take effect either, because a capture that applied
+    /// half of it would publish a policy paired with an image nobody declared.
+    #[test]
+    fn a_failed_capture_does_not_apply_a_tightened_egress_either() {
+        let mut controller = AzureSandboxController {
+            state: AzureSandboxState::Ready,
+            sandbox_group: Some("sbg".to_string()),
+            region: Some("swedencentral".to_string()),
+            resource_group: Some("rg".to_string()),
+            disk_image: Some("ubuntu".to_string()),
+            egress: Some(SandboxEgress::Allow),
+            idle_pause_seconds: None,
+            limits: None,
+            _internal_stay_count: None,
+        };
+        let config = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain: ToolchainConfig::Docker {
+                    dockerfile: None,
+                    build_args: None,
+                    target: None,
+                },
+            })
+            .egress(SandboxEgress::Deny)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+
+        controller
+            .capture_session_inputs(&config)
+            .expect_err("a source-built sandbox has no Azure catalog image");
+
+        assert_eq!(
+            controller.egress,
+            Some(SandboxEgress::Allow),
+            "the refused declaration leaves the served policy alone in both directions"
+        );
+        assert_eq!(controller.disk_image.as_deref(), Some("ubuntu"));
+    }
+
     /// Preflight validates the declared ceilings against Azure's own steps and then has nothing
     /// more to do with them: this binding is the only channel to the data plane, which takes them
     /// at sandbox-create and nowhere else.
