@@ -26,7 +26,6 @@ use crate::output::print_json;
 #[serde(rename_all = "camelCase")]
 struct UploadUrlRequest {
     name: String,
-    version: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -34,6 +33,11 @@ struct UploadUrlRequest {
 struct UploadUrlResponse {
     /// Presigned S3 PUT URL to upload the ZIP to.
     upload_url: String,
+    /// One-time id for this upload; echoed back on the publish call so the
+    /// platform publishes exactly the bytes this upload wrote. Prevents a
+    /// same-version retry from ever overwriting an already-published
+    /// version's bytes, since every upload gets its own S3 key.
+    upload_id: String,
     /// Content-Type header the PUT must send (must match the presign signature).
     content_type: String,
 }
@@ -45,6 +49,7 @@ struct UploadUrlResponse {
 struct PublishRequest {
     name: String,
     version: String,
+    upload_id: String,
     tier: String,
     /// The full, verbatim metadata.json object (platform re-validates it).
     metadata: Value,
@@ -623,7 +628,6 @@ pub async fn publish_task(
         .request(Method::POST, upload_url_endpoint.clone())
         .json(&UploadUrlRequest {
             name: manifest.name.clone(),
-            version: manifest.version.clone(),
         })
         .send()
         .await
@@ -686,6 +690,7 @@ pub async fn publish_task(
         .json(&PublishRequest {
             name: manifest.name.clone(),
             version: manifest.version.clone(),
+            upload_id: presign.upload_id.clone(),
             tier,
             metadata: metadata_value,
         })
