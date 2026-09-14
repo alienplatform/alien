@@ -428,11 +428,12 @@ impl RdsClient {
     }
 
     fn map_rds_error(status: StatusCode, body: &str, resource: &str) -> Option<ErrorData> {
-        // RDS reports "already gone" as 404 with DBClusterNotFoundFault / DBInstanceNotFoundFault;
-        // surfacing it as RemoteResourceNotFound lets the controller's delete be best-effort.
+        // RDS uses both `*NotFound` (for example DBInstanceNotFound) and
+        // `*NotFoundFault` (for example DBClusterNotFoundFault) on the wire. Surface either as
+        // RemoteResourceNotFound so controller deletion remains idempotent after a partial create.
         if let Ok(parsed) = quick_xml::de::from_str::<RdsErrorEnvelope>(body) {
             let code = parsed.error.code.as_str();
-            if code.ends_with("NotFoundFault") {
+            if code.ends_with("NotFound") || code.ends_with("NotFoundFault") {
                 return Some(ErrorData::RemoteResourceNotFound {
                     resource_type: "RDS Resource".into(),
                     resource_name: resource.into(),
@@ -711,6 +712,20 @@ mod tests {
             !json.contains(PW),
             "master password leaked through map_result: {json}"
         );
+    }
+
+    #[test]
+    fn maps_documented_rds_not_found_wire_codes() {
+        for code in ["DBInstanceNotFound", "DBClusterNotFoundFault"] {
+            let body = format!(
+                "<ErrorResponse><Error><Code>{code}</Code><Message>resource is absent</Message></Error></ErrorResponse>"
+            );
+
+            assert!(matches!(
+                RdsClient::map_rds_error(StatusCode::NOT_FOUND, &body, "stack-db"),
+                Some(ErrorData::RemoteResourceNotFound { .. })
+            ));
+        }
     }
 
     #[test]
