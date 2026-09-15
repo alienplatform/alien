@@ -30,4 +30,3 @@ const value:
     kind: "requireConfirmation",
   };
 ```
-

@@ -19,4 +19,3 @@ const value: models.RequiredPermission = {
   platforms: {},
 };
 ```
-
