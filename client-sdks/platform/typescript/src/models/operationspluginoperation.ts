@@ -23,6 +23,44 @@ export type OperationsPluginOperationTier = ClosedEnum<
   typeof OperationsPluginOperationTier
 >;
 
+export type OperationsPluginOperationRetries = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+export type OperationsPluginOperationRetry = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+export type OperationsPluginOperationVerification = {
+  changes: string;
+  pollOperation: string;
+  pollParamsFromResult: { [k: string]: string };
+  successField: string;
+  successValue: string;
+  retry?: OperationsPluginOperationRetry | undefined;
+  timeoutSeconds: number;
+};
+
+export type OperationsPluginOperationSensitiveOutputRequireConfirmation = {
+  kind: "requireConfirmation";
+};
+
+export type OperationsPluginOperationSensitiveOutputRedact = {
+  kind: "redact";
+  fields: Array<string>;
+};
+
+export type OperationsPluginOperationSensitiveOutputNone = {
+  kind: "none";
+};
+
+export type OperationsPluginOperationSensitiveOutputUnion =
+  | OperationsPluginOperationSensitiveOutputNone
+  | OperationsPluginOperationSensitiveOutputRedact
+  | OperationsPluginOperationSensitiveOutputRequireConfirmation;
+
 export const OperationsPluginOperationEffect = {
   Allow: "Allow",
   Deny: "Deny",
@@ -85,6 +123,13 @@ export type OperationsPluginOperation = {
    * JSON Schema for a successful result when the plugin publishes one.
    */
   outputSchema: { [k: string]: any | null } | null;
+  timeoutSeconds: number | null;
+  retries: OperationsPluginOperationRetries | null;
+  verification: OperationsPluginOperationVerification | null;
+  sensitiveOutput:
+    | OperationsPluginOperationSensitiveOutputNone
+    | OperationsPluginOperationSensitiveOutputRedact
+    | OperationsPluginOperationSensitiveOutputRequireConfirmation;
   /**
    * IDs of permission sets (see alien-permissions) this operation requires. Empty when the operation declares none.
    */
@@ -99,6 +144,166 @@ export type OperationsPluginOperation = {
 export const OperationsPluginOperationTier$inboundSchema: z.ZodEnum<
   typeof OperationsPluginOperationTier
 > = z.enum(OperationsPluginOperationTier);
+
+/** @internal */
+export const OperationsPluginOperationRetries$inboundSchema: z.ZodType<
+  OperationsPluginOperationRetries,
+  unknown
+> = z.object({
+  maxAttempts: z.int(),
+  intervalSeconds: z.int(),
+});
+
+export function operationsPluginOperationRetriesFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationRetries, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationsPluginOperationRetries$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationRetries' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationRetry$inboundSchema: z.ZodType<
+  OperationsPluginOperationRetry,
+  unknown
+> = z.object({
+  maxAttempts: z.int(),
+  intervalSeconds: z.int(),
+});
+
+export function operationsPluginOperationRetryFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationRetry, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationsPluginOperationRetry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationRetry' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationVerification$inboundSchema: z.ZodType<
+  OperationsPluginOperationVerification,
+  unknown
+> = z.object({
+  changes: z.string(),
+  pollOperation: z.string(),
+  pollParamsFromResult: z.record(z.string(), z.string()),
+  successField: z.string(),
+  successValue: z.string(),
+  retry: z.lazy(() => OperationsPluginOperationRetry$inboundSchema).optional(),
+  timeoutSeconds: z.int(),
+});
+
+export function operationsPluginOperationVerificationFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationVerification, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationVerification$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationVerification' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationSensitiveOutputRequireConfirmation$inboundSchema:
+  z.ZodType<
+    OperationsPluginOperationSensitiveOutputRequireConfirmation,
+    unknown
+  > = z.object({
+    kind: z.literal("requireConfirmation"),
+  });
+
+export function operationsPluginOperationSensitiveOutputRequireConfirmationFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  OperationsPluginOperationSensitiveOutputRequireConfirmation,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationSensitiveOutputRequireConfirmation$inboundSchema
+        .parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationSensitiveOutputRequireConfirmation' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationSensitiveOutputRedact$inboundSchema:
+  z.ZodType<OperationsPluginOperationSensitiveOutputRedact, unknown> = z.object(
+    {
+      kind: z.literal("redact"),
+      fields: z.array(z.string()),
+    },
+  );
+
+export function operationsPluginOperationSensitiveOutputRedactFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  OperationsPluginOperationSensitiveOutputRedact,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationSensitiveOutputRedact$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'OperationsPluginOperationSensitiveOutputRedact' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationSensitiveOutputNone$inboundSchema:
+  z.ZodType<OperationsPluginOperationSensitiveOutputNone, unknown> = z.object({
+    kind: z.literal("none"),
+  });
+
+export function operationsPluginOperationSensitiveOutputNoneFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  OperationsPluginOperationSensitiveOutputNone,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationSensitiveOutputNone$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'OperationsPluginOperationSensitiveOutputNone' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationSensitiveOutputUnion$inboundSchema:
+  z.ZodType<OperationsPluginOperationSensitiveOutputUnion, unknown> = z.union([
+    z.lazy(() => OperationsPluginOperationSensitiveOutputNone$inboundSchema),
+    z.lazy(() => OperationsPluginOperationSensitiveOutputRedact$inboundSchema),
+    z.lazy(() =>
+      OperationsPluginOperationSensitiveOutputRequireConfirmation$inboundSchema
+    ),
+  ]);
+
+export function operationsPluginOperationSensitiveOutputUnionFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  OperationsPluginOperationSensitiveOutputUnion,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationSensitiveOutputUnion$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'OperationsPluginOperationSensitiveOutputUnion' from JSON`,
+  );
+}
 
 /** @internal */
 export const OperationsPluginOperationEffect$inboundSchema: z.ZodEnum<
@@ -183,6 +388,20 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   description: z.nullable(z.string()),
   inputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
   outputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
+  timeoutSeconds: z.nullable(z.int()),
+  retries: z.nullable(
+    z.lazy(() => OperationsPluginOperationRetries$inboundSchema),
+  ),
+  verification: z.nullable(
+    z.lazy(() => OperationsPluginOperationVerification$inboundSchema),
+  ),
+  sensitiveOutput: z.union([
+    z.lazy(() => OperationsPluginOperationSensitiveOutputNone$inboundSchema),
+    z.lazy(() => OperationsPluginOperationSensitiveOutputRedact$inboundSchema),
+    z.lazy(() =>
+      OperationsPluginOperationSensitiveOutputRequireConfirmation$inboundSchema
+    ),
+  ]),
   requiredPermissions: z.array(z.string()),
   permissions: z.lazy(() => OperationsPluginOperationPermissions$inboundSchema),
 });

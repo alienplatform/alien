@@ -19,7 +19,29 @@ let value: OperationsPlugin = {
         "vision save across override pluck gurn lampoon since briskly drat",
       inputSchema: {},
       outputSchema: null,
-      requiredPermissions: [],
+      timeoutSeconds: 922085,
+      retries: {
+        maxAttempts: 804051,
+        intervalSeconds: 912712,
+      },
+      verification: {
+        changes: "<value>",
+        pollOperation: "<value>",
+        pollParamsFromResult: {
+          "key": "<value>",
+        },
+        successField: "<value>",
+        successValue: "<value>",
+        timeoutSeconds: 61821,
+      },
+      sensitiveOutput: {
+        kind: "requireConfirmation",
+      },
+      requiredPermissions: [
+        "<value 1>",
+        "<value 2>",
+        "<value 3>",
+      ],
       permissions: {
         azure: [
           "<value 1>",
@@ -29,27 +51,19 @@ let value: OperationsPlugin = {
         aws: [
           {
             effect: "Deny",
-            actions: [
+            actions: [],
+            resources: [
               "<value 1>",
               "<value 2>",
               "<value 3>",
             ],
-            resources: [],
-            condition: {},
+            condition: {
+              "key": {},
+            },
             reason: "<value>",
           },
         ],
-        gcp: [
-          {
-            permissions: [
-              "<value 1>",
-              "<value 2>",
-              "<value 3>",
-            ],
-            scope: "projects/${projectName}",
-            reason: "<value>",
-          },
-        ],
+        gcp: [],
       },
     },
   ],

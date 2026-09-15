@@ -96,6 +96,7 @@ async function $do(
   const path = pathToFunc("/v1/commands/{id}")(pathParams);
 
   const query = encodeFormQuery({
+    "confirmSensitiveOutput": payload.confirmSensitiveOutput,
     "workspace": client._options.workspace,
   });
 

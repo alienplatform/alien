@@ -34,7 +34,7 @@ function client(baseUrl: string, allowLocalStorage = false) {
 }
 
 function createResponse(commandId = "cmd_1") {
-  return { commandId, state: "PENDING", inlineAllowedUpTo: 150_000, next: "poll" }
+  return { commandId, created: true, state: "PENDING", inlineAllowedUpTo: 150_000, next: "poll" }
 }
 
 function successStatus(commandId: string, value: unknown) {

@@ -137,7 +137,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+   * One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
    */
   async verifyCheck(
     request: operations.VerifyOperationCheckRequest,

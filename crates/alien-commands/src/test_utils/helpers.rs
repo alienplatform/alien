@@ -133,6 +133,7 @@ pub fn test_inline_create_command_with_params(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     };
 
     (request, params_bytes)
@@ -151,6 +152,7 @@ pub fn test_storage_create_command(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     }
 }
 
@@ -167,6 +169,7 @@ pub fn test_create_command(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     }
 }
 
@@ -184,6 +187,7 @@ pub fn test_create_command_with_deadline(
         deadline: Some(deadline),
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     }
 }
 

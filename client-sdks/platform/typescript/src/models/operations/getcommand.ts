@@ -3,6 +3,7 @@
  */
 
 import * as z from "zod/v4";
+import { ClosedEnum } from "../../types/enums.js";
 
 export type GetCommandGlobals = {
   /**
@@ -11,16 +12,37 @@ export type GetCommandGlobals = {
   workspace?: string | undefined;
 };
 
+/**
+ * Explicitly confirm access to an operation result marked sensitive.
+ */
+export const ConfirmSensitiveOutput = {
+  True: "true",
+} as const;
+/**
+ * Explicitly confirm access to an operation result marked sensitive.
+ */
+export type ConfirmSensitiveOutput = ClosedEnum<typeof ConfirmSensitiveOutput>;
+
 export type GetCommandRequest = {
   /**
    * Unique identifier for the command.
    */
   id: string;
+  /**
+   * Explicitly confirm access to an operation result marked sensitive.
+   */
+  confirmSensitiveOutput?: ConfirmSensitiveOutput | undefined;
 };
+
+/** @internal */
+export const ConfirmSensitiveOutput$outboundSchema: z.ZodEnum<
+  typeof ConfirmSensitiveOutput
+> = z.enum(ConfirmSensitiveOutput);
 
 /** @internal */
 export type GetCommandRequest$Outbound = {
   id: string;
+  confirmSensitiveOutput?: string | undefined;
 };
 
 /** @internal */
@@ -29,6 +51,7 @@ export const GetCommandRequest$outboundSchema: z.ZodType<
   GetCommandRequest
 > = z.object({
   id: z.string(),
+  confirmSensitiveOutput: ConfirmSensitiveOutput$outboundSchema.optional(),
 });
 
 export function getCommandRequestToJSON(

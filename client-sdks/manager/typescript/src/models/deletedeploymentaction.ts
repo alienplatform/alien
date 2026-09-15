@@ -13,6 +13,10 @@ export const DeleteDeploymentAction = {
 export type DeleteDeploymentAction = ClosedEnum<typeof DeleteDeploymentAction>;
 
 /** @internal */
-export const DeleteDeploymentAction$outboundSchema: z.ZodEnum<
+export const DeleteDeploymentAction$inboundSchema: z.ZodEnum<
   typeof DeleteDeploymentAction
 > = z.enum(DeleteDeploymentAction);
+/** @internal */
+export const DeleteDeploymentAction$outboundSchema: z.ZodEnum<
+  typeof DeleteDeploymentAction
+> = DeleteDeploymentAction$inboundSchema;

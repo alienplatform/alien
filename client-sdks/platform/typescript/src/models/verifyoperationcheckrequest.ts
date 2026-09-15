@@ -6,39 +6,19 @@ import * as z from "zod/v4";
 
 export type VerifyOperationCheckRequest = {
   /**
-   * Deployment the write operation ran against.
+   * Deployment the original write command ran against.
    */
   deploymentId: string;
   /**
-   * Plugin name.
+   * Original operation command whose stored result and dispatch-time verification contract are authoritative.
    */
-  plugin: string;
-  /**
-   * The WRITE operation whose result is being verified.
-   */
-  operation: string;
-  /**
-   * The write operation's own success result.
-   */
-  writeResult?: any | null | undefined;
-  /**
-   * The remediation plan whose approved access request authorized the WRITE operation being verified, if the caller has it. The verification poll dispatches a different command (the write's declared pollOperation) that is rarely covered by its own policy rule or access request directly — passing this lets the poll inherit the write's own approval instead of requiring a separate one.
-   */
-  remediationPlanId?: string | undefined;
-  /**
-   * Same as remediationPlanId, for a plan-less (CLI-originated) access request.
-   */
-  accessRequestId?: string | undefined;
+  commandId: string;
 };
 
 /** @internal */
 export type VerifyOperationCheckRequest$Outbound = {
   deploymentId: string;
-  plugin: string;
-  operation: string;
-  writeResult?: any | null | undefined;
-  remediationPlanId?: string | undefined;
-  accessRequestId?: string | undefined;
+  commandId: string;
 };
 
 /** @internal */
@@ -47,11 +27,7 @@ export const VerifyOperationCheckRequest$outboundSchema: z.ZodType<
   VerifyOperationCheckRequest
 > = z.object({
   deploymentId: z.string(),
-  plugin: z.string(),
-  operation: z.string(),
-  writeResult: z.nullable(z.any()).optional(),
-  remediationPlanId: z.string().optional(),
-  accessRequestId: z.string().optional(),
+  commandId: z.string(),
 });
 
 export function verifyOperationCheckRequestToJSON(

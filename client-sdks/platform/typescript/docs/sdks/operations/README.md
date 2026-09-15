@@ -12,7 +12,7 @@
 * [getPolicy](#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
-* [verifyCheck](#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+* [verifyCheck](#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
 * [createAccessRequest](#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 * [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
@@ -639,7 +639,7 @@ run();
 
 ## verifyCheck
 
-One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
 
 ### Example Usage
 
@@ -655,6 +655,10 @@ const alien = new Alien({
 async function run() {
   const result = await alien.operations.verifyCheck({
     project: "my-project",
+    verifyOperationCheckRequest: {
+      deploymentId: "<id>",
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
   });
 
   console.log(result);
@@ -681,6 +685,10 @@ const alien = new AlienCore({
 async function run() {
   const res = await operationsVerifyCheck(alien, {
     project: "my-project",
+    verifyOperationCheckRequest: {
+      deploymentId: "<id>",
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
   });
   if (res.ok) {
     const { value: result } = res;

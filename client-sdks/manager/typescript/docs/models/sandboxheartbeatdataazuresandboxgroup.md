@@ -1,6 +1,6 @@
 # SandboxHeartbeatDataAzureSandboxGroup
 
-Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count
+Azure: the sandbox group's ARM state. The data plane has no list operation, so a sandbox count
 is not available here.
 
 ## Example Usage

@@ -1,15 +1,15 @@
-# Retry
+# VerifyOperationCheckResponseRetry
 
 The operation's declared retry policy, echoed so the caller's poll loop doesn't need its own copy.
 
 ## Example Usage
 
 ```typescript
-import { Retry } from "@alienplatform/platform-api/models";
+import { VerifyOperationCheckResponseRetry } from "@alienplatform/platform-api/models";
 
-let value: Retry = {
-  maxAttempts: 467396,
-  intervalSeconds: 597304,
+let value: VerifyOperationCheckResponseRetry = {
+  maxAttempts: 668212,
+  intervalSeconds: 783692,
 };
 ```
 

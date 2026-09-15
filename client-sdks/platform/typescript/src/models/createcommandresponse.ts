@@ -86,6 +86,10 @@ export type CreateCommandResponse = {
    * How the command is delivered to its target
    */
   deliveryMode: CreateCommandResponseDeliveryMode;
+  /**
+   * Whether an operation result contract was stored atomically with this command
+   */
+  operationResultContractPersisted: boolean;
 };
 
 /** @internal */
@@ -132,6 +136,7 @@ export const CreateCommandResponse$inboundSchema: z.ZodType<
   deploymentModel: CreateCommandResponseDeploymentModel$inboundSchema,
   target: z.lazy(() => CreateCommandResponseTarget$inboundSchema),
   deliveryMode: CreateCommandResponseDeliveryMode$inboundSchema,
+  operationResultContractPersisted: z.boolean(),
 });
 
 export function createCommandResponseFromJSON(

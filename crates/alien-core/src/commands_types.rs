@@ -477,6 +477,10 @@ pub struct CreateCommandRequest {
     /// exactly one command-capable resource must exist, or resolution fails.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_resource_id: Option<String>,
+    /// Opaque result-handling contract the registry must persist atomically
+    /// with command creation before the command becomes executable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_result_contract: Option<serde_json::Value>,
 }
 
 /// Storage upload information
@@ -497,6 +501,9 @@ pub struct StorageUpload {
 pub struct CreateCommandResponse {
     /// Unique command identifier
     pub command_id: String,
+    /// Whether this request created the returned command. False means an
+    /// idempotent replay returned a command created by another request.
+    pub created: bool,
     /// Current command state
     pub state: CommandState,
     /// Storage upload info (only for storage mode)
@@ -890,6 +897,7 @@ mod tests {
             deadline: None,
             idempotency_key: None,
             target_resource_id: None,
+            operation_result_contract: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
@@ -908,12 +916,37 @@ mod tests {
             deadline: None,
             idempotency_key: None,
             target_resource_id: Some("worker-1".to_string()),
+            operation_result_contract: None,
         };
 
         let json = serde_json::to_string(&request).unwrap();
         assert!(json.contains("\"targetResourceId\":\"worker-1\""));
 
         let round_tripped: CreateCommandRequest = serde_json::from_str(&json).unwrap();
+        assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn test_create_command_request_operation_contract_round_trip_camel_case() {
+        let contract = serde_json::json!({
+            "plugin": "postgres",
+            "operation": "vacuum",
+            "sensitiveOutput": { "mode": "redact", "paths": ["$.token"] },
+        });
+        let request = CreateCommandRequest {
+            deployment_id: "deployment_123".to_string(),
+            command: "operation/v1/hash".to_string(),
+            params: BodySpec::inline(b"{}"),
+            deadline: None,
+            idempotency_key: Some("invoke-123".to_string()),
+            target_resource_id: Some("operator".to_string()),
+            operation_result_contract: Some(contract.clone()),
+        };
+
+        let value = serde_json::to_value(&request).unwrap();
+        assert_eq!(value["operationResultContract"], contract);
+
+        let round_tripped: CreateCommandRequest = serde_json::from_value(value).unwrap();
         assert_eq!(round_tripped, request);
     }
 

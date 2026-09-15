@@ -13,7 +13,7 @@ export type OperationsBundleUploadUrlResponse = {
    */
   uploadUrl: string;
   /**
-   * One-time id for this upload. Pass it back verbatim to POST /plugins so the published catalog row points at exactly the bytes this call uploaded — it can never collide with another upload, including a repeat of the same name and version.
+   * One-time id for this upload. Pass it back verbatim to POST /plugins so the API can validate and snapshot exactly the bytes this call uploaded.
    */
   uploadId: string;
   /**
