@@ -289,6 +289,8 @@ async fn request_access_then_reinvoke(
             title: None,
             reason: None,
             remediation_plan_id: None,
+            replay_key: None,
+            requested_expires_at: None,
             commands: Vec::new(),
         })
         .send()
