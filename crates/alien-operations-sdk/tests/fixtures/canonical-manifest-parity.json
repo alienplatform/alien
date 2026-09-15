@@ -161,5 +161,64 @@
         "arm64": "example-linux"
       }
     }
+  },
+  {
+    "name": "unknown nested inline-permission field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "permissions": [
+            {
+              "id": "example/read",
+              "description": "Read one example resource",
+              "platforms": {
+                "aws": [
+                  {
+                    "grant": {
+                      "actions": ["example:GetResource"],
+                      "unexpected": true
+                    },
+                    "binding": {
+                      "stack": { "resources": ["arn:aws:example:::*"] }
+                    }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "Kubernetes reason exceeds 1024 UTF-8 bytes",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "kubernetesPermissions": {
+            "schemaVersion": 1,
+            "rules": [
+              {
+                "apiGroup": "",
+                "resource": "pods",
+                "verbs": ["get"],
+                "resourceNames": [],
+                "reason": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+              }
+            ]
+          }
+        }
+      ]
+    }
   }
 ]
