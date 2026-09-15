@@ -382,6 +382,7 @@ dependencies = [
  "rand_distr",
  "reqwest 0.12.28",
  "rustls 0.23.43",
+ "schemars 0.8.22",
  "self-replace",
  "semver",
  "serde",

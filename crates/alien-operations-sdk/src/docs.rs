@@ -48,7 +48,7 @@ fn render_operation(out: &mut String, plugin_tier: RiskTier, operation: &Operati
     if !operation.required_permissions.is_empty() {
         let _ = writeln!(out, "**Required permissions:**");
         for permission in &operation.required_permissions {
-            let _ = writeln!(out, "- `{permission}`");
+            let _ = writeln!(out, "- `{}`", permission.id());
         }
         let _ = writeln!(out);
     }

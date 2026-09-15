@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::manifest::{OperationManifest, PluginManifest};
 
-/// One MCP tool definition: `{ name, description, inputSchema }`, the shape
+/// One MCP tool definition: `{ name, description, inputSchema, outputSchema }`, the shape
 /// the Model Context Protocol's `tools/list` response and most MCP client
 /// SDKs expect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -25,11 +25,14 @@ pub struct McpToolSchema {
     /// risk tier so a tool is never presented with no explanation at all.
     pub description: String,
     /// JSON Schema for the operation's params. An operation with no
-    /// declared `paramsSchema` gets an empty-object schema (no required
+    /// declared `inputSchema` gets an empty-object schema (no required
     /// properties, nothing else accepted) rather than an unconstrained
     /// schema — matching that operation taking no meaningful params, not
     /// "any params are allowed".
     pub input_schema: RootSchema,
+    /// JSON Schema for successful tool output, when declared.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<RootSchema>,
 }
 
 /// Generate one [`McpToolSchema`] per operation the manifest declares.
@@ -57,6 +60,7 @@ fn generate_mcp_tool(manifest: &PluginManifest, operation: &OperationManifest) -
             .params_schema
             .clone()
             .unwrap_or_else(empty_object_schema),
+        output_schema: operation.output_schema.clone(),
     }
 }
 
@@ -140,5 +144,31 @@ mod tests {
         let schema_json = serde_json::to_value(&tools[0].input_schema).expect("schema serializes");
         assert_eq!(schema_json["type"], "object");
         assert_eq!(schema_json["additionalProperties"], false);
+    }
+
+    #[test]
+    fn carries_the_declared_output_schema_into_the_tool_contract() {
+        let manifest = PluginManifest::parse_and_validate(
+            manifest_json(
+                r#"{
+                    "name": "health",
+                    "outputSchema": {
+                        "type": "object",
+                        "properties": { "status": { "type": "string" } },
+                        "required": ["status"]
+                    }
+                }"#,
+            )
+            .as_bytes(),
+        )
+        .expect("valid manifest");
+
+        let tools = generate_mcp_tools(&manifest);
+        let schema = tools[0]
+            .output_schema
+            .as_ref()
+            .expect("output schema should be preserved");
+        let schema_json = serde_json::to_value(schema).expect("schema serializes");
+        assert_eq!(schema_json["properties"]["status"]["type"], "string");
     }
 }

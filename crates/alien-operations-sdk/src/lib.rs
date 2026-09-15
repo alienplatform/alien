@@ -23,8 +23,15 @@ pub mod manifest;
 pub mod mcp;
 pub mod plugin;
 pub mod protocol;
+pub mod typed;
 pub mod verification;
 
+pub use alien_core::permissions::{
+    AwsBindingSpec, AwsPermissionEffect, AwsPlatformPermission, AzureBindingSpec,
+    AzurePlatformPermission, BindingConfiguration, GcpBindingSpec, GcpCondition,
+    GcpPlatformPermission, PermissionGrant, PermissionSet, PermissionSetReference,
+    PlatformPermissions,
+};
 pub use docs::generate_docs;
 pub use error::{ErrorData, Result};
 pub use kubernetes::{
@@ -36,4 +43,5 @@ pub use manifest::{
 pub use mcp::{generate_mcp_tools, McpToolSchema};
 pub use plugin::{dispatch, run_plugin, Plugin};
 pub use protocol::{PluginInvocation, PluginResult, PROTOCOL_VERSION};
+pub use typed::{OperationDefinition, OperationFailure, TypedOperations};
 pub use verification::Verification;

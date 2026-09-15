@@ -1,26 +1,23 @@
 //! `alien operations permissions --cloud <aws|gcp|azure>` — compile a
-//! plugin's declared `requiredPermissions` (permission-set IDs) into a
+//! plugin's declared `permissions` (named or inline permission sets) into a
 //! cloud-specific policy document, using the same generators
 //! `alien-permissions` already uses for Alien's own infra permissions.
 //!
-//! Each ID a plugin declares must reference a permission set that already
-//! exists in `alien-permissions`. A plugin author who needs a permission
-//! Alien hasn't modeled yet contributes that permission set to the OSS repo
-//! first — this keeps every grantable action reviewed the same way Alien's
-//! own infra permissions are, rather than letting a plugin request arbitrary
-//! cloud actions unchecked.
+//! Named IDs must reference permission sets that exist in `alien-permissions`.
+//! Inline sets pass the same manifest validation and permission generator.
 //!
 //! This command runs fully offline: it reads the plugin's own manifest and
 //! Alien's compiled-in permission-set registry, and needs no platform
 //! account.
 
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
+use alien_core::permissions::PermissionSetReference;
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_operations_sdk::PluginManifest;
 use alien_permissions::generators::aws_runtime::AwsRuntimePermissionsGenerator;
 use alien_permissions::{get_permission_set, BindingTarget, PermissionContext};
-use alien_operations_sdk::PluginManifest;
 use clap::ValueEnum;
 
 use crate::error::{ErrorData, Result};
@@ -68,14 +65,18 @@ fn placeholder_context() -> PermissionContext {
 pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Result<()> {
     let manifest_path =
         Path::new(directory.unwrap_or(".")).join(alien_operations_sdk::manifest::MANIFEST_FILENAME);
-    let bytes = std::fs::read(&manifest_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let bytes = std::fs::read(&manifest_path).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: format!("could not read '{}'", manifest_path.display()),
+        },
+    )?;
+    let manifest =
+        PluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
+            message: format!(
+                "'{}' is not a valid plugin manifest",
+                manifest_path.display()
+            ),
         })?;
-    let manifest = PluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
-        message: format!("'{}' is not a valid plugin manifest", manifest_path.display()),
-    })?;
 
     if cloud != Cloud::Aws {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -90,55 +91,62 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
         }));
     }
 
-    let permission_ids = declared_permission_ids(&manifest);
-    if permission_ids.is_empty() {
+    let permissions = declared_permissions(&manifest);
+    if permissions.is_empty() {
         if json {
             crate::output::print_json(&serde_json::json!({ "statements": [] }))?;
         } else {
-            println!(
-                "'{}' declares no requiredPermissions.",
-                manifest_path.display()
-            );
+            println!("'{}' declares no permissions.", manifest_path.display());
         }
         return Ok(());
     }
 
-    print_aws_policy(&manifest.name, &permission_ids, json)
+    print_aws_policy(&manifest.name, &permissions, json)
 }
 
-/// The unique, sorted set of permission-set IDs every declared operation
-/// requires.
-fn declared_permission_ids(manifest: &PluginManifest) -> Vec<String> {
-    manifest
+/// The unique permission references every operation requires, sorted by ID.
+fn declared_permissions(manifest: &PluginManifest) -> Vec<PermissionSetReference> {
+    let mut permissions = BTreeMap::new();
+    for permission in manifest
         .operations
         .iter()
-        .flat_map(|operation| operation.required_permissions.iter().cloned())
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect()
+        .flat_map(|operation| &operation.required_permissions)
+    {
+        permissions
+            .entry(permission.id().to_string())
+            .or_insert_with(|| permission.clone());
+    }
+    permissions.into_values().collect()
 }
 
-fn print_aws_policy(plugin_name: &str, permission_ids: &[String], json: bool) -> Result<()> {
+fn print_aws_policy(
+    plugin_name: &str,
+    permissions: &[PermissionSetReference],
+    json: bool,
+) -> Result<()> {
     let generator = AwsRuntimePermissionsGenerator::new();
     let context = placeholder_context();
 
     let mut policies = Vec::new();
-    for id in permission_ids {
-        let permission_set = get_permission_set(id).ok_or_else(|| {
-            AlienError::new(ErrorData::ConfigurationError {
-                message: format!(
-                    "plugin '{plugin_name}' declares requiredPermissions '{id}', which is not a \
+    for permission in permissions {
+        let id = permission.id();
+        let permission_set = permission
+            .resolve(|name| get_permission_set(name).cloned())
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "plugin '{plugin_name}' declares permission '{id}', which is not a \
                      known alien-permissions permission set. Add a permission set for it under \
                      alien/crates/alien-permissions/permission-sets/ first."
-                ),
-            })
-        })?;
+                    ),
+                })
+            })?;
         let policy = generator
-            .generate_policy(permission_set, BindingTarget::Resource, &context)
+            .generate_policy(&permission_set, BindingTarget::Resource, &context)
             .context(ErrorData::ConfigurationError {
                 message: format!("could not generate an AWS policy for '{id}'"),
             })?;
-        policies.push((id.clone(), policy));
+        policies.push((id.to_string(), policy));
     }
 
     if json {
@@ -193,8 +201,12 @@ mod tests {
             }"#,
         );
 
-        permissions_task(Some(temp.path().to_str().expect("utf8 path")), Cloud::Aws, false)
-            .expect("no declared permissions should succeed trivially");
+        permissions_task(
+            Some(temp.path().to_str().expect("utf8 path")),
+            Cloud::Aws,
+            false,
+        )
+        .expect("no declared permissions should succeed trivially");
     }
 
     #[test]
@@ -214,8 +226,12 @@ mod tests {
             }"#,
         );
 
-        let err = permissions_task(Some(temp.path().to_str().expect("utf8 path")), Cloud::Aws, false)
-            .expect_err("unknown permission set must fail");
+        let err = permissions_task(
+            Some(temp.path().to_str().expect("utf8 path")),
+            Cloud::Aws,
+            false,
+        )
+        .expect_err("unknown permission set must fail");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
         assert!(err.to_string().contains("does-not-exist/anywhere"));
     }
@@ -245,8 +261,12 @@ mod tests {
             ),
         );
 
-        permissions_task(Some(temp.path().to_str().expect("utf8 path")), Cloud::Aws, false)
-            .expect("a real, AWS-supporting permission set should generate a policy");
+        permissions_task(
+            Some(temp.path().to_str().expect("utf8 path")),
+            Cloud::Aws,
+            false,
+        )
+        .expect("a real, AWS-supporting permission set should generate a policy");
     }
 
     #[test]
@@ -264,8 +284,9 @@ mod tests {
         );
 
         for cloud in [Cloud::Gcp, Cloud::Azure] {
-            let err = permissions_task(Some(temp.path().to_str().expect("utf8 path")), cloud, false)
-                .expect_err("gcp/azure must be rejected for now");
+            let err =
+                permissions_task(Some(temp.path().to_str().expect("utf8 path")), cloud, false)
+                    .expect_err("gcp/azure must be rejected for now");
             assert_eq!(err.code, "CONFIGURATION_ERROR");
         }
     }
