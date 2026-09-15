@@ -6156,6 +6156,7 @@
         "description": "Response to command creation",
         "required": [
           "commandId",
+          "created",
           "state",
           "inlineAllowedUpTo",
           "next"
@@ -6164,6 +6165,10 @@
           "commandId": {
             "type": "string",
             "description": "Unique command identifier"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether this request created the returned command. False means an\nidempotent replay returned a command created by another request."
           },
           "inlineAllowedUpTo": {
             "type": "integer",
