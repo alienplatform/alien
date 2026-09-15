@@ -53,6 +53,16 @@ output "e2e_security_group_ids" {
   sensitive = true
 }
 
+output "egress_deny_guard_role_arn" {
+  value     = aws_iam_role.egress_deny_guard.arn
+  sensitive = true
+}
+
+output "egress_deny_guard_artifact_bucket" {
+  value     = aws_s3_bucket.egress_deny_guard.bucket
+  sensitive = true
+}
+
 output "s3_bucket" {
   value     = aws_s3_bucket.test.bucket
   sensitive = true

@@ -383,6 +383,14 @@ pub trait LambdaMicrovmsApi: Send + Sync + std::fmt::Debug {
         image_version: &str,
     ) -> Result<MicrovmImageVersion>;
 
+    /// Makes one image version unavailable for new MicroVMs so an older version can be deleted,
+    /// or the whole image can remove its final version.
+    async fn deactivate_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<()>;
+
     /// Lists a version's build attempts, following pagination. A failed build's `stateReason`
     /// is the only place AWS explains why.
     async fn list_microvm_image_builds(
@@ -723,6 +731,25 @@ impl LambdaMicrovmsApi for LambdaMicrovmsClient {
             "GetMicrovmImageVersion",
         )
         .await
+    }
+
+    async fn deactivate_microvm_image_version(
+        &self,
+        image_identifier: &str,
+        image_version: &str,
+    ) -> Result<()> {
+        let _: serde_json::Value = self
+            .send(
+                Method::PATCH,
+                &format!(
+                    "/{API_VERSION}/microvm-images/{image_identifier}/versions/{image_version}"
+                ),
+                &[],
+                Some(serde_json::json!({ "status": "INACTIVE" })),
+                "UpdateMicrovmImageVersion",
+            )
+            .await?;
+        Ok(())
     }
 
     async fn list_microvm_image_builds(
@@ -1411,10 +1438,12 @@ mod live_image_create {
         )
     }
 
-    /// Deletes an image the way the API wants it, versions first.
+    /// Deletes an image the way the API wants it: deactivate every version, remove all but one,
+    /// then let the whole-image delete own the final version.
     ///
-    /// CloudControl accepts a delete on a `CREATED` image and never removes it — the versions
-    /// hold it. `DeleteMicrovmImageVersion` is in `sandbox/provision` for exactly this reason.
+    /// CloudControl accepts a delete on a `CREATED` image and never removes it while an active
+    /// version holds it. The version lifecycle actions are in `sandbox/provision` for exactly
+    /// this reason.
     #[tokio::test]
     #[ignore]
     async fn delete_images_versions_first() {
@@ -1432,24 +1461,28 @@ mod live_image_create {
                 Ok(list) => println!("{name}: {} version(s)", list.len()),
                 Err(error) => println!("{name}: list refused: {error}"),
             }
+            let mut deactivated = Vec::new();
             for version in versions.unwrap_or_default() {
                 let Some(v) = version.image_version.as_deref() else {
                     continue;
                 };
-                let path = format!("/{API_VERSION}/microvm-images/{name}/versions/{v}");
-                let result: std::result::Result<serde_json::Value, _> = client
-                    .send(
-                        Method::DELETE,
-                        &path,
-                        &[],
-                        None,
-                        "DeleteMicrovmImageVersion",
-                    )
-                    .await;
+                let result = client.deactivate_microvm_image_version(name, v).await;
                 println!(
                     "  version {v}: {}",
-                    if result.is_ok() { "deleted" } else { "refused" }
+                    if result.is_ok() {
+                        deactivated.push(v.to_string());
+                        "deactivated"
+                    } else {
+                        "deactivation refused"
+                    }
                 );
+            }
+            let delete_count = deactivated.len().saturating_sub(1);
+            for version in deactivated.into_iter().take(delete_count) {
+                match client.delete_microvm_image_version(name, &version).await {
+                    Ok(()) => println!("  version {version}: deleted"),
+                    Err(error) => println!("  version {version}: delete refused: {error}"),
+                }
             }
             match client.delete_microvm_image(name).await {
                 Ok(()) => println!("  image deleted"),
@@ -1815,10 +1848,11 @@ mod live_deny {
         );
     }
 
-    /// Reclaims everything a guard run leaves on the probe image: its sessions, then its versions.
+    /// Reclaims everything a guard run leaves on the probe image: its sessions, then all but the
+    /// final inactive version, which the stack's whole-image delete owns.
     ///
     /// A MicroVM the run did not terminate bills for hours and no stack delete reaches it, and a
-    /// surviving version holds the image open so the delete that follows cannot remove it.
+    /// surviving active version holds the image open so the delete that follows cannot remove it.
     #[tokio::test]
     #[ignore]
     async fn reclaim_the_probe_image() {
@@ -1843,6 +1877,7 @@ mod live_deny {
         let mut stranded = Vec::new();
         let mut terminating = Vec::new();
         let mut undeleted = Vec::new();
+        let mut deactivated = Vec::new();
         for version in client
             .list_microvm_image_versions(&image)
             .await
@@ -1892,20 +1927,28 @@ mod live_deny {
                 }
             }
 
-            // Best-effort for the same reason termination is: a version that refuses to delete
-            // would otherwise abandon every version after it, and abort before the report below
-            // naming what is still billing.
             match client
-                .send::<serde_json::Value>(
-                    Method::DELETE,
-                    &format!("/{API_VERSION}/microvm-images/{image}/versions/{version}"),
-                    &[],
-                    None,
-                    "DeleteMicrovmImageVersion",
-                )
+                .deactivate_microvm_image_version(&image, &version)
                 .await
             {
-                Ok(_) => println!("deleted version {version}"),
+                Ok(()) => {
+                    println!("deactivated version {version}");
+                    deactivated.push(version);
+                }
+                Err(error) => {
+                    println!("version {version}: deactivation refused: {error}");
+                    undeleted.push(version);
+                }
+            }
+        }
+
+        // AWS refuses to delete the final version on its own; DeleteMicrovmImage owns that last
+        // version. Remove every earlier version here, then leave exactly one for the stack's
+        // image deletion below.
+        let delete_count = deactivated.len().saturating_sub(1);
+        for version in deactivated.into_iter().take(delete_count) {
+            match client.delete_microvm_image_version(&image, &version).await {
+                Ok(()) => println!("deleted version {version}"),
                 Err(error) => {
                     println!("version {version}: delete refused: {error}");
                     undeleted.push(version);
@@ -1920,24 +1963,26 @@ mod live_deny {
         );
         assert!(
             undeleted.is_empty(),
-            "image versions the reclaim could not delete hold the image open, so the stack \
-             delete cannot remove it: {undeleted:?}"
+            "image versions the reclaim could not deactivate or delete hold the image open, so \
+             the stack delete cannot remove it: {undeleted:?}"
         );
         let left = client
             .list_microvm_image_versions(&image)
             .await
             .expect("ListMicrovmImageVersions");
-        assert!(
-            left.is_empty(),
-            "the probe image still holds versions, so the stack delete cannot remove it: {left:?}"
+        assert_eq!(
+            left.len(),
+            1,
+            "the probe image must retain exactly its final inactive version for whole-image \
+             deletion: {left:?}"
         );
     }
 
     /// The probe image is gone once its stack is.
     ///
     /// Asserted rather than assumed: a delete on a `CREATED` image is accepted and removes
-    /// nothing while its versions survive (`delete_images_versions_first`), so a teardown can
-    /// report success over an image that is still there.
+    /// nothing while it has an active version, so a teardown can report success over an image
+    /// that is still there.
     #[tokio::test]
     #[ignore]
     async fn the_probe_image_is_gone() {

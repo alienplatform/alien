@@ -36,6 +36,27 @@ jobs:
     # manual run starts from, so one trust policy covers the schedule and a deliberate break.
     environment: egress-deny-guard
     steps:
+      - name: Verify guard configuration
+        env:
+          EGRESS_GUARD_ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+          EGRESS_GUARD_AWS_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          EGRESS_GUARD_AWS_ROLE_ARN: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+          EGRESS_GUARD_AWS_VPC_ID: ${{ secrets.EGRESS_GUARD_AWS_VPC_ID }}
+          EGRESS_GUARD_PRIVATE_SUBNET_IDS: ${{ secrets.EGRESS_GUARD_PRIVATE_SUBNET_IDS }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in EGRESS_GUARD_ARTIFACT_BUCKET EGRESS_GUARD_AWS_REGION EGRESS_GUARD_AWS_ROLE_ARN EGRESS_GUARD_AWS_VPC_ID EGRESS_GUARD_PRIVATE_SUBNET_IDS; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf -v names '%s, ' "${missing[@]}"
+            echo "::error title=Egress guard is not configured::Set ${names%, } in the egress-deny-guard environment"
+            exit 1
+          fi
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Configure git credentials
@@ -89,6 +110,8 @@ jobs:
       - name: Render the sandbox stack
         env:
           ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+          PRIVATE_SUBNET_IDS: ${{ secrets.EGRESS_GUARD_PRIVATE_SUBNET_IDS }}
+          VPC_ID: ${{ secrets.EGRESS_GUARD_AWS_VPC_ID }}
         run: |
           set -euo pipefail
           cat > .guard/alien.json <<JSON
@@ -111,18 +134,25 @@ jobs:
             "permissions": { "profiles": {}, "management": "auto" }
           }
           JSON
-          cat > .guard/stack-settings.yaml <<'YAML'
-          network:
-            type: create
-            availabilityZones: 2
-          YAML
+          # Reuse the test VPC's NAT rather than consuming another scarce EIP for a weekly job.
+          # jq constructs the settings so identifiers cannot alter the JSON structure.
+          jq -n \
+            --arg vpc_id "$VPC_ID" \
+            --arg private_subnet_ids "$PRIVATE_SUBNET_IDS" \
+            '{network: {
+              type: "byo-vpc-aws",
+              vpc_id: $vpc_id,
+              public_subnet_ids: [],
+              private_subnet_ids: ($private_subnet_ids | split(",")),
+              security_group_ids: []
+            }}' > .guard/stack-settings.json
           # Rendered by the shipped emitter rather than written out here: the deny is a
           # loopback-only egress rule on the connector's security group, and a hand-written copy
           # would guard the copy instead of what deployments get.
           cargo run -p alien-cli --bin alien -- render \
             --format cloudformation \
             --stack .guard/alien.json \
-            --stack-settings .guard/stack-settings.yaml \
+            --stack-settings .guard/stack-settings.json \
             --registration-mode outputs \
             --output .guard
 
@@ -173,6 +203,15 @@ jobs:
             --parameter-overrides \
               "ManagingRoleArn=$MANAGING_ROLE_ARN" \
               "ManagingAccountId=$ACCOUNT_ID"
+
+      - name: Report failed stack resources
+        if: failure()
+        run: |
+          aws cloudformation describe-stack-events \
+            --stack-name "$STACK_NAME" \
+            --query "StackEvents[?contains(ResourceStatus, 'FAILED')].[Timestamp,LogicalResourceId,ResourceType,ResourceStatusReason]" \
+            --output table \
+            || echo "::warning::the stack failed before events were available"
 
       - name: Read the probe image and connector
         run: |
@@ -270,6 +309,25 @@ jobs:
     timeout-minutes: 45
     environment: egress-deny-guard
     steps:
+      - name: Verify guard configuration
+        env:
+          EGRESS_GUARD_ARTIFACT_BUCKET: ${{ secrets.EGRESS_GUARD_ARTIFACT_BUCKET }}
+          EGRESS_GUARD_AWS_REGION: ${{ vars.EGRESS_GUARD_AWS_REGION }}
+          EGRESS_GUARD_AWS_ROLE_ARN: ${{ secrets.EGRESS_GUARD_AWS_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in EGRESS_GUARD_ARTIFACT_BUCKET EGRESS_GUARD_AWS_REGION EGRESS_GUARD_AWS_ROLE_ARN; do
+            if [ -z "${!name}" ]; then
+              missing+=("$name")
+            fi
+          done
+          if [ "${#missing[@]}" -ne 0 ]; then
+            printf -v names '%s, ' "${missing[@]}"
+            echo "::error title=Egress guard is not configured::Set ${names%, } in the egress-deny-guard environment"
+            exit 1
+          fi
+
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6
         id: creds
         with:

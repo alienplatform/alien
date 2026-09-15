@@ -15,6 +15,7 @@
           // be authorized here, against the image ARN pattern the stack binding compiles.
           "actions": [
             "lambda:UpdateMicrovmImage",
+            "lambda:UpdateMicrovmImageVersion",
             "lambda:DeleteMicrovmImage",
             "lambda:DeleteMicrovmImageVersion",
             "lambda:GetMicrovmImage",

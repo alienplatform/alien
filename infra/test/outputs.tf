@@ -76,6 +76,16 @@ output "e2e_aws_security_group_ids" {
   sensitive = true
 }
 
+output "egress_deny_guard_aws_role_arn" {
+  value     = module.aws.egress_deny_guard_role_arn
+  sensitive = true
+}
+
+output "egress_deny_guard_artifact_bucket" {
+  value     = module.aws.egress_deny_guard_artifact_bucket
+  sensitive = true
+}
+
 # AWS resources
 output "aws_s3_bucket" {
   value     = module.aws.s3_bucket

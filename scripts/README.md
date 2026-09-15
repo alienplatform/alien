@@ -22,7 +22,7 @@ Small operational scripts used by root `package.json` commands and GitHub Action
 
 - **`egress-deny-guard-teardown.sh`** — Used by `.github/workflows/egress-deny-guard.yml` before and after the weekly `egressDeny` check to remove the probe stack, and to fail the run if any of it survives. Takes the stack name and needs target-account AWS credentials in both the CLI's and the Rust client's environment (`AWS_TARGET_*`).
 
-  Two preconditions live outside this repository: the OIDC role needs `MaxSessionDuration` of at least 5400 seconds, or every run dies at credential assumption; and a lifecycle rule expiring the artifact bucket's `egress-deny-guard/` prefix is what reclaims a bundle a cancelled run could not delete.
+  `infra/test` owns the guard's GitHub OIDC role, artifact bucket, one-day lifecycle rule, and reusable VPC. Its outputs populate the `egress-deny-guard` GitHub environment; the workflow checks those values before compiling so configuration drift fails immediately.
 
 ## Example testing
 

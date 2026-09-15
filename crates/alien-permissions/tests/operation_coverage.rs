@@ -278,6 +278,7 @@ fn critical_e2e_provider_operations_are_declared() {
             aws_actions: &[
                 "lambda:CreateMicrovmImage",
                 "lambda:UpdateMicrovmImage",
+                "lambda:UpdateMicrovmImageVersion",
                 "lambda:GetMicrovmImageBuild",
                 "lambda:DeleteMicrovmImage",
                 "lambda:ListMicrovmImageVersions",

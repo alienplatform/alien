@@ -660,8 +660,9 @@ impl AwsSandboxController {
             }
         };
 
-        // Deleting a version that is still building fails and rides the executor's retry budget
-        // (~17 min ceiling against a ~160s build) rather than a dedicated wait state.
+        // Deactivating a version that is still building fails and rides the executor's retry
+        // budget (~17 min ceiling against a ~160s build) rather than a dedicated wait state.
+        let mut image_versions = Vec::with_capacity(versions.len());
         for version in versions {
             // A versionless entry cannot be deleted, and skipping it would let the image
             // delete below no-op while a version survives — Deleted without deleting.
@@ -674,6 +675,28 @@ impl AwsSandboxController {
                     resource_id: Some(config.id.clone()),
                 }));
             };
+            match client
+                .deactivate_microvm_image_version(&image_identifier, &image_version)
+                .await
+            {
+                Ok(()) => image_versions.push(image_version),
+                Err(error) if is_remote_resource_absent(&error) => {}
+                Err(error) => {
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to deactivate MicroVM image '{image_identifier}' version \
+                             '{image_version}' before deletion"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    });
+                }
+            }
+        }
+
+        // AWS rejects deleting the final version directly. Delete every older version, then let
+        // DeleteMicrovmImage remove the image and its remaining inactive version together.
+        let delete_count = image_versions.len().saturating_sub(1);
+        for image_version in image_versions.into_iter().take(delete_count) {
             match client
                 .delete_microvm_image_version(&image_identifier, &image_version)
                 .await
@@ -914,6 +937,28 @@ impl AwsSandboxController {
             if (now - retired.retired_at).num_seconds() < window {
                 kept.push(retired);
                 continue;
+            }
+            match client
+                .deactivate_microvm_image_version(&identifier, &retired.version)
+                .await
+            {
+                Ok(()) => {}
+                Err(error) if is_remote_resource_absent(&error) => {
+                    debug!(sandbox_id = %resource_id, version = %retired.version, "retired MicroVM image version was already absent");
+                    continue;
+                }
+                Err(error) => {
+                    kept.push(retired.clone());
+                    kept.extend(pending);
+                    self.retired_versions = kept;
+                    return Err(error).context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to deactivate retired MicroVM image '{identifier}' version '{}'",
+                            retired.version
+                        ),
+                        resource_id: Some(resource_id.to_string()),
+                    });
+                }
             }
             match client
                 .delete_microvm_image_version(&identifier, &retired.version)
@@ -1419,6 +1464,11 @@ mod tests {
                 state: Some("CREATED".to_string()),
             })
         });
+        client
+            .expect_deactivate_microvm_image_version()
+            .withf(|_, version| version == "1.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
         client
             .expect_delete_microvm_image_version()
             .withf(|_, version| version == "1.0")
@@ -2013,6 +2063,11 @@ mod tests {
             })
         });
         client
+            .expect_deactivate_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        client
             .expect_delete_microvm_image_version()
             .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
             .times(1)
@@ -2246,10 +2301,10 @@ mod tests {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    /// Versions hold the image: the API accepts a delete on an image with versions present
-    /// while removing nothing, so the order is load-bearing, not stylistic.
+    /// Active versions hold the image, while AWS refuses to delete the final version directly:
+    /// deactivate all, delete all but one, then let the image delete own that last version.
     #[tokio::test]
-    async fn delete_removes_every_version_before_the_image() {
+    async fn delete_leaves_the_final_inactive_version_for_the_image() {
         let mut sequence = mockall::Sequence::new();
         let mut client = MockLambdaMicrovmsApi::new();
         client
@@ -2274,14 +2329,20 @@ mod tests {
                 ])
             });
         client
-            .expect_delete_microvm_image_version()
+            .expect_deactivate_microvm_image_version()
             .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
         client
-            .expect_delete_microvm_image_version()
+            .expect_deactivate_microvm_image_version()
             .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
+            .times(1)
+            .in_sequence(&mut sequence)
+            .returning(|_, _| Ok(()));
+        client
+            .expect_delete_microvm_image_version()
+            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
             .times(1)
             .in_sequence(&mut sequence)
             .returning(|_, _| Ok(()));
