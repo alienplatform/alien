@@ -92,7 +92,7 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
         }));
     }
 
-    let permissions = declared_permissions(&manifest);
+    let permissions = declared_permissions(&manifest)?;
     if permissions.is_empty() {
         if json {
             crate::output::print_json(&serde_json::json!({ "statements": [] }))?;
@@ -106,18 +106,28 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
 }
 
 /// The unique permission references every operation requires, sorted by ID.
-fn declared_permissions(manifest: &CanonicalPluginManifest) -> Vec<PermissionSetReference> {
+fn declared_permissions(manifest: &CanonicalPluginManifest) -> Result<Vec<PermissionSetReference>> {
     let mut permissions = BTreeMap::new();
     for permission in manifest
         .operations
         .iter()
         .flat_map(|operation| &operation.required_permissions)
     {
-        permissions
-            .entry(permission.id().to_string())
-            .or_insert_with(|| permission.clone());
+        let id = permission.id();
+        if let Some(existing) = permissions.get(id) {
+            if existing != permission {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!(
+                        "plugin '{}' declares conflicting definitions for permission '{id}'",
+                        manifest.name
+                    ),
+                }));
+            }
+        } else {
+            permissions.insert(id.to_string(), permission.clone());
+        }
     }
-    permissions.into_values().collect()
+    Ok(permissions.into_values().collect())
 }
 
 fn print_aws_policy(
@@ -208,6 +218,34 @@ mod tests {
             false,
         )
         .expect("no declared permissions should succeed trivially");
+    }
+
+    #[test]
+    fn permission_collection_rejects_conflicting_definitions_instead_of_first_wins() {
+        let manifest = CanonicalPluginManifest::parse(
+            br#"{
+                "name": "demo",
+                "version": "1.0.0",
+                "binaries": {"amd64": "demo-linux-amd64"},
+                "operations": [
+                    {"name": "one", "permissions": [{
+                        "id": "operations/demo/read",
+                        "description": "First definition",
+                        "platforms": {}
+                    }]},
+                    {"name": "two", "permissions": [{
+                        "id": "operations/demo/read",
+                        "description": "Different definition",
+                        "platforms": {}
+                    }]}
+                ]
+            }"#,
+        )
+        .expect("manifest shape should parse");
+
+        let error = declared_permissions(&manifest)
+            .expect_err("conflicting definitions must not silently pick the first");
+        assert!(error.to_string().contains("conflicting definitions"));
     }
 
     #[test]

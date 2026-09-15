@@ -36,7 +36,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use alien_core::permissions::{PermissionSet, PermissionSetReference};
 use alien_error::AlienError;
-use schemars::schema::RootSchema;
+use schemars::schema::{RootSchema, Schema, SchemaObject, SingleOrVec};
 use serde::{Deserialize, Serialize};
 
 use crate::error::{ErrorData, Result};
@@ -475,9 +475,27 @@ impl CanonicalPluginManifest {
         }
 
         let mut seen = BTreeSet::new();
+        let mut permission_definitions = BTreeMap::new();
         for (index, operation) in self.operations.iter().enumerate() {
             require_non_empty(&operation.name, &format!("operations[{index}].name"))?;
             validate_operation_contract(&self.name, self.tier, operation)?;
+            for permission in &operation.required_permissions {
+                let permission_id = permission.id();
+                if let Some(existing) = permission_definitions.get(permission_id) {
+                    if existing != permission {
+                        return invalid_operation(
+                            &self.name,
+                            operation,
+                            "permissions",
+                            &format!(
+                                "permission '{permission_id}' has conflicting definitions across operations"
+                            ),
+                        );
+                    }
+                } else {
+                    permission_definitions.insert(permission_id.to_string(), permission.clone());
+                }
+            }
             if let Some(permissions) = &operation.kubernetes_permissions {
                 permissions.validate(operation.effective_tier(self.tier))?;
             }
@@ -503,6 +521,68 @@ impl CanonicalPluginManifest {
                     operation: operation.name.clone(),
                     poll_operation: verification.poll_operation.clone(),
                 }));
+            }
+            let poll = poll.expect("a valid read-only poll operation exists");
+            let Some(poll_output_schema) = poll.output_schema.as_ref() else {
+                return invalid_operation(
+                    &self.name,
+                    operation,
+                    "verification.successField",
+                    "cannot be verified because the poll operation has no outputSchema",
+                );
+            };
+            if !root_schema_contains_path(poll_output_schema, &verification.success_field) {
+                return invalid_operation(
+                    &self.name,
+                    operation,
+                    "verification.successField",
+                    &format!(
+                        "path '{}' is not declared by poll operation '{}' outputSchema",
+                        verification.success_field, verification.poll_operation
+                    ),
+                );
+            }
+
+            if !verification.poll_params_from_result.is_empty() {
+                let Some(operation_output_schema) = operation.output_schema.as_ref() else {
+                    return invalid_operation(
+                        &self.name,
+                        operation,
+                        "verification.pollParamsFromResult",
+                        "cannot extract poll parameters without an outputSchema",
+                    );
+                };
+                let Some(poll_input_schema) = poll.input_schema.as_ref() else {
+                    return invalid_operation(
+                        &self.name,
+                        operation,
+                        "verification.pollParamsFromResult",
+                        "cannot pass poll parameters because the poll operation has no inputSchema",
+                    );
+                };
+                for (poll_param, result_path) in &verification.poll_params_from_result {
+                    if poll_param.contains('.')
+                        || !root_schema_contains_path(poll_input_schema, poll_param)
+                    {
+                        return invalid_operation(
+                            &self.name,
+                            operation,
+                            "verification.pollParamsFromResult",
+                            &format!(
+                                "poll parameter '{poll_param}' is not a top-level property declared by '{}' inputSchema",
+                                verification.poll_operation
+                            ),
+                        );
+                    }
+                    if !root_schema_contains_path(operation_output_schema, result_path) {
+                        return invalid_operation(
+                            &self.name,
+                            operation,
+                            "verification.pollParamsFromResult",
+                            &format!("result path '{result_path}' is not declared by outputSchema"),
+                        );
+                    }
+                }
             }
         }
 
@@ -652,16 +732,182 @@ fn validate_operation_contract(
                 "must contain non-empty output paths",
             );
         }
-        if operation.output_schema.is_none() {
+        let Some(output_schema) = operation.output_schema.as_ref() else {
             return invalid_operation(
                 plugin,
                 operation,
                 "outputSchema",
                 "is required when sensitive output fields are redacted",
             );
+        };
+        if let Some(field) = fields
+            .iter()
+            .find(|field| !root_schema_contains_redaction_path(output_schema, field))
+        {
+            return invalid_operation(
+                plugin,
+                operation,
+                "sensitiveOutput.fields",
+                &format!("path '{field}' is not declared by outputSchema"),
+            );
         }
     }
     Ok(())
+}
+
+fn root_schema_contains_path(root: &RootSchema, path: &str) -> bool {
+    root_schema_contains_path_with_arrays(root, path, false)
+}
+
+/// Redaction applies the same path to every element it encounters in an
+/// array, so a schema path through array items is valid for that policy. The
+/// verification reader does not have that behavior and intentionally uses
+/// [`root_schema_contains_path`] instead.
+fn root_schema_contains_redaction_path(root: &RootSchema, path: &str) -> bool {
+    root_schema_contains_path_with_arrays(root, path, true)
+}
+
+fn root_schema_contains_path_with_arrays(
+    root: &RootSchema,
+    path: &str,
+    transparent_arrays: bool,
+) -> bool {
+    let segments = path.split('.').collect::<Vec<_>>();
+    let mut visited_references = BTreeSet::new();
+    schema_object_contains_path(
+        root,
+        &root.schema,
+        &segments,
+        transparent_arrays,
+        &mut visited_references,
+    )
+}
+
+fn schema_contains_path(
+    root: &RootSchema,
+    schema: &Schema,
+    segments: &[&str],
+    transparent_arrays: bool,
+    visited_references: &mut BTreeSet<(String, usize)>,
+) -> bool {
+    match schema {
+        Schema::Bool(_) => false,
+        Schema::Object(schema) => schema_object_contains_path(
+            root,
+            schema,
+            segments,
+            transparent_arrays,
+            visited_references,
+        ),
+    }
+}
+
+fn schema_object_contains_path(
+    root: &RootSchema,
+    schema: &SchemaObject,
+    segments: &[&str],
+    transparent_arrays: bool,
+    visited_references: &mut BTreeSet<(String, usize)>,
+) -> bool {
+    if segments.is_empty() {
+        return true;
+    }
+
+    if let Some(reference) = &schema.reference {
+        let visit = (reference.clone(), segments.len());
+        if !visited_references.insert(visit.clone()) {
+            return false;
+        }
+        let found = local_definition(root, reference).is_some_and(|definition| {
+            schema_contains_path(
+                root,
+                definition,
+                segments,
+                transparent_arrays,
+                visited_references,
+            )
+        });
+        visited_references.remove(&visit);
+        if found {
+            return true;
+        }
+    }
+
+    if let Some(items) = transparent_arrays
+        .then(|| schema.array.as_ref().and_then(|array| array.items.as_ref()))
+        .flatten()
+    {
+        let found = match items {
+            SingleOrVec::Single(item) => {
+                schema_contains_path(root, item, segments, transparent_arrays, visited_references)
+            }
+            SingleOrVec::Vec(items) => items.iter().any(|item| {
+                schema_contains_path(root, item, segments, transparent_arrays, visited_references)
+            }),
+        };
+        if found {
+            return true;
+        }
+    }
+
+    let (head, tail) = segments.split_first().expect("checked non-empty");
+    if let Some(property) = schema
+        .object
+        .as_ref()
+        .and_then(|object| object.properties.get(*head))
+    {
+        if tail.is_empty()
+            || schema_contains_path(root, property, tail, transparent_arrays, visited_references)
+        {
+            return true;
+        }
+    }
+
+    schema.subschemas.as_ref().is_some_and(|subschemas| {
+        [
+            subschemas.all_of.as_ref(),
+            subschemas.any_of.as_ref(),
+            subschemas.one_of.as_ref(),
+        ]
+        .into_iter()
+        .flatten()
+        .flatten()
+        .any(|branch| {
+            schema_contains_path(
+                root,
+                branch,
+                segments,
+                transparent_arrays,
+                visited_references,
+            )
+        }) || [
+            subschemas.if_schema.as_deref(),
+            subschemas.then_schema.as_deref(),
+            subschemas.else_schema.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .any(|branch| {
+            schema_contains_path(
+                root,
+                branch,
+                segments,
+                transparent_arrays,
+                visited_references,
+            )
+        })
+    })
+}
+
+fn local_definition<'a>(root: &'a RootSchema, reference: &str) -> Option<&'a Schema> {
+    let name = reference
+        .strip_prefix("#/definitions/")
+        .or_else(|| reference.strip_prefix("#/$defs/"))?;
+    if name.contains('/') {
+        return None;
+    }
+    let name = name.replace("~1", "/").replace("~0", "~");
+    root.definitions.get(&name)
 }
 
 fn validate_retry_policy(
@@ -949,7 +1195,10 @@ mod tests {
     fn accepts_verification_polling_a_read_only_sibling() {
         let json = manifest_json(
             r#"
-            {"name": "get-pod-status", "tier": "read-only"},
+            {"name": "get-pod-status", "tier": "read-only", "outputSchema": {
+                "type": "object",
+                "properties": {"status": {"type": "string"}}
+            }},
             {"name": "restart-pod", "tier": "mutating", "verification": {
                 "changes": "the pod restarts",
                 "pollOperation": "get-pod-status",
@@ -1209,6 +1458,139 @@ mod tests {
             .expect_err("redaction paths without an output contract must fail");
 
         assert!(error.to_string().contains("outputSchema"));
+    }
+
+    #[test]
+    fn redacted_output_fields_must_resolve_against_the_output_schema() {
+        let json = manifest_json(
+            r##"{
+                "name": "credentials",
+                "outputSchema": {
+                    "definitions": {
+                        "Credential": {
+                            "type": "object",
+                            "properties": {"password": {"type": "string"}}
+                        }
+                    },
+                    "type": "object",
+                    "properties": {
+                        "rows": {
+                            "type": "array",
+                            "items": {"$ref": "#/definitions/Credential"}
+                        }
+                    }
+                },
+                "sensitiveOutput": {"kind": "redact", "fields": ["rows.password"]}
+            }"##,
+        );
+        PluginManifest::parse_and_validate(json.as_bytes())
+            .expect("a nested array/ref redaction path declared by outputSchema should validate");
+
+        let json = manifest_json(
+            r#"{
+                "name": "credentials",
+                "outputSchema": {
+                    "type": "object",
+                    "properties": {"username": {"type": "string"}}
+                },
+                "sensitiveOutput": {"kind": "redact", "fields": ["password"]}
+            }"#,
+        );
+        let error = PluginManifest::parse_and_validate(json.as_bytes())
+            .expect_err("a nonexistent redaction path must fail closed");
+        assert!(error.to_string().contains("path 'password'"));
+    }
+
+    #[test]
+    fn verification_paths_must_resolve_against_the_relevant_schemas() {
+        let valid = manifest_json(
+            r#"
+            {"name": "get-pod", "tier": "read-only",
+             "inputSchema": {"type": "object", "properties": {"podName": {"type": "string"}}},
+             "outputSchema": {"type": "object", "properties": {
+                 "state": {"type": "object", "properties": {"status": {"type": "string"}}}
+             }}},
+            {"name": "restart-pod", "tier": "mutating",
+             "outputSchema": {"type": "object", "properties": {
+                 "pod": {"type": "object", "properties": {"name": {"type": "string"}}}
+             }},
+             "verification": {
+                 "changes": "the pod restarts",
+                 "pollOperation": "get-pod",
+                 "pollParamsFromResult": {"podName": "pod.name"},
+                 "successField": "state.status",
+                 "successValue": "Running",
+                 "timeoutSeconds": 60
+             }}
+            "#,
+        );
+        PluginManifest::parse_and_validate(valid.as_bytes())
+            .expect("schema-resolved verification paths should validate");
+
+        for (needle, invalid) in [
+            (
+                "missingSource",
+                valid.replace("\"pod.name\"", "\"pod.missingSource\""),
+            ),
+            (
+                "missingParam",
+                valid.replace(
+                    "\"podName\": \"pod.name\"",
+                    "\"missingParam\": \"pod.name\"",
+                ),
+            ),
+            (
+                "missingStatus",
+                valid.replace("\"state.status\"", "\"state.missingStatus\""),
+            ),
+        ] {
+            let error = PluginManifest::parse_and_validate(invalid.as_bytes())
+                .expect_err("an unverifiable schema path must fail closed");
+            assert!(error.to_string().contains(needle), "{error}");
+        }
+
+        let array_result = valid.replace(
+            r#""outputSchema": {"type": "object", "properties": {
+                 "state": {"type": "object", "properties": {"status": {"type": "string"}}}
+             }}"#,
+            r#""outputSchema": {"type": "array", "items": {"type": "object", "properties": {
+                 "state": {"type": "object", "properties": {"status": {"type": "string"}}}
+             }}}"#,
+        );
+        let error = PluginManifest::parse_and_validate(array_result.as_bytes())
+            .expect_err("verification must not treat array items as the result object");
+        assert!(error.to_string().contains("state.status"), "{error}");
+    }
+
+    #[test]
+    fn permission_ids_are_plugin_wide_and_conflicting_definitions_are_rejected() {
+        let permission = r#"{
+            "id": "operations/example/read",
+            "description": "Read the selected example.",
+            "platforms": {"aws": [{
+                "grant": {"actions": ["example:Get"]},
+                "binding": {"resource": {"resources": ["arn:aws:example:*:*:item/*"]}}
+            }]}
+        }"#;
+        let identical = manifest_json(&format!(
+            r#"{{"name": "one", "permissions": [{permission}]}},
+                {{"name": "two", "permissions": [{permission}]}}"#
+        ));
+        PluginManifest::parse_and_validate(identical.as_bytes())
+            .expect("identical permission definitions may be shared across operations");
+
+        let conflicting = identical.replacen("example:Get\"]", "example:List\"]", 1);
+        let error = PluginManifest::parse_and_validate(conflicting.as_bytes())
+            .expect_err("different definitions with one permission ID must fail closed");
+        assert!(error.to_string().contains("conflicting definitions"));
+
+        let named_and_inline = manifest_json(&format!(
+            r#"{{"name": "one", "permissions": ["operations/example/read"]}},
+                {{"name": "two", "permissions": [{permission}]}}"#
+        ));
+        let error = PluginManifest::parse_and_validate(named_and_inline.as_bytes())
+            .expect_err("named and inline uses of one permission ID conflict");
+        assert!(error.to_string().contains("conflicting definitions"));
     }
 
     #[test]

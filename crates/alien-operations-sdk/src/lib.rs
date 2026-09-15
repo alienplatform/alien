@@ -32,7 +32,7 @@ pub use alien_core::permissions::{
     GcpPlatformPermission, PermissionGrant, PermissionSet, PermissionSetReference,
     PlatformPermissions,
 };
-pub use docs::generate_docs;
+pub use docs::{generate_docs, generate_docs_canonical};
 pub use error::{ErrorData, Result};
 pub use kubernetes::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
@@ -42,7 +42,9 @@ pub use manifest::{
     Arch, CanonicalOperationManifest, CanonicalPluginManifest, OperationManifest, PluginManifest,
     RetryPolicy, RiskTier, SensitiveOutputPolicy,
 };
-pub use mcp::{generate_mcp_tools, McpToolSchema};
+pub use mcp::{
+    generate_mcp_tools, generate_mcp_tools_canonical, CanonicalMcpToolSchema, McpToolSchema,
+};
 pub use plugin::{dispatch, run_plugin, Plugin};
 pub use protocol::{
     is_explicitly_retryable, retryable_error, PluginInvocation, PluginResult, PROTOCOL_VERSION,

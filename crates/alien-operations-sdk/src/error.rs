@@ -47,7 +47,7 @@ pub enum ErrorData {
     )]
     FieldEmpty {
         /// A description of which field was empty, e.g. "name",
-        /// "operations[1].name", "binaries.amd64".
+        /// "operations\[1\].name", "binaries.amd64".
         field: String,
     },
 

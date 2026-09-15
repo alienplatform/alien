@@ -7,13 +7,24 @@
 
 use std::fmt::Write as _;
 
+#[allow(deprecated)]
 use crate::manifest::{
-    CanonicalOperationManifest, CanonicalPluginManifest, RiskTier, SensitiveOutputPolicy,
+    CanonicalOperationManifest, CanonicalPluginManifest, PluginManifest, RiskTier,
+    SensitiveOutputPolicy,
 };
 
 /// Render a Markdown reference page documenting every operation `manifest`
 /// declares.
-pub fn generate_docs(manifest: &CanonicalPluginManifest) -> String {
+///
+/// This keeps the original public signature source compatible. Canonical
+/// manifest consumers should use [`generate_docs_canonical`].
+#[allow(deprecated)]
+pub fn generate_docs(manifest: &PluginManifest) -> String {
+    generate_docs_canonical(&manifest.clone().into_canonical())
+}
+
+/// Render documentation from the canonical operation contract.
+pub fn generate_docs_canonical(manifest: &CanonicalPluginManifest) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {}", manifest.name);
     let _ = writeln!(out);
@@ -126,7 +137,7 @@ mod tests {
     fn renders_plugin_name_and_version() {
         let manifest = CanonicalPluginManifest::parse_and_validate(manifest_json("").as_bytes())
             .expect("valid manifest");
-        let docs = generate_docs(&manifest);
+        let docs = generate_docs_canonical(&manifest);
         assert!(docs.contains("# postgres"));
         assert!(docs.contains("`1.0.0`"));
     }
@@ -140,7 +151,7 @@ mod tests {
             .as_bytes(),
         )
         .expect("valid manifest");
-        let docs = generate_docs(&manifest);
+        let docs = generate_docs_canonical(&manifest);
         assert!(docs.contains("### `vacuum` — mutating"));
         assert!(docs.contains("Run VACUUM."));
     }
@@ -159,7 +170,7 @@ mod tests {
             .as_bytes(),
         )
         .expect("valid manifest");
-        let docs = generate_docs(&manifest);
+        let docs = generate_docs_canonical(&manifest);
         assert!(docs.contains("`postgres/vacuum`"));
         assert!(docs.contains("**Timeout:** 30s"));
     }
@@ -169,7 +180,10 @@ mod tests {
         let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(
                 r#"
-                {"name": "get-pod-status", "tier": "read-only"},
+                {"name": "get-pod-status", "tier": "read-only", "outputSchema": {
+                    "type": "object",
+                    "properties": {"status": {"type": "string"}}
+                }},
                 {"name": "restart-pod", "tier": "mutating", "verification": {
                     "changes": "the pod restarts",
                     "pollOperation": "get-pod-status",
@@ -182,7 +196,7 @@ mod tests {
             .as_bytes(),
         )
         .expect("valid manifest");
-        let docs = generate_docs(&manifest);
+        let docs = generate_docs_canonical(&manifest);
         assert!(docs.contains("the pod restarts"));
         assert!(docs.contains("`get-pod-status`"));
         assert!(docs.contains("`status`"));
@@ -193,7 +207,17 @@ mod tests {
     fn renders_a_plugin_with_no_operations() {
         let manifest = CanonicalPluginManifest::parse_and_validate(manifest_json("").as_bytes())
             .expect("valid manifest");
-        let docs = generate_docs(&manifest);
+        let docs = generate_docs_canonical(&manifest);
         assert!(docs.contains("declares no operations"));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn legacy_generate_docs_signature_remains_source_compatible() {
+        let generate: fn(&PluginManifest) -> String = generate_docs;
+        let manifest = PluginManifest::parse_and_validate(manifest_json("").as_bytes())
+            .expect("valid legacy manifest");
+
+        assert!(generate(&manifest).contains("# postgres"));
     }
 }

@@ -10,7 +10,6 @@ use std::process::Command;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::manifest::Arch;
-use alien_operations_sdk::CanonicalPluginManifest;
 use serde_json::Value;
 use zip::write::SimpleFileOptions;
 
@@ -18,14 +17,17 @@ use crate::commands::operations::check::validate_manifest;
 use crate::error::{ErrorData, Result};
 
 pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
+    let directory_arg = directory;
+    let directory = Path::new(directory.unwrap_or("."));
+    ensure_typed_metadata_current(directory)?;
+
     // Fail fast on a broken manifest before spending time on a release
     // build. Validates silently (no stdout) so `--json` still emits exactly
     // one parseable document; re-read as raw bytes below since
     // single_arch_manifest_json needs to rewrite the manifest's JSON, not
     // the parsed struct.
-    let manifest = validate_manifest(directory)?;
+    let manifest = validate_manifest(directory_arg)?;
 
-    let directory = Path::new(directory.unwrap_or("."));
     let manifest_path = directory.join(alien_operations_sdk::manifest::MANIFEST_FILENAME);
     let manifest_bytes = std::fs::read(&manifest_path).into_alien_error().context(
         ErrorData::ConfigurationError {
@@ -98,6 +100,46 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
         println!("  alien operations publish {}", bundle_path.display());
     }
     Ok(())
+}
+
+/// Scaffolded plugins generate metadata from their typed operation registry.
+/// Refuse to package a stale checked-in copy: a unit test is useful feedback,
+/// but the bundle boundary is the point that must enforce the contract.
+fn ensure_typed_metadata_current(directory: &Path) -> Result<()> {
+    ensure_typed_metadata_current_via(directory, Path::new("cargo"))
+}
+
+fn ensure_typed_metadata_current_via(directory: &Path, cargo: &Path) -> Result<()> {
+    if !directory.join("src/bin/generate-metadata.rs").is_file() {
+        return Ok(());
+    }
+    let output = Command::new(cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--bin",
+            "generate-metadata",
+            "--",
+            "--check",
+        ])
+        .current_dir(directory)
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "could not check generated metadata in '{}'",
+                directory.display()
+            ),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "generated metadata in '{}' is stale or invalid; run `cargo run --bin generate-metadata` before packaging",
+            directory.display()
+        ),
+    }))
 }
 
 /// Rewrite `manifest_bytes`'s `binaries` map to declare only `arch` →
@@ -347,6 +389,7 @@ fn write_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_operations_sdk::CanonicalPluginManifest;
 
     #[test]
     fn writes_a_bundle_with_metadata_and_the_binary_entry() {
@@ -421,6 +464,31 @@ mod tests {
         assert_eq!(manifest.name, "demo");
         assert_eq!(manifest.operations.len(), 1);
         assert_eq!(manifest.operations[0].name, "health");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_boundary_runs_the_scaffold_metadata_check() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(temp.path().join("src/bin")).expect("create generator directory");
+        std::fs::write(
+            temp.path().join("src/bin/generate-metadata.rs"),
+            "fn main() {}\n",
+        )
+        .expect("write generator marker");
+        let fake_cargo = temp.path().join("cargo");
+        std::fs::write(&fake_cargo, "#!/bin/sh\nexit 1\n").expect("write fake cargo");
+        let mut permissions = std::fs::metadata(&fake_cargo)
+            .expect("read fake cargo metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_cargo, permissions).expect("make fake cargo executable");
+
+        let error = ensure_typed_metadata_current_via(temp.path(), &fake_cargo)
+            .expect_err("a failed generated metadata check must block packaging");
+        assert!(error.to_string().contains("before packaging"));
     }
 
     #[test]

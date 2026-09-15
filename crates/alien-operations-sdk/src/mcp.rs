@@ -9,11 +9,13 @@
 use schemars::schema::{RootSchema, Schema, SchemaObject};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{CanonicalOperationManifest, CanonicalPluginManifest};
+#[allow(deprecated)]
+use crate::manifest::{CanonicalOperationManifest, CanonicalPluginManifest, PluginManifest};
 
-/// One MCP tool definition: `{ name, description, inputSchema, outputSchema }`, the shape
-/// the Model Context Protocol's `tools/list` response and most MCP client
-/// SDKs expect.
+/// The original MCP tool definition published by this crate.
+///
+/// This type intentionally retains its exact public fields for downstream
+/// struct literals. New code should use [`CanonicalMcpToolSchema`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct McpToolSchema {
@@ -30,13 +32,43 @@ pub struct McpToolSchema {
     /// schema — matching that operation taking no meaningful params, not
     /// "any params are allowed".
     pub input_schema: RootSchema,
+}
+
+/// One canonical MCP tool definition, including a declared output contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalMcpToolSchema {
+    /// The tool name an MCP client calls, `<plugin>/<operation>`.
+    pub name: String,
+    /// Human-readable tool description.
+    pub description: String,
+    /// JSON Schema for invocation parameters.
+    pub input_schema: RootSchema,
     /// JSON Schema for successful tool output, when declared.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<RootSchema>,
 }
 
 /// Generate one [`McpToolSchema`] per operation the manifest declares.
-pub fn generate_mcp_tools(manifest: &CanonicalPluginManifest) -> Vec<McpToolSchema> {
+///
+/// This keeps the original public signature source compatible. Canonical
+/// manifest consumers should use [`generate_mcp_tools_canonical`].
+#[allow(deprecated)]
+pub fn generate_mcp_tools(manifest: &PluginManifest) -> Vec<McpToolSchema> {
+    generate_mcp_tools_canonical(&manifest.clone().into_canonical())
+        .into_iter()
+        .map(|tool| McpToolSchema {
+            name: tool.name,
+            description: tool.description,
+            input_schema: tool.input_schema,
+        })
+        .collect()
+}
+
+/// Generate MCP tools from the canonical operation contract.
+pub fn generate_mcp_tools_canonical(
+    manifest: &CanonicalPluginManifest,
+) -> Vec<CanonicalMcpToolSchema> {
     manifest
         .operations
         .iter()
@@ -47,9 +79,9 @@ pub fn generate_mcp_tools(manifest: &CanonicalPluginManifest) -> Vec<McpToolSche
 fn generate_mcp_tool(
     manifest: &CanonicalPluginManifest,
     operation: &CanonicalOperationManifest,
-) -> McpToolSchema {
+) -> CanonicalMcpToolSchema {
     let tier = operation.effective_tier(manifest.tier);
-    McpToolSchema {
+    CanonicalMcpToolSchema {
         name: format!("{}/{}", manifest.name, operation.name),
         description: operation.description.clone().unwrap_or_else(|| {
             format!(
@@ -105,7 +137,7 @@ mod tests {
         )
         .expect("valid manifest");
 
-        let tools = generate_mcp_tools(&manifest);
+        let tools = generate_mcp_tools_canonical(&manifest);
         assert_eq!(tools.len(), 2);
         assert_eq!(tools[0].name, "postgres/health");
         assert_eq!(tools[1].name, "postgres/version");
@@ -118,7 +150,7 @@ mod tests {
         )
         .expect("valid manifest");
 
-        let tools = generate_mcp_tools(&manifest);
+        let tools = generate_mcp_tools_canonical(&manifest);
         assert_eq!(tools.len(), 1);
         assert!(tools[0].description.contains("vacuum"));
         assert!(tools[0].description.contains("postgres"));
@@ -133,7 +165,7 @@ mod tests {
         )
         .expect("valid manifest");
 
-        let tools = generate_mcp_tools(&manifest);
+        let tools = generate_mcp_tools_canonical(&manifest);
         assert_eq!(tools[0].description, "Check database connectivity.");
     }
 
@@ -144,7 +176,7 @@ mod tests {
         )
         .expect("valid manifest");
 
-        let tools = generate_mcp_tools(&manifest);
+        let tools = generate_mcp_tools_canonical(&manifest);
         let schema_json = serde_json::to_value(&tools[0].input_schema).expect("schema serializes");
         assert_eq!(schema_json["type"], "object");
         assert_eq!(schema_json["additionalProperties"], false);
@@ -167,12 +199,29 @@ mod tests {
         )
         .expect("valid manifest");
 
-        let tools = generate_mcp_tools(&manifest);
+        let tools = generate_mcp_tools_canonical(&manifest);
         let schema = tools[0]
             .output_schema
             .as_ref()
             .expect("output schema should be preserved");
         let schema_json = serde_json::to_value(schema).expect("schema serializes");
         assert_eq!(schema_json["properties"]["status"]["type"], "string");
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn legacy_generate_mcp_tools_signature_remains_source_compatible() {
+        let generate: fn(&PluginManifest) -> Vec<McpToolSchema> = generate_mcp_tools;
+        let manifest =
+            PluginManifest::parse_and_validate(manifest_json(r#"{"name": "health"}"#).as_bytes())
+                .expect("valid legacy manifest");
+
+        assert_eq!(generate(&manifest)[0].name, "postgres/health");
+
+        let _source_compatible_literal = McpToolSchema {
+            name: "postgres/health".to_string(),
+            description: "Check health".to_string(),
+            input_schema: empty_object_schema(),
+        };
     }
 }

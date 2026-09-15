@@ -1,12 +1,13 @@
 //! `alien operations docs` — generate MCP tool schemas and a Markdown
 //! reference page from a plugin's manifest. Fully offline: pure codegen
-//! from `metadata.json`, driven by `alien_operations_sdk::{generate_docs,
-//! generate_mcp_tools}`.
+//! from `metadata.json`, driven by the canonical operations SDK generators.
 
 use std::path::Path;
 
 use alien_error::{Context, IntoAlienError};
-use alien_operations_sdk::{generate_docs, generate_mcp_tools, CanonicalPluginManifest};
+use alien_operations_sdk::{
+    generate_docs_canonical, generate_mcp_tools_canonical, CanonicalPluginManifest,
+};
 
 use crate::error::{ErrorData, Result};
 
@@ -27,8 +28,8 @@ pub fn docs_task(directory: Option<&str>, json: bool) -> Result<()> {
         },
     )?;
 
-    let tools = generate_mcp_tools(&manifest);
-    let markdown = generate_docs(&manifest);
+    let tools = generate_mcp_tools_canonical(&manifest);
+    let markdown = generate_docs_canonical(&manifest);
 
     if json {
         crate::output::print_json(&serde_json::json!({
