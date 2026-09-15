@@ -7,7 +7,9 @@ import { CreateProjectFromTemplateRegistry } from "@alienplatform/platform-api/m
 
 let value: CreateProjectFromTemplateRegistry = {
   enabled: true,
-  repositories: [],
+  repositories: [
+    "<value 1>",
+  ],
   credentialPolicy: "pull-only",
 };
 ```
@@ -16,6 +18,6 @@ let value: CreateProjectFromTemplateRegistry = {
 
 | Field                                                                                                                        | Type                                                                                                                         | Required                                                                                                                     | Description                                                                                                                  |
 | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                                                    | *true*                                                                                                                       | :heavy_check_mark:                                                                                                           | N/A                                                                                                                          |
+| `enabled`                                                                                                                    | *boolean*                                                                                                                    | :heavy_check_mark:                                                                                                           | N/A                                                                                                                          |
 | `repositories`                                                                                                               | *string*[]                                                                                                                   | :heavy_check_mark:                                                                                                           | N/A                                                                                                                          |
 | `credentialPolicy`                                                                                                           | [operations.CreateProjectFromTemplateCredentialPolicy](../../models/operations/createprojectfromtemplatecredentialpolicy.md) | :heavy_check_mark:                                                                                                           | N/A                                                                                                                          |

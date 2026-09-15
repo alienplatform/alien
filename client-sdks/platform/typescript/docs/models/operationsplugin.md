@@ -17,10 +17,40 @@ let value: OperationsPlugin = {
       tier: "destructive",
       description:
         "vision save across override pluck gurn lampoon since briskly drat",
-      requiredPermissions: [
-        "<value 1>",
-        "<value 2>",
-      ],
+      inputSchema: {},
+      outputSchema: null,
+      requiredPermissions: [],
+      permissions: {
+        azure: [
+          "<value 1>",
+          "<value 2>",
+          "<value 3>",
+        ],
+        aws: [
+          {
+            effect: "Deny",
+            actions: [
+              "<value 1>",
+              "<value 2>",
+              "<value 3>",
+            ],
+            resources: [],
+            condition: {},
+            reason: "<value>",
+          },
+        ],
+        gcp: [
+          {
+            permissions: [
+              "<value 1>",
+              "<value 2>",
+              "<value 3>",
+            ],
+            scope: "projects/${projectName}",
+            reason: "<value>",
+          },
+        ],
+      },
     },
   ],
 };

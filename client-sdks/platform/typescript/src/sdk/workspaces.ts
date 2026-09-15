@@ -47,20 +47,6 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Delete a workspace. The workspace must have no projects.
-   */
-  async delete(
-    request: operations.DeleteWorkspaceRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(workspacesDelete(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update a workspace.
    */
   async update(
@@ -68,6 +54,20 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.Workspace> {
     return unwrapAsync(workspacesUpdate(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Delete a workspace. The workspace must have no projects.
+   */
+  async delete(
+    request: operations.DeleteWorkspaceRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(workspacesDelete(
       this,
       request,
       options,
@@ -103,20 +103,6 @@ export class Workspaces extends ClientSDK {
   }
 
   /**
-   * Remove a member from a workspace.
-   */
-  async removeMember(
-    request: operations.RemoveWorkspaceMemberRequest,
-    options?: RequestOptions,
-  ): Promise<void> {
-    return unwrapAsync(workspacesRemoveMember(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
    * Update a workspace member's role.
    */
   async updateMember(
@@ -124,6 +110,20 @@ export class Workspaces extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.WorkspaceMember> {
     return unwrapAsync(workspacesUpdateMember(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Remove a member from a workspace.
+   */
+  async removeMember(
+    request: operations.RemoveWorkspaceMemberRequest,
+    options?: RequestOptions,
+  ): Promise<void> {
+    return unwrapAsync(workspacesRemoveMember(
       this,
       request,
       options,

@@ -41,14 +41,16 @@ export type RenderOperatorManifestRequestScope = ClosedEnum<
 /**
  * Operator permission tier
  */
-export const Permission = {
+export const RenderOperatorManifestRequestPermission = {
   Diagnostics: "diagnostics",
   Remediation: "remediation",
 } as const;
 /**
  * Operator permission tier
  */
-export type Permission = ClosedEnum<typeof Permission>;
+export type RenderOperatorManifestRequestPermission = ClosedEnum<
+  typeof RenderOperatorManifestRequestPermission
+>;
 
 /**
  * Enable the node log collector DaemonSet for raw pod logs.
@@ -85,7 +87,7 @@ export type RenderOperatorManifestRequest = {
   /**
    * Operator permission tier
    */
-  permission?: Permission | undefined;
+  permission?: RenderOperatorManifestRequestPermission | undefined;
   /**
    * Ready operator-image package to use for the Operator image. If omitted, the latest ready operator-image package for the project is used.
    */
@@ -124,9 +126,9 @@ export const RenderOperatorManifestRequestScope$outboundSchema: z.ZodEnum<
 > = z.enum(RenderOperatorManifestRequestScope);
 
 /** @internal */
-export const Permission$outboundSchema: z.ZodEnum<typeof Permission> = z.enum(
-  Permission,
-);
+export const RenderOperatorManifestRequestPermission$outboundSchema: z.ZodEnum<
+  typeof RenderOperatorManifestRequestPermission
+> = z.enum(RenderOperatorManifestRequestPermission);
 
 /** @internal */
 export type LogCollector$Outbound = {
@@ -171,7 +173,9 @@ export const RenderOperatorManifestRequest$outboundSchema: z.ZodType<
   namespace: z.string().optional(),
   scope: RenderOperatorManifestRequestScope$outboundSchema.default("namespace"),
   labelSelector: z.string().optional(),
-  permission: Permission$outboundSchema.default("diagnostics"),
+  permission: RenderOperatorManifestRequestPermission$outboundSchema.default(
+    "diagnostics",
+  ),
   operatorImagePackageId: z.string().optional(),
   deploymentGroupToken: z.string(),
   logCollector: z.lazy(() => LogCollector$outboundSchema).optional(),

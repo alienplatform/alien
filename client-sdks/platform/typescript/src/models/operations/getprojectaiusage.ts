@@ -77,7 +77,7 @@ export type GetProjectAiUsageTimeSery = {
   bucket: Date;
 };
 
-export type Customer = {
+export type GetProjectAiUsageCustomer = {
   requests: number;
   successfulRequests: number;
   errorRequests: number;
@@ -112,7 +112,7 @@ export type GetProjectAiUsageAvailable = {
   pricing: Pricing;
   totals: GetProjectAiUsageTotals;
   timeSeries: Array<GetProjectAiUsageTimeSery>;
-  customers: Array<Customer>;
+  customers: Array<GetProjectAiUsageCustomer>;
   models: Array<GetProjectAiUsageModel>;
   customersTruncated: boolean;
   modelsTruncated: boolean;
@@ -245,7 +245,10 @@ export function getProjectAiUsageTimeSeryFromJSON(
 }
 
 /** @internal */
-export const Customer$inboundSchema: z.ZodType<Customer, unknown> = z.object({
+export const GetProjectAiUsageCustomer$inboundSchema: z.ZodType<
+  GetProjectAiUsageCustomer,
+  unknown
+> = z.object({
   requests: z.int(),
   successfulRequests: z.int(),
   errorRequests: z.int(),
@@ -260,13 +263,13 @@ export const Customer$inboundSchema: z.ZodType<Customer, unknown> = z.object({
   externalId: z.nullable(z.string()),
 });
 
-export function customerFromJSON(
+export function getProjectAiUsageCustomerFromJSON(
   jsonString: string,
-): SafeParseResult<Customer, SDKValidationError> {
+): SafeParseResult<GetProjectAiUsageCustomer, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Customer$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Customer' from JSON`,
+    (x) => GetProjectAiUsageCustomer$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'GetProjectAiUsageCustomer' from JSON`,
   );
 }
 
@@ -308,7 +311,7 @@ export const GetProjectAiUsageAvailable$inboundSchema: z.ZodType<
   pricing: z.lazy(() => Pricing$inboundSchema),
   totals: z.lazy(() => GetProjectAiUsageTotals$inboundSchema),
   timeSeries: z.array(z.lazy(() => GetProjectAiUsageTimeSery$inboundSchema)),
-  customers: z.array(z.lazy(() => Customer$inboundSchema)),
+  customers: z.array(z.lazy(() => GetProjectAiUsageCustomer$inboundSchema)),
   models: z.array(z.lazy(() => GetProjectAiUsageModel$inboundSchema)),
   customersTruncated: z.boolean(),
   modelsTruncated: z.boolean(),

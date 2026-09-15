@@ -23,6 +23,47 @@ export type OperationsPluginOperationTier = ClosedEnum<
   typeof OperationsPluginOperationTier
 >;
 
+export const OperationsPluginOperationEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+export type OperationsPluginOperationEffect = ClosedEnum<
+  typeof OperationsPluginOperationEffect
+>;
+
+export type OperationsPluginOperationAw = {
+  effect: OperationsPluginOperationEffect;
+  actions: Array<string>;
+  resources: Array<string>;
+  condition: { [k: string]: { [k: string]: string } } | null;
+  reason: string;
+};
+
+export const OperationsPluginOperationScope = {
+  ProjectsDollarProjectName: "projects/${projectName}",
+} as const;
+export type OperationsPluginOperationScope = ClosedEnum<
+  typeof OperationsPluginOperationScope
+>;
+
+export type OperationsPluginOperationGcp = {
+  permissions: Array<string>;
+  scope: OperationsPluginOperationScope;
+  reason: string;
+};
+
+/**
+ * Cloud permissions required to execute this operation.
+ */
+export type OperationsPluginOperationPermissions = {
+  /**
+   * No Azure resource permissions are supported. Kubernetes API permissions are separate.
+   */
+  azure: Array<string>;
+  aws: Array<OperationsPluginOperationAw>;
+  gcp: Array<OperationsPluginOperationGcp>;
+};
+
 export type OperationsPluginOperation = {
   /**
    * Operation name, unique within the plugin.
@@ -37,15 +78,100 @@ export type OperationsPluginOperation = {
    */
   description: string | null;
   /**
+   * JSON Schema for operation parameters when the plugin publishes one.
+   */
+  inputSchema: { [k: string]: any | null } | null;
+  /**
+   * JSON Schema for a successful result when the plugin publishes one.
+   */
+  outputSchema: { [k: string]: any | null } | null;
+  /**
    * IDs of permission sets (see alien-permissions) this operation requires. Empty when the operation declares none.
    */
   requiredPermissions: Array<string>;
+  /**
+   * Cloud permissions required to execute this operation.
+   */
+  permissions: OperationsPluginOperationPermissions;
 };
 
 /** @internal */
 export const OperationsPluginOperationTier$inboundSchema: z.ZodEnum<
   typeof OperationsPluginOperationTier
 > = z.enum(OperationsPluginOperationTier);
+
+/** @internal */
+export const OperationsPluginOperationEffect$inboundSchema: z.ZodEnum<
+  typeof OperationsPluginOperationEffect
+> = z.enum(OperationsPluginOperationEffect);
+
+/** @internal */
+export const OperationsPluginOperationAw$inboundSchema: z.ZodType<
+  OperationsPluginOperationAw,
+  unknown
+> = z.object({
+  effect: OperationsPluginOperationEffect$inboundSchema,
+  actions: z.array(z.string()),
+  resources: z.array(z.string()),
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string()))),
+  reason: z.string(),
+});
+
+export function operationsPluginOperationAwFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationAw, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationsPluginOperationAw$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationAw' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationScope$inboundSchema: z.ZodEnum<
+  typeof OperationsPluginOperationScope
+> = z.enum(OperationsPluginOperationScope);
+
+/** @internal */
+export const OperationsPluginOperationGcp$inboundSchema: z.ZodType<
+  OperationsPluginOperationGcp,
+  unknown
+> = z.object({
+  permissions: z.array(z.string()),
+  scope: OperationsPluginOperationScope$inboundSchema,
+  reason: z.string(),
+});
+
+export function operationsPluginOperationGcpFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationGcp, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationsPluginOperationGcp$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationGcp' from JSON`,
+  );
+}
+
+/** @internal */
+export const OperationsPluginOperationPermissions$inboundSchema: z.ZodType<
+  OperationsPluginOperationPermissions,
+  unknown
+> = z.object({
+  azure: z.array(z.string()),
+  aws: z.array(z.lazy(() => OperationsPluginOperationAw$inboundSchema)),
+  gcp: z.array(z.lazy(() => OperationsPluginOperationGcp$inboundSchema)),
+});
+
+export function operationsPluginOperationPermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationsPluginOperationPermissions, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      OperationsPluginOperationPermissions$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationsPluginOperationPermissions' from JSON`,
+  );
+}
 
 /** @internal */
 export const OperationsPluginOperation$inboundSchema: z.ZodType<
@@ -55,7 +181,10 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   name: z.string(),
   tier: OperationsPluginOperationTier$inboundSchema,
   description: z.nullable(z.string()),
+  inputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
+  outputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))),
   requiredPermissions: z.array(z.string()),
+  permissions: z.lazy(() => OperationsPluginOperationPermissions$inboundSchema),
 });
 
 export function operationsPluginOperationFromJSON(

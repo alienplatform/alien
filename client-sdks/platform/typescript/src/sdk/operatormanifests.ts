@@ -3,6 +3,7 @@
  */
 
 import { operatorManifestsPrepareOperatorManifestPackage } from "../funcs/operatorManifestsPrepareOperatorManifestPackage.js";
+import { operatorManifestsRenderOperatorEcsCloudFormation } from "../funcs/operatorManifestsRenderOperatorEcsCloudFormation.js";
 import { operatorManifestsRenderOperatorManifest } from "../funcs/operatorManifestsRenderOperatorManifest.js";
 import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as models from "../models/index.js";
@@ -31,6 +32,23 @@ export class OperatorManifests extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.RenderOperatorManifestResponse> {
     return unwrapAsync(operatorManifestsRenderOperatorManifest(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Render a Remote Operator ECS Fargate CloudFormation installer
+   *
+   * @remarks
+   * Renders a credential-free CloudFormation artifact that reuses a customer-owned ECS cluster, network, EFS access point, task role, and same-account, same-Region Secrets Manager bootstrap secret encrypted with the default aws/secretsmanager KMS key. Customer-managed KMS keys are not supported by this installer.
+   */
+  async renderOperatorEcsCloudFormation(
+    request?: models.RenderOperatorEcsCloudFormationRequest | undefined,
+    options?: RequestOptions,
+  ): Promise<models.RenderOperatorEcsCloudFormationResponse> {
+    return unwrapAsync(operatorManifestsRenderOperatorEcsCloudFormation(
       this,
       request,
       options,

@@ -16,6 +16,14 @@ export type CreateAccessRequestGlobals = {
   workspace?: string | undefined;
 };
 
+export const CreateAccessRequestRequesterKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+export type CreateAccessRequestRequesterKind = ClosedEnum<
+  typeof CreateAccessRequestRequesterKind
+>;
+
 export type CreateAccessRequestDeployment = {
   id: string;
   name: string;
@@ -67,6 +75,9 @@ export type CreateAccessRequestMaxRisk = ClosedEnum<
  */
 export type CreateAccessRequestResponse = {
   id: string;
+  requesterKind: CreateAccessRequestRequesterKind | null;
+  requesterId: string | null;
+  requestedExpiresAt: string | null;
   deploymentId: string;
   deployment?: CreateAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
@@ -81,6 +92,11 @@ export type CreateAccessRequestResponse = {
   status: models.AccessRequestStatus;
   approvedUntil: string | null;
 };
+
+/** @internal */
+export const CreateAccessRequestRequesterKind$inboundSchema: z.ZodEnum<
+  typeof CreateAccessRequestRequesterKind
+> = z.enum(CreateAccessRequestRequesterKind);
 
 /** @internal */
 export const CreateAccessRequestDeployment$inboundSchema: z.ZodType<
@@ -139,6 +155,9 @@ export const CreateAccessRequestResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  requesterKind: z.nullable(CreateAccessRequestRequesterKind$inboundSchema),
+  requesterId: z.nullable(z.string()),
+  requestedExpiresAt: z.nullable(z.string()),
   deploymentId: z.string(),
   deployment: z.lazy(() => CreateAccessRequestDeployment$inboundSchema)
     .optional(),

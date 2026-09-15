@@ -46,6 +46,14 @@ export type CreateAccessRequestMaxRisk = ClosedEnum<
 >;
 
 export type CreateAccessRequest = {
+  /**
+   * Durable replay key scoped to the authenticated requester and workspace. Reusing it with a different validated payload returns ACCESS_REQUEST_REPLAY_MISMATCH.
+   */
+  replayKey?: string | undefined;
+  /**
+   * Absolute requester deadline in UTC (Z suffix). Must be in the future and at most six hours ahead (30 seconds clock-skew tolerance). Approvals never extend it. Omit for legacy approval-window behavior.
+   */
+  requestedExpiresAt?: Date | undefined;
   deploymentId: string;
   /**
    * Set for a plan-backed (ai-agent) request. Omit for a plan-less (CLI) request.
@@ -117,6 +125,8 @@ export const CreateAccessRequestMaxRisk$outboundSchema: z.ZodEnum<
 
 /** @internal */
 export type CreateAccessRequest$Outbound = {
+  replayKey?: string | undefined;
+  requestedExpiresAt?: string | undefined;
   deploymentId: string;
   remediationPlanId?: string | undefined;
   title?: string | undefined;
@@ -133,6 +143,8 @@ export const CreateAccessRequest$outboundSchema: z.ZodType<
   CreateAccessRequest$Outbound,
   CreateAccessRequest
 > = z.object({
+  replayKey: z.string().optional(),
+  requestedExpiresAt: z.date().transform(v => v.toISOString()).optional(),
   deploymentId: z.string(),
   remediationPlanId: z.string().optional(),
   title: z.string().optional(),

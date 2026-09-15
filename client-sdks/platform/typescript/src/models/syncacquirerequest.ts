@@ -135,7 +135,7 @@ export type SyncAcquireRequest = {
   /**
    * Signals support for echoing executionClaim on renew, reconcile, and release.
    */
-  supportsExecutionClaims?: true | undefined;
+  supportsExecutionClaims?: boolean | undefined;
   /**
    * Maximum number of deployments to acquire (default: 10)
    */
@@ -173,7 +173,7 @@ export type SyncAcquireRequest$Outbound = {
   setupMethod?: string | undefined;
   acquireMode?: string | undefined;
   deploymentModel: string;
-  supportsExecutionClaims?: true | undefined;
+  supportsExecutionClaims?: boolean | undefined;
   limit?: number | undefined;
 };
 
@@ -191,7 +191,7 @@ export const SyncAcquireRequest$outboundSchema: z.ZodType<
   setupMethod: DeploymentSetupMethod$outboundSchema.optional(),
   acquireMode: AcquireMode$outboundSchema.optional(),
   deploymentModel: SyncAcquireRequestDeploymentModel$outboundSchema,
-  supportsExecutionClaims: z.literal(true).optional(),
+  supportsExecutionClaims: z.boolean().optional(),
   limit: z.int().optional(),
 });
 

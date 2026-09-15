@@ -13,6 +13,9 @@ export type GetWorkspaceGatewayOverviewGlobals = {
 };
 
 export type GetWorkspaceGatewayOverviewRequest = {
+  /**
+   * Alien Gateway a customer deployment runs
+   */
   gateway: models.GatewayKind;
 };
 

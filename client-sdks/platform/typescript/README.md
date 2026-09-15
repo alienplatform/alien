@@ -160,6 +160,10 @@ run();
 * [getWorkspaceInviteLink](docs/sdks/alien/README.md#getworkspaceinvitelink)
 * [createWorkspaceInviteLink](docs/sdks/alien/README.md#createworkspaceinvitelink)
 * [revokeWorkspaceInviteLink](docs/sdks/alien/README.md#revokeworkspaceinvitelink)
+* [getDeploymentCredentialRotation](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
+* [prepareDeploymentCredentialRotation](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
+* [cancelDeploymentCredentialRotation](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
+* [getDeploymentCredentialRotationValues](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 * [listAwsVirtualKeys](docs/sdks/alien/README.md#listawsvirtualkeys)
 * [createAwsVirtualKey](docs/sdks/alien/README.md#createawsvirtualkey)
 * [rotateAwsVirtualKeyCredential](docs/sdks/alien/README.md#rotateawsvirtualkeycredential)
@@ -168,10 +172,6 @@ run();
 * [decommissionAwsVirtualKey](docs/sdks/alien/README.md#decommissionawsvirtualkey)
 * [getAwsVirtualKey](docs/sdks/alien/README.md#getawsvirtualkey)
 * [continueAwsVirtualKey](docs/sdks/alien/README.md#continueawsvirtualkey)
-* [getDeploymentCredentialRotation](docs/sdks/alien/README.md#getdeploymentcredentialrotation)
-* [prepareDeploymentCredentialRotation](docs/sdks/alien/README.md#preparedeploymentcredentialrotation)
-* [cancelDeploymentCredentialRotation](docs/sdks/alien/README.md#canceldeploymentcredentialrotation)
-* [getDeploymentCredentialRotationValues](docs/sdks/alien/README.md#getdeploymentcredentialrotationvalues)
 
 ### [AgentSessions](docs/sdks/agentsessions/README.md)
 
@@ -186,8 +186,8 @@ run();
 * [list](docs/sdks/apikeys/README.md#list) - Retrieve all API keys for the current workspace.
 * [create](docs/sdks/apikeys/README.md#create) - Create a new API key.
 * [get](docs/sdks/apikeys/README.md#get) - Retrieve a specific API key.
-* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [update](docs/sdks/apikeys/README.md#update) - Update an API key (enable/disable, change description).
+* [revoke](docs/sdks/apikeys/README.md#revoke) - Revoke (soft delete) an API key.
 * [deleteMultiple](docs/sdks/apikeys/README.md#deletemultiple) - Permanently delete multiple API keys.
 
 ### [Auth](docs/sdks/auth/README.md)
@@ -211,8 +211,8 @@ run();
 * [listNames](docs/sdks/commands/README.md#listnames) - List distinct command names. Use for filter dropdowns in the dashboard.
 * [listDeployments](docs/sdks/commands/README.md#listdeployments) - List distinct deployments that have commands, including deployment group info. Use for filter dropdowns in the dashboard.
 * [resolveTarget](docs/sdks/commands/README.md#resolvetarget) - Resolve which resource a command for this deployment would be addressed to, and how it would be delivered. Fails when the deployment has no command-capable resources, or more than one and no explicit target was named.
-* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [update](docs/sdks/commands/README.md#update) - Update command state. Called by manager when command is dispatched or completes.
+* [get](docs/sdks/commands/README.md#get) - Retrieve a command by ID.
 * [dispatch](docs/sdks/commands/README.md#dispatch) - Atomically mark a command DISPATCHED unless it is already terminal. Returns whether the transition was applied.
 * [complete](docs/sdks/commands/README.md#complete) - Atomically transition a command to a terminal state (SUCCEEDED, FAILED, or EXPIRED) unless it is already terminal. Returns whether the transition was applied.
 * [incrementAttempt](docs/sdks/commands/README.md#incrementattempt) - Atomically increment the command's attempt counter and return the new value.
@@ -234,8 +234,8 @@ run();
 
 * [list](docs/sdks/debugsessions/README.md#list) - Retrieve debug sessions for dashboard audit. Filters: project, deployment, state, mode.
 * [create](docs/sdks/debugsessions/README.md#create) - Create a debug-session audit row. Called by the manager when a pull or push debug tunnel is opened. Workspace + project derived from deployment.
-* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 * [update](docs/sdks/debugsessions/README.md#update) - Update debug-session state. Called by manager on tunnel attach, close, or deadline expiry.
+* [get](docs/sdks/debugsessions/README.md#get) - Retrieve a debug session by ID.
 
 ### [Deployment](docs/sdks/deployment/README.md)
 
@@ -245,14 +245,14 @@ run();
 
 ### [DeploymentGroups](docs/sdks/deploymentgroups/README.md)
 
-* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [createDeploymentGroup](docs/sdks/deploymentgroups/README.md#createdeploymentgroup) - Create a new deployment group
+* [listDeploymentGroups](docs/sdks/deploymentgroups/README.md#listdeploymentgroups) - List deployment groups
 * [ensureDeploymentGroupByName](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyname) - Get or create a deployment group by project and name
-* [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [ensureDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#ensuredeploymentgroupbyexternalid) - Get or create a deployment group by project and external ID
+* [getDeploymentGroupByExternalId](docs/sdks/deploymentgroups/README.md#getdeploymentgroupbyexternalid) - Get a deployment group by project and external ID
 * [getDeploymentGroup](docs/sdks/deploymentgroups/README.md#getdeploymentgroup) - Get deployment group details
-* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [updateDeploymentGroup](docs/sdks/deploymentgroups/README.md#updatedeploymentgroup) - Update deployment group
+* [deleteDeploymentGroup](docs/sdks/deploymentgroups/README.md#deletedeploymentgroup) - Delete deployment group
 * [setDeploymentGroupExternalId](docs/sdks/deploymentgroups/README.md#setdeploymentgroupexternalid) - Set or clear a deployment group's external ID
 * [createDeploymentGroupToken](docs/sdks/deploymentgroups/README.md#createdeploymentgrouptoken) - Create deployment group token
 * [createFirstPartyDeploymentSession](docs/sdks/deploymentgroups/README.md#createfirstpartydeploymentsession) - Create first-party deployment session
@@ -311,14 +311,14 @@ run();
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
 * [listInventory](docs/sdks/machines/README.md#listinventory)
-* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
+* [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
 
 ### [Managers](docs/sdks/managers/README.md)
 
-* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [create](docs/sdks/managers/README.md#create) - Create a new manager.
+* [list](docs/sdks/managers/README.md#list) - Retrieve all managers.
 * [retrySetup](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 * [retry](docs/sdks/managers/README.md#retry) - Retry private-manager setup. Returns a fresh setup action before the internal deployment exists, or requests retry for the internal deployment after it exists.
 * [cancelSetup](docs/sdks/managers/README.md#cancelsetup) - Cancel pending private-manager setup, revoke setup/runtime tokens, and remove the undeployed manager record.
@@ -347,11 +347,11 @@ run();
 * [updatePolicy](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
 * [verifyCheck](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
-* [listAccessRequests](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 * [createAccessRequest](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+* [listAccessRequests](docs/sdks/operations/README.md#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
-* [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate, direct method — approve a queued access request immediately, granting the same window a kubectl approve would. `method` names the calling system (e.g. `slack`) for the audit trail.
-* [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+* [approveAccessRequest](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+* [denyAccessRequest](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 * [getAccessRequest](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 
@@ -359,6 +359,7 @@ run();
 
 * [prepareOperatorManifestPackage](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
 * [renderOperatorManifest](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
+* [renderOperatorEcsCloudFormation](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 
 ### [Packages](docs/sdks/packages/README.md)
 
@@ -372,8 +373,8 @@ run();
 * [list](docs/sdks/projects/README.md#list) - Retrieve all projects.
 * [create](docs/sdks/projects/README.md#create) - Create a new project.
 * [get](docs/sdks/projects/README.md#get) - Retrieve a project by ID or name.
-* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [update](docs/sdks/projects/README.md#update) - Update a project.
+* [delete](docs/sdks/projects/README.md#delete) - Delete a project. The project must have no deployments.
 * [getGcpOAuthProvider](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
 * [updateGcpOAuthProvider](docs/sdks/projects/README.md#updategcpoauthprovider) - Update project-level Google Cloud OAuth provider settings.
 * [configureSource](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
@@ -391,10 +392,11 @@ run();
 * [configureKeys](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 * [configureBuckets](docs/sdks/projects/README.md#configurebuckets) - Enable buckets without requiring a project Release.
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
+* [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
 * [getAiUsage](docs/sdks/projects/README.md#getaiusage)
 * [getEncryptionUsage](docs/sdks/projects/README.md#getencryptionusage)
+* [getSandboxMetrics](docs/sdks/projects/README.md#getsandboxmetrics)
 
 ### [ReleaseChannels](docs/sdks/releasechannels/README.md)
 
@@ -424,7 +426,7 @@ run();
 
 * [listInventory](docs/sdks/resources/README.md#listinventory)
 * [listOverview](docs/sdks/resources/README.md#listoverview)
-* [listDeployments](docs/sdks/resources/README.md#listdeployments)
+* [listDeployments](docs/sdks/resources/README.md#listdeployments) - List deployments where the selected resource is installed.
 * [getDeploymentDetail](docs/sdks/resources/README.md#getdeploymentdetail)
 
 ### [SetupLinks](docs/sdks/setuplinks/README.md)
@@ -463,12 +465,12 @@ run();
 
 * [list](docs/sdks/workspaces/README.md#list) - Retrieve all workspaces.
 * [get](docs/sdks/workspaces/README.md#get) - Retrieve a workspace by ID.
-* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [update](docs/sdks/workspaces/README.md#update) - Update a workspace.
+* [delete](docs/sdks/workspaces/README.md#delete) - Delete a workspace. The workspace must have no projects.
 * [listMembers](docs/sdks/workspaces/README.md#listmembers) - List all members of a workspace.
 * [addMember](docs/sdks/workspaces/README.md#addmember) - Add a member to a workspace by email. The user must already have an account.
-* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [updateMember](docs/sdks/workspaces/README.md#updatemember) - Update a workspace member's role.
+* [removeMember](docs/sdks/workspaces/README.md#removemember) - Remove a member from a workspace.
 * [getSettings](docs/sdks/workspaces/README.md#getsettings) - Read the ai-agent settings for a workspace. Returns defaults (`enabled: true`, `debugPermissionMode: auto`) when the workspace has never customized them.
 * [updateSettings](docs/sdks/workspaces/README.md#updatesettings) - Update the ai-agent settings for a workspace. Supports `debugPermissionMode` (`ask` requires human approval on every ai-agent debug command, `auto` runs them without asking) and `enabled` (`false` turns the ai-agent off so incoming triggers are rejected before any session runs).
 
@@ -620,10 +622,10 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`managersRetrySetup`](docs/sdks/managers/README.md#retrysetup) - Revoke previous private-manager setup tokens and issue a fresh setup token/config.
 - [`managersUpdate`](docs/sdks/managers/README.md#update) - Update a manager to a specific release ID or active release.
 - [`managersUpdateDomainBinding`](docs/sdks/managers/README.md#updatedomainbinding) - Create, update, or remove the custom domain binding for a private manager.
-- [`operationsApproveAccessRequest`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate, direct method — approve a queued access request immediately, granting the same window a kubectl approve would. `method` names the calling system (e.g. `slack`) for the audit trail.
+- [`operationsApproveAccessRequest`](docs/sdks/operations/README.md#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 - [`operationsCreateAccessRequest`](docs/sdks/operations/README.md#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
 - [`operationsCreateBundleUploadUrl`](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-- [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+- [`operationsDenyAccessRequest`](docs/sdks/operations/README.md#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 - [`operationsGetAccessRequest`](docs/sdks/operations/README.md#getaccessrequest) - Get an access request by id.
 - [`operationsGetAccessRequestCoordinates`](docs/sdks/operations/README.md#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 - [`operationsGetPolicy`](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
@@ -637,6 +639,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 - [`operationsVerifyCheck`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
+- [`operatorManifestsRenderOperatorEcsCloudFormation`](docs/sdks/operatormanifests/README.md#renderoperatorecscloudformation) - Render a Remote Operator ECS Fargate CloudFormation installer
 - [`operatorManifestsRenderOperatorManifest`](docs/sdks/operatormanifests/README.md#renderoperatormanifest) - Render a Kubernetes Operator manifest
 - [`packagesCancel`](docs/sdks/packages/README.md#cancel) - Cancel a pending or building package.
 - [`packagesGet`](docs/sdks/packages/README.md#get) - Get details of a specific package.
@@ -649,7 +652,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsConfigureKeys`](docs/sdks/projects/README.md#configurekeys) - Enable customer-owned application encryption without requiring an application Release.
 - [`projectsConfigureModels`](docs/sdks/projects/README.md#configuremodels) - Configure customer-owned model providers without requiring an application Release.
 - [`projectsConfigureRegistry`](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
-- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
+- [`projectsConfigureRemoteSandbox`](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 - [`projectsConfigureSource`](docs/sdks/projects/README.md#configuresource) - Connect a GitHub repository or Alien template to an existing project.
 - [`projectsCreate`](docs/sdks/projects/README.md#create) - Create a new project.
 - [`projectsCreateFromTemplate`](docs/sdks/projects/README.md#createfromtemplate) - Create a project by forking alienplatform/alien into your namespace.
@@ -663,6 +666,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+- [`projectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.
 - [`projectsPreviewModelsImpact`](docs/sdks/projects/README.md#previewmodelsimpact) - Preview which customer model connections a configuration change may affect.
@@ -683,7 +687,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`resendWorkspaceInvitation`](docs/sdks/alien/README.md#resendworkspaceinvitation)
 - [`resolveResolve`](docs/sdks/resolve/README.md#resolve) - Resolve manager for a project and platform
 - [`resourcesGetDeploymentDetail`](docs/sdks/resources/README.md#getdeploymentdetail)
-- [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments)
+- [`resourcesListDeployments`](docs/sdks/resources/README.md#listdeployments) - List deployments where the selected resource is installed.
 - [`resourcesListInventory`](docs/sdks/resources/README.md#listinventory)
 - [`resourcesListOverview`](docs/sdks/resources/README.md#listoverview)
 - [`restoreAwsVirtualKey`](docs/sdks/alien/README.md#restoreawsvirtualkey)
@@ -950,23 +954,19 @@ The `HTTPClient` constructor takes an optional `fetcher` argument that can be
 used to integrate a third-party HTTP client or when writing tests to mock out
 the HTTP client and feed in fixtures.
 
-The following example shows how to:
-- route requests through a proxy server using [undici](https://www.npmjs.com/package/undici)'s ProxyAgent
-- use the `"beforeRequest"` hook to add a custom header and a timeout to requests
-- use the `"requestError"` hook to log errors
+The following example shows how to use the `"beforeRequest"` hook to to add a
+custom header and a timeout to requests and how to use the `"requestError"` hook
+to log errors:
 
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
-import { ProxyAgent } from "undici";
 import { HTTPClient } from "@alienplatform/platform-api/lib/http";
 
-const dispatcher = new ProxyAgent("http://proxy.example.com:8080");
-
 const httpClient = new HTTPClient({
-  // 'fetcher' takes a function that has the same signature as native 'fetch'.
-  fetcher: (input, init) =>
-    // 'dispatcher' is specific to undici and not part of the standard Fetch API.
-    fetch(input, { ...init, dispatcher } as RequestInit),
+  // fetcher takes a function that has the same signature as native `fetch`.
+  fetcher: (request) => {
+    return fetch(request);
+  }
 });
 
 httpClient.addHook("beforeRequest", (request) => {

@@ -283,13 +283,13 @@ export type ProjectListItemResponseMethod = ClosedEnum<
 >;
 
 export type ProjectListItemResponseDeployments = {
-  enabled: true;
+  enabled: boolean;
   methods?: Array<ProjectListItemResponseMethod> | undefined;
 };
 
 export type ProjectListItemResponseKeys = {
-  enabled: true;
-  applicationEncryption: true;
+  enabled: boolean;
+  applicationEncryption: boolean;
 };
 
 export const ProjectListItemResponseAllowedProvider = {
@@ -320,7 +320,7 @@ export type ProjectListItemResponseRequirement = {
 };
 
 export type ProjectListItemResponseModels = {
-  enabled: true;
+  enabled: boolean;
   allowedProviders: Array<ProjectListItemResponseAllowedProvider>;
   requirements: Array<ProjectListItemResponseRequirement>;
 };
@@ -333,7 +333,7 @@ export type ProjectListItemResponseAccess = ClosedEnum<
 >;
 
 export type ProjectListItemResponseBuckets = {
-  enabled: true;
+  enabled: boolean;
   access: ProjectListItemResponseAccess;
 };
 
@@ -346,16 +346,21 @@ export type ProjectListItemResponseCredentialPolicy = ClosedEnum<
 >;
 
 export type ProjectListItemResponseRegistry = {
-  enabled: true;
+  enabled: boolean;
   repositories: Array<string>;
   credentialPolicy: ProjectListItemResponseCredentialPolicy;
 };
 
+export type ProjectListItemResponseAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type ProjectListItemResponseRemoteSandbox = {
-  enabled: true;
+  enabled: boolean;
   baseImage?: string | undefined;
-  imageBundleUri?: string | undefined;
-  maxSessionLifetimeSeconds: number;
+  azure?: ProjectListItemResponseAzure | undefined;
+  maxLifetimeSeconds?: number | undefined;
 };
 
 export type ProjectListItemResponseCapabilities = {
@@ -657,7 +662,7 @@ export const ProjectListItemResponseDeployments$inboundSchema: z.ZodType<
   ProjectListItemResponseDeployments,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   methods: z.array(ProjectListItemResponseMethod$inboundSchema).optional(),
 });
 
@@ -677,8 +682,8 @@ export const ProjectListItemResponseKeys$inboundSchema: z.ZodType<
   ProjectListItemResponseKeys,
   unknown
 > = z.object({
-  enabled: z.literal(true),
-  applicationEncryption: z.literal(true),
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
 });
 
 export function projectListItemResponseKeysFromJSON(
@@ -727,7 +732,7 @@ export const ProjectListItemResponseModels$inboundSchema: z.ZodType<
   ProjectListItemResponseModels,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   allowedProviders: z.array(
     ProjectListItemResponseAllowedProvider$inboundSchema,
   ),
@@ -756,7 +761,7 @@ export const ProjectListItemResponseBuckets$inboundSchema: z.ZodType<
   ProjectListItemResponseBuckets,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   access: ProjectListItemResponseAccess$inboundSchema,
 });
 
@@ -780,7 +785,7 @@ export const ProjectListItemResponseRegistry$inboundSchema: z.ZodType<
   ProjectListItemResponseRegistry,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   repositories: z.array(z.string()),
   credentialPolicy: ProjectListItemResponseCredentialPolicy$inboundSchema,
 });
@@ -796,14 +801,33 @@ export function projectListItemResponseRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectListItemResponseAzure$inboundSchema: z.ZodType<
+  ProjectListItemResponseAzure,
+  unknown
+> = z.object({
+  catalogImage: z.string(),
+  idleSuspendSeconds: z.int(),
+});
+
+export function projectListItemResponseAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectListItemResponseAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectListItemResponseAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectListItemResponseAzure' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectListItemResponseRemoteSandbox$inboundSchema: z.ZodType<
   ProjectListItemResponseRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   baseImage: z.string().optional(),
-  imageBundleUri: z.string().optional(),
-  maxSessionLifetimeSeconds: z.int(),
+  azure: z.lazy(() => ProjectListItemResponseAzure$inboundSchema).optional(),
+  maxLifetimeSeconds: z.int().optional(),
 });
 
 export function projectListItemResponseRemoteSandboxFromJSON(

@@ -14,6 +14,10 @@ import {
   TargetDeployment,
   TargetDeployment$inboundSchema,
 } from "./targetdeployment.js";
+import {
+  TargetOperationsBundleSet,
+  TargetOperationsBundleSet$inboundSchema,
+} from "./targetoperationsbundleset.js";
 
 /**
  * State reconciliation result with optional target
@@ -28,6 +32,10 @@ export type SyncReconcileResponse = {
    * Target deployment if update is needed
    */
   target?: TargetDeployment | undefined;
+  /**
+   * Target operations-bundle set the Operator should converge its loaded plugin registry toward.
+   */
+  targetOperationsBundleSet?: TargetOperationsBundleSet | undefined;
 };
 
 /** @internal */
@@ -38,6 +46,7 @@ export const SyncReconcileResponse$inboundSchema: z.ZodType<
   success: z.boolean(),
   current: DeploymentState$inboundSchema,
   target: TargetDeployment$inboundSchema.optional(),
+  targetOperationsBundleSet: TargetOperationsBundleSet$inboundSchema.optional(),
 });
 
 export function syncReconcileResponseFromJSON(

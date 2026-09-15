@@ -30,6 +30,10 @@ export type PublishOperationsPluginRequest = {
    */
   version: string;
   /**
+   * The uploadId returned by POST /plugins/upload-url for the ZIP just uploaded. Identifies the exact S3 object to publish — never derived from name/version, so it can't collide with any other upload.
+   */
+  uploadId: string;
+  /**
    * Plugin-level default risk tier.
    */
   tier: PublishOperationsPluginRequestTier;
@@ -48,6 +52,7 @@ export const PublishOperationsPluginRequestTier$outboundSchema: z.ZodEnum<
 export type PublishOperationsPluginRequest$Outbound = {
   name: string;
   version: string;
+  uploadId: string;
   tier: string;
   metadata?: any | null | undefined;
 };
@@ -59,6 +64,7 @@ export const PublishOperationsPluginRequest$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   version: z.string(),
+  uploadId: z.string(),
   tier: PublishOperationsPluginRequestTier$outboundSchema,
   metadata: z.nullable(z.any()).optional(),
 });
