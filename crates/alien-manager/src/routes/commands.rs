@@ -106,9 +106,9 @@ fn command_read_capability_decision(
         return Some(allowed);
     }
 
-    // Operator command responses are governed by the Platform's immutable
-    // result policy. Broad user, API-key, and deployment credentials must not
-    // be able to bypass that policy by reading the manager directly.
+    // Operator command responses require an exact status-read capability.
+    // Broad user, API-key, and deployment credentials must not bypass the
+    // caller's result policy by reading the manager directly.
     (command.target.resource_id == OPERATOR_COMMAND_TARGET_ID).then_some(false)
 }
 
