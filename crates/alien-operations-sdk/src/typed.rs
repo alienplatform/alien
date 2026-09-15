@@ -79,6 +79,29 @@ impl OperationFailure {
 /// );
 /// let _ = unreviewed.manifest();
 /// ```
+///
+/// ```compile_fail
+/// use alien_operations_sdk::{
+///     OperationDefinition, OperationFailure, RiskTier, TypedOperations,
+/// };
+/// use schemars::JsonSchema;
+/// use serde::{Deserialize, Serialize};
+///
+/// #[derive(Deserialize, JsonSchema)]
+/// struct Params;
+/// #[derive(Serialize, JsonSchema)]
+/// struct Output;
+///
+/// let unreviewed = OperationDefinition::<Params, Output>::new(
+///     "health",
+///     RiskTier::ReadOnly,
+///     "Report health",
+/// );
+/// let mut operations = TypedOperations::new();
+/// operations.register(unreviewed, |_params| async {
+///     Ok::<_, OperationFailure>(Output)
+/// });
+/// ```
 pub struct OperationDefinition<Params, Output, const PERMISSIONS_REVIEWED: bool = true> {
     name: &'static str,
     tier: RiskTier,
@@ -189,25 +212,42 @@ impl<Params, Output> OperationDefinition<Params, Output, false> {
     }
 
     /// Declare named or inline permission sets required by the operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `permissions` is empty. Use [`Self::with_no_permissions`] to
+    /// make an explicit reviewed decision that the operation needs none.
     pub fn with_permissions(
         self,
         permissions: Vec<PermissionSetReference>,
     ) -> OperationDefinition<Params, Output> {
+        assert!(
+            !permissions.is_empty(),
+            "with_permissions requires at least one permission; use with_no_permissions for none"
+        );
         self.with_reviewed_permissions(permissions)
     }
 
     /// Declare stable named permission-set identifiers required by the operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics when `permission_ids` is empty. Use [`Self::with_no_permissions`]
+    /// to make an explicit reviewed decision that the operation needs none.
     pub fn with_permission_ids<I, S>(self, permission_ids: I) -> OperationDefinition<Params, Output>
     where
         I: IntoIterator<Item = S>,
         S: Into<String>,
     {
-        self.with_reviewed_permissions(
-            permission_ids
-                .into_iter()
-                .map(|permission_id| PermissionSetReference::from_name(permission_id.into()))
-                .collect(),
-        )
+        let permissions = permission_ids
+            .into_iter()
+            .map(|permission_id| PermissionSetReference::from_name(permission_id.into()))
+            .collect::<Vec<_>>();
+        assert!(
+            !permissions.is_empty(),
+            "with_permission_ids requires at least one permission; use with_no_permissions for none"
+        );
+        self.with_reviewed_permissions(permissions)
     }
 
     fn with_reviewed_permissions(
@@ -651,6 +691,32 @@ mod tests {
             serde_json::to_value(manifest).expect("manifest serializes")["permissions"],
             json!([])
         );
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "with_permissions requires at least one permission; use with_no_permissions for none"
+    )]
+    fn empty_permission_references_cannot_mark_a_definition_reviewed() {
+        OperationDefinition::<AddParams, AddOutput>::new(
+            "add",
+            RiskTier::ReadOnly,
+            "Add two integers",
+        )
+        .with_permissions(Vec::new());
+    }
+
+    #[test]
+    #[should_panic(
+        expected = "with_permission_ids requires at least one permission; use with_no_permissions for none"
+    )]
+    fn empty_permission_ids_cannot_mark_a_definition_reviewed() {
+        OperationDefinition::<AddParams, AddOutput>::new(
+            "add",
+            RiskTier::ReadOnly,
+            "Add two integers",
+        )
+        .with_permission_ids(std::iter::empty::<&str>());
     }
 
     #[tokio::test]
