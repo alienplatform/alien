@@ -12,6 +12,7 @@ import { StorageUploadSchema } from "./storage-upload-schema.js";
  */
 export const CreateCommandResponseSchema = z.object({
     "commandId": z.string().describe("Unique command identifier"),
+"created": z.boolean().describe("Whether this request created the returned command. False means an\nidempotent replay returned a command created by another request."),
 "inlineAllowedUpTo": z.int().min(0).describe("Maximum inline body size allowed"),
 "next": z.string().describe("Next action for client: \"upload\" | \"poll\""),
 get "state"(){

@@ -253,6 +253,7 @@ impl CommandServer {
                 if let Some(s) = status {
                     return Ok(CreateCommandResponse {
                         command_id: existing_id,
+                        created: false,
                         state: s.state,
                         storage_upload: None,
                         inline_allowed_up_to: self.inline_max_bytes as u64,
@@ -321,6 +322,7 @@ impl CommandServer {
                 let state = status.map(|s| s.state).unwrap_or(CommandState::Pending);
                 return Ok(CreateCommandResponse {
                     command_id: winner_id,
+                    created: false,
                     state,
                     storage_upload: None,
                     inline_allowed_up_to: self.inline_max_bytes as u64,
@@ -374,6 +376,7 @@ impl CommandServer {
 
         Ok(CreateCommandResponse {
             command_id,
+            created: true,
             state: final_state,
             storage_upload,
             inline_allowed_up_to: self.inline_max_bytes as u64,

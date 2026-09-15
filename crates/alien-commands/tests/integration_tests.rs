@@ -905,10 +905,12 @@ mod tests {
             .create_command(make_request(&default_id))
             .await
             .unwrap();
+        assert!(first.created);
         let second = server
             .create_command(make_request("second-daemon"))
             .await
             .unwrap();
+        assert!(second.created);
         // Same key, different target: distinct commands.
         assert_ne!(first.command_id, second.command_id);
 
@@ -918,6 +920,40 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(replay.command_id, first.command_id);
+        assert!(!replay.created);
+    }
+
+    /// Two requests that both pass the pre-create check report which one
+    /// actually claimed the idempotency key. The loser returns the winner's
+    /// command with `created: false`.
+    #[tokio::test]
+    async fn test_concurrent_idempotency_winner_reports_created_exactly_once() {
+        let server = TestCommandServer::builder()
+            .with_pull_mode()
+            .with_fault_injection()
+            .build()
+            .await;
+        server
+            .fault_kv
+            .as_ref()
+            .expect("fault-injecting KV should be installed")
+            .arm_idempotency_get_barrier(2);
+        let make_request = || {
+            let mut request = test_inline_create_command("target-agent", "idem-command");
+            request.target_resource_id = Some(server.default_target.resource_id.clone());
+            request.idempotency_key = Some("concurrent-key".to_string());
+            request
+        };
+
+        let (left, right) = tokio::join!(
+            server.create_command(make_request()),
+            server.create_command(make_request())
+        );
+        let left = left.expect("left create should complete");
+        let right = right.expect("right create should complete");
+
+        assert_eq!(left.command_id, right.command_id);
+        assert_ne!(left.created, right.created);
     }
 
     /// One deployment, two command-capable targets of different types

@@ -497,6 +497,9 @@ pub struct StorageUpload {
 pub struct CreateCommandResponse {
     /// Unique command identifier
     pub command_id: String,
+    /// Whether this request created the returned command. False means an
+    /// idempotent replay returned a command created by another request.
+    pub created: bool,
     /// Current command state
     pub state: CommandState,
     /// Storage upload info (only for storage mode)
