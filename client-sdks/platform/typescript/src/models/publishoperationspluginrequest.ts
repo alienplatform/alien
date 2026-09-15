@@ -319,7 +319,7 @@ export type PublishOperationsPluginRequestVerification = {
    * The value at successField that means verified.
    */
   successValue: string;
-  retry?: PublishOperationsPluginRequestRetry | undefined;
+  retry?: PublishOperationsPluginRequestRetry | null | undefined;
   timeoutSeconds: number;
 };
 
@@ -365,7 +365,7 @@ export type KubernetesPermissions = {
 
 export type Operation = {
   name: string;
-  tier?: OperationTier | undefined;
+  tier?: OperationTier | null | undefined;
   description?: string | null | undefined;
   inputSchema?: { [k: string]: any | null } | null | undefined;
   paramsSchema?: { [k: string]: any | null } | null | undefined;
@@ -374,9 +374,9 @@ export type Operation = {
     | Array<PublishOperationsPluginRequestPermission | string>
     | undefined;
   requiredPermissions?: Array<RequiredPermission | string> | undefined;
-  timeoutSeconds?: number | undefined;
-  retries?: PublishOperationsPluginRequestRetries | undefined;
-  verification?: PublishOperationsPluginRequestVerification | undefined;
+  timeoutSeconds?: number | null | undefined;
+  retries?: PublishOperationsPluginRequestRetries | null | undefined;
+  verification?: PublishOperationsPluginRequestVerification | null | undefined;
   sensitiveOutput?:
     | PublishOperationsPluginRequestSensitiveOutputNone
     | PublishOperationsPluginRequestSensitiveOutputRedact
@@ -1592,7 +1592,7 @@ export type PublishOperationsPluginRequestVerification$Outbound = {
   pollParamsFromResult?: { [k: string]: string } | undefined;
   successField: string;
   successValue: string;
-  retry?: PublishOperationsPluginRequestRetry$Outbound | undefined;
+  retry?: PublishOperationsPluginRequestRetry$Outbound | null | undefined;
   timeoutSeconds: number;
 };
 
@@ -1607,8 +1607,9 @@ export const PublishOperationsPluginRequestVerification$outboundSchema:
     pollParamsFromResult: z.record(z.string(), z.string()).optional(),
     successField: z.string(),
     successValue: z.string(),
-    retry: z.lazy(() => PublishOperationsPluginRequestRetry$outboundSchema)
-      .optional(),
+    retry: z.nullable(
+      z.lazy(() => PublishOperationsPluginRequestRetry$outboundSchema),
+    ).optional(),
     timeoutSeconds: z.int(),
   });
 
@@ -1785,7 +1786,7 @@ export function kubernetesPermissionsToJSON(
 /** @internal */
 export type Operation$Outbound = {
   name: string;
-  tier?: string | undefined;
+  tier?: string | null | undefined;
   description?: string | null | undefined;
   inputSchema?: { [k: string]: any | null } | null | undefined;
   paramsSchema?: { [k: string]: any | null } | null | undefined;
@@ -1794,10 +1795,11 @@ export type Operation$Outbound = {
     | Array<PublishOperationsPluginRequestPermission$Outbound | string>
     | undefined;
   requiredPermissions?: Array<RequiredPermission$Outbound | string> | undefined;
-  timeoutSeconds?: number | undefined;
-  retries?: PublishOperationsPluginRequestRetries$Outbound | undefined;
+  timeoutSeconds?: number | null | undefined;
+  retries?: PublishOperationsPluginRequestRetries$Outbound | null | undefined;
   verification?:
     | PublishOperationsPluginRequestVerification$Outbound
+    | null
     | undefined;
   sensitiveOutput?:
     | PublishOperationsPluginRequestSensitiveOutputNone$Outbound
@@ -1813,7 +1815,7 @@ export const Operation$outboundSchema: z.ZodType<
   Operation
 > = z.object({
   name: z.string(),
-  tier: OperationTier$outboundSchema.optional(),
+  tier: z.nullable(OperationTier$outboundSchema).optional(),
   description: z.nullable(z.string()).optional(),
   inputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))).optional(),
   paramsSchema: z.nullable(z.record(z.string(), z.nullable(z.any())))
@@ -1829,11 +1831,12 @@ export const Operation$outboundSchema: z.ZodType<
   requiredPermissions: z.array(
     z.union([z.lazy(() => RequiredPermission$outboundSchema), z.string()]),
   ).optional(),
-  timeoutSeconds: z.int().optional(),
-  retries: z.lazy(() => PublishOperationsPluginRequestRetries$outboundSchema)
-    .optional(),
-  verification: z.lazy(() =>
-    PublishOperationsPluginRequestVerification$outboundSchema
+  timeoutSeconds: z.nullable(z.int()).optional(),
+  retries: z.nullable(
+    z.lazy(() => PublishOperationsPluginRequestRetries$outboundSchema),
+  ).optional(),
+  verification: z.nullable(
+    z.lazy(() => PublishOperationsPluginRequestVerification$outboundSchema),
   ).optional(),
   sensitiveOutput: z.union([
     z.lazy(() =>
