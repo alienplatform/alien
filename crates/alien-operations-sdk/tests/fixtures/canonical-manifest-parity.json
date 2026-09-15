@@ -1,0 +1,165 @@
+[
+  {
+    "name": "minimal canonical manifest",
+    "accepted": true,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" }
+    }
+  },
+  {
+    "name": "DNS-1035 resource with consecutive hyphens",
+    "accepted": true,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "tier": "read-only",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "kubernetesPermissions": {
+            "schemaVersion": 1,
+            "rules": [
+              {
+                "apiGroup": "example.io",
+                "resource": "foo--bar",
+                "verbs": ["get"],
+                "resourceNames": [],
+                "reason": "Inspect the selected resource"
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "verification omits an empty poll mapping",
+    "accepted": true,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "tier": "mutating",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "restart",
+          "verification": {
+            "changes": "Restart the service",
+            "pollOperation": "status",
+            "successField": "state",
+            "successValue": "ready",
+            "timeoutSeconds": 30
+          }
+        },
+        {
+          "name": "status",
+          "tier": "read-only",
+          "outputSchema": {
+            "type": "object",
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown plugin field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "unexpected": true
+    }
+  },
+  {
+    "name": "unknown operation field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [{ "name": "inspect", "unexpected": true }]
+    }
+  },
+  {
+    "name": "unknown retry field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "timeoutSeconds": 30,
+          "retries": { "maxAttempts": 2, "intervalSeconds": 1, "jitter": true }
+        }
+      ]
+    }
+  },
+  {
+    "name": "unknown verification field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "tier": "mutating",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "restart",
+          "verification": {
+            "changes": "Restart the service",
+            "pollOperation": "status",
+            "pollParamsFromResult": {},
+            "successField": "state",
+            "successValue": "ready",
+            "timeoutSeconds": 30,
+            "unexpected": true
+          }
+        },
+        { "name": "status", "tier": "read-only" }
+      ]
+    }
+  },
+  {
+    "name": "unknown sensitive-output field",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "sensitiveOutput": { "kind": "none", "fields": ["secret"] }
+        }
+      ]
+    }
+  },
+  {
+    "name": "binary entry escapes the bundle root",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "../example-linux-amd64" }
+    }
+  },
+  {
+    "name": "one entry is declared for two architectures",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": {
+        "amd64": "example-linux",
+        "arm64": "example-linux"
+      }
+    }
+  }
+]

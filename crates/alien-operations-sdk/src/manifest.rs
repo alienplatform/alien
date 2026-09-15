@@ -46,6 +46,9 @@ use crate::verification::Verification;
 /// The `metadata.json` filename conventionally used inside a plugin bundle.
 pub const MANIFEST_FILENAME: &str = "metadata.json";
 
+/// Maximum uncompressed size of one executable bundle entry.
+pub const MAX_BUNDLE_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
+
 /// A CPU architecture a plugin binary targets. Only `amd64` and `arm64` are
 /// supported, matching the operator/worker deploy targets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -113,7 +116,7 @@ impl Default for RiskTier {
 
 /// How a plugin's output should be treated before it is shown to a human or
 /// handed to an AI agent.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum SensitiveOutputPolicy {
     /// No special handling; the result is safe to display and log as-is.
@@ -128,6 +131,29 @@ pub enum SensitiveOutputPolicy {
     /// The result may contain sensitive data the caller must explicitly
     /// acknowledge before it is displayed (e.g. a one-time secret value).
     RequireConfirmation,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", tag = "kind", deny_unknown_fields)]
+enum SensitiveOutputPolicyWire {
+    None {},
+    Redact { fields: Vec<String> },
+    RequireConfirmation {},
+}
+
+impl<'de> Deserialize<'de> for SensitiveOutputPolicy {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        Ok(
+            match SensitiveOutputPolicyWire::deserialize(deserializer)? {
+                SensitiveOutputPolicyWire::None {} => Self::None,
+                SensitiveOutputPolicyWire::Redact { fields } => Self::Redact { fields },
+                SensitiveOutputPolicyWire::RequireConfirmation {} => Self::RequireConfirmation,
+            },
+        )
+    }
 }
 
 impl Default for SensitiveOutputPolicy {
@@ -145,7 +171,7 @@ impl SensitiveOutputPolicy {
 /// A bounded retry policy for the operation's own invocation (distinct from
 /// [`Verification::retry`], which retries the post-write confirmation poll).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RetryPolicy {
     /// Maximum number of attempts, including the first (so `1` means no
     /// retry).
@@ -308,7 +334,7 @@ impl PluginManifest {
 
 /// One named operation in the canonical plugin contract.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CanonicalOperationManifest {
     /// Explicit Kubernetes API requirements, compiled by the installer for
     /// enabled plugins within the chosen scope and permission ceiling.
@@ -399,7 +425,7 @@ impl CanonicalOperationManifest {
 
 /// The parsed, validated contents of a canonical plugin manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct CanonicalPluginManifest {
     /// Plugin name, unique within a workspace (e.g. `postgres`).
     pub name: String,
@@ -512,8 +538,24 @@ impl CanonicalPluginManifest {
                 field: "binaries".to_string(),
             }));
         }
+        let mut binary_entries = BTreeSet::new();
         for (arch, entry) in &self.binaries {
-            require_non_empty(entry, &format!("binaries.{}", arch.as_str()))?;
+            let field = format!("binaries.{}", arch.as_str());
+            require_non_empty(entry, &field)?;
+            if !valid_binary_entry(entry) {
+                return Err(AlienError::new(ErrorData::ManifestInvalid {
+                    reason: format!(
+                        "{field} must be a root filename containing only ASCII letters, digits, '.', '_', or '-'"
+                    ),
+                }));
+            }
+            if !binary_entries.insert(entry) {
+                return Err(AlienError::new(ErrorData::ManifestInvalid {
+                    reason: format!(
+                        "binary entry '{entry}' is declared for more than one architecture"
+                    ),
+                }));
+            }
         }
 
         let mut seen = BTreeSet::new();
@@ -1182,9 +1224,41 @@ fn require_non_empty(value: &str, field: &str) -> Result<()> {
     Ok(())
 }
 
+fn valid_binary_entry(value: &str) -> bool {
+    value.len() <= 255
+        && value
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn canonical_manifest_matches_shared_cross_language_acceptance_vectors() {
+        let cases: serde_json::Value = serde_json::from_str(include_str!(
+            "../tests/fixtures/canonical-manifest-parity.json"
+        ))
+        .expect("shared parity vectors must be JSON");
+
+        for case in cases.as_array().expect("parity vectors must be an array") {
+            let name = case["name"].as_str().expect("case must have a name");
+            let accepted = case["accepted"]
+                .as_bool()
+                .expect("case must declare acceptance");
+            let bytes = serde_json::to_vec(&case["manifest"]).expect("serialize case manifest");
+            assert_eq!(
+                CanonicalPluginManifest::parse_and_validate(&bytes).is_ok(),
+                accepted,
+                "Rust canonical manifest parser disagrees with shared case '{name}'",
+            );
+        }
+    }
 
     fn manifest_json(operations: &str) -> String {
         format!(
