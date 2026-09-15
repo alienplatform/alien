@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::marker::PhantomData;
 
+use alien_core::presigned::PRESIGNED_RESPONSE_TOO_LARGE_MESSAGE;
 use alien_core::{
     commands_types::BodySpec, permissions::PermissionSetReference, presigned::PresignedOperation,
 };
@@ -380,9 +381,11 @@ async fn decode_params(params: &BodySpec) -> std::result::Result<Vec<u8>, Params
                     "PRESIGNED_REQUEST_EXPIRED" => ParamsDecodeFailure::Invalid(
                         "storage parameter retrieval request has expired",
                     ),
-                    "PRESIGNED_RESPONSE_TOO_LARGE" => ParamsDecodeFailure::Invalid(
-                        "storage parameter body did not match its declared size",
-                    ),
+                    "GENERIC_ERROR" if error.message == PRESIGNED_RESPONSE_TOO_LARGE_MESSAGE => {
+                        ParamsDecodeFailure::Invalid(
+                            "storage parameter body did not match its declared size",
+                        )
+                    }
                     _ => ParamsDecodeFailure::Unavailable {
                         status: None,
                         retryable: true,
@@ -626,6 +629,45 @@ mod tests {
         assert_eq!(
             serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
             json!({"total": 5})
+        );
+    }
+
+    #[tokio::test]
+    async fn default_sdk_graph_dispatches_local_storage_backed_params() {
+        let directory = tempfile::tempdir().expect("temporary storage directory should exist");
+        let file = directory.path().join("params.json");
+        let body = br#"{"left":8,"right":5}"#;
+        std::fs::write(&file, body).expect("local storage fixture should be writable");
+        let request = serde_json::from_value(json!({
+            "backend": {
+                "type": "local",
+                "filePath": file,
+                "operation": "get"
+            },
+            "expiration": "2099-01-01T00:00:00Z",
+            "operation": "get",
+            "path": "operation-params.json"
+        }))
+        .expect("local presigned request should decode");
+        let invocation = storage_invocation(body.len() as u64, request);
+        let mut operations = TypedOperations::new();
+        operations
+            .register(add_definition(), |params: AddParams| async move {
+                Ok(AddOutput {
+                    total: params.left + params.right,
+                })
+            })
+            .expect("definition registers");
+
+        let result = operations.execute(&invocation).await;
+
+        let PluginResult::Success { response } = result else {
+            panic!("local storage-backed operation should succeed: {result:?}");
+        };
+        let bytes = response.decode_inline().expect("response is inline");
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&bytes).unwrap(),
+            json!({"total": 13})
         );
     }
 

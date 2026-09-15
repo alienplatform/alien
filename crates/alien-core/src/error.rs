@@ -159,15 +159,6 @@ pub enum ErrorData {
     )]
     HttpRequestFailed { url: String, method: String },
 
-    /// A storage response exceeded the caller's explicit read bound.
-    #[error(
-        code = "PRESIGNED_RESPONSE_TOO_LARGE",
-        message = "Presigned response for '{path}' exceeded the maximum size of {max_bytes} bytes",
-        retryable = "false",
-        internal = "false"
-    )]
-    PresignedResponseTooLarge { path: String, max_bytes: usize },
-
     /// Operation not supported.
     #[error(
         code = "OPERATION_NOT_SUPPORTED",

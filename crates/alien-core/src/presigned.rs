@@ -8,6 +8,13 @@ use std::collections::HashMap;
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
 
+/// Stable message used when a bounded presigned GET exceeds its caller's
+/// explicit limit. This uses the existing generic error variant so adding the
+/// bounded API does not add a variant to the exhaustively matchable public
+/// [`ErrorData`] enum.
+pub const PRESIGNED_RESPONSE_TOO_LARGE_MESSAGE: &str =
+    "presigned response exceeded the caller's maximum size";
+
 /// A presigned request that can be serialized, stored, and executed later.
 /// Hides implementation details for different storage backends.
 #[derive(Eq, PartialEq, Debug, Clone, Serialize, Deserialize)]
@@ -321,10 +328,7 @@ impl PresignedRequest {
                     .content_length()
                     .is_some_and(|length| length > max_bytes as u64)
                 {
-                    return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
-                        path: self.path.clone(),
-                        max_bytes,
-                    }));
+                    return Err(presigned_response_too_large());
                 }
 
                 let mut bytes = Vec::with_capacity(
@@ -344,10 +348,7 @@ impl PresignedRequest {
                     })?
                 {
                     if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
-                        return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
-                            path: self.path.clone(),
-                            max_bytes,
-                        }));
+                        return Err(presigned_response_too_large());
                     }
                     bytes.extend_from_slice(&chunk);
                 }
@@ -448,10 +449,7 @@ impl PresignedRequest {
                             operation: "read".to_string(),
                         })?;
                     if data.len() > max_bytes {
-                        return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
-                            path: self.path.clone(),
-                            max_bytes,
-                        }));
+                        return Err(presigned_response_too_large());
                     }
                     data
                 } else {
@@ -485,6 +483,12 @@ impl PresignedRequest {
             }
         }
     }
+}
+
+fn presigned_response_too_large() -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::GenericError {
+        message: PRESIGNED_RESPONSE_TOO_LARGE_MESSAGE.to_string(),
+    })
 }
 
 #[cfg(test)]
