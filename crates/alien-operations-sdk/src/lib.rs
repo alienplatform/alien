@@ -50,5 +50,7 @@ pub use protocol::{
     is_explicitly_retryable, retryable_error, PluginInvocation, PluginResult, PROTOCOL_VERSION,
     RETRYABLE_ERROR_DETAILS,
 };
-pub use typed::{OperationDefinition, OperationFailure, TypedOperations};
+pub use typed::{
+    OperationDefinition, OperationFailure, TypedOperations, TYPED_OPERATION_PARAMS_MAX_BYTES,
+};
 pub use verification::Verification;

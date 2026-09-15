@@ -51,7 +51,7 @@ pub enum PresignedRequestBackend {
 pub enum PresignedOperation {
     /// Upload/put operation
     Put,
-    /// Download/get operation  
+    /// Download/get operation
     Get,
     /// Delete operation
     Delete,
@@ -159,6 +159,18 @@ impl PresignedRequest {
         self.execute_with_client(&client, body).await
     }
 
+    /// Execute this request while bounding a GET response body before it is
+    /// buffered. PUT and DELETE requests do not have response bodies.
+    pub async fn execute_with_response_limit(
+        &self,
+        body: Option<Bytes>,
+        max_response_bytes: usize,
+    ) -> Result<PresignedResponse> {
+        let client = reqwest::Client::new();
+        self.execute_with_client_inner(&client, body, Some(max_response_bytes))
+            .await
+    }
+
     /// Execute this presigned request with a caller-owned HTTP client.
     ///
     /// Multi-step protocols should use this form so retries and adjacent HTTP
@@ -168,19 +180,32 @@ impl PresignedRequest {
         client: &reqwest::Client,
         body: Option<Bytes>,
     ) -> Result<PresignedResponse> {
+        self.execute_with_client_inner(client, body, None).await
+    }
+
+    async fn execute_with_client_inner(
+        &self,
+        client: &reqwest::Client,
+        body: Option<Bytes>,
+        max_response_bytes: Option<usize>,
+    ) -> Result<PresignedResponse> {
         match &self.backend {
             PresignedRequestBackend::Http {
                 url,
                 method,
                 headers,
-            } => self.execute_http(client, url, method, headers, body).await,
+            } => {
+                self.execute_http(client, url, method, headers, body, max_response_bytes)
+                    .await
+            }
             PresignedRequestBackend::Local {
                 file_path,
                 operation,
             } => {
                 #[cfg(feature = "local")]
                 {
-                    self.execute_local(file_path, *operation, body).await
+                    self.execute_local(file_path, *operation, body, max_response_bytes)
+                        .await
                 }
                 #[cfg(not(feature = "local"))]
                 {
@@ -237,6 +262,7 @@ impl PresignedRequest {
         method: &str,
         headers: &HashMap<String, String>,
         body: Option<Bytes>,
+        max_response_bytes: Option<usize>,
     ) -> Result<PresignedResponse> {
         if self.is_expired() {
             return Err(AlienError::new(ErrorData::PresignedRequestExpired {
@@ -268,7 +294,7 @@ impl PresignedRequest {
         }
 
         let safe_url = redact_url_for_error(url);
-        let response = request
+        let mut response = request
             .send()
             .await
             .map_err(reqwest::Error::without_url)
@@ -285,18 +311,60 @@ impl PresignedRequest {
             .map(|(k, v)| (k.to_string(), v.to_str().unwrap_or("").to_string()))
             .collect();
 
-        let response_body = if matches!(self.operation, PresignedOperation::Get) {
-            Some(
-                response
-                    .bytes()
+        let response_body = if max_response_bytes.is_some() && !(200..300).contains(&status_code) {
+            // Bounded consumers need the status, not an untrusted error body.
+            // Do not buffer error responses that cannot be valid GET data.
+            None
+        } else if matches!(self.operation, PresignedOperation::Get) {
+            if let Some(max_bytes) = max_response_bytes {
+                if response
+                    .content_length()
+                    .is_some_and(|length| length > max_bytes as u64)
+                {
+                    return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
+                        path: self.path.clone(),
+                        max_bytes,
+                    }));
+                }
+
+                let mut bytes = Vec::with_capacity(
+                    response
+                        .content_length()
+                        .unwrap_or_default()
+                        .min(max_bytes as u64) as usize,
+                );
+                while let Some(chunk) = response
+                    .chunk()
                     .await
                     .map_err(reqwest::Error::without_url)
                     .into_alien_error()
                     .context(ErrorData::HttpRequestFailed {
-                        url: safe_url,
+                        url: safe_url.clone(),
                         method: method.to_string(),
-                    })?,
-            )
+                    })?
+                {
+                    if chunk.len() > max_bytes.saturating_sub(bytes.len()) {
+                        return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
+                            path: self.path.clone(),
+                            max_bytes,
+                        }));
+                    }
+                    bytes.extend_from_slice(&chunk);
+                }
+                Some(Bytes::from(bytes))
+            } else {
+                Some(
+                    response
+                        .bytes()
+                        .await
+                        .map_err(reqwest::Error::without_url)
+                        .into_alien_error()
+                        .context(ErrorData::HttpRequestFailed {
+                            url: safe_url,
+                            method: method.to_string(),
+                        })?,
+                )
+            }
         } else {
             None
         };
@@ -314,9 +382,10 @@ impl PresignedRequest {
         file_path: &str,
         operation: LocalOperation,
         body: Option<Bytes>,
+        max_response_bytes: Option<usize>,
     ) -> Result<PresignedResponse> {
         use std::path::Path as StdPath;
-        use tokio::fs;
+        use tokio::{fs, io::AsyncReadExt};
 
         if self.is_expired() {
             return Err(AlienError::new(ErrorData::PresignedRequestExpired {
@@ -362,12 +431,37 @@ impl PresignedRequest {
                 })
             }
             LocalOperation::Get => {
-                let data = fs::read(path).await.into_alien_error().context(
-                    ErrorData::LocalFilesystemError {
-                        path: file_path.to_string(),
-                        operation: "read".to_string(),
-                    },
-                )?;
+                let data = if let Some(max_bytes) = max_response_bytes {
+                    let file = fs::File::open(path).await.into_alien_error().context(
+                        ErrorData::LocalFilesystemError {
+                            path: file_path.to_string(),
+                            operation: "open".to_string(),
+                        },
+                    )?;
+                    let mut data = Vec::with_capacity(max_bytes.min(64 * 1024));
+                    file.take(max_bytes.saturating_add(1) as u64)
+                        .read_to_end(&mut data)
+                        .await
+                        .into_alien_error()
+                        .context(ErrorData::LocalFilesystemError {
+                            path: file_path.to_string(),
+                            operation: "read".to_string(),
+                        })?;
+                    if data.len() > max_bytes {
+                        return Err(AlienError::new(ErrorData::PresignedResponseTooLarge {
+                            path: self.path.clone(),
+                            max_bytes,
+                        }));
+                    }
+                    data
+                } else {
+                    fs::read(path).await.into_alien_error().context(
+                        ErrorData::LocalFilesystemError {
+                            path: file_path.to_string(),
+                            operation: "read".to_string(),
+                        },
+                    )?
+                };
 
                 Ok(PresignedResponse {
                     status_code: 200,
