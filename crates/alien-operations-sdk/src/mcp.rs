@@ -9,7 +9,7 @@
 use schemars::schema::{RootSchema, Schema, SchemaObject};
 use serde::{Deserialize, Serialize};
 
-use crate::manifest::{OperationManifest, PluginManifest};
+use crate::manifest::{CanonicalOperationManifest, CanonicalPluginManifest};
 
 /// One MCP tool definition: `{ name, description, inputSchema, outputSchema }`, the shape
 /// the Model Context Protocol's `tools/list` response and most MCP client
@@ -36,7 +36,7 @@ pub struct McpToolSchema {
 }
 
 /// Generate one [`McpToolSchema`] per operation the manifest declares.
-pub fn generate_mcp_tools(manifest: &PluginManifest) -> Vec<McpToolSchema> {
+pub fn generate_mcp_tools(manifest: &CanonicalPluginManifest) -> Vec<McpToolSchema> {
     manifest
         .operations
         .iter()
@@ -44,7 +44,10 @@ pub fn generate_mcp_tools(manifest: &PluginManifest) -> Vec<McpToolSchema> {
         .collect()
 }
 
-fn generate_mcp_tool(manifest: &PluginManifest, operation: &OperationManifest) -> McpToolSchema {
+fn generate_mcp_tool(
+    manifest: &CanonicalPluginManifest,
+    operation: &CanonicalOperationManifest,
+) -> McpToolSchema {
     let tier = operation.effective_tier(manifest.tier);
     McpToolSchema {
         name: format!("{}/{}", manifest.name, operation.name),
@@ -57,7 +60,7 @@ fn generate_mcp_tool(manifest: &PluginManifest, operation: &OperationManifest) -
             )
         }),
         input_schema: operation
-            .params_schema
+            .input_schema
             .clone()
             .unwrap_or_else(empty_object_schema),
         output_schema: operation.output_schema.clone(),
@@ -81,7 +84,7 @@ fn empty_object_schema() -> RootSchema {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::PluginManifest;
+    use crate::manifest::CanonicalPluginManifest;
 
     fn manifest_json(operations: &str) -> String {
         format!(
@@ -97,7 +100,7 @@ mod tests {
 
     #[test]
     fn generates_one_tool_per_operation() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(r#"{"name": "health"}, {"name": "version"}"#).as_bytes(),
         )
         .expect("valid manifest");
@@ -110,7 +113,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_a_generated_description_when_none_declared() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(r#"{"name": "vacuum", "tier": "mutating"}"#).as_bytes(),
         )
         .expect("valid manifest");
@@ -124,7 +127,7 @@ mod tests {
 
     #[test]
     fn uses_the_declared_description_when_present() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(r#"{"name": "health", "description": "Check database connectivity."}"#)
                 .as_bytes(),
         )
@@ -136,9 +139,10 @@ mod tests {
 
     #[test]
     fn an_operation_with_no_params_schema_gets_a_closed_empty_object_schema() {
-        let manifest =
-            PluginManifest::parse_and_validate(manifest_json(r#"{"name": "health"}"#).as_bytes())
-                .expect("valid manifest");
+        let manifest = CanonicalPluginManifest::parse_and_validate(
+            manifest_json(r#"{"name": "health"}"#).as_bytes(),
+        )
+        .expect("valid manifest");
 
         let tools = generate_mcp_tools(&manifest);
         let schema_json = serde_json::to_value(&tools[0].input_schema).expect("schema serializes");
@@ -148,7 +152,7 @@ mod tests {
 
     #[test]
     fn carries_the_declared_output_schema_into_the_tool_contract() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(
                 r#"{
                     "name": "health",

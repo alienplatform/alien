@@ -6,21 +6,26 @@
 use std::path::Path;
 
 use alien_error::{Context, IntoAlienError};
-use alien_operations_sdk::{generate_docs, generate_mcp_tools, PluginManifest};
+use alien_operations_sdk::{generate_docs, generate_mcp_tools, CanonicalPluginManifest};
 
 use crate::error::{ErrorData, Result};
 
 pub fn docs_task(directory: Option<&str>, json: bool) -> Result<()> {
     let manifest_path =
         Path::new(directory.unwrap_or(".")).join(alien_operations_sdk::manifest::MANIFEST_FILENAME);
-    let bytes = std::fs::read(&manifest_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let bytes = std::fs::read(&manifest_path).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: format!("could not read '{}'", manifest_path.display()),
-        })?;
-    let manifest = PluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
-        message: format!("'{}' is not a valid plugin manifest", manifest_path.display()),
-    })?;
+        },
+    )?;
+    let manifest = CanonicalPluginManifest::parse_and_validate(&bytes).context(
+        ErrorData::ConfigurationError {
+            message: format!(
+                "'{}' is not a valid plugin manifest",
+                manifest_path.display()
+            ),
+        },
+    )?;
 
     let tools = generate_mcp_tools(&manifest);
     let markdown = generate_docs(&manifest);

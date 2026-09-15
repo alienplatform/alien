@@ -4,7 +4,7 @@
 use std::path::Path;
 
 use alien_error::{Context, IntoAlienError};
-use alien_operations_sdk::PluginManifest;
+use alien_operations_sdk::CanonicalPluginManifest;
 
 use crate::error::{ErrorData, Result};
 
@@ -27,15 +27,18 @@ pub fn check_task(directory: Option<&str>, json: bool) -> Result<()> {
 /// user-facing result — those commands own stdout for their own
 /// `--json` contract, and a validation summary printed on the way there
 /// would corrupt it into more than one JSON document.
-pub fn validate_manifest(directory: Option<&str>) -> Result<PluginManifest> {
+pub fn validate_manifest(directory: Option<&str>) -> Result<CanonicalPluginManifest> {
     let manifest_path = manifest_path(directory);
-    let bytes = std::fs::read(&manifest_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let bytes = std::fs::read(&manifest_path).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: format!("could not read '{}'", manifest_path.display()),
-        })?;
-    PluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
-        message: format!("'{}' is not a valid plugin manifest", manifest_path.display()),
+        },
+    )?;
+    CanonicalPluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
+        message: format!(
+            "'{}' is not a valid plugin manifest",
+            manifest_path.display()
+        ),
     })
 }
 
@@ -43,7 +46,7 @@ fn manifest_path(directory: Option<&str>) -> std::path::PathBuf {
     Path::new(directory.unwrap_or(".")).join(alien_operations_sdk::manifest::MANIFEST_FILENAME)
 }
 
-fn print_summary(directory: Option<&str>, manifest: &PluginManifest) {
+fn print_summary(directory: Option<&str>, manifest: &CanonicalPluginManifest) {
     println!(
         "'{}' is valid: plugin '{}' v{} ({} tier)",
         manifest_path(directory).display(),
@@ -53,7 +56,10 @@ fn print_summary(directory: Option<&str>, manifest: &PluginManifest) {
     );
     for operation in &manifest.operations {
         let tier = operation.effective_tier(manifest.tier);
-        let description = operation.description.as_deref().unwrap_or("(no description)");
+        let description = operation
+            .description
+            .as_deref()
+            .unwrap_or("(no description)");
         println!("  {} [{}] — {description}", operation.name, tier.as_str());
     }
 }

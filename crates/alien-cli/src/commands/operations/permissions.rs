@@ -15,7 +15,7 @@ use std::path::Path;
 
 use alien_core::permissions::PermissionSetReference;
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_operations_sdk::PluginManifest;
+use alien_operations_sdk::CanonicalPluginManifest;
 use alien_permissions::generators::aws_runtime::AwsRuntimePermissionsGenerator;
 use alien_permissions::{get_permission_set, BindingTarget, PermissionContext};
 use clap::ValueEnum;
@@ -70,13 +70,14 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
             message: format!("could not read '{}'", manifest_path.display()),
         },
     )?;
-    let manifest =
-        PluginManifest::parse_and_validate(&bytes).context(ErrorData::ConfigurationError {
+    let manifest = CanonicalPluginManifest::parse_and_validate(&bytes).context(
+        ErrorData::ConfigurationError {
             message: format!(
                 "'{}' is not a valid plugin manifest",
                 manifest_path.display()
             ),
-        })?;
+        },
+    )?;
 
     if cloud != Cloud::Aws {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -105,7 +106,7 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
 }
 
 /// The unique permission references every operation requires, sorted by ID.
-fn declared_permissions(manifest: &PluginManifest) -> Vec<PermissionSetReference> {
+fn declared_permissions(manifest: &CanonicalPluginManifest) -> Vec<PermissionSetReference> {
     let mut permissions = BTreeMap::new();
     for permission in manifest
         .operations

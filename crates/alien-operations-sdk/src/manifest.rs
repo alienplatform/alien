@@ -154,10 +154,120 @@ pub struct RetryPolicy {
     pub interval_seconds: u32,
 }
 
-/// One named operation a plugin exposes.
+/// The original operation manifest published by this crate.
+///
+/// This type is intentionally kept source compatible for downstream crates
+/// that construct it with struct literals. New code should use
+/// [`CanonicalOperationManifest`].
+#[deprecated(note = "use CanonicalOperationManifest for the canonical contract")]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OperationManifest {
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_kubernetes_permissions"
+    )]
+    pub kubernetes_permissions: Option<KubernetesPermissions>,
+    pub name: String,
+    #[serde(default)]
+    pub tier: Option<RiskTier>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub params_schema: Option<RootSchema>,
+    #[serde(default)]
+    pub required_permissions: Vec<String>,
+    #[serde(default)]
+    pub timeout_seconds: Option<u32>,
+    #[serde(default)]
+    pub retries: Option<RetryPolicy>,
+    #[serde(default)]
+    pub verification: Option<Verification>,
+    #[serde(default)]
+    pub sensitive_output: SensitiveOutputPolicy,
+}
+
+#[allow(deprecated)]
+impl OperationManifest {
+    pub fn effective_tier(&self, plugin_default: RiskTier) -> RiskTier {
+        self.tier.unwrap_or(plugin_default)
+    }
+
+    /// Convert the legacy contract into the canonical contract without
+    /// changing the meaning of any existing field.
+    pub fn into_canonical(self) -> CanonicalOperationManifest {
+        self.into()
+    }
+}
+
+/// The original plugin manifest published by this crate.
+///
+/// This remains available for source compatibility. Canonical metadata
+/// readers and writers should use [`CanonicalPluginManifest`].
+#[deprecated(note = "use CanonicalPluginManifest for the canonical contract")]
+#[allow(deprecated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PluginManifest {
+    pub name: String,
+    pub version: String,
+    #[serde(default)]
+    pub tier: RiskTier,
+    pub binaries: BTreeMap<Arch, String>,
+    #[serde(default)]
+    pub operations: Vec<OperationManifest>,
+}
+
+#[allow(deprecated)]
+impl PluginManifest {
+    pub fn parse(bytes: &[u8]) -> Result<Self> {
+        serde_json::from_slice(bytes).map_err(|err| {
+            AlienError::new(ErrorData::ManifestInvalid {
+                reason: err.to_string(),
+            })
+        })
+    }
+
+    pub fn parse_and_validate(bytes: &[u8]) -> Result<Self> {
+        let manifest = Self::parse(bytes)?;
+        manifest.clone().into_canonical().validate()?;
+        Ok(manifest)
+    }
+
+    pub fn operation(&self, name: &str) -> Option<&OperationManifest> {
+        self.operations
+            .iter()
+            .find(|operation| operation.name == name)
+    }
+
+    pub fn binary_for(&self, arch: Arch) -> Result<&str> {
+        binary_for(&self.name, &self.binaries, arch)
+    }
+
+    pub fn tier_for(&self, operation: &str) -> Result<RiskTier> {
+        self.operation(operation)
+            .map(|operation| operation.effective_tier(self.tier))
+            .ok_or_else(|| unknown_operation(&self.name, operation))
+    }
+
+    pub fn content_key(&self) -> String {
+        format!("{}@{}", self.name, self.version)
+    }
+
+    pub fn into_canonical(self) -> CanonicalPluginManifest {
+        self.into()
+    }
+
+    pub fn validate(&self) -> Result<()> {
+        self.clone().into_canonical().validate()
+    }
+}
+
+/// One named operation in the canonical plugin contract.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CanonicalOperationManifest {
     /// Explicit Kubernetes API requirements, compiled by the installer for
     /// enabled plugins within the chosen scope and permission ceiling.
     #[serde(
@@ -169,7 +279,7 @@ pub struct OperationManifest {
     /// Operation name, unique within the plugin (e.g. `vacuum`).
     pub name: String,
     /// Risk tier for this specific operation. Falls back to the plugin's
-    /// tier when omitted (resolved through [`OperationManifest::effective_tier`]).
+    /// tier when omitted (resolved through [`CanonicalOperationManifest::effective_tier`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tier: Option<RiskTier>,
     /// Human-readable description surfaced in the catalog, CLI help, and
@@ -185,7 +295,7 @@ pub struct OperationManifest {
         alias = "paramsSchema",
         skip_serializing_if = "Option::is_none"
     )]
-    pub params_schema: Option<RootSchema>,
+    pub input_schema: Option<RootSchema>,
     /// JSON Schema for a successful operation result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<RootSchema>,
@@ -230,7 +340,7 @@ where
     KubernetesPermissions::deserialize(deserializer).map(Some)
 }
 
-impl OperationManifest {
+impl CanonicalOperationManifest {
     /// The effective risk tier: this operation's own tier if declared,
     /// otherwise the plugin's default.
     pub fn effective_tier(&self, plugin_default: RiskTier) -> RiskTier {
@@ -245,10 +355,10 @@ impl OperationManifest {
     }
 }
 
-/// The parsed, validated contents of a plugin manifest.
+/// The parsed, validated contents of a canonical plugin manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct PluginManifest {
+pub struct CanonicalPluginManifest {
     /// Plugin name, unique within a workspace (e.g. `postgres`).
     pub name: String,
     /// Semantic version string (e.g. `1.0.0`). Compared as an opaque
@@ -262,12 +372,52 @@ pub struct PluginManifest {
     pub binaries: BTreeMap<Arch, String>,
     /// The operations this plugin exposes.
     #[serde(default)]
-    pub operations: Vec<OperationManifest>,
+    pub operations: Vec<CanonicalOperationManifest>,
 }
 
-impl PluginManifest {
+#[allow(deprecated)]
+impl From<OperationManifest> for CanonicalOperationManifest {
+    fn from(operation: OperationManifest) -> Self {
+        Self {
+            kubernetes_permissions: operation.kubernetes_permissions,
+            name: operation.name,
+            tier: operation.tier,
+            description: operation.description,
+            input_schema: operation.params_schema,
+            output_schema: None,
+            required_permissions: operation
+                .required_permissions
+                .into_iter()
+                .map(PermissionSetReference::from_name)
+                .collect(),
+            timeout_seconds: operation.timeout_seconds,
+            retries: operation.retries,
+            verification: operation.verification,
+            sensitive_output: operation.sensitive_output,
+        }
+    }
+}
+
+#[allow(deprecated)]
+impl From<PluginManifest> for CanonicalPluginManifest {
+    fn from(manifest: PluginManifest) -> Self {
+        Self {
+            name: manifest.name,
+            version: manifest.version,
+            tier: manifest.tier,
+            binaries: manifest.binaries,
+            operations: manifest
+                .operations
+                .into_iter()
+                .map(CanonicalOperationManifest::from)
+                .collect(),
+        }
+    }
+}
+
+impl CanonicalPluginManifest {
     /// Parse a manifest from `metadata.json` bytes without validating it.
-    /// Prefer [`PluginManifest::parse_and_validate`] unless you specifically
+    /// Prefer [`CanonicalPluginManifest::parse_and_validate`] unless you specifically
     /// need the unvalidated form.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
         serde_json::from_slice(bytes).map_err(|err| {
@@ -285,37 +435,20 @@ impl PluginManifest {
     }
 
     /// Look up a declared operation by name.
-    pub fn operation(&self, name: &str) -> Option<&OperationManifest> {
+    pub fn operation(&self, name: &str) -> Option<&CanonicalOperationManifest> {
         self.operations.iter().find(|op| op.name == name)
     }
 
     /// The bundle entry for `arch`.
     pub fn binary_for(&self, arch: Arch) -> Result<&str> {
-        self.binaries.get(&arch).map(String::as_str).ok_or_else(|| {
-            let available = self
-                .binaries
-                .keys()
-                .map(Arch::as_str)
-                .collect::<Vec<_>>()
-                .join(", ");
-            AlienError::new(ErrorData::ArchUnsupported {
-                plugin: self.name.clone(),
-                arch: arch.as_str().to_string(),
-                available,
-            })
-        })
+        binary_for(&self.name, &self.binaries, arch)
     }
 
     /// The effective risk tier for a named operation.
     pub fn tier_for(&self, operation: &str) -> Result<RiskTier> {
         self.operation(operation)
             .map(|operation| operation.effective_tier(self.tier))
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::OperationUnknown {
-                    plugin: self.name.clone(),
-                    operation: operation.to_string(),
-                })
-            })
+            .ok_or_else(|| unknown_operation(&self.name, operation))
     }
 
     /// Stable extraction-directory key for this manifest.
@@ -377,10 +510,36 @@ impl PluginManifest {
     }
 }
 
+fn binary_for<'a>(
+    plugin: &str,
+    binaries: &'a BTreeMap<Arch, String>,
+    arch: Arch,
+) -> Result<&'a str> {
+    binaries.get(&arch).map(String::as_str).ok_or_else(|| {
+        let available = binaries
+            .keys()
+            .map(Arch::as_str)
+            .collect::<Vec<_>>()
+            .join(", ");
+        AlienError::new(ErrorData::ArchUnsupported {
+            plugin: plugin.to_string(),
+            arch: arch.as_str().to_string(),
+            available,
+        })
+    })
+}
+
+fn unknown_operation(plugin: &str, operation: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::OperationUnknown {
+        plugin: plugin.to_string(),
+        operation: operation.to_string(),
+    })
+}
+
 fn validate_operation_contract(
     plugin: &str,
     plugin_tier: RiskTier,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
 ) -> Result<()> {
     if operation
         .description
@@ -507,7 +666,7 @@ fn validate_operation_contract(
 
 fn validate_retry_policy(
     plugin: &str,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
     field: &str,
     retries: RetryPolicy,
 ) -> Result<()> {
@@ -532,7 +691,7 @@ fn validate_retry_policy(
 
 fn validate_inline_permission_set(
     plugin: &str,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
     permission_set: &PermissionSet,
 ) -> Result<()> {
     if permission_set.description.trim().is_empty() {
@@ -667,7 +826,7 @@ fn validate_inline_permission_set(
 
 fn validate_grant_values(
     plugin: &str,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
     permission_id: &str,
     label: &str,
     groups: &[Option<&[String]>],
@@ -697,7 +856,7 @@ fn validate_grant_values(
 
 fn invalid_permission_binding<T>(
     plugin: &str,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
     permission_id: &str,
     platform: &str,
 ) -> Result<T> {
@@ -711,7 +870,7 @@ fn invalid_permission_binding<T>(
 
 fn invalid_operation<T>(
     plugin: &str,
-    operation: &OperationManifest,
+    operation: &CanonicalOperationManifest,
     field: &str,
     reason: &str,
 ) -> Result<T> {
@@ -735,6 +894,9 @@ fn require_non_empty(value: &str, field: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    type PluginManifest = CanonicalPluginManifest;
+    type OperationManifest = CanonicalOperationManifest;
 
     fn manifest_json(operations: &str) -> String {
         format!(
@@ -813,7 +975,7 @@ mod tests {
             name: "vacuum".into(),
             tier: None,
             description: None,
-            params_schema: None,
+            input_schema: None,
             output_schema: None,
             required_permissions: vec![],
             timeout_seconds: None,
@@ -1068,5 +1230,29 @@ mod tests {
             .expect_err("unbound inline grants must fail");
 
         assert!(error.to_string().contains("AWS binding"));
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn legacy_struct_literals_remain_source_compatible_and_convert_explicitly() {
+        let legacy = super::OperationManifest {
+            kubernetes_permissions: None,
+            name: "inspect".to_string(),
+            tier: Some(RiskTier::ReadOnly),
+            description: None,
+            params_schema: None,
+            required_permissions: vec!["example/read".to_string()],
+            timeout_seconds: None,
+            retries: None,
+            verification: None,
+            sensitive_output: SensitiveOutputPolicy::None,
+        };
+
+        let canonical = legacy.into_canonical();
+        assert_eq!(
+            canonical.permission_ids().collect::<Vec<_>>(),
+            vec!["example/read"]
+        );
+        assert!(canonical.output_schema.is_none());
     }
 }

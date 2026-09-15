@@ -6,7 +6,7 @@
 //!
 //! 1. Implements [`plugin::Plugin`] and calls [`plugin::run_plugin`] from
 //!    `main`.
-//! 2. Declares a [`manifest::PluginManifest`] (conventionally
+//! 2. Declares a [`manifest::CanonicalPluginManifest`] (conventionally
 //!    `metadata.json`) describing each operation's params, risk tier,
 //!    required permissions, timeout, retries, verification, and
 //!    sensitive-output handling.
@@ -37,11 +37,16 @@ pub use error::{ErrorData, Result};
 pub use kubernetes::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
 };
+#[allow(deprecated)]
 pub use manifest::{
-    Arch, OperationManifest, PluginManifest, RetryPolicy, RiskTier, SensitiveOutputPolicy,
+    Arch, CanonicalOperationManifest, CanonicalPluginManifest, OperationManifest, PluginManifest,
+    RetryPolicy, RiskTier, SensitiveOutputPolicy,
 };
 pub use mcp::{generate_mcp_tools, McpToolSchema};
 pub use plugin::{dispatch, run_plugin, Plugin};
-pub use protocol::{PluginInvocation, PluginResult, PROTOCOL_VERSION};
+pub use protocol::{
+    is_explicitly_retryable, retryable_error, PluginInvocation, PluginResult, PROTOCOL_VERSION,
+    RETRYABLE_ERROR_DETAILS,
+};
 pub use typed::{OperationDefinition, OperationFailure, TypedOperations};
 pub use verification::Verification;

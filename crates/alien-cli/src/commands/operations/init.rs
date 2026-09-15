@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_operations_sdk::{Arch, OperationDefinition, PluginManifest, RiskTier};
+use alien_operations_sdk::{Arch, CanonicalPluginManifest, OperationDefinition, RiskTier};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -157,7 +157,7 @@ struct ScaffoldHealthOutput {
 }
 
 fn metadata_json(name: &str) -> Result<String> {
-    let manifest = PluginManifest {
+    let manifest = CanonicalPluginManifest {
         name: name.to_string(),
         version: "0.1.0".to_string(),
         tier: RiskTier::ReadOnly,
@@ -216,7 +216,8 @@ fn lib_rs(name: &str) -> String {
 use std::collections::BTreeMap;
 
 use alien_operations_sdk::{{
-    Arch, OperationDefinition, OperationFailure, PluginManifest, Result, RiskTier, TypedOperations,
+    Arch, CanonicalPluginManifest, OperationDefinition, OperationFailure, Result, RiskTier,
+    TypedOperations,
 }};
 use schemars::JsonSchema;
 use serde::{{Deserialize, Serialize}};
@@ -250,9 +251,9 @@ pub fn operations() -> Result<TypedOperations> {{
 }}
 
 /// Generate bundle metadata from the same definitions used for dispatch.
-pub fn plugin_manifest() -> Result<PluginManifest> {{
+pub fn plugin_manifest() -> Result<CanonicalPluginManifest> {{
     let operations = operations()?;
-    let manifest = PluginManifest {{
+    let manifest = CanonicalPluginManifest {{
         name: "{name}".to_string(),
         version: "0.1.0".to_string(),
         tier: RiskTier::ReadOnly,
@@ -397,12 +398,13 @@ mod tests {
         assert!(target.join("src/bin/generate-metadata.rs").is_file());
 
         let metadata_bytes = std::fs::read(target.join("metadata.json")).expect("read metadata");
-        let manifest = alien_operations_sdk::PluginManifest::parse_and_validate(&metadata_bytes)
-            .expect("scaffolded metadata.json should be a valid manifest");
+        let manifest =
+            alien_operations_sdk::CanonicalPluginManifest::parse_and_validate(&metadata_bytes)
+                .expect("scaffolded metadata.json should be a valid manifest");
         assert_eq!(manifest.name, "my-plugin");
         assert_eq!(manifest.operations.len(), 1);
         assert_eq!(manifest.operations[0].name, "health");
-        assert!(manifest.operations[0].params_schema.is_some());
+        assert!(manifest.operations[0].input_schema.is_some());
         assert!(manifest.operations[0].output_schema.is_some());
     }
 

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_operations_sdk::PluginManifest;
+use alien_operations_sdk::CanonicalPluginManifest;
 use alien_platform_api::types::{
     InvokeOperationRequest, InvokeOperationResponseStatus, VerifyOperationCheckRequest,
     VerifyOperationCheckResponseOutcome,
@@ -116,15 +116,14 @@ pub async fn invoke_task(
         })?
         .into_inner();
 
-    let (invocation, access_request_id) = if invocation.status
-        == InvokeOperationResponseStatus::PendingApproval
-    {
-        if !options.request_access {
-            if options.json {
-                print_json(&invocation)?;
-            } else {
-                println!(
-                    "Access is required to run {operation_ref}.\n\n\
+    let (invocation, access_request_id) =
+        if invocation.status == InvokeOperationResponseStatus::PendingApproval {
+            if !options.request_access {
+                if options.json {
+                    print_json(&invocation)?;
+                } else {
+                    println!(
+                        "Access is required to run {operation_ref}.\n\n\
                      Request access:\n\
                      \x20\x20alien access-requests create \\\n\
                      \x20\x20\x20\x20--deployment {} \\\n\
@@ -132,27 +131,27 @@ pub async fn invoke_task(
                      \x20\x20\x20\x20--params '{}' \\\n\
                      \x20\x20\x20\x20--duration 1h\n\n\
                      Or rerun this command with --request-access.",
-                    options.deployment, options.params,
-                );
+                        options.deployment, options.params,
+                    );
+                }
+                return Ok(());
             }
-            return Ok(());
-        }
 
-        let (invocation, access_request_id) = request_access_then_reinvoke(
-            &sdk_client,
-            workspace,
-            project,
-            &deployment_id,
-            plugin,
-            operation,
-            options.params,
-            options.access_duration,
-        )
-        .await?;
-        (invocation, Some(access_request_id))
-    } else {
-        (invocation, None)
-    };
+            let (invocation, access_request_id) = request_access_then_reinvoke(
+                &sdk_client,
+                workspace,
+                project,
+                &deployment_id,
+                plugin,
+                operation,
+                options.params,
+                options.access_duration,
+            )
+            .await?;
+            (invocation, Some(access_request_id))
+        } else {
+            (invocation, None)
+        };
 
     let command_id = invocation.command_id.ok_or_else(|| {
         AlienError::new(ErrorData::ApiRequestFailed {
@@ -561,7 +560,9 @@ async fn verify_operation(
             .into_inner();
 
         match check.outcome {
-            VerifyOperationCheckResponseOutcome::Verified => return Ok(VerificationOutcome::Verified),
+            VerifyOperationCheckResponseOutcome::Verified => {
+                return Ok(VerificationOutcome::Verified)
+            }
             VerifyOperationCheckResponseOutcome::Failed => {
                 return Ok(VerificationOutcome::Unverified {
                     reason: check
@@ -783,7 +784,7 @@ pub async fn list_task(
 /// S3, rather than only being caught by the platform's own (looser, string
 /// name/version/tier-only) validation after upload. Returns the raw JSON
 /// value (forwarded verbatim) plus the parsed manifest.
-fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, PluginManifest)> {
+fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, CanonicalPluginManifest)> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(reader)
@@ -807,7 +808,7 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, PluginMa
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
-    let manifest = PluginManifest::parse_and_validate(contents.as_bytes()).context(
+    let manifest = CanonicalPluginManifest::parse_and_validate(contents.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: format!("bundle '{}' has an invalid manifest", path.display()),
         },

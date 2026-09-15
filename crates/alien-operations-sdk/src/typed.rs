@@ -11,8 +11,9 @@ use schemars::{schema_for, JsonSchema};
 use serde::{de::DeserializeOwned, Serialize};
 
 use crate::{
-    ErrorData, KubernetesPermissions, OperationManifest, Plugin, PluginInvocation, PluginResult,
-    Result, RetryPolicy, RiskTier, SensitiveOutputPolicy, Verification, PROTOCOL_VERSION,
+    CanonicalOperationManifest, ErrorData, KubernetesPermissions, Plugin, PluginInvocation,
+    PluginResult, Result, RetryPolicy, RiskTier, SensitiveOutputPolicy, Verification,
+    PROTOCOL_VERSION,
 };
 
 /// A structured failure safe to return to an operation caller.
@@ -20,6 +21,7 @@ use crate::{
 pub struct OperationFailure {
     code: String,
     message: String,
+    retryable: bool,
 }
 
 impl OperationFailure {
@@ -28,11 +30,23 @@ impl OperationFailure {
         Self {
             code: code.into(),
             message: message.into(),
+            retryable: false,
         }
     }
 
+    /// Mark this failure safe to retry. Runtime retries remain disabled unless
+    /// the operation manifest also declares a bounded retry policy.
+    pub const fn retryable(mut self) -> Self {
+        self.retryable = true;
+        self
+    }
+
     fn into_result(self) -> PluginResult {
-        PluginResult::error(self.code, self.message)
+        if self.retryable {
+            crate::retryable_error(self.code, self.message)
+        } else {
+            PluginResult::error(self.code, self.message)
+        }
     }
 }
 
@@ -130,17 +144,17 @@ impl<Params, Output> OperationDefinition<Params, Output> {
     }
 
     /// Generate the authoritative serializable manifest from this definition.
-    pub fn manifest(&self) -> OperationManifest
+    pub fn manifest(&self) -> CanonicalOperationManifest
     where
         Params: JsonSchema,
         Output: JsonSchema,
     {
-        OperationManifest {
+        CanonicalOperationManifest {
             kubernetes_permissions: self.kubernetes_permissions.clone(),
             name: self.name.to_string(),
             tier: Some(self.tier),
             description: Some(self.description.to_string()),
-            params_schema: Some(schema_for!(Params)),
+            input_schema: Some(schema_for!(Params)),
             output_schema: Some(schema_for!(Output)),
             required_permissions: self.permissions.clone(),
             timeout_seconds: self.timeout_seconds,
@@ -196,7 +210,7 @@ where
 /// Runtime registry built from the same typed definitions used for metadata.
 pub struct TypedOperations {
     handlers: BTreeMap<&'static str, Box<dyn ErasedOperation>>,
-    manifests: BTreeMap<&'static str, OperationManifest>,
+    manifests: BTreeMap<&'static str, CanonicalOperationManifest>,
     unknown_operation_message: &'static str,
 }
 
@@ -257,7 +271,7 @@ impl TypedOperations {
     }
 
     /// Operation manifests sorted by operation name.
-    pub fn manifests(&self) -> Vec<OperationManifest> {
+    pub fn manifests(&self) -> Vec<CanonicalOperationManifest> {
         self.manifests.values().cloned().collect()
     }
 

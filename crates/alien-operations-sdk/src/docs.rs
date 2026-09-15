@@ -7,11 +7,13 @@
 
 use std::fmt::Write as _;
 
-use crate::manifest::{OperationManifest, PluginManifest, RiskTier, SensitiveOutputPolicy};
+use crate::manifest::{
+    CanonicalOperationManifest, CanonicalPluginManifest, RiskTier, SensitiveOutputPolicy,
+};
 
 /// Render a Markdown reference page documenting every operation `manifest`
 /// declares.
-pub fn generate_docs(manifest: &PluginManifest) -> String {
+pub fn generate_docs(manifest: &CanonicalPluginManifest) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "# {}", manifest.name);
     let _ = writeln!(out);
@@ -35,7 +37,11 @@ pub fn generate_docs(manifest: &PluginManifest) -> String {
     out
 }
 
-fn render_operation(out: &mut String, plugin_tier: RiskTier, operation: &OperationManifest) {
+fn render_operation(
+    out: &mut String,
+    plugin_tier: RiskTier,
+    operation: &CanonicalOperationManifest,
+) {
     let tier = operation.effective_tier(plugin_tier);
     let _ = writeln!(out);
     let _ = writeln!(out, "### `{}` — {}", operation.name, tier.as_str());
@@ -118,7 +124,7 @@ mod tests {
 
     #[test]
     fn renders_plugin_name_and_version() {
-        let manifest = PluginManifest::parse_and_validate(manifest_json("").as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(manifest_json("").as_bytes())
             .expect("valid manifest");
         let docs = generate_docs(&manifest);
         assert!(docs.contains("# postgres"));
@@ -127,7 +133,7 @@ mod tests {
 
     #[test]
     fn renders_operation_description_and_tier() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(
                 r#"{"name": "vacuum", "tier": "mutating", "description": "Run VACUUM."}"#,
             )
@@ -141,7 +147,7 @@ mod tests {
 
     #[test]
     fn renders_required_permissions_and_timeout() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(
                 r#"{
                     "name": "vacuum",
@@ -160,7 +166,7 @@ mod tests {
 
     #[test]
     fn renders_verification_details() {
-        let manifest = PluginManifest::parse_and_validate(
+        let manifest = CanonicalPluginManifest::parse_and_validate(
             manifest_json(
                 r#"
                 {"name": "get-pod-status", "tier": "read-only"},
@@ -185,7 +191,7 @@ mod tests {
 
     #[test]
     fn renders_a_plugin_with_no_operations() {
-        let manifest = PluginManifest::parse_and_validate(manifest_json("").as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(manifest_json("").as_bytes())
             .expect("valid manifest");
         let docs = generate_docs(&manifest);
         assert!(docs.contains("declares no operations"));
