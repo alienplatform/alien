@@ -229,6 +229,11 @@ pub struct ArtifactRegistryCredentials {
 pub enum ComputeServiceType {
     /// Serverless functions
     Worker,
+    /// Sandbox sessions.
+    ///
+    /// A separate variant rather than a wider `Worker` because each compute service pulls as its
+    /// own Google-managed service agent, so a grant made for one reaches neither the other.
+    Sandbox,
     // In the future, we could add Container, VirtualMachine, Kubernetes, etc.
 }
 

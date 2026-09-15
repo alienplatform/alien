@@ -17,6 +17,30 @@ use async_trait::async_trait;
 use chrono;
 use tracing::{debug, info, warn};
 
+/// The IAM members a cross-account grant names, for both the add and the remove path.
+///
+/// Each compute service pulls as its own Google-managed service agent, so the project number alone
+/// does not say who may pull. Granting and revoking read the same list, since a member the revoke
+/// misses stays on the repository policy with nothing left to remove it.
+fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
+    let mut members = Vec::new();
+    for service_type in &access.allowed_service_types {
+        let agent_domain = match service_type {
+            ComputeServiceType::Worker => "serverless-robot-prod",
+            ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
+        };
+        for project_number in &access.project_numbers {
+            members.push(format!(
+                "serviceAccount:service-{project_number}@{agent_domain}.iam.gserviceaccount.com"
+            ));
+        }
+    }
+    for service_account_email in &access.service_account_emails {
+        members.push(format!("serviceAccount:{service_account_email}"));
+    }
+    members
+}
+
 /// GCP Artifact Registry implementation of the ArtifactRegistry binding.
 #[derive(Debug)]
 pub struct GarArtifactRegistry {
@@ -306,29 +330,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
                 etag: None,
             });
 
-        // Build new members to add
-        let mut new_members = Vec::new();
-
-        // Add service accounts based on compute service types and project numbers
-        for service_type in &gcp_access.allowed_service_types {
-            match service_type {
-                ComputeServiceType::Worker => {
-                    // Add serverless robot service accounts for Worker service type
-                    for project_number in &gcp_access.project_numbers {
-                        let serverless_robot_email = format!(
-                            "service-{}@serverless-robot-prod.iam.gserviceaccount.com",
-                            project_number
-                        );
-                        new_members.push(format!("serviceAccount:{}", serverless_robot_email));
-                    }
-                } // Future service types would be handled here
-            }
-        }
-
-        // Add additional service account emails
-        for service_account_email in &gcp_access.service_account_emails {
-            new_members.push(format!("serviceAccount:{}", service_account_email));
-        }
+        let new_members = cross_account_members(&gcp_access);
 
         self.update_policy_members(&repo_name, current_policy, new_members, true)
             .await
@@ -380,31 +382,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
             }
         };
 
-        // Build members to remove
-        let mut members_to_remove = Vec::new();
-
-        // Add service accounts based on compute service types and project numbers
-        for service_type in &gcp_access.allowed_service_types {
-            match service_type {
-                ComputeServiceType::Worker => {
-                    // Add serverless robot service accounts for Worker service type
-                    for project_number in &gcp_access.project_numbers {
-                        let serverless_robot_email = format!(
-                            "service-{}@serverless-robot-prod.iam.gserviceaccount.com",
-                            project_number
-                        );
-                        members_to_remove
-                            .push(format!("serviceAccount:{}", serverless_robot_email));
-                    }
-                } // Future service types would be handled here
-            }
-        }
-
-        // Add additional service account emails
-        for service_account_email in &gcp_access.service_account_emails {
-            members_to_remove.push(format!("serviceAccount:{}", service_account_email));
-        }
-
+        let members_to_remove = cross_account_members(&gcp_access);
         self.update_policy_members(&repo_name, current_policy, members_to_remove, false)
             .await
     }
@@ -640,5 +618,45 @@ impl ArtifactRegistry for GarArtifactRegistry {
             "GCP Artifact Registry delete_repository: no-op (image paths are implicit)"
         );
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Each compute service pulls as a different Google-managed service agent, and three adjacent
+    /// Vertex agents exist that would 403 here, so the accounts are pinned rather than described.
+    #[test]
+    fn each_service_type_resolves_to_its_own_service_agent() {
+        let members = cross_account_members(&GcpCrossAccountAccess {
+            project_numbers: vec!["123456789012".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox],
+            service_account_emails: vec![
+                "management@test-project.iam.gserviceaccount.com".to_string()
+            ],
+        });
+
+        assert_eq!(
+            members,
+            vec![
+                "serviceAccount:service-123456789012@serverless-robot-prod.iam.gserviceaccount.com",
+                "serviceAccount:service-123456789012@gcp-sa-vertex-sandbox.iam.gserviceaccount.com",
+                "serviceAccount:management@test-project.iam.gserviceaccount.com",
+            ]
+        );
+    }
+
+    /// Granting and revoking read one list, so a service type that names no project contributes no
+    /// member to either.
+    #[test]
+    fn a_service_type_grants_nothing_for_a_project_it_does_not_name() {
+        let members = cross_account_members(&GcpCrossAccountAccess {
+            project_numbers: Vec::new(),
+            allowed_service_types: vec![ComputeServiceType::Sandbox],
+            service_account_emails: Vec::new(),
+        });
+
+        assert!(members.is_empty());
     }
 }

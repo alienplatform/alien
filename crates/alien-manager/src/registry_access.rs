@@ -142,7 +142,13 @@ async fn revoke_registry_access(
             environment_info,
             CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                allowed_service_types: vec![ComputeServiceType::Worker],
+                // Every service type, whatever this deployment granted. Removal is a `retain`, so
+                // naming one that was never added is a no-op, while missing one leaves a member on
+                // the policy with nothing left to revoke it.
+                allowed_service_types: vec![
+                    ComputeServiceType::Worker,
+                    ComputeServiceType::Sandbox,
+                ],
                 service_account_emails: Vec::new(),
             }),
             "last project consumer's shared registry access",
@@ -372,21 +378,21 @@ fn repository_ids_for_access(
         return Vec::new();
     }
 
-    if matches!(
-        state
-            .environment_info
-            .as_ref()
-            .map(EnvironmentInfo::platform),
-        Some(Platform::Aws)
-    ) {
+    let platform = state
+        .environment_info
+        .as_ref()
+        .map(EnvironmentInfo::platform);
+    let include_sandbox = platform.is_some_and(sandbox_pulls_from_our_registry);
+
+    if matches!(platform, Some(Platform::Aws)) {
         let mut repo_ids = HashSet::new();
-        collect_image_repositories(state, &prefix, INCLUDE_SANDBOX, &mut repo_ids);
+        collect_image_repositories(state, &prefix, include_sandbox, &mut repo_ids);
         let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
         repo_ids.sort();
         return repo_ids;
     }
 
-    if !has_image_in_repository_prefix(state, &prefix, EXCLUDE_SANDBOX) {
+    if !has_image_in_repository_prefix(state, &prefix, include_sandbox) {
         return Vec::new();
     }
 
@@ -396,10 +402,14 @@ fn repository_ids_for_access(
     repo_ids
 }
 
-/// Only the AWS sandbox takes its root filesystem from an image Alien hosts, so counting one on
-/// any other provider would claim a grant that provider never needs.
-const INCLUDE_SANDBOX: bool = true;
-const EXCLUDE_SANDBOX: bool = false;
+/// Whether this platform's sandbox takes its root filesystem from an image Alien hosts.
+///
+/// AWS builds a MicroVM image from a bundle we publish, and a GCP sandbox runs a container it pulls
+/// from our registry, so both earn a grant. Azure names an image from its own catalog and reaches
+/// our registry for nothing, so counting one there would claim a grant it never needs.
+fn sandbox_pulls_from_our_registry(platform: Platform) -> bool {
+    matches!(platform, Platform::Aws | Platform::Gcp)
+}
 
 /// The image a resource pulls from Alien's registry, if it declares one.
 fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Option<&str> {
@@ -483,7 +493,7 @@ fn has_image_in_repository_prefix(
 /// loads, so answering `true` too often costs a lookup, while answering `false` too often leaves
 /// a live cross-account grant on Alien's registry with nothing left to revoke it.
 fn has_registry_backed_image(state: &DeploymentState, platform: &Platform) -> bool {
-    let include_sandbox = matches!(platform, Platform::Aws);
+    let include_sandbox = sandbox_pulls_from_our_registry(*platform);
 
     state
         .current_release
@@ -593,7 +603,10 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                allowed_service_types: vec![ComputeServiceType::Worker],
+                allowed_service_types: vec![
+                    ComputeServiceType::Worker,
+                    ComputeServiceType::Sandbox,
+                ],
                 service_account_emails,
             }))
         }
@@ -1284,7 +1297,7 @@ mod tests {
     }
 
     #[test]
-    fn aws_cleanup_guard_covers_a_sandbox_only_stack() {
+    fn cleanup_guard_covers_a_sandbox_only_stack() {
         let state = aws_state_with_stack(sandbox_stack(
             "manager.example.com/alien-artifacts-prj_test:agents-abc123",
         ));
@@ -1294,8 +1307,12 @@ mod tests {
             "a partial AWS sandbox grant must still be cleaned up on delete"
         );
         assert!(
-            !has_registry_backed_image(&state, &Platform::Gcp),
-            "no GCP sandbox pulls from Alien's registry, so cleanup must stay a no-op there"
+            has_registry_backed_image(&state, &Platform::Gcp),
+            "a GCP sandbox pulls its container from Alien's registry, so its grant is cleaned up too"
+        );
+        assert!(
+            !has_registry_backed_image(&state, &Platform::Azure),
+            "an Azure sandbox reads nothing of ours, so cleanup stays a no-op there"
         );
 
         // The guard is deliberately looser than the repository scan and asks only whether an
@@ -1348,7 +1365,7 @@ mod tests {
     }
 
     #[test]
-    fn gcp_registry_access_ignores_sandbox_images() {
+    fn gcp_registry_access_covers_sandbox_images() {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
             fail_remove: false,
@@ -1357,9 +1374,33 @@ mod tests {
             "manager.example.com/test-project/alien-artifacts/agents:abc123",
         ));
 
-        assert!(
-            repository_ids_for_access(&registry, &state).is_empty(),
-            "a GCP sandbox takes no image from Alien's registry, so it must grant nothing"
+        assert_eq!(
+            repository_ids_for_access(&registry, &state),
+            vec!["test-project/alien-artifacts".to_string()],
+            "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
+        );
+    }
+
+    /// Each compute service pulls as its own Google-managed service agent. Naming the wrong one is
+    /// a 403 at the first session, so the pair is pinned rather than described.
+    #[test]
+    fn the_gcp_grant_names_both_service_agents() {
+        let access = build_cross_account_access(
+            &EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                project_number: "123456789012".to_string(),
+                project_id: "test-project".to_string(),
+                region: "us-central1".to_string(),
+            }),
+            None,
+        )
+        .expect("a GCP environment builds a cross-account access");
+
+        let CrossAccountAccess::Gcp(gcp) = access else {
+            panic!("a GCP environment must build GCP cross-account access");
+        };
+        assert_eq!(
+            gcp.allowed_service_types,
+            vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
         );
     }
 }
