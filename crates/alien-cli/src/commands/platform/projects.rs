@@ -808,13 +808,13 @@ mod tests {
 
     #[test]
     fn remote_sandbox_requires_a_base_image() {
-        sandbox_options(
+        remote_sandbox_request(
             Some("public.ecr.aws/x/y:v1"),
             std::num::NonZeroU64::new(3600),
         )
         .expect("a base image is accepted");
 
-        let error = sandbox_options(None, std::num::NonZeroU64::new(3600))
+        let error = remote_sandbox_request(None, std::num::NonZeroU64::new(3600))
             .expect_err("a missing base image must be refused");
         assert!(
             error.to_string().contains("--base-image"),

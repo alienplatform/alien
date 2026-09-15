@@ -209,9 +209,9 @@ async fn create_task(
             title: options.title.map(str::to_string),
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
-            commands: Vec::new(),
             replay_key: None,
             requested_expires_at: None,
+            commands: Vec::new(),
         }
     } else {
         let Some(max_risk) = options.max_risk else {
@@ -233,9 +233,9 @@ async fn create_task(
             title: options.title.map(str::to_string),
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
-            commands: Vec::new(),
             replay_key: None,
             requested_expires_at: None,
+            commands: Vec::new(),
         }
     };
 

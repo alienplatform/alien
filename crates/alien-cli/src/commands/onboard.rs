@@ -198,6 +198,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
             input_values: Some(stack_input_values),
             max_deployments: std::num::NonZeroU64::new(args.max_deployments)
                 .unwrap_or(std::num::NonZeroU64::new(100).unwrap()),
+            recovery_deployment_group_id: None,
             name: deployment_group_name.try_into().map_err(|e| {
                 AlienError::new(ErrorData::ValidationError {
                     field: "name".to_string(),
@@ -210,7 +211,6 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     message: format!("{}", e),
                 })
             })?,
-            recovery_deployment_group_id: None,
             setup_items: Some(
                 args.setup_items
                     .iter()
