@@ -58,7 +58,28 @@ impl OperationFailure {
 }
 
 /// One operation's typed runtime and serializable public contract.
-pub struct OperationDefinition<Params, Output> {
+///
+/// The const state prevents manifest generation and runtime registration until
+/// the definition explicitly declares required permission sets or chooses
+/// [`OperationDefinition::with_no_permissions`].
+///
+/// ```compile_fail
+/// use alien_operations_sdk::{OperationDefinition, RiskTier};
+/// use schemars::JsonSchema;
+///
+/// #[derive(JsonSchema)]
+/// struct Params;
+/// #[derive(JsonSchema)]
+/// struct Output;
+///
+/// let unreviewed = OperationDefinition::<Params, Output>::new(
+///     "health",
+///     RiskTier::ReadOnly,
+///     "Report health",
+/// );
+/// let _ = unreviewed.manifest();
+/// ```
+pub struct OperationDefinition<Params, Output, const PERMISSIONS_REVIEWED: bool = true> {
     name: &'static str,
     tier: RiskTier,
     description: &'static str,
@@ -74,8 +95,12 @@ pub struct OperationDefinition<Params, Output> {
 
 impl<Params, Output> OperationDefinition<Params, Output> {
     /// Define an operation whose input and output schemas come from its Rust types.
-    pub const fn new(name: &'static str, tier: RiskTier, description: &'static str) -> Self {
-        Self {
+    pub const fn new(
+        name: &'static str,
+        tier: RiskTier,
+        description: &'static str,
+    ) -> OperationDefinition<Params, Output, false> {
+        OperationDefinition {
             name,
             tier,
             description,
@@ -90,28 +115,34 @@ impl<Params, Output> OperationDefinition<Params, Output> {
         }
     }
 
+    /// Generate the authoritative serializable manifest from this definition.
+    pub fn manifest(&self) -> CanonicalOperationManifest
+    where
+        Params: JsonSchema,
+        Output: JsonSchema,
+    {
+        CanonicalOperationManifest {
+            kubernetes_permissions: self.kubernetes_permissions.clone(),
+            name: self.name.to_string(),
+            tier: Some(self.tier),
+            description: Some(self.description.to_string()),
+            input_schema: Some(schema_for!(Params)),
+            output_schema: Some(schema_for!(Output)),
+            required_permissions: self.permissions.clone(),
+            timeout_seconds: self.timeout_seconds,
+            retries: self.retries,
+            verification: self.verification.clone(),
+            sensitive_output: self.sensitive_output.clone(),
+        }
+    }
+}
+
+impl<Params, Output, const PERMISSIONS_REVIEWED: bool>
+    OperationDefinition<Params, Output, PERMISSIONS_REVIEWED>
+{
     /// Set the safe validation message returned when parameters cannot decode.
     pub const fn with_invalid_params_message(mut self, message: &'static str) -> Self {
         self.invalid_params_message = message;
-        self
-    }
-
-    /// Declare named or inline permission sets required by the operation.
-    pub fn with_permissions(mut self, permissions: Vec<PermissionSetReference>) -> Self {
-        self.permissions = permissions;
-        self
-    }
-
-    /// Declare stable named permission-set identifiers required by the operation.
-    pub fn with_permission_ids<I, S>(mut self, permission_ids: I) -> Self
-    where
-        I: IntoIterator<Item = S>,
-        S: Into<String>,
-    {
-        self.permissions = permission_ids
-            .into_iter()
-            .map(|permission_id| PermissionSetReference::from_name(permission_id.into()))
-            .collect();
         self
     }
 
@@ -149,25 +180,52 @@ impl<Params, Output> OperationDefinition<Params, Output> {
     pub const fn name(&self) -> &'static str {
         self.name
     }
+}
 
-    /// Generate the authoritative serializable manifest from this definition.
-    pub fn manifest(&self) -> CanonicalOperationManifest
+impl<Params, Output> OperationDefinition<Params, Output, false> {
+    /// Record that this operation was reviewed and requires no permission sets.
+    pub fn with_no_permissions(self) -> OperationDefinition<Params, Output> {
+        self.with_reviewed_permissions(Vec::new())
+    }
+
+    /// Declare named or inline permission sets required by the operation.
+    pub fn with_permissions(
+        self,
+        permissions: Vec<PermissionSetReference>,
+    ) -> OperationDefinition<Params, Output> {
+        self.with_reviewed_permissions(permissions)
+    }
+
+    /// Declare stable named permission-set identifiers required by the operation.
+    pub fn with_permission_ids<I, S>(self, permission_ids: I) -> OperationDefinition<Params, Output>
     where
-        Params: JsonSchema,
-        Output: JsonSchema,
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
     {
-        CanonicalOperationManifest {
-            kubernetes_permissions: self.kubernetes_permissions.clone(),
-            name: self.name.to_string(),
-            tier: Some(self.tier),
-            description: Some(self.description.to_string()),
-            input_schema: Some(schema_for!(Params)),
-            output_schema: Some(schema_for!(Output)),
-            required_permissions: self.permissions.clone(),
+        self.with_reviewed_permissions(
+            permission_ids
+                .into_iter()
+                .map(|permission_id| PermissionSetReference::from_name(permission_id.into()))
+                .collect(),
+        )
+    }
+
+    fn with_reviewed_permissions(
+        self,
+        permissions: Vec<PermissionSetReference>,
+    ) -> OperationDefinition<Params, Output> {
+        OperationDefinition {
+            name: self.name,
+            tier: self.tier,
+            description: self.description,
+            invalid_params_message: self.invalid_params_message,
+            permissions,
+            kubernetes_permissions: self.kubernetes_permissions,
             timeout_seconds: self.timeout_seconds,
             retries: self.retries,
-            verification: self.verification.clone(),
-            sensitive_output: self.sensitive_output.clone(),
+            verification: self.verification,
+            sensitive_output: self.sensitive_output,
+            marker: PhantomData,
         }
     }
 }
@@ -577,6 +635,22 @@ mod tests {
         assert_eq!(encoded["sensitiveOutput"]["fields"], json!(["total"]));
         assert_eq!(encoded["inputSchema"]["type"], "object");
         assert_eq!(encoded["outputSchema"]["type"], "object");
+    }
+
+    #[test]
+    fn reviewed_no_permissions_are_explicit_in_generated_contract() {
+        let manifest = OperationDefinition::<AddParams, AddOutput>::new(
+            "add",
+            RiskTier::ReadOnly,
+            "Add two integers",
+        )
+        .with_no_permissions()
+        .manifest();
+
+        assert_eq!(
+            serde_json::to_value(manifest).expect("manifest serializes")["permissions"],
+            json!([])
+        );
     }
 
     #[tokio::test]

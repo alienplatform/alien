@@ -172,6 +172,7 @@ fn metadata_json(name: &str) -> Result<String> {
                 RiskTier::ReadOnly,
                 "Report plugin health.",
             )
+            .with_no_permissions()
             .manifest(),
         ],
     };
@@ -233,6 +234,7 @@ struct HealthOutput {{
 
 fn health_definition() -> OperationDefinition<HealthParams, HealthOutput> {{
     OperationDefinition::new("health", RiskTier::ReadOnly, "Report plugin health.")
+        .with_no_permissions()
 }}
 
 async fn health(_params: HealthParams) -> std::result::Result<HealthOutput, OperationFailure> {{
