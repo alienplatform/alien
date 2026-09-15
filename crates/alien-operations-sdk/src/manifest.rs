@@ -231,7 +231,7 @@ impl PluginManifest {
 
     pub fn parse_and_validate(bytes: &[u8]) -> Result<Self> {
         let manifest = Self::parse(bytes)?;
-        manifest.clone().into_canonical().validate()?;
+        manifest.validate()?;
         Ok(manifest)
     }
 
@@ -260,7 +260,49 @@ impl PluginManifest {
     }
 
     pub fn validate(&self) -> Result<()> {
-        self.clone().into_canonical().validate()
+        require_non_empty(&self.name, "name")?;
+        require_non_empty(&self.version, "version")?;
+        if self.binaries.is_empty() {
+            return Err(AlienError::new(ErrorData::FieldEmpty {
+                field: "binaries".to_string(),
+            }));
+        }
+        for (arch, entry) in &self.binaries {
+            require_non_empty(entry, &format!("binaries.{}", arch.as_str()))?;
+        }
+
+        let mut seen = BTreeSet::new();
+        for (index, operation) in self.operations.iter().enumerate() {
+            require_non_empty(&operation.name, &format!("operations[{index}].name"))?;
+            if let Some(permissions) = &operation.kubernetes_permissions {
+                permissions.validate(operation.effective_tier(self.tier))?;
+            }
+            if !seen.insert(operation.name.as_str()) {
+                return Err(AlienError::new(ErrorData::OperationDuplicate {
+                    plugin: self.name.clone(),
+                    operation: operation.name.clone(),
+                }));
+            }
+        }
+
+        for operation in &self.operations {
+            let Some(verification) = &operation.verification else {
+                continue;
+            };
+            let poll = self.operation(&verification.poll_operation);
+            let is_read_only_poll = poll
+                .map(|poll_op| poll_op.effective_tier(self.tier) == RiskTier::ReadOnly)
+                .unwrap_or(false);
+            if !is_read_only_poll {
+                return Err(AlienError::new(ErrorData::VerificationPollInvalid {
+                    plugin: self.name.clone(),
+                    operation: operation.name.clone(),
+                    poll_operation: verification.poll_operation.clone(),
+                }));
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -821,7 +863,7 @@ fn schema_object_contains_path(
         let found = local_definition(root, reference).is_some_and(|definition| {
             schema_contains_path(
                 root,
-                definition,
+                &definition,
                 segments,
                 transparent_arrays,
                 visited_references,
@@ -899,15 +941,18 @@ fn schema_object_contains_path(
     })
 }
 
-fn local_definition<'a>(root: &'a RootSchema, reference: &str) -> Option<&'a Schema> {
-    let name = reference
-        .strip_prefix("#/definitions/")
-        .or_else(|| reference.strip_prefix("#/$defs/"))?;
-    if name.contains('/') {
+fn local_definition(root: &RootSchema, reference: &str) -> Option<Schema> {
+    let pointer = reference.strip_prefix('#')?;
+    if !pointer.starts_with('/') {
         return None;
     }
-    let name = name.replace("~1", "/").replace("~0", "~");
-    root.definitions.get(&name)
+    let document = serde_json::to_value(root).ok()?;
+    let resolved = document.pointer(pointer).or_else(|| {
+        pointer
+            .strip_prefix("/$defs/")
+            .and_then(|tail| document.pointer(&format!("/definitions/{tail}")))
+    })?;
+    serde_json::from_value(resolved.clone()).ok()
 }
 
 fn validate_retry_policy(
@@ -1141,9 +1186,6 @@ fn require_non_empty(value: &str, field: &str) -> Result<()> {
 mod tests {
     use super::*;
 
-    type PluginManifest = CanonicalPluginManifest;
-    type OperationManifest = CanonicalOperationManifest;
-
     fn manifest_json(operations: &str) -> String {
         format!(
             r#"{{
@@ -1158,7 +1200,7 @@ mod tests {
 
     #[test]
     fn parses_minimal_manifest() {
-        let manifest = PluginManifest::parse_and_validate(manifest_json("").as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(manifest_json("").as_bytes())
             .expect("minimal manifest should parse and validate");
         assert_eq!(manifest.name, "postgres");
         assert_eq!(manifest.tier, RiskTier::ReadOnly);
@@ -1168,7 +1210,7 @@ mod tests {
     #[test]
     fn rejects_duplicate_operation_names() {
         let json = manifest_json(r#"{"name": "vacuum"}, {"name": "vacuum", "tier": "mutating"}"#);
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("duplicate operation names must fail validation");
         assert!(err.to_string().contains("more than once"));
     }
@@ -1186,7 +1228,7 @@ mod tests {
             }}
             "#,
         );
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("poll operation must be read-only");
         assert!(err.to_string().contains("pollOperation"));
     }
@@ -1208,7 +1250,7 @@ mod tests {
             }}
             "#,
         );
-        PluginManifest::parse_and_validate(json.as_bytes())
+        CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect("verification polling a read-only sibling operation should validate");
     }
 
@@ -1219,7 +1261,7 @@ mod tests {
 
     #[test]
     fn operation_tier_falls_back_to_plugin_default() {
-        let op = OperationManifest {
+        let op = CanonicalOperationManifest {
             kubernetes_permissions: None,
             name: "vacuum".into(),
             tier: None,
@@ -1243,7 +1285,7 @@ mod tests {
             "binaries": { "amd64": "postgres-linux-amd64" },
             "operations": []
         }"#;
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("empty plugin name must fail validation");
         assert!(err.to_string().contains("name"));
     }
@@ -1256,7 +1298,7 @@ mod tests {
             "binaries": { "amd64": "postgres-linux-amd64" },
             "operations": []
         }"#;
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("whitespace-only version must fail validation");
         assert!(err.to_string().contains("version"));
     }
@@ -1269,7 +1311,7 @@ mod tests {
             "binaries": {},
             "operations": []
         }"#;
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("empty binaries map must fail validation");
         assert!(err.to_string().contains("binaries"));
     }
@@ -1282,7 +1324,7 @@ mod tests {
             "binaries": { "amd64": "" },
             "operations": []
         }"#;
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("empty binary entry must fail validation");
         assert!(err.to_string().contains("binaries.amd64"));
     }
@@ -1290,7 +1332,7 @@ mod tests {
     #[test]
     fn rejects_an_empty_operation_name() {
         let json = manifest_json(r#"{"name": ""}"#);
-        let err = PluginManifest::parse_and_validate(json.as_bytes())
+        let err = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("empty operation name must fail validation");
         assert!(err.to_string().contains("operations[0].name"));
     }
@@ -1308,7 +1350,7 @@ mod tests {
                 "retries": {"maxAttempts": 2, "intervalSeconds": 1}
             }"#,
         );
-        let manifest = PluginManifest::parse_and_validate(json.as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect("legacy keys must remain readable");
         let encoded = serde_json::to_value(manifest).expect("canonical manifest serializes");
         let operation = &encoded["operations"][0];
@@ -1338,7 +1380,7 @@ mod tests {
                 }]
             }"#,
         );
-        let manifest = PluginManifest::parse_and_validate(json.as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect("valid inline permissions must remain compatible");
 
         assert_eq!(
@@ -1356,7 +1398,7 @@ mod tests {
                 "paramsSchema": {"type": "string"}
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("duplicate schema keys must fail instead of picking one");
 
         assert!(error.to_string().contains("duplicate field"));
@@ -1371,7 +1413,7 @@ mod tests {
                 "requiredPermissions": ["example/legacy-read"]
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("duplicate permission keys must fail instead of merging grants");
 
         assert!(error.to_string().contains("duplicate field"));
@@ -1385,7 +1427,7 @@ mod tests {
                 "retries": {"maxAttempts": 2, "intervalSeconds": 1}
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("retrying without a timeout must fail");
 
         assert!(error.to_string().contains("requires timeoutSeconds"));
@@ -1400,7 +1442,7 @@ mod tests {
                 "retries": {"maxAttempts": 0, "intervalSeconds": 1}
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("zero retry attempts must fail");
 
         assert!(error.to_string().contains("maxAttempts"));
@@ -1409,7 +1451,7 @@ mod tests {
     #[test]
     fn timeout_must_be_positive() {
         let json = manifest_json(r#"{"name": "inspect", "timeoutSeconds": 0}"#);
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("zero timeout must fail");
 
         assert!(error.to_string().contains("timeoutSeconds"));
@@ -1419,7 +1461,7 @@ mod tests {
     #[test]
     fn unknown_risk_tiers_fail_during_contract_decoding() {
         let json = manifest_json(r#"{"name": "inspect", "tier": "unsafe"}"#);
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("unknown risk tiers must fail closed");
 
         assert!(error.to_string().contains("unknown variant"));
@@ -1440,7 +1482,7 @@ mod tests {
             }}
             "#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("read-only verification is an invalid policy combination");
 
         assert!(error.to_string().contains("read-only operations"));
@@ -1454,7 +1496,7 @@ mod tests {
                 "sensitiveOutput": {"kind": "redact", "fields": ["password"]}
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("redaction paths without an output contract must fail");
 
         assert!(error.to_string().contains("outputSchema"));
@@ -1483,8 +1525,41 @@ mod tests {
                 "sensitiveOutput": {"kind": "redact", "fields": ["rows.password"]}
             }"##,
         );
-        PluginManifest::parse_and_validate(json.as_bytes())
+        CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect("a nested array/ref redaction path declared by outputSchema should validate");
+
+        let nested_pointer = manifest_json(
+            r##"{
+                "name": "credentials",
+                "outputSchema": {
+                    "definitions": {
+                        "Envelope": {
+                            "type": "object",
+                            "properties": {
+                                "credential/value~raw": {
+                                    "type": "object",
+                                    "properties": {"password": {"type": "string"}}
+                                }
+                            }
+                        }
+                    },
+                    "type": "object",
+                    "properties": {
+                        "result": {
+                            "$ref": "#/definitions/Envelope/properties/credential~1value~0raw"
+                        }
+                    }
+                },
+                "sensitiveOutput": {"kind": "redact", "fields": ["result.password"]}
+            }"##,
+        );
+        CanonicalPluginManifest::parse_and_validate(nested_pointer.as_bytes())
+            .expect("nested RFC 6901 local refs should resolve escaped path segments");
+        let invalid_pointer =
+            nested_pointer.replacen("credential~1value~0raw", "credential~1value~0missing", 1);
+        let error = CanonicalPluginManifest::parse_and_validate(invalid_pointer.as_bytes())
+            .expect_err("a nested RFC 6901 pointer must resolve to an existing schema");
+        assert!(error.to_string().contains("result.password"), "{error}");
 
         let json = manifest_json(
             r#"{
@@ -1496,7 +1571,7 @@ mod tests {
                 "sensitiveOutput": {"kind": "redact", "fields": ["password"]}
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("a nonexistent redaction path must fail closed");
         assert!(error.to_string().contains("path 'password'"));
     }
@@ -1524,7 +1599,7 @@ mod tests {
              }}
             "#,
         );
-        PluginManifest::parse_and_validate(valid.as_bytes())
+        CanonicalPluginManifest::parse_and_validate(valid.as_bytes())
             .expect("schema-resolved verification paths should validate");
 
         for (needle, invalid) in [
@@ -1544,7 +1619,7 @@ mod tests {
                 valid.replace("\"state.status\"", "\"state.missingStatus\""),
             ),
         ] {
-            let error = PluginManifest::parse_and_validate(invalid.as_bytes())
+            let error = CanonicalPluginManifest::parse_and_validate(invalid.as_bytes())
                 .expect_err("an unverifiable schema path must fail closed");
             assert!(error.to_string().contains(needle), "{error}");
         }
@@ -1557,7 +1632,7 @@ mod tests {
                  "state": {"type": "object", "properties": {"status": {"type": "string"}}}
              }}}"#,
         );
-        let error = PluginManifest::parse_and_validate(array_result.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(array_result.as_bytes())
             .expect_err("verification must not treat array items as the result object");
         assert!(error.to_string().contains("state.status"), "{error}");
     }
@@ -1576,11 +1651,11 @@ mod tests {
             r#"{{"name": "one", "permissions": [{permission}]}},
                 {{"name": "two", "permissions": [{permission}]}}"#
         ));
-        PluginManifest::parse_and_validate(identical.as_bytes())
+        CanonicalPluginManifest::parse_and_validate(identical.as_bytes())
             .expect("identical permission definitions may be shared across operations");
 
         let conflicting = identical.replacen("example:Get\"]", "example:List\"]", 1);
-        let error = PluginManifest::parse_and_validate(conflicting.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(conflicting.as_bytes())
             .expect_err("different definitions with one permission ID must fail closed");
         assert!(error.to_string().contains("conflicting definitions"));
 
@@ -1588,7 +1663,7 @@ mod tests {
             r#"{{"name": "one", "permissions": ["operations/example/read"]}},
                 {{"name": "two", "permissions": [{permission}]}}"#
         ));
-        let error = PluginManifest::parse_and_validate(named_and_inline.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(named_and_inline.as_bytes())
             .expect_err("named and inline uses of one permission ID conflict");
         assert!(error.to_string().contains("conflicting definitions"));
     }
@@ -1608,7 +1683,7 @@ mod tests {
                 }]
             }"#,
         );
-        let error = PluginManifest::parse_and_validate(json.as_bytes())
+        let error = CanonicalPluginManifest::parse_and_validate(json.as_bytes())
             .expect_err("unbound inline grants must fail");
 
         assert!(error.to_string().contains("AWS binding"));
@@ -1636,5 +1711,33 @@ mod tests {
             vec!["example/read"]
         );
         assert!(canonical.output_schema.is_none());
+    }
+
+    #[allow(deprecated)]
+    #[test]
+    fn legacy_validation_keeps_pre_canonical_verification_and_redaction_semantics() {
+        let json = manifest_json(
+            r#"
+            {"name": "status", "tier": "read-only"},
+            {"name": "restart", "tier": "mutating",
+             "paramsSchema": {"type": "object"},
+             "verification": {
+                 "changes": "the resource restarts",
+                 "pollOperation": "status",
+                 "pollParamsFromResult": {},
+                 "successField": "state",
+                 "successValue": "ready",
+                 "timeoutSeconds": 30
+             },
+             "sensitiveOutput": {"kind": "redact", "fields": ["token"]}}
+            "#,
+        );
+
+        let legacy = super::PluginManifest::parse_and_validate(json.as_bytes())
+            .expect("the exact legacy validator accepted schemas without outputSchema");
+        assert!(
+            legacy.into_canonical().validate().is_err(),
+            "strict canonical validation remains opt-in through explicit conversion"
+        );
     }
 }
