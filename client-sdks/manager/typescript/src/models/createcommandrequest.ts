@@ -30,6 +30,13 @@ export type CreateCommandRequest = {
    */
   idempotencyKey?: string | null | undefined;
   /**
+   * Opaque result-handling contract the registry must persist atomically
+   *
+   * @remarks
+   * with command creation before the command becomes executable.
+   */
+  operationResultContract?: any | undefined;
+  /**
    * Body specification supporting inline and storage modes
    */
   params: BodySpec;
@@ -49,6 +56,7 @@ export type CreateCommandRequest$Outbound = {
   deadline?: string | null | undefined;
   deploymentId: string;
   idempotencyKey?: string | null | undefined;
+  operationResultContract?: any | undefined;
   params: BodySpec$Outbound;
   targetResourceId?: string | null | undefined;
 };
@@ -62,6 +70,7 @@ export const CreateCommandRequest$outboundSchema: z.ZodType<
   deadline: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   deploymentId: z.string(),
   idempotencyKey: z.nullable(z.string()).optional(),
+  operationResultContract: z.any().optional(),
   params: BodySpec$outboundSchema,
   targetResourceId: z.nullable(z.string()).optional(),
 });

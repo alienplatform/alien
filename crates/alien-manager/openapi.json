@@ -6981,6 +6981,9 @@
             ],
             "description": "Optional idempotency key"
           },
+          "operationResultContract": {
+            "description": "Opaque result-handling contract the registry must persist atomically\nwith command creation before the command becomes executable."
+          },
           "params": {
             "$ref": "#/components/schemas/BodySpec",
             "description": "Command parameters (JSON, can be large)"
@@ -9421,9 +9424,14 @@
       "HealthResponse": {
         "type": "object",
         "required": [
-          "status"
+          "status",
+          "operationResultContract"
         ],
         "properties": {
+          "operationResultContract": {
+            "type": "boolean",
+            "description": "True when operation result contracts are persisted before commands\nbecome executable."
+          },
           "status": {
             "type": "string"
           }

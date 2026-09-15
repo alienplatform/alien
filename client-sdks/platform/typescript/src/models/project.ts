@@ -273,13 +273,13 @@ export const ProjectMethod = {
 export type ProjectMethod = ClosedEnum<typeof ProjectMethod>;
 
 export type ProjectDeployments = {
-  enabled: true;
+  enabled: boolean;
   methods?: Array<ProjectMethod> | undefined;
 };
 
 export type ProjectKeys = {
-  enabled: true;
-  applicationEncryption: true;
+  enabled: boolean;
+  applicationEncryption: boolean;
 };
 
 export const ProjectAllowedProvider = {
@@ -306,7 +306,7 @@ export type ProjectRequirement = {
 };
 
 export type ProjectModels = {
-  enabled: true;
+  enabled: boolean;
   allowedProviders: Array<ProjectAllowedProvider>;
   requirements: Array<ProjectRequirement>;
 };
@@ -317,7 +317,7 @@ export const ProjectAccess = {
 export type ProjectAccess = ClosedEnum<typeof ProjectAccess>;
 
 export type ProjectBuckets = {
-  enabled: true;
+  enabled: boolean;
   access: ProjectAccess;
 };
 
@@ -330,16 +330,21 @@ export type ProjectCredentialPolicy = ClosedEnum<
 >;
 
 export type ProjectRegistry = {
-  enabled: true;
+  enabled: boolean;
   repositories: Array<string>;
   credentialPolicy: ProjectCredentialPolicy;
 };
 
+export type ProjectAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type ProjectRemoteSandbox = {
-  enabled: true;
+  enabled: boolean;
   baseImage?: string | undefined;
-  imageBundleUri?: string | undefined;
-  maxSessionLifetimeSeconds: number;
+  azure?: ProjectAzure | undefined;
+  maxLifetimeSeconds?: number | undefined;
 };
 
 export type ProjectProjectCapabilitiesCapabilities = {
@@ -615,7 +620,7 @@ export const ProjectDeployments$inboundSchema: z.ZodType<
   ProjectDeployments,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   methods: z.array(ProjectMethod$inboundSchema).optional(),
 });
 
@@ -632,8 +637,8 @@ export function projectDeploymentsFromJSON(
 /** @internal */
 export const ProjectKeys$inboundSchema: z.ZodType<ProjectKeys, unknown> = z
   .object({
-    enabled: z.literal(true),
-    applicationEncryption: z.literal(true),
+    enabled: z.boolean(),
+    applicationEncryption: z.boolean(),
   });
 
 export function projectKeysFromJSON(
@@ -679,7 +684,7 @@ export function projectRequirementFromJSON(
 /** @internal */
 export const ProjectModels$inboundSchema: z.ZodType<ProjectModels, unknown> = z
   .object({
-    enabled: z.literal(true),
+    enabled: z.boolean(),
     allowedProviders: z.array(ProjectAllowedProvider$inboundSchema),
     requirements: z.array(z.lazy(() => ProjectRequirement$inboundSchema)),
   });
@@ -701,7 +706,7 @@ export const ProjectAccess$inboundSchema: z.ZodEnum<typeof ProjectAccess> = z
 /** @internal */
 export const ProjectBuckets$inboundSchema: z.ZodType<ProjectBuckets, unknown> =
   z.object({
-    enabled: z.literal(true),
+    enabled: z.boolean(),
     access: ProjectAccess$inboundSchema,
   });
 
@@ -725,7 +730,7 @@ export const ProjectRegistry$inboundSchema: z.ZodType<
   ProjectRegistry,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   repositories: z.array(z.string()),
   credentialPolicy: ProjectCredentialPolicy$inboundSchema,
 });
@@ -741,14 +746,31 @@ export function projectRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectAzure$inboundSchema: z.ZodType<ProjectAzure, unknown> = z
+  .object({
+    catalogImage: z.string(),
+    idleSuspendSeconds: z.int(),
+  });
+
+export function projectAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectAzure' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectRemoteSandbox$inboundSchema: z.ZodType<
   ProjectRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   baseImage: z.string().optional(),
-  imageBundleUri: z.string().optional(),
-  maxSessionLifetimeSeconds: z.int(),
+  azure: z.lazy(() => ProjectAzure$inboundSchema).optional(),
+  maxLifetimeSeconds: z.int().optional(),
 });
 
 export function projectRemoteSandboxFromJSON(

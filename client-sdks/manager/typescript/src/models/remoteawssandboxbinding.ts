@@ -24,23 +24,23 @@ export type RemoteAwsSandboxBinding = {
    */
   allowEgress: boolean;
   /**
-   * Idle seconds after which a session suspends, where the declaration asked for one.
+   * Idle seconds after which a sandbox pauses, where the declaration asked for one.
    */
-  idleSuspendSeconds?: number | null | undefined;
+  idlePauseSeconds?: number | null | undefined;
   /**
-   * MicroVM image the credential lease authorizes sessions against.
+   * MicroVM image the credential lease authorizes sandboxes against.
    */
   imageArn: string;
   /**
-   * Image version sessions are enumerated by together with the image.
+   * Image version sandboxes are enumerated by together with the image.
    */
   imageVersion: string;
   /**
-   * Wall-clock ceiling on a session, where the declaration asked for one.
+   * Wall-clock ceiling on a sandbox, where the declaration asked for one.
    */
   maxLifetimeSeconds?: number | null | undefined;
   /**
-   * Ports a session capability may be minted for.
+   * Ports a sandbox capability may be minted for.
    */
   previewPorts: Array<number>;
   /**
@@ -55,7 +55,7 @@ export const RemoteAwsSandboxBinding$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   allowEgress: z.boolean(),
-  idleSuspendSeconds: z.nullable(z.int()).optional(),
+  idlePauseSeconds: z.nullable(z.int()).optional(),
   imageArn: z.string(),
   imageVersion: z.string(),
   maxLifetimeSeconds: z.nullable(z.int()).optional(),

@@ -27,7 +27,7 @@ export type VerifyOperationCheckResponseOutcome = ClosedEnum<
 /**
  * The operation's declared retry policy, echoed so the caller's poll loop doesn't need its own copy.
  */
-export type Retry = {
+export type VerifyOperationCheckResponseRetry = {
   maxAttempts: number;
   intervalSeconds: number;
 };
@@ -44,7 +44,7 @@ export type VerifyOperationCheckResponse = {
   /**
    * The operation's declared retry policy, echoed so the caller's poll loop doesn't need its own copy.
    */
-  retry?: Retry | undefined;
+  retry?: VerifyOperationCheckResponseRetry | undefined;
   /**
    * The operation's declared verification timeout.
    */
@@ -57,18 +57,21 @@ export const VerifyOperationCheckResponseOutcome$inboundSchema: z.ZodEnum<
 > = z.enum(VerifyOperationCheckResponseOutcome);
 
 /** @internal */
-export const Retry$inboundSchema: z.ZodType<Retry, unknown> = z.object({
+export const VerifyOperationCheckResponseRetry$inboundSchema: z.ZodType<
+  VerifyOperationCheckResponseRetry,
+  unknown
+> = z.object({
   maxAttempts: z.int(),
   intervalSeconds: z.int(),
 });
 
-export function retryFromJSON(
+export function verifyOperationCheckResponseRetryFromJSON(
   jsonString: string,
-): SafeParseResult<Retry, SDKValidationError> {
+): SafeParseResult<VerifyOperationCheckResponseRetry, SDKValidationError> {
   return safeParse(
     jsonString,
-    (x) => Retry$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'Retry' from JSON`,
+    (x) => VerifyOperationCheckResponseRetry$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'VerifyOperationCheckResponseRetry' from JSON`,
   );
 }
 
@@ -79,7 +82,8 @@ export const VerifyOperationCheckResponse$inboundSchema: z.ZodType<
 > = z.object({
   outcome: VerifyOperationCheckResponseOutcome$inboundSchema,
   reason: z.string().optional(),
-  retry: z.lazy(() => Retry$inboundSchema).optional(),
+  retry: z.lazy(() => VerifyOperationCheckResponseRetry$inboundSchema)
+    .optional(),
   timeoutSeconds: z.int().optional(),
 });
 

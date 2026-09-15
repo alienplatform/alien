@@ -8,12 +8,20 @@ import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
 
 export type HealthResponse = {
+  /**
+   * True when operation result contracts are persisted before commands
+   *
+   * @remarks
+   * become executable.
+   */
+  operationResultContract: boolean;
   status: string;
 };
 
 /** @internal */
 export const HealthResponse$inboundSchema: z.ZodType<HealthResponse, unknown> =
   z.object({
+    operationResultContract: z.boolean(),
     status: z.string(),
   });
 

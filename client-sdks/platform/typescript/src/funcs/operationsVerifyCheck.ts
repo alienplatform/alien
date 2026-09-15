@@ -4,7 +4,6 @@
 
 import { AlienCore } from "../core.js";
 import { encodeFormQuery, encodeJSON } from "../lib/encodings.js";
-import { matchStatusCode } from "../lib/http.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -28,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+ * One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
  */
 export function operationsVerifyCheck(
   client: AlienCore,
@@ -139,8 +138,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    isErrorStatusCode: (statusCode: number) =>
-      matchStatusCode({ status: statusCode } as Response, ["4XX", "5XX"]),
+    errorCodes: ["404", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });

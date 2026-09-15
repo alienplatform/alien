@@ -210,6 +210,7 @@ async fn onboard_platform(args: OnboardArgs, ctx: ExecutionMode, name: String) -
                     message: format!("{}", e),
                 })
             })?,
+            recovery_deployment_group_id: None,
             setup_items: Some(
                 args.setup_items
                     .iter()

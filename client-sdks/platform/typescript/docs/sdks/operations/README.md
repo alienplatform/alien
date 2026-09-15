@@ -12,12 +12,12 @@
 * [getPolicy](#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
-* [verifyCheck](#verifycheck) - One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
-* [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
+* [verifyCheck](#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
 * [createAccessRequest](#createaccessrequest) - Create an access request — either plan-backed (an ai-agent investigation's exact commands) or plan-less (a CLI-originated exact operation or wildcard pattern, resolved and frozen here). Plan-backed requests await the engineer gate (status `pending-approval`); plan-less requests are queued immediately since the requester is asking for their own access (status `queued`).
+* [listAccessRequests](#listaccessrequests) - List a project's access requests, newest first.
 * [queueAccessRequest](#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
-* [approveAccessRequest](#approveaccessrequest) - Customer gate, direct method — approve a queued access request immediately, granting the same window a kubectl approve would. `method` names the calling system (e.g. `slack`) for the audit trail.
-* [denyAccessRequest](#denyaccessrequest) - Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+* [approveAccessRequest](#approveaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
+* [denyAccessRequest](#denyaccessrequest) - Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 * [getAccessRequestCoordinates](#getaccessrequestcoordinates) - The customer's kubectl approve command for a queued access request, or null until the operator has materialized the grant CR and reported its coordinates. Polled by the Slack handler to update the access-plan card.
 * [getAccessRequest](#getaccessrequest) - Get an access request by id.
 
@@ -25,60 +25,9 @@
 
 List available operations plugins (builtin + custom) for a project, with their operations and risk tiers.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="listOperationsPlugins" method="get" path="/v1/operations/plugins" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.listPlugins({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsListPlugins } from "@alienplatform/platform-api/funcs/operationsListPlugins.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsListPlugins(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsListPlugins failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="listOperationsPlugins" method="get" path="/v1/operations/plugins" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="listOperationsPlugins" method="get" path="/v1/operations/plugins" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -152,60 +101,9 @@ run();
 
 Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="publishOperationsPlugin" method="post" path="/v1/operations/plugins" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.publishPlugin({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsPublishPlugin } from "@alienplatform/platform-api/funcs/operationsPublishPlugin.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsPublishPlugin(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsPublishPlugin failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="publishOperationsPlugin" method="post" path="/v1/operations/plugins" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="publishOperationsPlugin" method="post" path="/v1/operations/plugins" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -272,7 +170,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 400, 402                 | application/json         |
+| errors.APIError          | 400, 402, 409            | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -280,60 +178,9 @@ run();
 
 Replace the complete set of enabled built-in operations plugins for a project.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="setBuiltinOperationsPlugins" method="put" path="/v1/operations/plugins/builtin/enabled" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.setBuiltinPlugins({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsSetBuiltinPlugins } from "@alienplatform/platform-api/funcs/operationsSetBuiltinPlugins.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsSetBuiltinPlugins(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsSetBuiltinPlugins failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="setBuiltinOperationsPlugins" method="put" path="/v1/operations/plugins/builtin/enabled" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="setBuiltinOperationsPlugins" method="put" path="/v1/operations/plugins/builtin/enabled" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -408,60 +255,9 @@ run();
 
 Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="createOperationsBundleUploadUrl" method="post" path="/v1/operations/plugins/upload-url" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.createBundleUploadUrl({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsCreateBundleUploadUrl } from "@alienplatform/platform-api/funcs/operationsCreateBundleUploadUrl.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsCreateBundleUploadUrl(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsCreateBundleUploadUrl failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="createOperationsBundleUploadUrl" method="post" path="/v1/operations/plugins/upload-url" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="createOperationsBundleUploadUrl" method="post" path="/v1/operations/plugins/upload-url" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -536,62 +332,9 @@ run();
 
 Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="setOperationsPluginEnabled" method="patch" path="/v1/operations/plugins/{name}/enabled" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.setPluginEnabled({
-    name: "<value>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsSetPluginEnabled } from "@alienplatform/platform-api/funcs/operationsSetPluginEnabled.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsSetPluginEnabled(alien, {
-    name: "<value>",
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsSetPluginEnabled failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="setOperationsPluginEnabled" method="patch" path="/v1/operations/plugins/{name}/enabled" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="setOperationsPluginEnabled" method="patch" path="/v1/operations/plugins/{name}/enabled" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -668,60 +411,9 @@ run();
 
 Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="getOperationsPolicy" method="get" path="/v1/operations/policy" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.getPolicy({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsGetPolicy } from "@alienplatform/platform-api/funcs/operationsGetPolicy.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsGetPolicy(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsGetPolicy failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="getOperationsPolicy" method="get" path="/v1/operations/policy" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="getOperationsPolicy" method="get" path="/v1/operations/policy" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -795,60 +487,9 @@ run();
 
 Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="updateOperationsPolicy" method="put" path="/v1/operations/policy" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.updatePolicy({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsUpdatePolicy } from "@alienplatform/platform-api/funcs/operationsUpdatePolicy.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsUpdatePolicy(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsUpdatePolicy failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="updateOperationsPolicy" method="put" path="/v1/operations/policy" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="updateOperationsPolicy" method="put" path="/v1/operations/policy" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -923,60 +564,9 @@ run();
 
 Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="invokeOperation" method="post" path="/v1/operations/invoke" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.invoke({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsInvoke } from "@alienplatform/platform-api/funcs/operationsInvoke.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsInvoke(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsInvoke failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="invokeOperation" method="post" path="/v1/operations/invoke" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="invokeOperation" method="post" path="/v1/operations/invoke" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1049,62 +639,11 @@ run();
 
 ## verifyCheck
 
-One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="verifyOperationCheck" method="post" path="/v1/operations/verify-check" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.verifyCheck({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsVerifyCheck } from "@alienplatform/platform-api/funcs/operationsVerifyCheck.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsVerifyCheck(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsVerifyCheck failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="verifyOperationCheck" method="post" path="/v1/operations/verify-check" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="verifyOperationCheck" method="post" path="/v1/operations/verify-check" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -1116,6 +655,10 @@ const alien = new Alien({
 async function run() {
   const result = await alien.operations.verifyCheck({
     project: "my-project",
+    verifyOperationCheckRequest: {
+      deploymentId: "<id>",
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
   });
 
   console.log(result);
@@ -1142,6 +685,10 @@ const alien = new AlienCore({
 async function run() {
   const res = await operationsVerifyCheck(alien, {
     project: "my-project",
+    verifyOperationCheckRequest: {
+      deploymentId: "<id>",
+      commandId: "cmd_2sxjXxvOYct7IohT3ukliAzf",
+    },
   });
   if (res.ok) {
     const { value: result } = res;
@@ -1166,138 +713,6 @@ run();
 ### Response
 
 **Promise\<[models.VerifyOperationCheckResponse](../../models/verifyoperationcheckresponse.md)\>**
-
-### Errors
-
-| Error Type               | Status Code              | Content Type             |
-| ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
-| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
-
-## listAccessRequests
-
-List a project's access requests, newest first.
-
-### Example Usage: projectId
-
-<!-- UsageSnippet language="typescript" operationID="listAccessRequests" method="get" path="/v1/access-requests" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.listAccessRequests({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsListAccessRequests } from "@alienplatform/platform-api/funcs/operationsListAccessRequests.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsListAccessRequests(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsListAccessRequests failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="listAccessRequests" method="get" path="/v1/access-requests" example="projectName" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.operations.listAccessRequests({
-    project: "my-project",
-    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { operationsListAccessRequests } from "@alienplatform/platform-api/funcs/operationsListAccessRequests.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await operationsListAccessRequests(alien, {
-    project: "my-project",
-    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("operationsListAccessRequests failed:", res.error);
-  }
-}
-
-run();
-```
-
-### Parameters
-
-| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `request`                                                                                                                                                                      | [operations.ListAccessRequestsRequest](../../models/operations/listaccessrequestsrequest.md)                                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
-| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
-| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
-| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
-
-### Response
-
-**Promise\<[operations.ListAccessRequestsResponse](../../models/operations/listaccessrequestsresponse.md)\>**
 
 ### Errors
 
@@ -1386,6 +801,85 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
+| errors.APIError          | 500                      | application/json         |
+| errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
+
+## listAccessRequests
+
+List a project's access requests, newest first.
+
+### Example Usage
+
+<!-- UsageSnippet language="typescript" operationID="listAccessRequests" method="get" path="/v1/access-requests" -->
+```typescript
+import { Alien } from "@alienplatform/platform-api";
+
+const alien = new Alien({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const result = await alien.operations.listAccessRequests({
+    project: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+
+  console.log(result);
+}
+
+run();
+```
+
+### Standalone function
+
+The standalone function version of this method:
+
+```typescript
+import { AlienCore } from "@alienplatform/platform-api/core.js";
+import { operationsListAccessRequests } from "@alienplatform/platform-api/funcs/operationsListAccessRequests.js";
+
+// Use `AlienCore` for best tree-shaking performance.
+// You can create one instance of it to use across an application.
+const alien = new AlienCore({
+  workspace: "my-workspace",
+  apiKey: process.env["ALIEN_API_KEY"] ?? "",
+});
+
+async function run() {
+  const res = await operationsListAccessRequests(alien, {
+    project: "my-project",
+    deploymentId: "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  });
+  if (res.ok) {
+    const { value: result } = res;
+    console.log(result);
+  } else {
+    console.log("operationsListAccessRequests failed:", res.error);
+  }
+}
+
+run();
+```
+
+### Parameters
+
+| Parameter                                                                                                                                                                      | Type                                                                                                                                                                           | Required                                                                                                                                                                       | Description                                                                                                                                                                    |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `request`                                                                                                                                                                      | [operations.ListAccessRequestsRequest](../../models/operations/listaccessrequestsrequest.md)                                                                                   | :heavy_check_mark:                                                                                                                                                             | The request object to use for the request.                                                                                                                                     |
+| `options`                                                                                                                                                                      | RequestOptions                                                                                                                                                                 | :heavy_minus_sign:                                                                                                                                                             | Used to set various options for making HTTP requests.                                                                                                                          |
+| `options.fetchOptions`                                                                                                                                                         | [RequestInit](https://developer.mozilla.org/en-US/docs/Web/API/Request/Request#options)                                                                                        | :heavy_minus_sign:                                                                                                                                                             | Options that are passed to the underlying HTTP request. This can be used to inject extra headers for examples. All `Request` options, except `method` and `body`, are allowed. |
+| `options.retries`                                                                                                                                                              | [RetryConfig](../../lib/utils/retryconfig.md)                                                                                                                                  | :heavy_minus_sign:                                                                                                                                                             | Enables retrying HTTP requests under certain failure conditions.                                                                                                               |
+
+### Response
+
+**Promise\<[operations.ListAccessRequestsResponse](../../models/operations/listaccessrequestsresponse.md)\>**
+
+### Errors
+
+| Error Type               | Status Code              | Content Type             |
+| ------------------------ | ------------------------ | ------------------------ |
 | errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
@@ -1463,12 +957,12 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 400, 404, 409            | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## approveAccessRequest
 
-Customer gate, direct method — approve a queued access request immediately, granting the same window a kubectl approve would. `method` names the calling system (e.g. `slack`) for the audit trail.
+Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
 
 ### Example Usage
 
@@ -1486,7 +980,6 @@ async function run() {
     id: "<id>",
     requestBody: {
       method: "slack",
-      actorId: "<id>",
     },
   });
 
@@ -1516,7 +1009,6 @@ async function run() {
     id: "<id>",
     requestBody: {
       method: "slack",
-      actorId: "<id>",
     },
   });
   if (res.ok) {
@@ -1547,12 +1039,13 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 400, 403, 404, 409       | application/json         |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## denyAccessRequest
 
-Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
 
 ### Example Usage
 
@@ -1570,7 +1063,6 @@ async function run() {
     id: "<id>",
     requestBody: {
       method: "slack",
-      actorId: "<id>",
     },
   });
 
@@ -1600,7 +1092,6 @@ async function run() {
     id: "<id>",
     requestBody: {
       method: "slack",
-      actorId: "<id>",
     },
   });
   if (res.ok) {
@@ -1631,7 +1122,8 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 403, 404, 409            | application/json         |
+| errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## getAccessRequestCoordinates

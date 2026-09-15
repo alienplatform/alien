@@ -50,6 +50,10 @@ export type CreateCommandRequest = {
    * Size of command params in bytes
    */
   requestSizeBytes?: number | undefined;
+  /**
+   * Opaque operation result contract forwarded by a manager and persisted before dispatch
+   */
+  operationResultContract?: any | null | undefined;
 };
 
 /** @internal */
@@ -65,6 +69,7 @@ export type CreateCommandRequest$Outbound = {
   initialState?: string | undefined;
   deadline?: string | null | undefined;
   requestSizeBytes?: number | undefined;
+  operationResultContract?: any | null | undefined;
 };
 
 /** @internal */
@@ -79,6 +84,7 @@ export const CreateCommandRequest$outboundSchema: z.ZodType<
   initialState: InitialState$outboundSchema.optional(),
   deadline: z.nullable(z.date().transform(v => v.toISOString())).optional(),
   requestSizeBytes: z.number().optional(),
+  operationResultContract: z.nullable(z.any()).optional(),
 });
 
 export function createCommandRequestToJSON(

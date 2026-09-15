@@ -20,6 +20,384 @@ export type PublishOperationsPluginRequestTier = ClosedEnum<
   typeof PublishOperationsPluginRequestTier
 >;
 
+export const MetadataTier = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+export type MetadataTier = ClosedEnum<typeof MetadataTier>;
+
+export type PublishOperationsPluginRequestBinaries2 = {
+  amd64?: string | undefined;
+  arm64: string;
+};
+
+export type PublishOperationsPluginRequestBinaries1 = {
+  amd64: string;
+  arm64?: string | undefined;
+};
+
+export type Binaries =
+  | PublishOperationsPluginRequestBinaries1
+  | PublishOperationsPluginRequestBinaries2;
+
+export const OperationTier = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+export type OperationTier = ClosedEnum<typeof OperationTier>;
+
+export const PermissionEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+export type PermissionEffect = ClosedEnum<typeof PermissionEffect>;
+
+export type PermissionAwGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type PermissionAwStack = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+export type PermissionAwResource = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+export type PermissionAwBinding = {
+  stack?: PermissionAwStack | null | undefined;
+  resource?: PermissionAwResource | null | undefined;
+};
+
+export type PermissionAw = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  effect?: PermissionEffect | undefined;
+  grant: PermissionAwGrant;
+  binding: PermissionAwBinding;
+};
+
+export type PermissionGcpGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type PermissionStackCondition = {
+  title: string;
+  expression: string;
+};
+
+export type PermissionGcpStack = {
+  scope: string;
+  condition?: PermissionStackCondition | null | undefined;
+};
+
+export type PermissionResourceCondition = {
+  title: string;
+  expression: string;
+};
+
+export type PermissionGcpResource = {
+  scope: string;
+  condition?: PermissionResourceCondition | null | undefined;
+};
+
+export type PermissionGcpBinding = {
+  stack?: PermissionGcpStack | null | undefined;
+  resource?: PermissionGcpResource | null | undefined;
+};
+
+export type PermissionGcp = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: PermissionGcpGrant;
+  binding: PermissionGcpBinding;
+};
+
+export type PermissionAzureGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type PermissionAzureStack = {
+  scope: string;
+};
+
+export type PermissionAzureResource = {
+  scope: string;
+};
+
+export type PermissionAzureBinding = {
+  stack?: PermissionAzureStack | null | undefined;
+  resource?: PermissionAzureResource | null | undefined;
+};
+
+export type PermissionAzure = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: PermissionAzureGrant;
+  binding: PermissionAzureBinding;
+};
+
+export type PermissionPlatforms = {
+  aws?: Array<PermissionAw> | null | undefined;
+  gcp?: Array<PermissionGcp> | null | undefined;
+  azure?: Array<PermissionAzure> | null | undefined;
+};
+
+export type PublishOperationsPluginRequestPermission = {
+  id: string;
+  description: string;
+  platforms: PermissionPlatforms;
+};
+
+export type Permission = PublishOperationsPluginRequestPermission | string;
+
+export const RequiredPermissionEffect = {
+  Allow: "Allow",
+  Deny: "Deny",
+} as const;
+export type RequiredPermissionEffect = ClosedEnum<
+  typeof RequiredPermissionEffect
+>;
+
+export type RequiredPermissionAwGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type RequiredPermissionAwStack = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+export type RequiredPermissionAwResource = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+export type RequiredPermissionAwBinding = {
+  stack?: RequiredPermissionAwStack | null | undefined;
+  resource?: RequiredPermissionAwResource | null | undefined;
+};
+
+export type RequiredPermissionAw = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  effect?: RequiredPermissionEffect | undefined;
+  grant: RequiredPermissionAwGrant;
+  binding: RequiredPermissionAwBinding;
+};
+
+export type RequiredPermissionGcpGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type RequiredPermissionStackCondition = {
+  title: string;
+  expression: string;
+};
+
+export type RequiredPermissionGcpStack = {
+  scope: string;
+  condition?: RequiredPermissionStackCondition | null | undefined;
+};
+
+export type RequiredPermissionResourceCondition = {
+  title: string;
+  expression: string;
+};
+
+export type RequiredPermissionGcpResource = {
+  scope: string;
+  condition?: RequiredPermissionResourceCondition | null | undefined;
+};
+
+export type RequiredPermissionGcpBinding = {
+  stack?: RequiredPermissionGcpStack | null | undefined;
+  resource?: RequiredPermissionGcpResource | null | undefined;
+};
+
+export type RequiredPermissionGcp = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: RequiredPermissionGcpGrant;
+  binding: RequiredPermissionGcpBinding;
+};
+
+export type RequiredPermissionAzureGrant = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+export type RequiredPermissionAzureStack = {
+  scope: string;
+};
+
+export type RequiredPermissionAzureResource = {
+  scope: string;
+};
+
+export type RequiredPermissionAzureBinding = {
+  stack?: RequiredPermissionAzureStack | null | undefined;
+  resource?: RequiredPermissionAzureResource | null | undefined;
+};
+
+export type RequiredPermissionAzure = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: RequiredPermissionAzureGrant;
+  binding: RequiredPermissionAzureBinding;
+};
+
+export type RequiredPermissionPlatforms = {
+  aws?: Array<RequiredPermissionAw> | null | undefined;
+  gcp?: Array<RequiredPermissionGcp> | null | undefined;
+  azure?: Array<RequiredPermissionAzure> | null | undefined;
+};
+
+export type RequiredPermission = {
+  id: string;
+  description: string;
+  platforms: RequiredPermissionPlatforms;
+};
+
+export type RequiredPermissionUnion = RequiredPermission | string;
+
+export type PublishOperationsPluginRequestRetries = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+export type PublishOperationsPluginRequestRetry = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+export type PublishOperationsPluginRequestVerification = {
+  /**
+   * Human-readable: what this operation changes.
+   */
+  changes: string;
+  /**
+   * A read-only operation in the same plugin to poll for success.
+   */
+  pollOperation: string;
+  /**
+   * Poll operation param name -> field name in the write operation's own result.
+   */
+  pollParamsFromResult?: { [k: string]: string } | undefined;
+  /**
+   * Dotted field path in the poll result that signals success.
+   */
+  successField: string;
+  /**
+   * The value at successField that means verified.
+   */
+  successValue: string;
+  retry?: PublishOperationsPluginRequestRetry | undefined;
+  timeoutSeconds: number;
+};
+
+export type PublishOperationsPluginRequestSensitiveOutputRequireConfirmation = {
+  kind: "requireConfirmation";
+};
+
+export type PublishOperationsPluginRequestSensitiveOutputRedact = {
+  kind: "redact";
+  fields: Array<string>;
+};
+
+export type PublishOperationsPluginRequestSensitiveOutputNone = {
+  kind: "none";
+};
+
+export type PublishOperationsPluginRequestSensitiveOutputUnion =
+  | PublishOperationsPluginRequestSensitiveOutputNone
+  | PublishOperationsPluginRequestSensitiveOutputRedact
+  | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation;
+
+export const Verb = {
+  Get: "get",
+  List: "list",
+  Watch: "watch",
+  Delete: "delete",
+  Patch: "patch",
+} as const;
+export type Verb = ClosedEnum<typeof Verb>;
+
+export type Rule = {
+  apiGroup: string;
+  resource: string;
+  verbs: Array<Verb>;
+  resourceNames?: Array<string> | undefined;
+  reason: string;
+};
+
+export type KubernetesPermissions = {
+  schemaVersion: number;
+  rules: Array<Rule>;
+};
+
+export type Operation = {
+  name: string;
+  tier?: OperationTier | undefined;
+  description?: string | null | undefined;
+  inputSchema?: { [k: string]: any | null } | null | undefined;
+  paramsSchema?: { [k: string]: any | null } | null | undefined;
+  outputSchema?: { [k: string]: any | null } | null | undefined;
+  permissions?:
+    | Array<PublishOperationsPluginRequestPermission | string>
+    | undefined;
+  requiredPermissions?: Array<RequiredPermission | string> | undefined;
+  timeoutSeconds?: number | undefined;
+  retries?: PublishOperationsPluginRequestRetries | undefined;
+  verification?: PublishOperationsPluginRequestVerification | undefined;
+  sensitiveOutput?:
+    | PublishOperationsPluginRequestSensitiveOutputNone
+    | PublishOperationsPluginRequestSensitiveOutputRedact
+    | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation
+    | undefined;
+  kubernetesPermissions?: KubernetesPermissions | undefined;
+};
+
+/**
+ * The complete canonical metadata.json from the uploaded bundle.
+ */
+export type Metadata = {
+  name: string;
+  version: string;
+  tier?: MetadataTier | undefined;
+  binaries:
+    | PublishOperationsPluginRequestBinaries1
+    | PublishOperationsPluginRequestBinaries2;
+  operations?: Array<Operation> | undefined;
+};
+
 export type PublishOperationsPluginRequest = {
   /**
    * Plugin name (from the bundle's metadata.json).
@@ -30,13 +408,17 @@ export type PublishOperationsPluginRequest = {
    */
   version: string;
   /**
+   * The uploadId returned by POST /plugins/upload-url for the ZIP just uploaded. Identifies the exact S3 object to publish — never derived from name/version, so it can't collide with any other upload.
+   */
+  uploadId: string;
+  /**
    * Plugin-level default risk tier.
    */
   tier: PublishOperationsPluginRequestTier;
   /**
-   * The verbatim metadata.json (operations[], binaries{}).
+   * The complete canonical metadata.json from the uploaded bundle.
    */
-  metadata?: any | null | undefined;
+  metadata: Metadata;
 };
 
 /** @internal */
@@ -45,11 +427,1468 @@ export const PublishOperationsPluginRequestTier$outboundSchema: z.ZodEnum<
 > = z.enum(PublishOperationsPluginRequestTier);
 
 /** @internal */
-export type PublishOperationsPluginRequest$Outbound = {
+export const MetadataTier$outboundSchema: z.ZodEnum<typeof MetadataTier> = z
+  .enum(MetadataTier);
+
+/** @internal */
+export type PublishOperationsPluginRequestBinaries2$Outbound = {
+  amd64?: string | undefined;
+  arm64: string;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestBinaries2$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestBinaries2$Outbound,
+  PublishOperationsPluginRequestBinaries2
+> = z.object({
+  amd64: z.string().optional(),
+  arm64: z.string(),
+});
+
+export function publishOperationsPluginRequestBinaries2ToJSON(
+  publishOperationsPluginRequestBinaries2:
+    PublishOperationsPluginRequestBinaries2,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestBinaries2$outboundSchema.parse(
+      publishOperationsPluginRequestBinaries2,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestBinaries1$Outbound = {
+  amd64: string;
+  arm64?: string | undefined;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestBinaries1$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestBinaries1$Outbound,
+  PublishOperationsPluginRequestBinaries1
+> = z.object({
+  amd64: z.string(),
+  arm64: z.string().optional(),
+});
+
+export function publishOperationsPluginRequestBinaries1ToJSON(
+  publishOperationsPluginRequestBinaries1:
+    PublishOperationsPluginRequestBinaries1,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestBinaries1$outboundSchema.parse(
+      publishOperationsPluginRequestBinaries1,
+    ),
+  );
+}
+
+/** @internal */
+export type Binaries$Outbound =
+  | PublishOperationsPluginRequestBinaries1$Outbound
+  | PublishOperationsPluginRequestBinaries2$Outbound;
+
+/** @internal */
+export const Binaries$outboundSchema: z.ZodType<Binaries$Outbound, Binaries> = z
+  .union([
+    z.lazy(() => PublishOperationsPluginRequestBinaries1$outboundSchema),
+    z.lazy(() => PublishOperationsPluginRequestBinaries2$outboundSchema),
+  ]);
+
+export function binariesToJSON(binaries: Binaries): string {
+  return JSON.stringify(Binaries$outboundSchema.parse(binaries));
+}
+
+/** @internal */
+export const OperationTier$outboundSchema: z.ZodEnum<typeof OperationTier> = z
+  .enum(OperationTier);
+
+/** @internal */
+export const PermissionEffect$outboundSchema: z.ZodEnum<
+  typeof PermissionEffect
+> = z.enum(PermissionEffect);
+
+/** @internal */
+export type PermissionAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PermissionAwGrant$outboundSchema: z.ZodType<
+  PermissionAwGrant$Outbound,
+  PermissionAwGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function permissionAwGrantToJSON(
+  permissionAwGrant: PermissionAwGrant,
+): string {
+  return JSON.stringify(
+    PermissionAwGrant$outboundSchema.parse(permissionAwGrant),
+  );
+}
+
+/** @internal */
+export type PermissionAwStack$Outbound = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+/** @internal */
+export const PermissionAwStack$outboundSchema: z.ZodType<
+  PermissionAwStack$Outbound,
+  PermissionAwStack
+> = z.object({
+  resources: z.array(z.string()),
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+});
+
+export function permissionAwStackToJSON(
+  permissionAwStack: PermissionAwStack,
+): string {
+  return JSON.stringify(
+    PermissionAwStack$outboundSchema.parse(permissionAwStack),
+  );
+}
+
+/** @internal */
+export type PermissionAwResource$Outbound = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+/** @internal */
+export const PermissionAwResource$outboundSchema: z.ZodType<
+  PermissionAwResource$Outbound,
+  PermissionAwResource
+> = z.object({
+  resources: z.array(z.string()),
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+});
+
+export function permissionAwResourceToJSON(
+  permissionAwResource: PermissionAwResource,
+): string {
+  return JSON.stringify(
+    PermissionAwResource$outboundSchema.parse(permissionAwResource),
+  );
+}
+
+/** @internal */
+export type PermissionAwBinding$Outbound = {
+  stack?: PermissionAwStack$Outbound | null | undefined;
+  resource?: PermissionAwResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PermissionAwBinding$outboundSchema: z.ZodType<
+  PermissionAwBinding$Outbound,
+  PermissionAwBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => PermissionAwStack$outboundSchema)).optional(),
+  resource: z.nullable(z.lazy(() => PermissionAwResource$outboundSchema))
+    .optional(),
+});
+
+export function permissionAwBindingToJSON(
+  permissionAwBinding: PermissionAwBinding,
+): string {
+  return JSON.stringify(
+    PermissionAwBinding$outboundSchema.parse(permissionAwBinding),
+  );
+}
+
+/** @internal */
+export type PermissionAw$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: PermissionAwGrant$Outbound;
+  binding: PermissionAwBinding$Outbound;
+};
+
+/** @internal */
+export const PermissionAw$outboundSchema: z.ZodType<
+  PermissionAw$Outbound,
+  PermissionAw
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  effect: PermissionEffect$outboundSchema.optional(),
+  grant: z.lazy(() => PermissionAwGrant$outboundSchema),
+  binding: z.lazy(() => PermissionAwBinding$outboundSchema),
+});
+
+export function permissionAwToJSON(permissionAw: PermissionAw): string {
+  return JSON.stringify(PermissionAw$outboundSchema.parse(permissionAw));
+}
+
+/** @internal */
+export type PermissionGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PermissionGcpGrant$outboundSchema: z.ZodType<
+  PermissionGcpGrant$Outbound,
+  PermissionGcpGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function permissionGcpGrantToJSON(
+  permissionGcpGrant: PermissionGcpGrant,
+): string {
+  return JSON.stringify(
+    PermissionGcpGrant$outboundSchema.parse(permissionGcpGrant),
+  );
+}
+
+/** @internal */
+export type PermissionStackCondition$Outbound = {
+  title: string;
+  expression: string;
+};
+
+/** @internal */
+export const PermissionStackCondition$outboundSchema: z.ZodType<
+  PermissionStackCondition$Outbound,
+  PermissionStackCondition
+> = z.object({
+  title: z.string(),
+  expression: z.string(),
+});
+
+export function permissionStackConditionToJSON(
+  permissionStackCondition: PermissionStackCondition,
+): string {
+  return JSON.stringify(
+    PermissionStackCondition$outboundSchema.parse(permissionStackCondition),
+  );
+}
+
+/** @internal */
+export type PermissionGcpStack$Outbound = {
+  scope: string;
+  condition?: PermissionStackCondition$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PermissionGcpStack$outboundSchema: z.ZodType<
+  PermissionGcpStack$Outbound,
+  PermissionGcpStack
+> = z.object({
+  scope: z.string(),
+  condition: z.nullable(z.lazy(() => PermissionStackCondition$outboundSchema))
+    .optional(),
+});
+
+export function permissionGcpStackToJSON(
+  permissionGcpStack: PermissionGcpStack,
+): string {
+  return JSON.stringify(
+    PermissionGcpStack$outboundSchema.parse(permissionGcpStack),
+  );
+}
+
+/** @internal */
+export type PermissionResourceCondition$Outbound = {
+  title: string;
+  expression: string;
+};
+
+/** @internal */
+export const PermissionResourceCondition$outboundSchema: z.ZodType<
+  PermissionResourceCondition$Outbound,
+  PermissionResourceCondition
+> = z.object({
+  title: z.string(),
+  expression: z.string(),
+});
+
+export function permissionResourceConditionToJSON(
+  permissionResourceCondition: PermissionResourceCondition,
+): string {
+  return JSON.stringify(
+    PermissionResourceCondition$outboundSchema.parse(
+      permissionResourceCondition,
+    ),
+  );
+}
+
+/** @internal */
+export type PermissionGcpResource$Outbound = {
+  scope: string;
+  condition?: PermissionResourceCondition$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PermissionGcpResource$outboundSchema: z.ZodType<
+  PermissionGcpResource$Outbound,
+  PermissionGcpResource
+> = z.object({
+  scope: z.string(),
+  condition: z.nullable(
+    z.lazy(() => PermissionResourceCondition$outboundSchema),
+  ).optional(),
+});
+
+export function permissionGcpResourceToJSON(
+  permissionGcpResource: PermissionGcpResource,
+): string {
+  return JSON.stringify(
+    PermissionGcpResource$outboundSchema.parse(permissionGcpResource),
+  );
+}
+
+/** @internal */
+export type PermissionGcpBinding$Outbound = {
+  stack?: PermissionGcpStack$Outbound | null | undefined;
+  resource?: PermissionGcpResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PermissionGcpBinding$outboundSchema: z.ZodType<
+  PermissionGcpBinding$Outbound,
+  PermissionGcpBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => PermissionGcpStack$outboundSchema)).optional(),
+  resource: z.nullable(z.lazy(() => PermissionGcpResource$outboundSchema))
+    .optional(),
+});
+
+export function permissionGcpBindingToJSON(
+  permissionGcpBinding: PermissionGcpBinding,
+): string {
+  return JSON.stringify(
+    PermissionGcpBinding$outboundSchema.parse(permissionGcpBinding),
+  );
+}
+
+/** @internal */
+export type PermissionGcp$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: PermissionGcpGrant$Outbound;
+  binding: PermissionGcpBinding$Outbound;
+};
+
+/** @internal */
+export const PermissionGcp$outboundSchema: z.ZodType<
+  PermissionGcp$Outbound,
+  PermissionGcp
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => PermissionGcpGrant$outboundSchema),
+  binding: z.lazy(() => PermissionGcpBinding$outboundSchema),
+});
+
+export function permissionGcpToJSON(permissionGcp: PermissionGcp): string {
+  return JSON.stringify(PermissionGcp$outboundSchema.parse(permissionGcp));
+}
+
+/** @internal */
+export type PermissionAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const PermissionAzureGrant$outboundSchema: z.ZodType<
+  PermissionAzureGrant$Outbound,
+  PermissionAzureGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function permissionAzureGrantToJSON(
+  permissionAzureGrant: PermissionAzureGrant,
+): string {
+  return JSON.stringify(
+    PermissionAzureGrant$outboundSchema.parse(permissionAzureGrant),
+  );
+}
+
+/** @internal */
+export type PermissionAzureStack$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const PermissionAzureStack$outboundSchema: z.ZodType<
+  PermissionAzureStack$Outbound,
+  PermissionAzureStack
+> = z.object({
+  scope: z.string(),
+});
+
+export function permissionAzureStackToJSON(
+  permissionAzureStack: PermissionAzureStack,
+): string {
+  return JSON.stringify(
+    PermissionAzureStack$outboundSchema.parse(permissionAzureStack),
+  );
+}
+
+/** @internal */
+export type PermissionAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const PermissionAzureResource$outboundSchema: z.ZodType<
+  PermissionAzureResource$Outbound,
+  PermissionAzureResource
+> = z.object({
+  scope: z.string(),
+});
+
+export function permissionAzureResourceToJSON(
+  permissionAzureResource: PermissionAzureResource,
+): string {
+  return JSON.stringify(
+    PermissionAzureResource$outboundSchema.parse(permissionAzureResource),
+  );
+}
+
+/** @internal */
+export type PermissionAzureBinding$Outbound = {
+  stack?: PermissionAzureStack$Outbound | null | undefined;
+  resource?: PermissionAzureResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const PermissionAzureBinding$outboundSchema: z.ZodType<
+  PermissionAzureBinding$Outbound,
+  PermissionAzureBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => PermissionAzureStack$outboundSchema))
+    .optional(),
+  resource: z.nullable(z.lazy(() => PermissionAzureResource$outboundSchema))
+    .optional(),
+});
+
+export function permissionAzureBindingToJSON(
+  permissionAzureBinding: PermissionAzureBinding,
+): string {
+  return JSON.stringify(
+    PermissionAzureBinding$outboundSchema.parse(permissionAzureBinding),
+  );
+}
+
+/** @internal */
+export type PermissionAzure$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: PermissionAzureGrant$Outbound;
+  binding: PermissionAzureBinding$Outbound;
+};
+
+/** @internal */
+export const PermissionAzure$outboundSchema: z.ZodType<
+  PermissionAzure$Outbound,
+  PermissionAzure
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => PermissionAzureGrant$outboundSchema),
+  binding: z.lazy(() => PermissionAzureBinding$outboundSchema),
+});
+
+export function permissionAzureToJSON(
+  permissionAzure: PermissionAzure,
+): string {
+  return JSON.stringify(PermissionAzure$outboundSchema.parse(permissionAzure));
+}
+
+/** @internal */
+export type PermissionPlatforms$Outbound = {
+  aws?: Array<PermissionAw$Outbound> | null | undefined;
+  gcp?: Array<PermissionGcp$Outbound> | null | undefined;
+  azure?: Array<PermissionAzure$Outbound> | null | undefined;
+};
+
+/** @internal */
+export const PermissionPlatforms$outboundSchema: z.ZodType<
+  PermissionPlatforms$Outbound,
+  PermissionPlatforms
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => PermissionAw$outboundSchema)))
+    .optional(),
+  gcp: z.nullable(z.array(z.lazy(() => PermissionGcp$outboundSchema)))
+    .optional(),
+  azure: z.nullable(z.array(z.lazy(() => PermissionAzure$outboundSchema)))
+    .optional(),
+});
+
+export function permissionPlatformsToJSON(
+  permissionPlatforms: PermissionPlatforms,
+): string {
+  return JSON.stringify(
+    PermissionPlatforms$outboundSchema.parse(permissionPlatforms),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestPermission$Outbound = {
+  id: string;
+  description: string;
+  platforms: PermissionPlatforms$Outbound;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestPermission$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestPermission$Outbound,
+  PublishOperationsPluginRequestPermission
+> = z.object({
+  id: z.string(),
+  description: z.string(),
+  platforms: z.lazy(() => PermissionPlatforms$outboundSchema),
+});
+
+export function publishOperationsPluginRequestPermissionToJSON(
+  publishOperationsPluginRequestPermission:
+    PublishOperationsPluginRequestPermission,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestPermission$outboundSchema.parse(
+      publishOperationsPluginRequestPermission,
+    ),
+  );
+}
+
+/** @internal */
+export type Permission$Outbound =
+  | PublishOperationsPluginRequestPermission$Outbound
+  | string;
+
+/** @internal */
+export const Permission$outboundSchema: z.ZodType<
+  Permission$Outbound,
+  Permission
+> = z.union([
+  z.lazy(() => PublishOperationsPluginRequestPermission$outboundSchema),
+  z.string(),
+]);
+
+export function permissionToJSON(permission: Permission): string {
+  return JSON.stringify(Permission$outboundSchema.parse(permission));
+}
+
+/** @internal */
+export const RequiredPermissionEffect$outboundSchema: z.ZodEnum<
+  typeof RequiredPermissionEffect
+> = z.enum(RequiredPermissionEffect);
+
+/** @internal */
+export type RequiredPermissionAwGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAwGrant$outboundSchema: z.ZodType<
+  RequiredPermissionAwGrant$Outbound,
+  RequiredPermissionAwGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function requiredPermissionAwGrantToJSON(
+  requiredPermissionAwGrant: RequiredPermissionAwGrant,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAwGrant$outboundSchema.parse(requiredPermissionAwGrant),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAwStack$Outbound = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAwStack$outboundSchema: z.ZodType<
+  RequiredPermissionAwStack$Outbound,
+  RequiredPermissionAwStack
+> = z.object({
+  resources: z.array(z.string()),
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+});
+
+export function requiredPermissionAwStackToJSON(
+  requiredPermissionAwStack: RequiredPermissionAwStack,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAwStack$outboundSchema.parse(requiredPermissionAwStack),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAwResource$Outbound = {
+  resources: Array<string>;
+  condition?: { [k: string]: { [k: string]: string } } | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAwResource$outboundSchema: z.ZodType<
+  RequiredPermissionAwResource$Outbound,
+  RequiredPermissionAwResource
+> = z.object({
+  resources: z.array(z.string()),
+  condition: z.nullable(z.record(z.string(), z.record(z.string(), z.string())))
+    .optional(),
+});
+
+export function requiredPermissionAwResourceToJSON(
+  requiredPermissionAwResource: RequiredPermissionAwResource,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAwResource$outboundSchema.parse(
+      requiredPermissionAwResource,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAwBinding$Outbound = {
+  stack?: RequiredPermissionAwStack$Outbound | null | undefined;
+  resource?: RequiredPermissionAwResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAwBinding$outboundSchema: z.ZodType<
+  RequiredPermissionAwBinding$Outbound,
+  RequiredPermissionAwBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => RequiredPermissionAwStack$outboundSchema))
+    .optional(),
+  resource: z.nullable(
+    z.lazy(() => RequiredPermissionAwResource$outboundSchema),
+  ).optional(),
+});
+
+export function requiredPermissionAwBindingToJSON(
+  requiredPermissionAwBinding: RequiredPermissionAwBinding,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAwBinding$outboundSchema.parse(
+      requiredPermissionAwBinding,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAw$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  effect?: string | undefined;
+  grant: RequiredPermissionAwGrant$Outbound;
+  binding: RequiredPermissionAwBinding$Outbound;
+};
+
+/** @internal */
+export const RequiredPermissionAw$outboundSchema: z.ZodType<
+  RequiredPermissionAw$Outbound,
+  RequiredPermissionAw
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  effect: RequiredPermissionEffect$outboundSchema.optional(),
+  grant: z.lazy(() => RequiredPermissionAwGrant$outboundSchema),
+  binding: z.lazy(() => RequiredPermissionAwBinding$outboundSchema),
+});
+
+export function requiredPermissionAwToJSON(
+  requiredPermissionAw: RequiredPermissionAw,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAw$outboundSchema.parse(requiredPermissionAw),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionGcpGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionGcpGrant$outboundSchema: z.ZodType<
+  RequiredPermissionGcpGrant$Outbound,
+  RequiredPermissionGcpGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function requiredPermissionGcpGrantToJSON(
+  requiredPermissionGcpGrant: RequiredPermissionGcpGrant,
+): string {
+  return JSON.stringify(
+    RequiredPermissionGcpGrant$outboundSchema.parse(requiredPermissionGcpGrant),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionStackCondition$Outbound = {
+  title: string;
+  expression: string;
+};
+
+/** @internal */
+export const RequiredPermissionStackCondition$outboundSchema: z.ZodType<
+  RequiredPermissionStackCondition$Outbound,
+  RequiredPermissionStackCondition
+> = z.object({
+  title: z.string(),
+  expression: z.string(),
+});
+
+export function requiredPermissionStackConditionToJSON(
+  requiredPermissionStackCondition: RequiredPermissionStackCondition,
+): string {
+  return JSON.stringify(
+    RequiredPermissionStackCondition$outboundSchema.parse(
+      requiredPermissionStackCondition,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionGcpStack$Outbound = {
+  scope: string;
+  condition?: RequiredPermissionStackCondition$Outbound | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionGcpStack$outboundSchema: z.ZodType<
+  RequiredPermissionGcpStack$Outbound,
+  RequiredPermissionGcpStack
+> = z.object({
+  scope: z.string(),
+  condition: z.nullable(
+    z.lazy(() => RequiredPermissionStackCondition$outboundSchema),
+  ).optional(),
+});
+
+export function requiredPermissionGcpStackToJSON(
+  requiredPermissionGcpStack: RequiredPermissionGcpStack,
+): string {
+  return JSON.stringify(
+    RequiredPermissionGcpStack$outboundSchema.parse(requiredPermissionGcpStack),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionResourceCondition$Outbound = {
+  title: string;
+  expression: string;
+};
+
+/** @internal */
+export const RequiredPermissionResourceCondition$outboundSchema: z.ZodType<
+  RequiredPermissionResourceCondition$Outbound,
+  RequiredPermissionResourceCondition
+> = z.object({
+  title: z.string(),
+  expression: z.string(),
+});
+
+export function requiredPermissionResourceConditionToJSON(
+  requiredPermissionResourceCondition: RequiredPermissionResourceCondition,
+): string {
+  return JSON.stringify(
+    RequiredPermissionResourceCondition$outboundSchema.parse(
+      requiredPermissionResourceCondition,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionGcpResource$Outbound = {
+  scope: string;
+  condition?: RequiredPermissionResourceCondition$Outbound | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionGcpResource$outboundSchema: z.ZodType<
+  RequiredPermissionGcpResource$Outbound,
+  RequiredPermissionGcpResource
+> = z.object({
+  scope: z.string(),
+  condition: z.nullable(
+    z.lazy(() => RequiredPermissionResourceCondition$outboundSchema),
+  ).optional(),
+});
+
+export function requiredPermissionGcpResourceToJSON(
+  requiredPermissionGcpResource: RequiredPermissionGcpResource,
+): string {
+  return JSON.stringify(
+    RequiredPermissionGcpResource$outboundSchema.parse(
+      requiredPermissionGcpResource,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionGcpBinding$Outbound = {
+  stack?: RequiredPermissionGcpStack$Outbound | null | undefined;
+  resource?: RequiredPermissionGcpResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionGcpBinding$outboundSchema: z.ZodType<
+  RequiredPermissionGcpBinding$Outbound,
+  RequiredPermissionGcpBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => RequiredPermissionGcpStack$outboundSchema))
+    .optional(),
+  resource: z.nullable(
+    z.lazy(() => RequiredPermissionGcpResource$outboundSchema),
+  ).optional(),
+});
+
+export function requiredPermissionGcpBindingToJSON(
+  requiredPermissionGcpBinding: RequiredPermissionGcpBinding,
+): string {
+  return JSON.stringify(
+    RequiredPermissionGcpBinding$outboundSchema.parse(
+      requiredPermissionGcpBinding,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionGcp$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: RequiredPermissionGcpGrant$Outbound;
+  binding: RequiredPermissionGcpBinding$Outbound;
+};
+
+/** @internal */
+export const RequiredPermissionGcp$outboundSchema: z.ZodType<
+  RequiredPermissionGcp$Outbound,
+  RequiredPermissionGcp
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => RequiredPermissionGcpGrant$outboundSchema),
+  binding: z.lazy(() => RequiredPermissionGcpBinding$outboundSchema),
+});
+
+export function requiredPermissionGcpToJSON(
+  requiredPermissionGcp: RequiredPermissionGcp,
+): string {
+  return JSON.stringify(
+    RequiredPermissionGcp$outboundSchema.parse(requiredPermissionGcp),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAzureGrant$Outbound = {
+  actions?: Array<string> | null | undefined;
+  permissions?: Array<string> | null | undefined;
+  predefinedRoles?: Array<string> | null | undefined;
+  residualPermissions?: Array<string> | null | undefined;
+  dataActions?: Array<string> | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAzureGrant$outboundSchema: z.ZodType<
+  RequiredPermissionAzureGrant$Outbound,
+  RequiredPermissionAzureGrant
+> = z.object({
+  actions: z.nullable(z.array(z.string())).optional(),
+  permissions: z.nullable(z.array(z.string())).optional(),
+  predefinedRoles: z.nullable(z.array(z.string())).optional(),
+  residualPermissions: z.nullable(z.array(z.string())).optional(),
+  dataActions: z.nullable(z.array(z.string())).optional(),
+});
+
+export function requiredPermissionAzureGrantToJSON(
+  requiredPermissionAzureGrant: RequiredPermissionAzureGrant,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAzureGrant$outboundSchema.parse(
+      requiredPermissionAzureGrant,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAzureStack$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const RequiredPermissionAzureStack$outboundSchema: z.ZodType<
+  RequiredPermissionAzureStack$Outbound,
+  RequiredPermissionAzureStack
+> = z.object({
+  scope: z.string(),
+});
+
+export function requiredPermissionAzureStackToJSON(
+  requiredPermissionAzureStack: RequiredPermissionAzureStack,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAzureStack$outboundSchema.parse(
+      requiredPermissionAzureStack,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAzureResource$Outbound = {
+  scope: string;
+};
+
+/** @internal */
+export const RequiredPermissionAzureResource$outboundSchema: z.ZodType<
+  RequiredPermissionAzureResource$Outbound,
+  RequiredPermissionAzureResource
+> = z.object({
+  scope: z.string(),
+});
+
+export function requiredPermissionAzureResourceToJSON(
+  requiredPermissionAzureResource: RequiredPermissionAzureResource,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAzureResource$outboundSchema.parse(
+      requiredPermissionAzureResource,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAzureBinding$Outbound = {
+  stack?: RequiredPermissionAzureStack$Outbound | null | undefined;
+  resource?: RequiredPermissionAzureResource$Outbound | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionAzureBinding$outboundSchema: z.ZodType<
+  RequiredPermissionAzureBinding$Outbound,
+  RequiredPermissionAzureBinding
+> = z.object({
+  stack: z.nullable(z.lazy(() => RequiredPermissionAzureStack$outboundSchema))
+    .optional(),
+  resource: z.nullable(
+    z.lazy(() => RequiredPermissionAzureResource$outboundSchema),
+  ).optional(),
+});
+
+export function requiredPermissionAzureBindingToJSON(
+  requiredPermissionAzureBinding: RequiredPermissionAzureBinding,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAzureBinding$outboundSchema.parse(
+      requiredPermissionAzureBinding,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionAzure$Outbound = {
+  label?: string | null | undefined;
+  description?: string | null | undefined;
+  grant: RequiredPermissionAzureGrant$Outbound;
+  binding: RequiredPermissionAzureBinding$Outbound;
+};
+
+/** @internal */
+export const RequiredPermissionAzure$outboundSchema: z.ZodType<
+  RequiredPermissionAzure$Outbound,
+  RequiredPermissionAzure
+> = z.object({
+  label: z.nullable(z.string()).optional(),
+  description: z.nullable(z.string()).optional(),
+  grant: z.lazy(() => RequiredPermissionAzureGrant$outboundSchema),
+  binding: z.lazy(() => RequiredPermissionAzureBinding$outboundSchema),
+});
+
+export function requiredPermissionAzureToJSON(
+  requiredPermissionAzure: RequiredPermissionAzure,
+): string {
+  return JSON.stringify(
+    RequiredPermissionAzure$outboundSchema.parse(requiredPermissionAzure),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionPlatforms$Outbound = {
+  aws?: Array<RequiredPermissionAw$Outbound> | null | undefined;
+  gcp?: Array<RequiredPermissionGcp$Outbound> | null | undefined;
+  azure?: Array<RequiredPermissionAzure$Outbound> | null | undefined;
+};
+
+/** @internal */
+export const RequiredPermissionPlatforms$outboundSchema: z.ZodType<
+  RequiredPermissionPlatforms$Outbound,
+  RequiredPermissionPlatforms
+> = z.object({
+  aws: z.nullable(z.array(z.lazy(() => RequiredPermissionAw$outboundSchema)))
+    .optional(),
+  gcp: z.nullable(z.array(z.lazy(() => RequiredPermissionGcp$outboundSchema)))
+    .optional(),
+  azure: z.nullable(
+    z.array(z.lazy(() => RequiredPermissionAzure$outboundSchema)),
+  ).optional(),
+});
+
+export function requiredPermissionPlatformsToJSON(
+  requiredPermissionPlatforms: RequiredPermissionPlatforms,
+): string {
+  return JSON.stringify(
+    RequiredPermissionPlatforms$outboundSchema.parse(
+      requiredPermissionPlatforms,
+    ),
+  );
+}
+
+/** @internal */
+export type RequiredPermission$Outbound = {
+  id: string;
+  description: string;
+  platforms: RequiredPermissionPlatforms$Outbound;
+};
+
+/** @internal */
+export const RequiredPermission$outboundSchema: z.ZodType<
+  RequiredPermission$Outbound,
+  RequiredPermission
+> = z.object({
+  id: z.string(),
+  description: z.string(),
+  platforms: z.lazy(() => RequiredPermissionPlatforms$outboundSchema),
+});
+
+export function requiredPermissionToJSON(
+  requiredPermission: RequiredPermission,
+): string {
+  return JSON.stringify(
+    RequiredPermission$outboundSchema.parse(requiredPermission),
+  );
+}
+
+/** @internal */
+export type RequiredPermissionUnion$Outbound =
+  | RequiredPermission$Outbound
+  | string;
+
+/** @internal */
+export const RequiredPermissionUnion$outboundSchema: z.ZodType<
+  RequiredPermissionUnion$Outbound,
+  RequiredPermissionUnion
+> = z.union([z.lazy(() => RequiredPermission$outboundSchema), z.string()]);
+
+export function requiredPermissionUnionToJSON(
+  requiredPermissionUnion: RequiredPermissionUnion,
+): string {
+  return JSON.stringify(
+    RequiredPermissionUnion$outboundSchema.parse(requiredPermissionUnion),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestRetries$Outbound = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestRetries$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestRetries$Outbound,
+  PublishOperationsPluginRequestRetries
+> = z.object({
+  maxAttempts: z.int(),
+  intervalSeconds: z.int(),
+});
+
+export function publishOperationsPluginRequestRetriesToJSON(
+  publishOperationsPluginRequestRetries: PublishOperationsPluginRequestRetries,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestRetries$outboundSchema.parse(
+      publishOperationsPluginRequestRetries,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestRetry$Outbound = {
+  maxAttempts: number;
+  intervalSeconds: number;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestRetry$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestRetry$Outbound,
+  PublishOperationsPluginRequestRetry
+> = z.object({
+  maxAttempts: z.int(),
+  intervalSeconds: z.int(),
+});
+
+export function publishOperationsPluginRequestRetryToJSON(
+  publishOperationsPluginRequestRetry: PublishOperationsPluginRequestRetry,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestRetry$outboundSchema.parse(
+      publishOperationsPluginRequestRetry,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestVerification$Outbound = {
+  changes: string;
+  pollOperation: string;
+  pollParamsFromResult?: { [k: string]: string } | undefined;
+  successField: string;
+  successValue: string;
+  retry?: PublishOperationsPluginRequestRetry$Outbound | undefined;
+  timeoutSeconds: number;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestVerification$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestVerification$Outbound,
+    PublishOperationsPluginRequestVerification
+  > = z.object({
+    changes: z.string(),
+    pollOperation: z.string(),
+    pollParamsFromResult: z.record(z.string(), z.string()).optional(),
+    successField: z.string(),
+    successValue: z.string(),
+    retry: z.lazy(() => PublishOperationsPluginRequestRetry$outboundSchema)
+      .optional(),
+    timeoutSeconds: z.int(),
+  });
+
+export function publishOperationsPluginRequestVerificationToJSON(
+  publishOperationsPluginRequestVerification:
+    PublishOperationsPluginRequestVerification,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestVerification$outboundSchema.parse(
+      publishOperationsPluginRequestVerification,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound =
+  {
+    kind: "requireConfirmation";
+  };
+
+/** @internal */
+export const PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound,
+    PublishOperationsPluginRequestSensitiveOutputRequireConfirmation
+  > = z.object({
+    kind: z.literal("requireConfirmation"),
+  });
+
+export function publishOperationsPluginRequestSensitiveOutputRequireConfirmationToJSON(
+  publishOperationsPluginRequestSensitiveOutputRequireConfirmation:
+    PublishOperationsPluginRequestSensitiveOutputRequireConfirmation,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema
+      .parse(publishOperationsPluginRequestSensitiveOutputRequireConfirmation),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestSensitiveOutputRedact$Outbound = {
+  kind: "redact";
+  fields: Array<string>;
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestSensitiveOutputRedact$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestSensitiveOutputRedact$Outbound,
+    PublishOperationsPluginRequestSensitiveOutputRedact
+  > = z.object({
+    kind: z.literal("redact"),
+    fields: z.array(z.string()),
+  });
+
+export function publishOperationsPluginRequestSensitiveOutputRedactToJSON(
+  publishOperationsPluginRequestSensitiveOutputRedact:
+    PublishOperationsPluginRequestSensitiveOutputRedact,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestSensitiveOutputRedact$outboundSchema.parse(
+      publishOperationsPluginRequestSensitiveOutputRedact,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestSensitiveOutputNone$Outbound = {
+  kind: "none";
+};
+
+/** @internal */
+export const PublishOperationsPluginRequestSensitiveOutputNone$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestSensitiveOutputNone$Outbound,
+    PublishOperationsPluginRequestSensitiveOutputNone
+  > = z.object({
+    kind: z.literal("none"),
+  });
+
+export function publishOperationsPluginRequestSensitiveOutputNoneToJSON(
+  publishOperationsPluginRequestSensitiveOutputNone:
+    PublishOperationsPluginRequestSensitiveOutputNone,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestSensitiveOutputNone$outboundSchema.parse(
+      publishOperationsPluginRequestSensitiveOutputNone,
+    ),
+  );
+}
+
+/** @internal */
+export type PublishOperationsPluginRequestSensitiveOutputUnion$Outbound =
+  | PublishOperationsPluginRequestSensitiveOutputNone$Outbound
+  | PublishOperationsPluginRequestSensitiveOutputRedact$Outbound
+  | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound;
+
+/** @internal */
+export const PublishOperationsPluginRequestSensitiveOutputUnion$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestSensitiveOutputUnion$Outbound,
+    PublishOperationsPluginRequestSensitiveOutputUnion
+  > = z.union([
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputNone$outboundSchema
+    ),
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputRedact$outboundSchema
+    ),
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema
+    ),
+  ]);
+
+export function publishOperationsPluginRequestSensitiveOutputUnionToJSON(
+  publishOperationsPluginRequestSensitiveOutputUnion:
+    PublishOperationsPluginRequestSensitiveOutputUnion,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestSensitiveOutputUnion$outboundSchema.parse(
+      publishOperationsPluginRequestSensitiveOutputUnion,
+    ),
+  );
+}
+
+/** @internal */
+export const Verb$outboundSchema: z.ZodEnum<typeof Verb> = z.enum(Verb);
+
+/** @internal */
+export type Rule$Outbound = {
+  apiGroup: string;
+  resource: string;
+  verbs: Array<string>;
+  resourceNames?: Array<string> | undefined;
+  reason: string;
+};
+
+/** @internal */
+export const Rule$outboundSchema: z.ZodType<Rule$Outbound, Rule> = z.object({
+  apiGroup: z.string(),
+  resource: z.string(),
+  verbs: z.array(Verb$outboundSchema),
+  resourceNames: z.array(z.string()).optional(),
+  reason: z.string(),
+});
+
+export function ruleToJSON(rule: Rule): string {
+  return JSON.stringify(Rule$outboundSchema.parse(rule));
+}
+
+/** @internal */
+export type KubernetesPermissions$Outbound = {
+  schemaVersion: number;
+  rules: Array<Rule$Outbound>;
+};
+
+/** @internal */
+export const KubernetesPermissions$outboundSchema: z.ZodType<
+  KubernetesPermissions$Outbound,
+  KubernetesPermissions
+> = z.object({
+  schemaVersion: z.number(),
+  rules: z.array(z.lazy(() => Rule$outboundSchema)),
+});
+
+export function kubernetesPermissionsToJSON(
+  kubernetesPermissions: KubernetesPermissions,
+): string {
+  return JSON.stringify(
+    KubernetesPermissions$outboundSchema.parse(kubernetesPermissions),
+  );
+}
+
+/** @internal */
+export type Operation$Outbound = {
+  name: string;
+  tier?: string | undefined;
+  description?: string | null | undefined;
+  inputSchema?: { [k: string]: any | null } | null | undefined;
+  paramsSchema?: { [k: string]: any | null } | null | undefined;
+  outputSchema?: { [k: string]: any | null } | null | undefined;
+  permissions?:
+    | Array<PublishOperationsPluginRequestPermission$Outbound | string>
+    | undefined;
+  requiredPermissions?: Array<RequiredPermission$Outbound | string> | undefined;
+  timeoutSeconds?: number | undefined;
+  retries?: PublishOperationsPluginRequestRetries$Outbound | undefined;
+  verification?:
+    | PublishOperationsPluginRequestVerification$Outbound
+    | undefined;
+  sensitiveOutput?:
+    | PublishOperationsPluginRequestSensitiveOutputNone$Outbound
+    | PublishOperationsPluginRequestSensitiveOutputRedact$Outbound
+    | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound
+    | undefined;
+  kubernetesPermissions?: KubernetesPermissions$Outbound | undefined;
+};
+
+/** @internal */
+export const Operation$outboundSchema: z.ZodType<
+  Operation$Outbound,
+  Operation
+> = z.object({
+  name: z.string(),
+  tier: OperationTier$outboundSchema.optional(),
+  description: z.nullable(z.string()).optional(),
+  inputSchema: z.nullable(z.record(z.string(), z.nullable(z.any()))).optional(),
+  paramsSchema: z.nullable(z.record(z.string(), z.nullable(z.any())))
+    .optional(),
+  outputSchema: z.nullable(z.record(z.string(), z.nullable(z.any())))
+    .optional(),
+  permissions: z.array(
+    z.union([
+      z.lazy(() => PublishOperationsPluginRequestPermission$outboundSchema),
+      z.string(),
+    ]),
+  ).optional(),
+  requiredPermissions: z.array(
+    z.union([z.lazy(() => RequiredPermission$outboundSchema), z.string()]),
+  ).optional(),
+  timeoutSeconds: z.int().optional(),
+  retries: z.lazy(() => PublishOperationsPluginRequestRetries$outboundSchema)
+    .optional(),
+  verification: z.lazy(() =>
+    PublishOperationsPluginRequestVerification$outboundSchema
+  ).optional(),
+  sensitiveOutput: z.union([
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputNone$outboundSchema
+    ),
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputRedact$outboundSchema
+    ),
+    z.lazy(() =>
+      PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema
+    ),
+  ]).optional(),
+  kubernetesPermissions: z.lazy(() => KubernetesPermissions$outboundSchema)
+    .optional(),
+});
+
+export function operationToJSON(operation: Operation): string {
+  return JSON.stringify(Operation$outboundSchema.parse(operation));
+}
+
+/** @internal */
+export type Metadata$Outbound = {
   name: string;
   version: string;
   tier: string;
-  metadata?: any | null | undefined;
+  binaries:
+    | PublishOperationsPluginRequestBinaries1$Outbound
+    | PublishOperationsPluginRequestBinaries2$Outbound;
+  operations?: Array<Operation$Outbound> | undefined;
+};
+
+/** @internal */
+export const Metadata$outboundSchema: z.ZodType<Metadata$Outbound, Metadata> = z
+  .object({
+    name: z.string(),
+    version: z.string(),
+    tier: MetadataTier$outboundSchema.default("destructive"),
+    binaries: z.union([
+      z.lazy(() => PublishOperationsPluginRequestBinaries1$outboundSchema),
+      z.lazy(() => PublishOperationsPluginRequestBinaries2$outboundSchema),
+    ]),
+    operations: z.array(z.lazy(() => Operation$outboundSchema)).optional(),
+  });
+
+export function metadataToJSON(metadata: Metadata): string {
+  return JSON.stringify(Metadata$outboundSchema.parse(metadata));
+}
+
+/** @internal */
+export type PublishOperationsPluginRequest$Outbound = {
+  name: string;
+  version: string;
+  uploadId: string;
+  tier: string;
+  metadata: Metadata$Outbound;
 };
 
 /** @internal */
@@ -59,8 +1898,9 @@ export const PublishOperationsPluginRequest$outboundSchema: z.ZodType<
 > = z.object({
   name: z.string(),
   version: z.string(),
+  uploadId: z.string(),
   tier: PublishOperationsPluginRequestTier$outboundSchema,
-  metadata: z.nullable(z.any()).optional(),
+  metadata: z.lazy(() => Metadata$outboundSchema),
 });
 
 export function publishOperationsPluginRequestToJSON(

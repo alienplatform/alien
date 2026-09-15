@@ -35,6 +35,10 @@ import {
   RemoteAzureKeyVaultKeyBinding$inboundSchema,
 } from "./remoteazurekeyvaultkeybinding.js";
 import {
+  RemoteAzureSandboxBinding,
+  RemoteAzureSandboxBinding$inboundSchema,
+} from "./remoteazuresandboxbinding.js";
+import {
   RemoteBlobStorageBinding,
   RemoteBlobStorageBinding$inboundSchema,
 } from "./remoteblobstoragebinding.js";
@@ -47,6 +51,10 @@ import {
   RemoteGcpCloudKmsKeyBinding$inboundSchema,
 } from "./remotegcpcloudkmskeybinding.js";
 import {
+  RemoteGcpSandboxBinding,
+  RemoteGcpSandboxBinding$inboundSchema,
+} from "./remotegcpsandboxbinding.js";
+import {
   RemoteGcpVertexAiBinding,
   RemoteGcpVertexAiBinding$inboundSchema,
 } from "./remotegcpvertexaibinding.js";
@@ -58,6 +66,55 @@ import {
   RemoteS3StorageBinding,
   RemoteS3StorageBinding$inboundSchema,
 } from "./remotes3storagebinding.js";
+
+/**
+ * GCP Agent Platform reasoning engine and a GCP access token.
+ */
+export type ResolveBindingResponseSandboxGcpAgentPlatform = {
+  /**
+   * Concrete Agent Platform topology returned to remote clients.
+   *
+   * @remarks
+   *
+   * No egress field, unlike the other two clouds: the policy lives on the environment template
+   * named below, so it travels with the template rather than as a flag the client must read.
+   */
+  binding: RemoteGcpSandboxBinding;
+  /**
+   * Response-safe GCP client configuration. Refreshable source credentials and
+   *
+   * @remarks
+   * service endpoint overrides cannot be represented by this type.
+   */
+  clientConfig: RemoteGcpClientConfig;
+  expiresAt: string;
+  service: "sandbox-gcp-agent-platform";
+};
+
+/**
+ * Azure Container Apps sandbox group and an Azure data-plane token.
+ */
+export type ResolveBindingResponseSandboxAzure = {
+  /**
+   * Concrete sandbox-group topology returned to remote clients.
+   *
+   * @remarks
+   *
+   * The ceilings travel because Azure applies them at create and nowhere else, so a remote caller
+   * that does not send them gets the data plane's default rather than the declared size. They are
+   * not a limit — a holder that ignores them gets whatever the data plane accepts.
+   */
+  binding: RemoteAzureSandboxBinding;
+  /**
+   * Response-safe Azure client configuration containing one storage-audience
+   *
+   * @remarks
+   * access token for the stack's Remote Bindings identity.
+   */
+  clientConfig: RemoteAzureClientConfig;
+  expiresAt: string;
+  service: "sandbox-azure";
+};
 
 /**
  * AWS Lambda MicroVM sandbox and an AWS session.
@@ -255,7 +312,56 @@ export type ResolveBindingResponse =
   | ResolveBindingResponseBedrock
   | ResolveBindingResponseVertex
   | ResolveBindingResponseFoundry
-  | ResolveBindingResponseSandboxAws;
+  | ResolveBindingResponseSandboxAws
+  | ResolveBindingResponseSandboxAzure
+  | ResolveBindingResponseSandboxGcpAgentPlatform;
+
+/** @internal */
+export const ResolveBindingResponseSandboxGcpAgentPlatform$inboundSchema:
+  z.ZodType<ResolveBindingResponseSandboxGcpAgentPlatform, unknown> = z.object({
+    binding: RemoteGcpSandboxBinding$inboundSchema,
+    clientConfig: RemoteGcpClientConfig$inboundSchema,
+    expiresAt: z.string(),
+    service: z.literal("sandbox-gcp-agent-platform"),
+  });
+
+export function resolveBindingResponseSandboxGcpAgentPlatformFromJSON(
+  jsonString: string,
+): SafeParseResult<
+  ResolveBindingResponseSandboxGcpAgentPlatform,
+  SDKValidationError
+> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveBindingResponseSandboxGcpAgentPlatform$inboundSchema.parse(
+        JSON.parse(x),
+      ),
+    `Failed to parse 'ResolveBindingResponseSandboxGcpAgentPlatform' from JSON`,
+  );
+}
+
+/** @internal */
+export const ResolveBindingResponseSandboxAzure$inboundSchema: z.ZodType<
+  ResolveBindingResponseSandboxAzure,
+  unknown
+> = z.object({
+  binding: RemoteAzureSandboxBinding$inboundSchema,
+  clientConfig: RemoteAzureClientConfig$inboundSchema,
+  expiresAt: z.string(),
+  service: z.literal("sandbox-azure"),
+});
+
+export function resolveBindingResponseSandboxAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ResolveBindingResponseSandboxAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) =>
+      ResolveBindingResponseSandboxAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ResolveBindingResponseSandboxAzure' from JSON`,
+  );
+}
 
 /** @internal */
 export const ResolveBindingResponseSandboxAws$inboundSchema: z.ZodType<
@@ -485,6 +591,8 @@ export const ResolveBindingResponse$inboundSchema: z.ZodType<
   z.lazy(() => ResolveBindingResponseVertex$inboundSchema),
   z.lazy(() => ResolveBindingResponseFoundry$inboundSchema),
   z.lazy(() => ResolveBindingResponseSandboxAws$inboundSchema),
+  z.lazy(() => ResolveBindingResponseSandboxAzure$inboundSchema),
+  z.lazy(() => ResolveBindingResponseSandboxGcpAgentPlatform$inboundSchema),
 ]);
 
 export function resolveBindingResponseFromJSON(

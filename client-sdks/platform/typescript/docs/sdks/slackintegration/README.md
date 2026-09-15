@@ -340,7 +340,7 @@ async function run() {
   const res = await slackIntegrationUninstall(alien);
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("slackIntegrationUninstall failed:", res.error);
   }

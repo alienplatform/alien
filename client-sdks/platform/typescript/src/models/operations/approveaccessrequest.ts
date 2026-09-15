@@ -19,7 +19,10 @@ export type ApproveAccessRequestGlobals = {
 
 export type ApproveAccessRequestRequestBody = {
   method: string;
-  actorId: string;
+  /**
+   * Deprecated and ignored. Actor identity comes from the authenticated user.
+   */
+  actorId?: string | undefined;
   source?: { [k: string]: any | null } | undefined;
   approvedForMinutes?: number | undefined;
 };
@@ -28,6 +31,14 @@ export type ApproveAccessRequestRequest = {
   id: string;
   requestBody?: ApproveAccessRequestRequestBody | undefined;
 };
+
+export const ApproveAccessRequestRequesterKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+export type ApproveAccessRequestRequesterKind = ClosedEnum<
+  typeof ApproveAccessRequestRequesterKind
+>;
 
 export type ApproveAccessRequestDeployment = {
   id: string;
@@ -80,6 +91,9 @@ export type ApproveAccessRequestMaxRisk = ClosedEnum<
  */
 export type ApproveAccessRequestResponse = {
   id: string;
+  requesterKind: ApproveAccessRequestRequesterKind | null;
+  requesterId: string | null;
+  requestedExpiresAt: string | null;
   deploymentId: string;
   deployment?: ApproveAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
@@ -99,7 +113,7 @@ export type ApproveAccessRequestResponse = {
 /** @internal */
 export type ApproveAccessRequestRequestBody$Outbound = {
   method: string;
-  actorId: string;
+  actorId?: string | undefined;
   source?: { [k: string]: any | null } | undefined;
   approvedForMinutes?: number | undefined;
 };
@@ -110,7 +124,7 @@ export const ApproveAccessRequestRequestBody$outboundSchema: z.ZodType<
   ApproveAccessRequestRequestBody
 > = z.object({
   method: z.string(),
-  actorId: z.string(),
+  actorId: z.string().optional(),
   source: z.record(z.string(), z.nullable(z.any())).optional(),
   approvedForMinutes: z.int().optional(),
 });
@@ -154,6 +168,11 @@ export function approveAccessRequestRequestToJSON(
     ),
   );
 }
+
+/** @internal */
+export const ApproveAccessRequestRequesterKind$inboundSchema: z.ZodEnum<
+  typeof ApproveAccessRequestRequesterKind
+> = z.enum(ApproveAccessRequestRequesterKind);
 
 /** @internal */
 export const ApproveAccessRequestDeployment$inboundSchema: z.ZodType<
@@ -212,6 +231,9 @@ export const ApproveAccessRequestResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  requesterKind: z.nullable(ApproveAccessRequestRequesterKind$inboundSchema),
+  requesterId: z.nullable(z.string()),
+  requestedExpiresAt: z.nullable(z.string()),
   deploymentId: z.string(),
   deployment: z.lazy(() => ApproveAccessRequestDeployment$inboundSchema)
     .optional(),

@@ -1505,6 +1505,7 @@ mod tests {
             deadline: None,
             idempotency_key: None,
             target_resource_id: None,
+            operation_result_contract: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());
@@ -1517,6 +1518,7 @@ mod tests {
             deadline: None,
             idempotency_key: None,
             target_resource_id: None,
+            operation_result_contract: None,
         };
         let result = server.create_command(invalid_request).await;
         assert!(result.is_err());

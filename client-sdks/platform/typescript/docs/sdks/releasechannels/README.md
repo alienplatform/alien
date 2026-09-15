@@ -12,60 +12,9 @@
 
 List the release channels configured for a project.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.releaseChannels.list({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { releaseChannelsList } from "@alienplatform/platform-api/funcs/releaseChannelsList.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await releaseChannelsList(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("releaseChannelsList failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="listReleaseChannels" method="get" path="/v1/release-channels" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -139,68 +88,9 @@ run();
 
 Create a release channel for a project.
 
-### Example Usage: projectId
+### Example Usage
 
-<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" example="projectId" -->
-```typescript
-import { Alien } from "@alienplatform/platform-api";
-
-const alien = new Alien({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const result = await alien.releaseChannels.create({
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
-  });
-
-  console.log(result);
-}
-
-run();
-```
-
-### Standalone function
-
-The standalone function version of this method:
-
-```typescript
-import { AlienCore } from "@alienplatform/platform-api/core.js";
-import { releaseChannelsCreate } from "@alienplatform/platform-api/funcs/releaseChannelsCreate.js";
-
-// Use `AlienCore` for best tree-shaking performance.
-// You can create one instance of it to use across an application.
-const alien = new AlienCore({
-  workspace: "my-workspace",
-  apiKey: process.env["ALIEN_API_KEY"] ?? "",
-});
-
-async function run() {
-  const res = await releaseChannelsCreate(alien, {
-    project: "prj_mcytp6z3j91f7tn5ryqsfwtr",
-    requestBody: {
-      name: "<value>",
-      releaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    },
-  });
-  if (res.ok) {
-    const { value: result } = res;
-    console.log(result);
-  } else {
-    console.log("releaseChannelsCreate failed:", res.error);
-  }
-}
-
-run();
-```
-### Example Usage: projectName
-
-<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" example="projectName" -->
+<!-- UsageSnippet language="typescript" operationID="createReleaseChannel" method="post" path="/v1/release-channels" -->
 ```typescript
 import { Alien } from "@alienplatform/platform-api";
 
@@ -327,7 +217,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-    
+
   } else {
     console.log("releaseChannelsDelete failed:", res.error);
   }

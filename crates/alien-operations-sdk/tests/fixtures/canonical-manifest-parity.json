@@ -220,5 +220,174 @@
         }
       ]
     }
+  },
+  {
+    "name": "invalid JSON Schema keyword type",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [{ "name": "inspect", "inputSchema": { "type": 42 } }]
+    }
+  },
+  {
+    "name": "inline permission has a blank identifier",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "permissions": [
+            {
+              "id": " ",
+              "description": "Read example metadata",
+              "platforms": {
+                "aws": [
+                  {
+                    "grant": { "actions": ["example:Get"] },
+                    "binding": { "stack": { "resources": ["*"] } }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "inline permission has no platform grant",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "permissions": [
+            {
+              "id": "example/read",
+              "description": "Read example metadata",
+              "platforms": {}
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "GCP inline permission has an empty scope",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "permissions": [
+            {
+              "id": "example/read",
+              "description": "Read example metadata",
+              "platforms": {
+                "gcp": [
+                  {
+                    "grant": { "permissions": ["example.resources.get"] },
+                    "binding": { "stack": { "scope": " " } }
+                  }
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "operation retries omit the required timeout",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "retries": { "maxAttempts": 2, "intervalSeconds": 1 }
+        }
+      ]
+    }
+  },
+  {
+    "name": "read-only operation declares post-write verification",
+    "accepted": false,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "tier": "read-only",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "verification": {
+            "changes": "Inspect the service",
+            "pollOperation": "status",
+            "successField": "state",
+            "successValue": "ready",
+            "timeoutSeconds": 30
+          }
+        },
+        {
+          "name": "status",
+          "outputSchema": {
+            "type": "object",
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      ]
+    }
+  },
+  {
+    "name": "nullable optional operation fields",
+    "accepted": true,
+    "manifest": {
+      "name": "example",
+      "version": "1.0.0",
+      "binaries": { "amd64": "example-linux-amd64" },
+      "operations": [
+        {
+          "name": "inspect",
+          "tier": null,
+          "timeoutSeconds": null,
+          "retries": null,
+          "verification": null
+        },
+        {
+          "name": "restart",
+          "tier": "mutating",
+          "verification": {
+            "changes": "Restart the service",
+            "pollOperation": "status",
+            "successField": "state",
+            "successValue": "ready",
+            "retry": null,
+            "timeoutSeconds": 30
+          }
+        },
+        {
+          "name": "status",
+          "tier": "read-only",
+          "outputSchema": {
+            "type": "object",
+            "properties": { "state": { "type": "string" } }
+          }
+        }
+      ]
+    }
   }
 ]

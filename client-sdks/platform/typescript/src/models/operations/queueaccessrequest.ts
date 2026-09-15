@@ -20,6 +20,14 @@ export type QueueAccessRequestRequest = {
   id: string;
 };
 
+export const QueueAccessRequestRequesterKind = {
+  User: "user",
+  ServiceAccount: "serviceAccount",
+} as const;
+export type QueueAccessRequestRequesterKind = ClosedEnum<
+  typeof QueueAccessRequestRequesterKind
+>;
+
 export type QueueAccessRequestDeployment = {
   id: string;
   name: string;
@@ -69,6 +77,9 @@ export type QueueAccessRequestMaxRisk = ClosedEnum<
  */
 export type QueueAccessRequestResponse = {
   id: string;
+  requesterKind: QueueAccessRequestRequesterKind | null;
+  requesterId: string | null;
+  requestedExpiresAt: string | null;
   deploymentId: string;
   deployment?: QueueAccessRequestDeployment | undefined;
   remediationPlanId: string | null;
@@ -105,6 +116,11 @@ export function queueAccessRequestRequestToJSON(
     QueueAccessRequestRequest$outboundSchema.parse(queueAccessRequestRequest),
   );
 }
+
+/** @internal */
+export const QueueAccessRequestRequesterKind$inboundSchema: z.ZodEnum<
+  typeof QueueAccessRequestRequesterKind
+> = z.enum(QueueAccessRequestRequesterKind);
 
 /** @internal */
 export const QueueAccessRequestDeployment$inboundSchema: z.ZodType<
@@ -163,6 +179,9 @@ export const QueueAccessRequestResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   id: z.string(),
+  requesterKind: z.nullable(QueueAccessRequestRequesterKind$inboundSchema),
+  requesterId: z.nullable(z.string()),
+  requestedExpiresAt: z.nullable(z.string()),
   deploymentId: z.string(),
   deployment: z.lazy(() => QueueAccessRequestDeployment$inboundSchema)
     .optional(),

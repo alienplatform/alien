@@ -210,6 +210,8 @@ async fn create_task(
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
             commands: Vec::new(),
+            replay_key: None,
+            requested_expires_at: None,
         }
     } else {
         let Some(max_risk) = options.max_risk else {
@@ -232,6 +234,8 @@ async fn create_task(
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
             commands: Vec::new(),
+            replay_key: None,
+            requested_expires_at: None,
         }
     };
 
@@ -352,12 +356,12 @@ async fn get_task(
     // Only worth polling while queued and not yet materialized — if it's
     // pending-approval there's genuinely nothing to wait for yet, and any
     // other status already has its final answer.
-    let kubectl_approve = if request.status == alien_platform_api::types::AccessRequestStatus::Queued
-    {
-        poll_for_kubectl_approve(sdk_client, workspace, id).await?
-    } else {
-        fetch_kubectl_approve(sdk_client, workspace, id).await?
-    };
+    let kubectl_approve =
+        if request.status == alien_platform_api::types::AccessRequestStatus::Queued {
+            poll_for_kubectl_approve(sdk_client, workspace, id).await?
+        } else {
+            fetch_kubectl_approve(sdk_client, workspace, id).await?
+        };
 
     if json {
         print_json(&serde_json::json!({
@@ -504,7 +508,10 @@ async fn wait_task(
             alien_platform_api::types::AccessRequestStatus::Rejected
             | alien_platform_api::types::AccessRequestStatus::Expired => {
                 return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!("access request '{id}' is '{}', not approved", request.status),
+                    message: format!(
+                        "access request '{id}' is '{}', not approved",
+                        request.status
+                    ),
                     url: None,
                 }));
             }

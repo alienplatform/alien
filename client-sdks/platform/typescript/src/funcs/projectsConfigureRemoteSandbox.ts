@@ -4,7 +4,6 @@
 
 import { AlienCore } from "../core.js";
 import { encodeFormQuery, encodeJSON, encodeSimple } from "../lib/encodings.js";
-import { matchStatusCode } from "../lib/http.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -28,7 +27,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. AWS only.
+ * Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
  */
 export function projectsConfigureRemoteSandbox(
   client: AlienCore,
@@ -98,6 +97,7 @@ async function $do(
       charEncoding: "percent",
     }),
   };
+
   const path = pathToFunc(
     "/v1/projects/{idOrName}/project-capabilities/remote-sandbox",
   )(pathParams);
@@ -148,8 +148,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    isErrorStatusCode: (statusCode: number) =>
-      matchStatusCode({ status: statusCode } as Response, ["4XX", "5XX"]),
+    errorCodes: ["400", "403", "404", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });

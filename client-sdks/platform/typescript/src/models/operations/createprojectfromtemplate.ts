@@ -490,13 +490,13 @@ export type CreateProjectFromTemplateMethod = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateDeployments = {
-  enabled: true;
+  enabled: boolean;
   methods?: Array<CreateProjectFromTemplateMethod> | undefined;
 };
 
 export type CreateProjectFromTemplateKeys = {
-  enabled: true;
-  applicationEncryption: true;
+  enabled: boolean;
+  applicationEncryption: boolean;
 };
 
 export const CreateProjectFromTemplateAllowedProvider = {
@@ -527,7 +527,7 @@ export type CreateProjectFromTemplateRequirement = {
 };
 
 export type CreateProjectFromTemplateModels = {
-  enabled: true;
+  enabled: boolean;
   allowedProviders: Array<CreateProjectFromTemplateAllowedProvider>;
   requirements: Array<CreateProjectFromTemplateRequirement>;
 };
@@ -540,7 +540,7 @@ export type CreateProjectFromTemplateAccess = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateBuckets = {
-  enabled: true;
+  enabled: boolean;
   access: CreateProjectFromTemplateAccess;
 };
 
@@ -553,16 +553,21 @@ export type CreateProjectFromTemplateCredentialPolicy = ClosedEnum<
 >;
 
 export type CreateProjectFromTemplateRegistry = {
-  enabled: true;
+  enabled: boolean;
   repositories: Array<string>;
   credentialPolicy: CreateProjectFromTemplateCredentialPolicy;
 };
 
+export type CreateProjectFromTemplateAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type CreateProjectFromTemplateRemoteSandbox = {
-  enabled: true;
+  enabled: boolean;
   baseImage?: string | undefined;
-  imageBundleUri?: string | undefined;
-  maxSessionLifetimeSeconds: number;
+  azure?: CreateProjectFromTemplateAzure | undefined;
+  maxLifetimeSeconds?: number | undefined;
 };
 
 export type CreateProjectFromTemplateCapabilities = {
@@ -1209,7 +1214,7 @@ export const CreateProjectFromTemplateDeployments$inboundSchema: z.ZodType<
   CreateProjectFromTemplateDeployments,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   methods: z.array(CreateProjectFromTemplateMethod$inboundSchema).optional(),
 });
 
@@ -1229,8 +1234,8 @@ export const CreateProjectFromTemplateKeys$inboundSchema: z.ZodType<
   CreateProjectFromTemplateKeys,
   unknown
 > = z.object({
-  enabled: z.literal(true),
-  applicationEncryption: z.literal(true),
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
 });
 
 export function createProjectFromTemplateKeysFromJSON(
@@ -1279,7 +1284,7 @@ export const CreateProjectFromTemplateModels$inboundSchema: z.ZodType<
   CreateProjectFromTemplateModels,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   allowedProviders: z.array(
     CreateProjectFromTemplateAllowedProvider$inboundSchema,
   ),
@@ -1308,7 +1313,7 @@ export const CreateProjectFromTemplateBuckets$inboundSchema: z.ZodType<
   CreateProjectFromTemplateBuckets,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   access: CreateProjectFromTemplateAccess$inboundSchema,
 });
 
@@ -1332,7 +1337,7 @@ export const CreateProjectFromTemplateRegistry$inboundSchema: z.ZodType<
   CreateProjectFromTemplateRegistry,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   repositories: z.array(z.string()),
   credentialPolicy: CreateProjectFromTemplateCredentialPolicy$inboundSchema,
 });
@@ -1348,14 +1353,33 @@ export function createProjectFromTemplateRegistryFromJSON(
 }
 
 /** @internal */
+export const CreateProjectFromTemplateAzure$inboundSchema: z.ZodType<
+  CreateProjectFromTemplateAzure,
+  unknown
+> = z.object({
+  catalogImage: z.string(),
+  idleSuspendSeconds: z.int(),
+});
+
+export function createProjectFromTemplateAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<CreateProjectFromTemplateAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => CreateProjectFromTemplateAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'CreateProjectFromTemplateAzure' from JSON`,
+  );
+}
+
+/** @internal */
 export const CreateProjectFromTemplateRemoteSandbox$inboundSchema: z.ZodType<
   CreateProjectFromTemplateRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   baseImage: z.string().optional(),
-  imageBundleUri: z.string().optional(),
-  maxSessionLifetimeSeconds: z.int(),
+  azure: z.lazy(() => CreateProjectFromTemplateAzure$inboundSchema).optional(),
+  maxLifetimeSeconds: z.int().optional(),
 });
 
 export function createProjectFromTemplateRemoteSandboxFromJSON(

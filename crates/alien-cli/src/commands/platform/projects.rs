@@ -459,9 +459,8 @@ fn remote_sandbox_request(
     }
     Ok(ConfigureRemoteSandboxRequest {
         base_image: Some(base_image),
-        image_bundle_uri: None,
         azure: None,
-        max_session_lifetime_seconds: Some(max_session_lifetime_seconds),
+        max_lifetime_seconds: Some(max_session_lifetime_seconds),
     })
 }
 
@@ -726,7 +725,7 @@ mod tests {
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({
                 "baseImage": "public.ecr.aws/example/analysis:v1",
-                "maxSessionLifetimeSeconds": 28_800,
+                "maxLifetimeSeconds": 28_800,
             }),
         );
     }

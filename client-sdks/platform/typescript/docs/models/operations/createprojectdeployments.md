@@ -6,7 +6,7 @@
 import { CreateProjectDeployments } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectDeployments = {
-  enabled: true,
+  enabled: false,
 };
 ```
 
@@ -14,5 +14,5 @@ let value: CreateProjectDeployments = {
 
 | Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
 | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `enabled`                                                                          | *true*                                                                             | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `enabled`                                                                          | *boolean*                                                                          | :heavy_check_mark:                                                                 | N/A                                                                                |
 | `methods`                                                                          | [operations.CreateProjectMethod](../../models/operations/createprojectmethod.md)[] | :heavy_minus_sign:                                                                 | N/A                                                                                |
