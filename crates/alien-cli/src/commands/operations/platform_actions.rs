@@ -808,7 +808,7 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, Canonica
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
-    let manifest = CanonicalPluginManifest::parse_and_validate(contents.as_bytes()).context(
+    let manifest = super::check::parse_manifest_for_cli(contents.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: format!("bundle '{}' has an invalid manifest", path.display()),
         },
@@ -865,6 +865,18 @@ mod tests {
         assert_eq!(parsed.tier, alien_operations_sdk::RiskTier::Mutating);
         // The full object is forwarded verbatim (operations[] preserved).
         assert!(value.get("operations").is_some());
+    }
+
+    #[test]
+    fn reads_released_legacy_metadata_from_bundle() {
+        let meta: Value = serde_json::from_str(super::super::check::legacy_verification_manifest())
+            .expect("legacy fixture JSON");
+        let bytes = bundle_with_metadata(&meta);
+
+        let (_, parsed) = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
+            .expect("publish must preserve released legacy manifest support");
+        assert!(parsed.operations[0].input_schema.is_some());
+        assert!(parsed.operations[1].output_schema.is_none());
     }
 
     #[test]

@@ -22,6 +22,8 @@ use clap::ValueEnum;
 
 use crate::error::{ErrorData, Result};
 
+use super::check::parse_manifest_for_cli;
+
 /// Cloud target for `alien operations permissions`.
 #[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
 #[value(rename_all = "lowercase")]
@@ -70,14 +72,12 @@ pub fn permissions_task(directory: Option<&str>, cloud: Cloud, json: bool) -> Re
             message: format!("could not read '{}'", manifest_path.display()),
         },
     )?;
-    let manifest = CanonicalPluginManifest::parse_and_validate(&bytes).context(
-        ErrorData::ConfigurationError {
-            message: format!(
-                "'{}' is not a valid plugin manifest",
-                manifest_path.display()
-            ),
-        },
-    )?;
+    let manifest = parse_manifest_for_cli(&bytes).context(ErrorData::ConfigurationError {
+        message: format!(
+            "'{}' is not a valid plugin manifest",
+            manifest_path.display()
+        ),
+    })?;
 
     if cloud != Cloud::Aws {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -218,6 +218,22 @@ mod tests {
             false,
         )
         .expect("no declared permissions should succeed trivially");
+    }
+
+    #[test]
+    fn accepts_a_released_legacy_manifest_before_compiling_permissions() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        write_manifest(
+            temp.path(),
+            super::super::check::legacy_verification_manifest(),
+        );
+
+        permissions_task(
+            Some(temp.path().to_str().expect("utf8 path")),
+            Cloud::Aws,
+            false,
+        )
+        .expect("permissions must preserve released legacy manifest support");
     }
 
     #[test]
