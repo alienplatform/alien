@@ -3,8 +3,6 @@ pub mod error;
 pub mod events;
 mod log_text;
 pub mod otlp;
-#[cfg(feature = "otlp")]
-mod otlp_retry;
 pub mod runtime;
 pub mod secrets;
 pub mod tracing_init;

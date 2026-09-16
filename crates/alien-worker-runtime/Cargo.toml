@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["otlp", "aws", "gcp", "azure", "kubernetes", "local"]
-otlp = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-appender-tracing", "dep:opentelemetry-http", "reqwest/blocking"]
+otlp = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-appender-tracing"]
 aws = ["alien-bindings/aws", "lambda_http", "lambda_runtime", "lambda-extension", "pin-project-lite", "http-body", "aws_lambda_events"]
 gcp = ["alien-bindings/gcp", "cloudevents-sdk"]  
 azure = ["alien-bindings/azure", "cloudevents-sdk"]
@@ -33,7 +33,6 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
 http = { workspace = true }
-opentelemetry-http = { version = "0.30", optional = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive", "env"] }
 dotenvy = { workspace = true }
@@ -46,10 +45,10 @@ serde_json = { workspace = true }
 tokio = { workspace = true, features = ["sync", "macros", "io-util", "rt", "time", "net", "fs", "process", "signal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std", "json"] }
-opentelemetry = { version = "0.30", features = ["logs"], optional = true }
-opentelemetry_sdk = { version = "0.30", features = ["logs"], optional = true }
-opentelemetry-otlp = { version = "0.30", features = ["http-proto", "logs"], optional = true }
-opentelemetry-appender-tracing = { version = "0.30", optional = true }
+opentelemetry = { version = "0.32", features = ["logs"], optional = true }
+opentelemetry_sdk = { version = "0.32", features = ["logs"], optional = true }
+opentelemetry-otlp = { version = "0.32", features = ["experimental-http-retry", "http-proto", "logs"], optional = true }
+opentelemetry-appender-tracing = { version = "0.32", optional = true }
 url = { workspace = true, features = ["serde"] }
 uuid = { workspace = true, features = ["v4", "serde"] }
 hyper-util = { workspace = true, features = ["full"] }
