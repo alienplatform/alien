@@ -534,8 +534,8 @@ async fn wait_task(
     }
 }
 
-/// Parse a short duration string (`1h`, `30m`, `90s`) into whole minutes.
-pub(crate) fn parse_duration_minutes(value: &str) -> Result<u64> {
+/// Parse a short duration string (`1h`, `30m`, `90s`) without rounding.
+pub(crate) fn parse_duration_seconds(value: &str) -> Result<u64> {
     let invalid = || {
         AlienError::new(ErrorData::ValidationError {
             field: "duration".to_string(),
@@ -549,16 +549,17 @@ pub(crate) fn parse_duration_minutes(value: &str) -> Result<u64> {
             .ok_or_else(invalid)?,
     );
     let amount: u64 = digits.parse().map_err(|_| invalid())?;
-    let minutes = match unit {
-        "h" => amount.saturating_mul(60),
-        "m" => amount,
-        "s" => amount.div_ceil(60).max(1),
+    let seconds = match unit {
+        "h" => amount.checked_mul(60 * 60),
+        "m" => amount.checked_mul(60),
+        "s" => Some(amount),
         _ => return Err(invalid()),
-    };
-    if minutes == 0 {
+    }
+    .ok_or_else(invalid)?;
+    if seconds == 0 {
         return Err(invalid());
     }
-    Ok(minutes)
+    Ok(seconds)
 }
 
 pub(crate) fn requested_expiration(
@@ -568,20 +569,20 @@ pub(crate) fn requested_expiration(
     let Some(duration) = duration else {
         return Ok(None);
     };
-    let minutes = parse_duration_minutes(duration)?;
-    if minutes > 6 * 60 {
+    let seconds = parse_duration_seconds(duration)?;
+    if seconds > 6 * 60 * 60 {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "duration".to_string(),
             message: "duration cannot exceed 6h".to_string(),
         }));
     }
-    let minutes = i64::try_from(minutes).map_err(|_| {
+    let seconds = i64::try_from(seconds).map_err(|_| {
         AlienError::new(ErrorData::ValidationError {
             field: "duration".to_string(),
             message: "duration is too large".to_string(),
         })
     })?;
-    now.checked_add_signed(chrono::Duration::minutes(minutes))
+    now.checked_add_signed(chrono::Duration::seconds(seconds))
         .map(Some)
         .ok_or_else(|| {
             AlienError::new(ErrorData::ValidationError {
@@ -596,23 +597,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duration_strings_parse_to_minutes() {
-        assert_eq!(parse_duration_minutes("1h").unwrap(), 60);
-        assert_eq!(parse_duration_minutes("90m").unwrap(), 90);
-        assert_eq!(parse_duration_minutes("30s").unwrap(), 1);
-        assert_eq!(parse_duration_minutes("120s").unwrap(), 2);
-        assert!(parse_duration_minutes("").is_err());
-        assert!(parse_duration_minutes("abc").is_err());
-        assert!(parse_duration_minutes("1d").is_err());
-        assert!(parse_duration_minutes("0m").is_err());
+    fn duration_strings_parse_to_seconds_without_rounding() {
+        assert_eq!(parse_duration_seconds("1h").unwrap(), 3_600);
+        assert_eq!(parse_duration_seconds("90m").unwrap(), 5_400);
+        assert_eq!(parse_duration_seconds("1s").unwrap(), 1);
+        assert_eq!(parse_duration_seconds("90s").unwrap(), 90);
+        assert!(parse_duration_seconds("").is_err());
+        assert!(parse_duration_seconds("abc").is_err());
+        assert!(parse_duration_seconds("1d").is_err());
+        assert!(parse_duration_seconds("0m").is_err());
     }
 
     #[test]
     fn requested_duration_becomes_an_absolute_utc_deadline() {
         let now = "2026-09-17T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
         assert_eq!(
-            requested_expiration(now, Some("90m")).unwrap(),
-            Some("2026-09-17T01:30:00Z".parse().unwrap())
+            requested_expiration(now, Some("90s")).unwrap(),
+            Some("2026-09-17T00:01:30Z".parse().unwrap())
         );
         assert_eq!(requested_expiration(now, None).unwrap(), None);
         assert!(requested_expiration(now, Some("361m")).is_err());
