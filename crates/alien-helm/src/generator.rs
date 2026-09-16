@@ -604,8 +604,12 @@ fn remote_operator_values_schema() -> serde_json::Value {
 
 fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
     let collector_check = if requires_collector_token {
-        r#"{{- if not (hasKey $credentials.data "collector-token") -}}
-  {{- fail "The Remote Operator credentials Secret must contain collector-token when log collection is enabled." -}}
+        r#"{{- $collectorToken := "" -}}
+{{- if hasKey $credentials.data "collector-token" -}}
+  {{- $collectorToken = index $credentials.data "collector-token" | b64dec -}}
+{{- end -}}
+{{- if empty $collectorToken -}}
+  {{- fail "The Remote Operator credentials Secret must contain a non-empty collector-token when log collection is enabled." -}}
 {{- end -}}
 "#
     } else {
@@ -640,7 +644,12 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 {{- if not (and (hasKey $credentials.data "sync-token") (hasKey $credentials.data "encryption-key")) -}}
   {{- fail "The Remote Operator credentials Secret must contain sync-token and encryption-key." -}}
 {{- end -}}
-{{- $actualEncryptionKeySha256 := index $credentials.data "encryption-key" | b64dec | sha256sum -}}
+{{- $syncToken := index $credentials.data "sync-token" | b64dec -}}
+{{- $encryptionKey := index $credentials.data "encryption-key" | b64dec -}}
+{{- if or (empty $syncToken) (empty $encryptionKey) -}}
+  {{- fail "The Remote Operator credentials Secret must contain non-empty sync-token and encryption-key values." -}}
+{{- end -}}
+{{- $actualEncryptionKeySha256 := $encryptionKey | sha256sum -}}
 {{- if ne $actualEncryptionKeySha256 $expectedEncryptionKeySha256 -}}
   {{- fail (printf "Remote Operator credentials Secret %s/%s has encryption-key SHA-256 %s, but setup recorded %s. Refusing identity replacement; restore the original encryption-key." .Release.Namespace $secretName $actualEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
 {{- end -}}
@@ -5688,7 +5697,7 @@ mod tests {
         assert!(checks.contains("Disabling Remote Operator"));
         assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));
         assert!(checks.contains("(not .Values.remoteOperator.bootstrapIdentity)"));
-        assert!(checks.contains("b64dec | sha256sum"));
+        assert!(checks.contains("$encryptionKey | sha256sum"));
         assert!(checks.contains("pins credentials Secret"));
         assert!(checks.contains("pins encryption-key SHA-256"));
         assert!(checks.contains("completed Remote Operator identity"));
@@ -5961,6 +5970,26 @@ remoteOperator:
             format!("{}\n{}", rendered.stdout, rendered.stderr).contains("encryptionKeySha256"),
             "schema diagnostic must identify the malformed fingerprint: {rendered:?}"
         );
+    }
+
+    #[test]
+    fn product_chart_requires_non_empty_decoded_external_credentials() {
+        let checks = remote_operator_checks_tpl(true);
+
+        for required_check in [
+            "$syncToken := index $credentials.data \"sync-token\" | b64dec",
+            "$encryptionKey := index $credentials.data \"encryption-key\" | b64dec",
+            "if or (empty $syncToken) (empty $encryptionKey)",
+            "$collectorToken = index $credentials.data \"collector-token\" | b64dec",
+            "if empty $collectorToken",
+        ] {
+            assert!(
+                checks.contains(required_check),
+                "server-side Secret validation must include: {required_check}"
+            );
+        }
+        assert!(checks.contains("non-empty sync-token and encryption-key values"));
+        assert!(checks.contains("non-empty collector-token"));
     }
 
     #[test]
