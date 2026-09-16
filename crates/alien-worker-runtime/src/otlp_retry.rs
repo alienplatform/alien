@@ -46,18 +46,26 @@ impl RetryingLogClient {
             let retry_after = match result {
                 Ok(mut response) => {
                     if !matches!(response.status().as_u16(), 429 | 502 | 503 | 504) {
+                        let status = response.status();
                         let headers = std::mem::take(response.headers_mut());
-                        let mut result = Response::builder()
-                            .status(response.status())
-                            .body(response.bytes()?)?;
-                        *result.headers_mut() = headers;
-                        return Ok(result);
+                        match response.bytes() {
+                            Ok(body) => {
+                                let mut result = Response::builder().status(status).body(body)?;
+                                *result.headers_mut() = headers;
+                                return Ok(result);
+                            }
+                            // A truncated success response is an ambiguous delivery,
+                            // just like losing the connection before its headers.
+                            Err(_) if status.is_success() => None,
+                            Err(error) => return Err(Box::new(error)),
+                        }
+                    } else {
+                        response
+                            .headers()
+                            .get(http::header::RETRY_AFTER)
+                            .and_then(|value| value.to_str().ok())
+                            .and_then(retry_after)
                     }
-                    response
-                        .headers()
-                        .get(http::header::RETRY_AFTER)
-                        .and_then(|value| value.to_str().ok())
-                        .and_then(retry_after)
                 }
                 Err(error) => {
                     if !(error.is_timeout()
@@ -119,11 +127,19 @@ mod tests {
         statuses: Vec<u16>,
         retry_after: Option<&'static str>,
     ) -> (String, std::thread::JoinHandle<Vec<Vec<u8>>>) {
+        serve_wire(statuses, retry_after, false)
+    }
+
+    fn serve_wire(
+        statuses: Vec<u16>,
+        retry_after: Option<&'static str>,
+        truncate_first: bool,
+    ) -> (String, std::thread::JoinHandle<Vec<Vec<u8>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let url = format!("http://{}/v1/logs", listener.local_addr().unwrap());
         let task = std::thread::spawn(move || {
             let mut bodies = Vec::new();
-            for status in statuses {
+            for (index, status) in statuses.into_iter().enumerate() {
                 let (mut stream, _) = listener.accept().unwrap();
                 stream
                     .set_read_timeout(Some(Duration::from_secs(3)))
@@ -143,6 +159,14 @@ mod tests {
                 let mut body = vec![0; size];
                 reader.read_exact(&mut body).unwrap();
                 bodies.push(body);
+                if status == 0 {
+                    // Drop the connection before response headers arrive.
+                    continue;
+                }
+                if truncate_first && index == 0 {
+                    write!(stream, "HTTP/1.1 {status} Test\r\nContent-Length: 10\r\nConnection: close\r\n\r\nx").unwrap();
+                    continue;
+                }
                 let retry_header = retry_after
                     .map(|value| format!("Retry-After: {value}\r\n"))
                     .unwrap_or_default();
@@ -208,6 +232,51 @@ mod tests {
             .unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(server.join().unwrap(), vec![b"same-batch".to_vec(); 3]);
+    }
+
+    #[test]
+    fn truncated_success_body_retries_but_permanent_status_does_not() {
+        let (url, server) = serve_wire(vec![200, 200], None, true);
+        let response = RetryingLogClient::new()
+            .send(
+                Request::post(url)
+                    .body(Bytes::from_static(b"ambiguous-batch"))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(server.join().unwrap(), vec![b"ambiguous-batch".to_vec(); 2]);
+
+        let (url, server) = serve_wire(vec![400], None, true);
+        assert!(RetryingLogClient::new()
+            .send(Request::post(url).body(Bytes::new()).unwrap())
+            .is_err());
+        assert_eq!(server.join().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn connection_failure_retries_identical_bytes_but_invalid_scheme_fails_fast() {
+        let (url, server) = serve(vec![0, 200], None);
+        let mut client = RetryingLogClient::new();
+        client.budget = Duration::from_secs(2);
+        let response = client
+            .send(
+                Request::post(url)
+                    .body(Bytes::from_static(b"transport-batch"))
+                    .unwrap(),
+            )
+            .unwrap();
+        assert_eq!(response.status(), 200);
+        assert_eq!(server.join().unwrap(), vec![b"transport-batch".to_vec(); 2]);
+        let started = Instant::now();
+        assert!(client
+            .send(
+                Request::post("ftp://127.0.0.1/logs")
+                    .body(Bytes::new())
+                    .unwrap()
+            )
+            .is_err());
+        assert!(started.elapsed() < Duration::from_millis(200));
     }
 
     #[test]
