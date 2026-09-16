@@ -88,6 +88,28 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     };
 
     run_ok("kubectl", ["create", "namespace", &helm_namespace], None);
+    let installer_role = temp.path().join("product-installer-role.yaml");
+    fs::write(
+        &installer_role,
+        format!(
+            r#"apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: product-installer
+  namespace: {helm_namespace}
+rules:
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["*"]
+"#
+        ),
+    )
+    .expect("write namespace-scoped product installer Role");
+    run_ok(
+        "kubectl",
+        ["apply", "--filename", path_str(&installer_role)],
+        None,
+    );
     run_ok(
         "kubectl",
         [
@@ -96,7 +118,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
             "product-installer",
             "--namespace",
             &helm_namespace,
-            "--clusterrole=admin",
+            "--role=product-installer",
             "--user=product-installer",
         ],
         None,
