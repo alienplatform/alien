@@ -19,6 +19,7 @@ const CRD_NAME: &str = "alienaccessrequests.accessrequests.alien";
 const ENCRYPTION_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ENCRYPTION_KEY_SHA256: &str =
     "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e";
+const GOOD_OPERATOR_IMAGE: &str = "registry.k8s.io/pause:3.10.1";
 
 struct TestClusterCleanup {
     helm_namespace: String,
@@ -69,10 +70,19 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let temp = tempfile::tempdir().expect("lifecycle temp directory");
     let good_chart_dir = temp.path().join("good-chart");
     let bad_chart_dir = temp.path().join("bad-chart");
-    write_chart(
-        &good_chart_dir,
-        &product_chart("registry.k8s.io/pause:3.10.1"),
+    run_ok("docker", ["pull", GOOD_OPERATOR_IMAGE], None);
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            GOOD_OPERATOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
     );
+    write_chart(&good_chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
     write_chart(
         &bad_chart_dir,
         &product_chart("registry.invalid/alien/operator:missing"),
@@ -432,7 +442,7 @@ rules:
 fn terraform_lifecycle_harness_is_formatted_and_parseable_without_a_collector_token() {
     let temp = tempfile::tempdir().expect("Terraform harness temp directory");
     let chart_dir = temp.path().join("chart");
-    write_chart(&chart_dir, &product_chart("registry.k8s.io/pause:3.10.1"));
+    write_chart(&chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
     let kubeconfig = temp.path().join("unused-kubeconfig");
     fs::write(&kubeconfig, "apiVersion: v1\nkind: Config\n").expect("write parse-only kubeconfig");
     let terraform_dir = temp.path().join("terraform");
