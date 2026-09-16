@@ -42,7 +42,7 @@ export class OperatorManifests extends ClientSDK {
    * Render a Remote Operator ECS Fargate CloudFormation installer
    *
    * @remarks
-   * Renders a credential-free CloudFormation artifact that reuses a customer-owned ECS cluster, network, and EFS access point; owns a task role compiled from the project's enabled operations; and uses a generated local command to hand one-time setup material directly to same-account, same-Region Secrets Manager. Sensitive S3 and SQS wildcard declarations fail closed unless the request supplies exact resource ceilings.
+   * Renders a credential-free CloudFormation artifact that reuses a customer-owned ECS cluster, network, EFS access point, task role, and same-account, same-Region Secrets Manager bootstrap secret encrypted with the default aws/secretsmanager KMS key. Customer-managed KMS keys are not supported by this installer.
    */
   async renderOperatorEcsCloudFormation(
     request?: models.RenderOperatorEcsCloudFormationRequest | undefined,
