@@ -1391,6 +1391,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-operator
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
+            target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
           key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}
 
       - uses: ./.github/actions/setup-rust
@@ -1407,13 +1408,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
+            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -1446,6 +1447,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-operator
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
+            target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
           key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}
 
       - uses: ./.github/actions/setup-rust
@@ -1462,13 +1464,13 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
+            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -1790,7 +1792,7 @@ jobs:
         run: |
           for target in x86_64-unknown-linux-musl aarch64-unknown-linux-musl; do
             mkdir -p "target/${target}/release"
-            for binary in alien-operator alien-worker-runtime alien-manager; do
+            for binary in alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
               cp "./linux-bins/binaries-${target}/${binary}" "target/${target}/release/${binary}"
               chmod +x "target/${target}/release/${binary}"
             done
@@ -1958,12 +1960,33 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Metadata (alien-sandbox-agent)
+        id: meta_sandbox_agent
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/alienplatform/alien-sandbox-agent
+          tags: |
+            type=raw,value=qualification-${{ inputs.source_ref }}
+
+      - name: Publish alien-sandbox-agent
+        uses: depot/build-push-action@v1
+        with:
+          project: ${{ vars.DEPOT_PROJECT_ID }}
+          context: .
+          file: docker/Dockerfile.alien-sandbox-agent
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta_sandbox_agent.outputs.tags }}
+          labels: ${{ steps.meta_sandbox_agent.outputs.labels }}
+          provenance: true
+          sbom: true
+
       - name: Record qualified image digests
         env:
           RELEASE_COMMIT: ${{ inputs.source_ref }}
         run: |
           DIGESTS='{}'
-          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager; do
+          for name in alien-base alien-worker-typescript alien-builder alien-operator alien-manager alien-sandbox-agent; do
             qualified="ghcr.io/alienplatform/${name}:qualification-${RELEASE_COMMIT}"
             digest=$(docker buildx imagetools inspect "$qualified" |
               sed -n 's/^Digest:[[:space:]]*//p' | head -n1)
