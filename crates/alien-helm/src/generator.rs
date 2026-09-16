@@ -401,6 +401,10 @@ fn add_remote_operator_files(
         "templates/remote-operator-cleanup-job.yaml".to_string(),
         remote_operator_cleanup_job_tpl(),
     );
+    files.insert(
+        "templates/remote-operator-rollback-guard.yaml".to_string(),
+        remote_operator_rollback_guard_tpl(),
+    );
 
     let values = files.get_mut("values.yaml").ok_or_else(|| {
         AlienError::new(ErrorData::GenericError {
@@ -595,8 +599,48 @@ spec:
             - -ec
             - |
               resource_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
+              kubectl -n {{ .Release.Namespace | quote }} delete deployment "$resource_name" --ignore-not-found=true
               kubectl -n {{ .Release.Namespace | quote }} delete configmap "$resource_name" "$resource_name-complete" --ignore-not-found=true
               kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaim "$resource_name-identity" --ignore-not-found=true
+"#
+    .to_string()
+}
+
+fn remote_operator_rollback_guard_tpl() -> String {
+    r#"{{- if not .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-rollback-guard" (include "deployment.remoteOperatorResourceName" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-rollback
+    "helm.sh/hook-weight": "-100"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      restartPolicy: Never
+      containers:
+        - name: rollback-guard
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              identity_completion={{ include "deployment.remoteOperatorIdentityCompletionName" . | quote }}
+              if kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" >/dev/null 2>&1; then
+                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. Use the explicit uninstall lifecycle instead." >&2
+                exit 1
+              fi
+{{- end }}
 "#
     .to_string()
 }
@@ -5785,8 +5829,14 @@ mod tests {
         assert!(checks.contains("managedResourceExists"));
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
+        assert!(cleanup.contains("delete deployment \"$resource_name\""));
         assert!(cleanup.contains("$resource_name-complete"));
         assert!(cleanup.contains("$resource_name-identity"));
+        let rollback_guard = &chart.files["templates/remote-operator-rollback-guard.yaml"];
+        assert!(rollback_guard.contains("if not .Values.remoteOperator.enabled"));
+        assert!(rollback_guard.contains("helm.sh/hook\": pre-rollback"));
+        assert!(rollback_guard.contains("get configmap \"$identity_completion\""));
+        assert!(rollback_guard.contains("Use the explicit uninstall lifecycle instead"));
         assert!(checks.contains("missing from a partial installation"));
         assert!(checks.contains("Disabling Remote Operator"));
         assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));

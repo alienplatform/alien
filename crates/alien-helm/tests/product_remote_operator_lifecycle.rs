@@ -20,6 +20,8 @@ const ENCRYPTION_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef01
 const ENCRYPTION_KEY_SHA256: &str =
     "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e";
 const GOOD_OPERATOR_IMAGE: &str = "registry.k8s.io/pause:3.10.1";
+const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "registry.k8s.io/pause";
+const GOOD_RUNTIME_IMAGE_TAG: &str = "3.10.1";
 
 struct TestClusterCleanup {
     helm_namespace: String,
@@ -142,7 +144,13 @@ rules:
             "--namespace",
             &helm_namespace,
             "--kube-as-user=product-installer",
+            "--wait",
+            "--timeout=2m",
             "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
         ],
         None,
     );
@@ -286,7 +294,14 @@ rules:
     );
     run_ok(
         "helm",
-        ["uninstall", &helm_release, "--namespace", &helm_namespace],
+        [
+            "uninstall",
+            &helm_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
         None,
     );
     run_ok("kubectl", ["get", "crd", CRD_NAME], None);
@@ -517,6 +532,10 @@ fn helm_upgrade_args(
         format!(
             "--set-string=remoteOperator.existingSecret.encryptionKeySha256={ENCRYPTION_KEY_SHA256}"
         ),
+        format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+        format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+        "--set=runtime.probes.liveness.enabled=false".to_string(),
+        "--set=runtime.probes.readiness.enabled=false".to_string(),
     ]
 }
 
@@ -611,6 +630,20 @@ locals {{
   provider_helm_values = yamlencode({{
     management = {{
       url = "https://management.example.test"
+    }}
+    runtime = {{
+      image = {{
+        repository = {GOOD_RUNTIME_IMAGE_REPOSITORY:?}
+        tag        = {GOOD_RUNTIME_IMAGE_TAG:?}
+      }}
+      probes = {{
+        liveness = {{
+          enabled = false
+        }}
+        readiness = {{
+          enabled = false
+        }}
+      }}
     }}
   }})
 }}
