@@ -4,7 +4,6 @@
 
 import { AlienCore } from "../core.js";
 import { encodeFormQuery, encodeJSON, encodeSimple } from "../lib/encodings.js";
-import { matchStatusCode } from "../lib/http.js";
 import * as M from "../lib/matchers.js";
 import { compactMap } from "../lib/primitives.js";
 import { safeParse } from "../lib/schemas.js";
@@ -27,7 +26,7 @@ import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+ * Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
  */
 export function operationsDenyAccessRequest(
   client: AlienCore,
@@ -92,6 +91,7 @@ async function $do(
       charEncoding: "percent",
     }),
   };
+
   const path = pathToFunc("/v1/access-requests/{id}/deny")(pathParams);
 
   const query = encodeFormQuery({
@@ -140,8 +140,7 @@ async function $do(
 
   const doResult = await client._do(req, {
     context,
-    isErrorStatusCode: (statusCode: number) =>
-      matchStatusCode({ status: statusCode } as Response, ["4XX", "5XX"]),
+    errorCodes: ["403", "404", "409", "4XX", "500", "5XX"],
     retryConfig: context.retryConfig,
     retryCodes: context.retryCodes,
   });
@@ -167,7 +166,8 @@ async function $do(
     | SDKValidationError
   >(
     M.json(200, operations.DenyAccessRequestResponse$inboundSchema),
-    M.jsonErr([404, 409], errors.APIError$inboundSchema),
+    M.jsonErr([403, 404, 409], errors.APIError$inboundSchema),
+    M.jsonErr(500, errors.APIError$inboundSchema),
     M.fail("4XX"),
     M.fail("5XX"),
   )(response, req, { extraFields: responseFields });

@@ -388,7 +388,7 @@ jobs:
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Rust and TypeScript command integration

@@ -6,7 +6,7 @@
 //!
 //! 1. Implements [`plugin::Plugin`] and calls [`plugin::run_plugin`] from
 //!    `main`.
-//! 2. Declares a [`manifest::PluginManifest`] (conventionally
+//! 2. Declares a [`manifest::CanonicalPluginManifest`] (conventionally
 //!    `metadata.json`) describing each operation's params, risk tier,
 //!    required permissions, timeout, retries, verification, and
 //!    sensitive-output handling.
@@ -23,17 +23,34 @@ pub mod manifest;
 pub mod mcp;
 pub mod plugin;
 pub mod protocol;
+pub mod typed;
 pub mod verification;
 
-pub use docs::generate_docs;
+pub use alien_core::permissions::{
+    AwsBindingSpec, AwsPermissionEffect, AwsPlatformPermission, AzureBindingSpec,
+    AzurePlatformPermission, BindingConfiguration, GcpBindingSpec, GcpCondition,
+    GcpPlatformPermission, PermissionGrant, PermissionSet, PermissionSetReference,
+    PlatformPermissions,
+};
+pub use docs::{generate_docs, generate_docs_canonical};
 pub use error::{ErrorData, Result};
 pub use kubernetes::{
     KubernetesOperationPermissions, KubernetesPermissionRule, KubernetesPermissions,
 };
+#[allow(deprecated)]
 pub use manifest::{
-    Arch, OperationManifest, PluginManifest, RetryPolicy, RiskTier, SensitiveOutputPolicy,
+    Arch, CanonicalOperationManifest, CanonicalPluginManifest, OperationManifest, PluginManifest,
+    RetryPolicy, RiskTier, SensitiveOutputPolicy, MAX_BUNDLE_EXECUTABLE_BYTES,
 };
-pub use mcp::{generate_mcp_tools, McpToolSchema};
+pub use mcp::{
+    generate_mcp_tools, generate_mcp_tools_canonical, CanonicalMcpToolSchema, McpToolSchema,
+};
 pub use plugin::{dispatch, run_plugin, Plugin};
-pub use protocol::{PluginInvocation, PluginResult, PROTOCOL_VERSION};
+pub use protocol::{
+    is_explicitly_retryable, retryable_error, PluginInvocation, PluginResult, PROTOCOL_VERSION,
+    RETRYABLE_ERROR_DETAILS,
+};
+pub use typed::{
+    OperationDefinition, OperationFailure, TypedOperations, TYPED_OPERATION_PARAMS_MAX_BYTES,
+};
 pub use verification::Verification;

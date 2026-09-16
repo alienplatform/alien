@@ -2,7 +2,7 @@ use alien_helm::{
     generate_operator_manifest, HelmChart, OperatorManifestOptions, OperatorOutputFormat,
     OperatorPermission, OperatorScope,
 };
-use alien_operations_sdk::{KubernetesOperationPermissions, PluginManifest};
+use alien_operations_sdk::{CanonicalPluginManifest, KubernetesOperationPermissions};
 use indexmap::IndexMap;
 use serde::Deserialize;
 use serde_yaml::Value as YamlValue;
@@ -68,7 +68,8 @@ fn custom_operation(plugin_name: &str) -> KubernetesOperationPermissions {
             }]
         }}]
     });
-    let parsed = PluginManifest::parse_and_validate(manifest.to_string().as_bytes()).unwrap();
+    let parsed =
+        CanonicalPluginManifest::parse_and_validate(manifest.to_string().as_bytes()).unwrap();
     let operation = &parsed.operations[0];
     KubernetesOperationPermissions {
         plugin: parsed.name.clone(),

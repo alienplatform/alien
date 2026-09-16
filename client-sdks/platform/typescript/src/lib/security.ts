@@ -13,22 +13,17 @@ type OAuth2PasswordFlow = {
   tokenURL: string;
 };
 
-export const SecurityErrorCode = {
-  Incomplete: "incomplete",
-  UnrecognisedSecurityType: "unrecognized_security_type",
-} as const;
-export type SecurityErrorCode =
-  (typeof SecurityErrorCode)[keyof typeof SecurityErrorCode];
+export enum SecurityErrorCode {
+  Incomplete = "incomplete",
+  UnrecognisedSecurityType = "unrecognized_security_type",
+}
 
 export class SecurityError extends Error {
-  public code: SecurityErrorCode;
-
   constructor(
-    code: SecurityErrorCode,
+    public code: SecurityErrorCode,
     message: string,
   ) {
     super(message);
-    this.code = code;
     this.name = "SecurityError";
   }
 
@@ -203,7 +198,8 @@ export function resolveSecurity(
         applyBearer(state, spec);
         break;
       default:
-        throw SecurityError.unrecognizedType((spec satisfies never, type));
+        spec satisfies never;
+        throw SecurityError.unrecognizedType(type);
     }
   });
 
@@ -245,9 +241,8 @@ function applyBearer(
 
 export function resolveGlobalSecurity(
   security: Partial<models.Security> | null | undefined,
-  allowedFields?: number[],
 ): SecurityState | null {
-  let inputs: SecurityInput[][] = [
+  return resolveSecurity(
     [
       {
         fieldName: "Authorization",
@@ -255,18 +250,7 @@ export function resolveGlobalSecurity(
         value: security?.apiKey ?? env().ALIEN_API_KEY,
       },
     ],
-  ];
-
-  if (allowedFields) {
-    inputs = allowedFields.map((i) => {
-      if (i < 0 || i >= inputs.length) {
-        throw new RangeError(`invalid allowedFields index ${i}`);
-      }
-      return inputs[i]!;
-    });
-  }
-
-  return resolveSecurity(...inputs);
+  );
 }
 
 export async function extractSecurity<

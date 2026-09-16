@@ -137,27 +137,13 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * One verification poll cycle for a write operation's declared verification spec. Dispatches the declared poll operation once, waits briefly for it, and evaluates the success condition. Returns 'skipped' if the operation declares no verification, or the write result lacks the fields verification needs. Callers poll this repeatedly per the operation's declared retry policy.
+   * One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
    */
   async verifyCheck(
     request: operations.VerifyOperationCheckRequest,
     options?: RequestOptions,
   ): Promise<models.VerifyOperationCheckResponse> {
     return unwrapAsync(operationsVerifyCheck(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  /**
-   * List a project's access requests, newest first.
-   */
-  async listAccessRequests(
-    request: operations.ListAccessRequestsRequest,
-    options?: RequestOptions,
-  ): Promise<operations.ListAccessRequestsResponse> {
-    return unwrapAsync(operationsListAccessRequests(
       this,
       request,
       options,
@@ -179,6 +165,20 @@ export class Operations extends ClientSDK {
   }
 
   /**
+   * List a project's access requests, newest first.
+   */
+  async listAccessRequests(
+    request: operations.ListAccessRequestsRequest,
+    options?: RequestOptions,
+  ): Promise<operations.ListAccessRequestsResponse> {
+    return unwrapAsync(operationsListAccessRequests(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
    * Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
    */
   async queueAccessRequest(
@@ -193,7 +193,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Customer gate, direct method — approve a queued access request immediately, granting the same window a kubectl approve would. `method` names the calling system (e.g. `slack`) for the audit trail.
+   * Customer gate — an authenticated workspace member or administrator other than the requester may approve a queued access request. Actor identity comes from authentication; method/source are audit context only.
    */
   async approveAccessRequest(
     request: operations.ApproveAccessRequestRequest,
@@ -207,7 +207,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Customer gate, direct method — reject a queued access request immediately. `method` names the calling system for the audit trail.
+   * Customer gate — an authenticated workspace member or administrator other than the requester may reject a queued access request. Actor identity comes from authentication.
    */
   async denyAccessRequest(
     request: operations.DenyAccessRequestRequest,

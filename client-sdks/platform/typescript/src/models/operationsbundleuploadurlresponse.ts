@@ -13,6 +13,10 @@ export type OperationsBundleUploadUrlResponse = {
    */
   uploadUrl: string;
   /**
+   * One-time id for this upload. Pass it back verbatim to POST /plugins so the API can validate and snapshot exactly the bytes this call uploaded.
+   */
+  uploadId: string;
+  /**
    * Content-Type header the PUT must send (must match the signature).
    */
   contentType: string;
@@ -24,6 +28,7 @@ export const OperationsBundleUploadUrlResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   uploadUrl: z.string(),
+  uploadId: z.string(),
   contentType: z.string(),
 });
 

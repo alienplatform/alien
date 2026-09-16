@@ -31,6 +31,18 @@ use uuid::Uuid;
 /// 4. Stores in local database for deployment loop
 /// 5. Creates approval record if manual approval is required
 pub async fn run_sync_loop(state: Arc<OperatorState>) {
+    run_sync_loop_with_command_address_support(state, false).await;
+}
+
+/// Run the sync loop with capabilities declared by injected runtime loops.
+///
+/// Kept crate-private so the public `run_sync_loop` API remains compatible;
+/// the full operator entry point derives this value from the actual operations
+/// receiver before moving it into its task.
+pub(crate) async fn run_sync_loop_with_command_address_support(
+    state: Arc<OperatorState>,
+    operations_command_address_v1: bool,
+) {
     let interval = Duration::from_secs(state.config.sync_interval_seconds);
 
     let sync_config = match &state.config.sync {
@@ -56,7 +68,14 @@ pub async fn run_sync_loop(state: Arc<OperatorState>) {
     );
 
     loop {
-        match sync_with_manager(&state, &client, sync_config.url.as_str()).await {
+        match sync_with_manager(
+            &state,
+            &client,
+            sync_config.url.as_str(),
+            operations_command_address_v1,
+        )
+        .await
+        {
             Ok(has_update) => {
                 if has_update {
                     info!("Received update from manager");
@@ -108,6 +127,7 @@ async fn sync_with_manager(
     state: &OperatorState,
     client: &Client,
     base_url: &str,
+    operations_command_address_v1: bool,
 ) -> crate::error::Result<bool> {
     // Get current deployment state from local database (or create default if not exists)
     let mut deployment_state =
@@ -199,7 +219,7 @@ async fn sync_with_manager(
         current_state: Some(deployment_state),
         heartbeats,
         observed_inventory_batches,
-        capabilities: report_operator_capabilities(state),
+        capabilities: report_operator_capabilities(state, operations_command_address_v1),
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
     };
@@ -447,8 +467,13 @@ fn single_observed_version(batches: &[ObservedInventoryBatch]) -> Option<String>
     }
 }
 
-fn report_operator_capabilities(state: &OperatorState) -> Vec<OperatorCapabilityReport> {
-    let mut capabilities = Vec::new();
+fn report_operator_capabilities(
+    state: &OperatorState,
+    operations_command_address_v1: bool,
+) -> Vec<OperatorCapabilityReport> {
+    let mut capabilities = vec![operation_command_address_capability(
+        operations_command_address_v1,
+    )];
     capabilities.push(OperatorCapabilityReport {
         key: "credential.rotation-v1".to_string(),
         state: OperatorCapabilityState::Granted,
@@ -496,6 +521,21 @@ fn report_operator_capabilities(state: &OperatorState) -> Vec<OperatorCapability
     });
 
     capabilities
+}
+
+fn operation_command_address_capability(
+    operations_command_address_v1: bool,
+) -> OperatorCapabilityReport {
+    OperatorCapabilityReport {
+        key: "operations.command-address-v1".to_string(),
+        state: if operations_command_address_v1 {
+            OperatorCapabilityState::Granted
+        } else {
+            OperatorCapabilityState::Unavailable
+        },
+        detail: operations_command_address_v1
+            .then(|| "Version-qualified operation command registration and execution".to_string()),
+    }
 }
 
 fn is_uninitialized_deployment_state(state: &alien_core::DeploymentState) -> bool {
@@ -566,10 +606,28 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        sync::OperatorCapabilityState, DeploymentState, DeploymentStatus, Platform,
+        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
 
-    use super::{apply_manager_control_state, is_uninitialized_deployment_state};
+    use super::{
+        apply_manager_control_state, is_uninitialized_deployment_state,
+        operation_command_address_capability,
+    };
+
+    #[test]
+    fn reports_versioned_operation_command_support_declared_by_the_receiver() {
+        let capability = operation_command_address_capability(true);
+        assert_eq!(capability.key, "operations.command-address-v1");
+        assert_eq!(capability.state, OperatorCapabilityState::Granted);
+    }
+
+    #[test]
+    fn does_not_report_versioned_command_support_without_receiver_opt_in() {
+        let capability = operation_command_address_capability(false);
+        assert_eq!(capability.key, "operations.command-address-v1");
+        assert_eq!(capability.state, OperatorCapabilityState::Unavailable);
+    }
 
     #[test]
     fn recognizes_empty_pending_state_as_uninitialized() {

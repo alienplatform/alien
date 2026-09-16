@@ -352,13 +352,13 @@ export type ConfigureProjectSourceMethod = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceDeployments = {
-  enabled: true;
+  enabled: boolean;
   methods?: Array<ConfigureProjectSourceMethod> | undefined;
 };
 
 export type ConfigureProjectSourceKeys = {
-  enabled: true;
-  applicationEncryption: true;
+  enabled: boolean;
+  applicationEncryption: boolean;
 };
 
 export const ConfigureProjectSourceAllowedProvider = {
@@ -389,7 +389,7 @@ export type ConfigureProjectSourceRequirement = {
 };
 
 export type ConfigureProjectSourceModels = {
-  enabled: true;
+  enabled: boolean;
   allowedProviders: Array<ConfigureProjectSourceAllowedProvider>;
   requirements: Array<ConfigureProjectSourceRequirement>;
 };
@@ -402,7 +402,7 @@ export type ConfigureProjectSourceAccess = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceBuckets = {
-  enabled: true;
+  enabled: boolean;
   access: ConfigureProjectSourceAccess;
 };
 
@@ -415,16 +415,21 @@ export type ConfigureProjectSourceCredentialPolicy = ClosedEnum<
 >;
 
 export type ConfigureProjectSourceRegistry = {
-  enabled: true;
+  enabled: boolean;
   repositories: Array<string>;
   credentialPolicy: ConfigureProjectSourceCredentialPolicy;
 };
 
+export type ConfigureProjectSourceAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type ConfigureProjectSourceRemoteSandbox = {
-  enabled: true;
+  enabled: boolean;
   baseImage?: string | undefined;
-  imageBundleUri?: string | undefined;
-  maxSessionLifetimeSeconds: number;
+  azure?: ConfigureProjectSourceAzure | undefined;
+  maxLifetimeSeconds?: number | undefined;
 };
 
 export type ConfigureProjectSourceCapabilities = {
@@ -942,7 +947,7 @@ export const ConfigureProjectSourceDeployments$inboundSchema: z.ZodType<
   ConfigureProjectSourceDeployments,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   methods: z.array(ConfigureProjectSourceMethod$inboundSchema).optional(),
 });
 
@@ -961,8 +966,8 @@ export const ConfigureProjectSourceKeys$inboundSchema: z.ZodType<
   ConfigureProjectSourceKeys,
   unknown
 > = z.object({
-  enabled: z.literal(true),
-  applicationEncryption: z.literal(true),
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
 });
 
 export function configureProjectSourceKeysFromJSON(
@@ -1010,7 +1015,7 @@ export const ConfigureProjectSourceModels$inboundSchema: z.ZodType<
   ConfigureProjectSourceModels,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   allowedProviders: z.array(
     ConfigureProjectSourceAllowedProvider$inboundSchema,
   ),
@@ -1039,7 +1044,7 @@ export const ConfigureProjectSourceBuckets$inboundSchema: z.ZodType<
   ConfigureProjectSourceBuckets,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   access: ConfigureProjectSourceAccess$inboundSchema,
 });
 
@@ -1063,7 +1068,7 @@ export const ConfigureProjectSourceRegistry$inboundSchema: z.ZodType<
   ConfigureProjectSourceRegistry,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   repositories: z.array(z.string()),
   credentialPolicy: ConfigureProjectSourceCredentialPolicy$inboundSchema,
 });
@@ -1079,14 +1084,33 @@ export function configureProjectSourceRegistryFromJSON(
 }
 
 /** @internal */
+export const ConfigureProjectSourceAzure$inboundSchema: z.ZodType<
+  ConfigureProjectSourceAzure,
+  unknown
+> = z.object({
+  catalogImage: z.string(),
+  idleSuspendSeconds: z.int(),
+});
+
+export function configureProjectSourceAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ConfigureProjectSourceAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ConfigureProjectSourceAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ConfigureProjectSourceAzure' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigureProjectSourceRemoteSandbox$inboundSchema: z.ZodType<
   ConfigureProjectSourceRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   baseImage: z.string().optional(),
-  imageBundleUri: z.string().optional(),
-  maxSessionLifetimeSeconds: z.int(),
+  azure: z.lazy(() => ConfigureProjectSourceAzure$inboundSchema).optional(),
+  maxLifetimeSeconds: z.int().optional(),
 });
 
 export function configureProjectSourceRemoteSandboxFromJSON(

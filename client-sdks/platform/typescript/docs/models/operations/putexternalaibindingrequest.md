@@ -8,8 +8,10 @@ import { PutExternalAIBindingRequest } from "@alienplatform/platform-api/models/
 let value: PutExternalAIBindingRequest = {
   id: "dg_r27ict8c7vcgsumpj90ackf7b",
   putExternalAIBindingRequest: {
-    provider: "anthropic",
-    apiKey: "<value>",
+    provider: "databricks",
+    workspaceUrl: "https://dead-morning.biz/",
+    clientId: "<id>",
+    clientSecret: "<value>",
     acknowledgeAlienCredentialAccess: true,
   },
 };

@@ -5,10 +5,17 @@
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
 
+/**
+ * Alien Gateway a customer deployment runs
+ */
 export const GatewayKind = {
   Ai: "ai",
   Encryption: "encryption",
+  Sandbox: "sandbox",
 } as const;
+/**
+ * Alien Gateway a customer deployment runs
+ */
 export type GatewayKind = ClosedEnum<typeof GatewayKind>;
 
 /** @internal */

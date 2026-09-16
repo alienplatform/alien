@@ -1,17 +1,20 @@
 # Permission
 
-Operator permission tier
 
-## Example Usage
+## Supported Types
+
+### `string`
 
 ```typescript
-import { Permission } from "@alienplatform/platform-api/models";
-
-let value: Permission = "remediation";
+const value: string = "<value>";
 ```
 
-## Values
+### `models.PublishOperationsPluginRequestPermission`
 
 ```typescript
-"diagnostics" | "remediation"
+const value: models.PublishOperationsPluginRequestPermission = {
+  id: "<id>",
+  description: "reclassify baa till um",
+  platforms: {},
+};
 ```

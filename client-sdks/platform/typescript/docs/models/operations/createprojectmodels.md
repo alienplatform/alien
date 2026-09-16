@@ -7,14 +7,10 @@ import { CreateProjectModels } from "@alienplatform/platform-api/models/operatio
 
 let value: CreateProjectModels = {
   enabled: true,
-  allowedProviders: [],
-  requirements: [
-    {
-      publicModelId: "<id>",
-      clientApis: [],
-      required: true,
-    },
+  allowedProviders: [
+    "gcp-vertex",
   ],
+  requirements: [],
 };
 ```
 
@@ -22,6 +18,6 @@ let value: CreateProjectModels = {
 
 | Field                                                                                                | Type                                                                                                 | Required                                                                                             | Description                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                            | *true*                                                                                               | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
+| `enabled`                                                                                            | *boolean*                                                                                            | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
 | `allowedProviders`                                                                                   | [operations.CreateProjectAllowedProvider](../../models/operations/createprojectallowedprovider.md)[] | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
 | `requirements`                                                                                       | [operations.CreateProjectRequirement](../../models/operations/createprojectrequirement.md)[]         | :heavy_check_mark:                                                                                   | N/A                                                                                                  |

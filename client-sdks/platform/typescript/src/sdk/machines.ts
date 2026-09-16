@@ -71,22 +71,22 @@ export class Machines extends ClientSDK {
     ));
   }
 
-  async drainMachine(
-    request: operations.DrainMachinesMachineRequest,
+  async cancelMachineDrain(
+    request: operations.CancelMachinesMachineDrainRequest,
     options?: RequestOptions,
-  ): Promise<models.DrainMachinesMachineResponse> {
-    return unwrapAsync(machinesDrainMachine(
+  ): Promise<models.CancelMachinesMachineDrainResponse> {
+    return unwrapAsync(machinesCancelMachineDrain(
       this,
       request,
       options,
     ));
   }
 
-  async cancelMachineDrain(
-    request: operations.CancelMachinesMachineDrainRequest,
+  async drainMachine(
+    request: operations.DrainMachinesMachineRequest,
     options?: RequestOptions,
-  ): Promise<models.CancelMachinesMachineDrainResponse> {
-    return unwrapAsync(machinesCancelMachineDrain(
+  ): Promise<models.DrainMachinesMachineResponse> {
+    return unwrapAsync(machinesDrainMachine(
       this,
       request,
       options,

@@ -17,13 +17,13 @@ export type ProjectCapabilitiesMethod = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesDeployments = {
-  enabled: true;
+  enabled: boolean;
   methods?: Array<ProjectCapabilitiesMethod> | undefined;
 };
 
 export type ProjectCapabilitiesKeys = {
-  enabled: true;
-  applicationEncryption: true;
+  enabled: boolean;
+  applicationEncryption: boolean;
 };
 
 export const ProjectCapabilitiesAllowedProvider = {
@@ -54,7 +54,7 @@ export type ProjectCapabilitiesRequirement = {
 };
 
 export type ProjectCapabilitiesModels = {
-  enabled: true;
+  enabled: boolean;
   allowedProviders: Array<ProjectCapabilitiesAllowedProvider>;
   requirements: Array<ProjectCapabilitiesRequirement>;
 };
@@ -67,7 +67,7 @@ export type ProjectCapabilitiesAccess = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesBuckets = {
-  enabled: true;
+  enabled: boolean;
   access: ProjectCapabilitiesAccess;
 };
 
@@ -80,16 +80,21 @@ export type ProjectCapabilitiesCredentialPolicy = ClosedEnum<
 >;
 
 export type ProjectCapabilitiesRegistry = {
-  enabled: true;
+  enabled: boolean;
   repositories: Array<string>;
   credentialPolicy: ProjectCapabilitiesCredentialPolicy;
 };
 
+export type ProjectCapabilitiesAzure = {
+  catalogImage: string;
+  idleSuspendSeconds: number;
+};
+
 export type ProjectCapabilitiesRemoteSandbox = {
-  enabled: true;
+  enabled: boolean;
   baseImage?: string | undefined;
-  imageBundleUri?: string | undefined;
-  maxSessionLifetimeSeconds: number;
+  azure?: ProjectCapabilitiesAzure | undefined;
+  maxLifetimeSeconds?: number | undefined;
 };
 
 export type ProjectCapabilitiesCapabilities = {
@@ -116,7 +121,7 @@ export const ProjectCapabilitiesDeployments$inboundSchema: z.ZodType<
   ProjectCapabilitiesDeployments,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   methods: z.array(ProjectCapabilitiesMethod$inboundSchema).optional(),
 });
 
@@ -135,8 +140,8 @@ export const ProjectCapabilitiesKeys$inboundSchema: z.ZodType<
   ProjectCapabilitiesKeys,
   unknown
 > = z.object({
-  enabled: z.literal(true),
-  applicationEncryption: z.literal(true),
+  enabled: z.boolean(),
+  applicationEncryption: z.boolean(),
 });
 
 export function projectCapabilitiesKeysFromJSON(
@@ -184,7 +189,7 @@ export const ProjectCapabilitiesModels$inboundSchema: z.ZodType<
   ProjectCapabilitiesModels,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   allowedProviders: z.array(ProjectCapabilitiesAllowedProvider$inboundSchema),
   requirements: z.array(
     z.lazy(() => ProjectCapabilitiesRequirement$inboundSchema),
@@ -211,7 +216,7 @@ export const ProjectCapabilitiesBuckets$inboundSchema: z.ZodType<
   ProjectCapabilitiesBuckets,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   access: ProjectCapabilitiesAccess$inboundSchema,
 });
 
@@ -235,7 +240,7 @@ export const ProjectCapabilitiesRegistry$inboundSchema: z.ZodType<
   ProjectCapabilitiesRegistry,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   repositories: z.array(z.string()),
   credentialPolicy: ProjectCapabilitiesCredentialPolicy$inboundSchema,
 });
@@ -251,14 +256,33 @@ export function projectCapabilitiesRegistryFromJSON(
 }
 
 /** @internal */
+export const ProjectCapabilitiesAzure$inboundSchema: z.ZodType<
+  ProjectCapabilitiesAzure,
+  unknown
+> = z.object({
+  catalogImage: z.string(),
+  idleSuspendSeconds: z.int(),
+});
+
+export function projectCapabilitiesAzureFromJSON(
+  jsonString: string,
+): SafeParseResult<ProjectCapabilitiesAzure, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => ProjectCapabilitiesAzure$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'ProjectCapabilitiesAzure' from JSON`,
+  );
+}
+
+/** @internal */
 export const ProjectCapabilitiesRemoteSandbox$inboundSchema: z.ZodType<
   ProjectCapabilitiesRemoteSandbox,
   unknown
 > = z.object({
-  enabled: z.literal(true),
+  enabled: z.boolean(),
   baseImage: z.string().optional(),
-  imageBundleUri: z.string().optional(),
-  maxSessionLifetimeSeconds: z.int(),
+  azure: z.lazy(() => ProjectCapabilitiesAzure$inboundSchema).optional(),
+  maxLifetimeSeconds: z.int().optional(),
 });
 
 export function projectCapabilitiesRemoteSandboxFromJSON(

@@ -62,7 +62,7 @@ export class Deployments extends ClientSDK {
   async deleteDeployment(
     request: operations.DeleteDeploymentRequest,
     options?: RequestOptions,
-  ): Promise<void> {
+  ): Promise<models.DeleteDeploymentResponse> {
     return unwrapAsync(deploymentsDeleteDeployment(
       this,
       request,

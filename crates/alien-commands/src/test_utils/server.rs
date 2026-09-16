@@ -1,6 +1,6 @@
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use axum::Router;
@@ -35,6 +35,7 @@ use crate::{
 pub struct FaultInjectingKv {
     inner: Arc<LocalKv>,
     fail_pending_scan: AtomicBool,
+    idempotency_get_barrier: Mutex<Option<Arc<tokio::sync::Barrier>>>,
 }
 
 impl FaultInjectingKv {
@@ -42,6 +43,7 @@ impl FaultInjectingKv {
         Self {
             inner,
             fail_pending_scan: AtomicBool::new(false),
+            idempotency_get_barrier: Mutex::new(None),
         }
     }
 
@@ -51,6 +53,16 @@ impl FaultInjectingKv {
     pub fn arm_pending_scan_failure(&self) {
         self.fail_pending_scan.store(true, Ordering::SeqCst);
     }
+
+    /// Hold the first `parties` absent idempotency reads until all concurrent
+    /// creators have passed the pre-create check.
+    pub fn arm_idempotency_get_barrier(&self, parties: usize) {
+        *self
+            .idempotency_get_barrier
+            .lock()
+            .expect("idempotency barrier lock should not be poisoned") =
+            Some(Arc::new(tokio::sync::Barrier::new(parties)));
+    }
 }
 
 impl Binding for FaultInjectingKv {}
@@ -58,7 +70,19 @@ impl Binding for FaultInjectingKv {}
 #[async_trait]
 impl Kv for FaultInjectingKv {
     async fn get(&self, key: &str) -> alien_bindings::Result<Option<KvEntry>> {
-        self.inner.get(key).await
+        let value = self.inner.get(key).await?;
+        let barrier = if key.starts_with("idem:") && value.is_none() {
+            self.idempotency_get_barrier
+                .lock()
+                .expect("idempotency barrier lock should not be poisoned")
+                .clone()
+        } else {
+            None
+        };
+        if let Some(barrier) = barrier {
+            barrier.wait().await;
+        }
+        Ok(value)
     }
 
     async fn put(

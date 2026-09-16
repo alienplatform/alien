@@ -683,7 +683,7 @@ jobs:
         if: ${{ inputs.stable_action == 'qualification' }}
         run: pnpm build
         env:
-          NODE_OPTIONS: "--max-old-space-size=8192"
+          NODE_OPTIONS: "--max-old-space-size=12288"
 
       - name: Download qualified npm packages
         if: ${{ inputs.stable_action == 'publish' }}

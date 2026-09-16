@@ -284,6 +284,7 @@ impl CommandRegistry for SqliteCommandRegistry {
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
+        _operation_result_contract: Option<serde_json::Value>,
     ) -> alien_commands::error::Result<CommandMetadata> {
         let command_id = alien_core::new_id(alien_core::IdType::Command);
         let now = Utc::now();

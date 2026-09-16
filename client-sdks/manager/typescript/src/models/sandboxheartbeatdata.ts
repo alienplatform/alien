@@ -40,11 +40,11 @@ export type SandboxHeartbeatDataKubernetesPods = {
 };
 
 /**
- * GCP: the Agent Platform template sessions are cut from, and the engine it hangs under.
+ * GCP: the Agent Platform template sandboxes are cut from, and the engine it hangs under.
  *
  * @remarks
  *
- * No session count: that needs `aiplatform.sandboxEnvironments.list`, which only the management
+ * No sandbox count: that needs `aiplatform.sandboxEnvironments.list`, which only the management
  * permission set holds. No template state either — emission is gated on reading it `ACTIVE`,
  * which is what `status` already says.
  */
@@ -55,14 +55,14 @@ export type SandboxHeartbeatDataGcpAgentPlatform = {
   engine: string;
   status: SandboxHeartbeatStatus;
   /**
-   * The template sessions are currently cut from.
+   * The template sandboxes are currently cut from.
    */
   templateId: string;
   backend: "gcpAgentPlatform";
 };
 
 /**
- * Azure: the sandbox group's ARM state. The data plane has no list operation, so a session count
+ * Azure: the sandbox group's ARM state. The data plane has no list operation, so a sandbox count
  *
  * @remarks
  * is not available here.
@@ -79,7 +79,7 @@ export type SandboxHeartbeatDataAzureSandboxGroup = {
  */
 export type SandboxHeartbeatDataAwsMicrovm = {
   /**
-   * Image the sessions belong to.
+   * Image the sandboxes belong to.
    */
   imageIdentifier: string;
   /**
@@ -87,7 +87,7 @@ export type SandboxHeartbeatDataAwsMicrovm = {
    *
    * @remarks
    *
-   * No session count sits beside it: counting means `lambda:ListMicrovms`, which authorizes
+   * No sandbox count sits beside it: counting means `lambda:ListMicrovms`, which authorizes
    * against no resource type and so cannot be granted without an account-wide reach the
    * permission sets refuse. A field only an over-broad grant could fill is a field whose
    * implementer ships AccessDenied into a customer's account.
@@ -98,11 +98,11 @@ export type SandboxHeartbeatDataAwsMicrovm = {
 };
 
 /**
- * Content-free telemetry about a sandbox's sessions.
+ * Content-free telemetry about what a sandbox resource is running.
  *
  * @remarks
  *
- * Never anything from inside a session. A controller reaches only the cloud's management APIs,
+ * Never anything from inside a sandbox. A controller reaches only the cloud's management APIs,
  * and the whole point of the resource is that the control plane cannot see what runs in it.
  */
 export type SandboxHeartbeatData =

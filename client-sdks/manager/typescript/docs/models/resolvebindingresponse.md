@@ -232,3 +232,50 @@ const value: models.ResolveBindingResponseSandboxAws = {
 };
 ```
 
+### `models.ResolveBindingResponseSandboxAzure`
+
+```typescript
+const value: models.ResolveBindingResponseSandboxAzure = {
+  binding: {
+    allowEgress: true,
+    dataPlaneEndpoint: "<value>",
+    diskImage: "<value>",
+    region: "<value>",
+    resourceGroup: "<value>",
+    sandboxGroup: "<value>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    subscriptionId: "<id>",
+    tenantId: "<id>",
+  },
+  expiresAt: "1758451719405",
+  service: "sandbox-azure",
+};
+```
+
+### `models.ResolveBindingResponseSandboxGcpAgentPlatform`
+
+```typescript
+const value: models.ResolveBindingResponseSandboxGcpAgentPlatform = {
+  binding: {
+    engine: "<value>",
+    region: "<value>",
+    template: "<value>",
+  },
+  clientConfig: {
+    credentials: {
+      token: "<value>",
+      type: "accessToken",
+    },
+    projectId: "<id>",
+    region: "<value>",
+  },
+  expiresAt: "1749791336160",
+  service: "sandbox-gcp-agent-platform",
+};
+```
+
