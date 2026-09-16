@@ -65,6 +65,10 @@ let value: OperationsPlugin = {
         ],
         gcp: [],
       },
+      kubernetesPermissions: {
+        schemaVersion: 2286.04,
+        rules: [],
+      },
     },
   ],
 };

@@ -342,26 +342,28 @@ export type PublishOperationsPluginRequestSensitiveOutputUnion =
   | PublishOperationsPluginRequestSensitiveOutputRedact
   | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation;
 
-export const Verb = {
+export const PublishOperationsPluginRequestVerb = {
   Get: "get",
   List: "list",
   Watch: "watch",
   Delete: "delete",
   Patch: "patch",
 } as const;
-export type Verb = ClosedEnum<typeof Verb>;
+export type PublishOperationsPluginRequestVerb = ClosedEnum<
+  typeof PublishOperationsPluginRequestVerb
+>;
 
-export type Rule = {
+export type PublishOperationsPluginRequestRule = {
   apiGroup: string;
   resource: string;
-  verbs: Array<Verb>;
+  verbs: Array<PublishOperationsPluginRequestVerb>;
   resourceNames?: Array<string> | undefined;
   reason: string;
 };
 
-export type KubernetesPermissions = {
+export type PublishOperationsPluginRequestKubernetesPermissions = {
   schemaVersion: number;
-  rules: Array<Rule>;
+  rules: Array<PublishOperationsPluginRequestRule>;
 };
 
 export type Operation = {
@@ -371,9 +373,7 @@ export type Operation = {
   inputSchema?: { [k: string]: any | null } | null | undefined;
   paramsSchema?: { [k: string]: any | null } | null | undefined;
   outputSchema?: { [k: string]: any | null } | null | undefined;
-  permissions?:
-    | Array<PublishOperationsPluginRequestPermission | string>
-    | undefined;
+  permissions: Array<PublishOperationsPluginRequestPermission | string>;
   requiredPermissions?: Array<RequiredPermission | string> | undefined;
   timeoutSeconds?: number | null | undefined;
   retries?: PublishOperationsPluginRequestRetries | null | undefined;
@@ -383,7 +383,9 @@ export type Operation = {
     | PublishOperationsPluginRequestSensitiveOutputRedact
     | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation
     | undefined;
-  kubernetesPermissions?: KubernetesPermissions | undefined;
+  kubernetesPermissions?:
+    | PublishOperationsPluginRequestKubernetesPermissions
+    | undefined;
 };
 
 /**
@@ -1737,10 +1739,12 @@ export function publishOperationsPluginRequestSensitiveOutputUnionToJSON(
 }
 
 /** @internal */
-export const Verb$outboundSchema: z.ZodEnum<typeof Verb> = z.enum(Verb);
+export const PublishOperationsPluginRequestVerb$outboundSchema: z.ZodEnum<
+  typeof PublishOperationsPluginRequestVerb
+> = z.enum(PublishOperationsPluginRequestVerb);
 
 /** @internal */
-export type Rule$Outbound = {
+export type PublishOperationsPluginRequestRule$Outbound = {
   apiGroup: string;
   resource: string;
   verbs: Array<string>;
@@ -1749,38 +1753,53 @@ export type Rule$Outbound = {
 };
 
 /** @internal */
-export const Rule$outboundSchema: z.ZodType<Rule$Outbound, Rule> = z.object({
+export const PublishOperationsPluginRequestRule$outboundSchema: z.ZodType<
+  PublishOperationsPluginRequestRule$Outbound,
+  PublishOperationsPluginRequestRule
+> = z.object({
   apiGroup: z.string(),
   resource: z.string(),
-  verbs: z.array(Verb$outboundSchema),
+  verbs: z.array(PublishOperationsPluginRequestVerb$outboundSchema),
   resourceNames: z.array(z.string()).optional(),
   reason: z.string(),
 });
 
-export function ruleToJSON(rule: Rule): string {
-  return JSON.stringify(Rule$outboundSchema.parse(rule));
+export function publishOperationsPluginRequestRuleToJSON(
+  publishOperationsPluginRequestRule: PublishOperationsPluginRequestRule,
+): string {
+  return JSON.stringify(
+    PublishOperationsPluginRequestRule$outboundSchema.parse(
+      publishOperationsPluginRequestRule,
+    ),
+  );
 }
 
 /** @internal */
-export type KubernetesPermissions$Outbound = {
+export type PublishOperationsPluginRequestKubernetesPermissions$Outbound = {
   schemaVersion: number;
-  rules: Array<Rule$Outbound>;
+  rules: Array<PublishOperationsPluginRequestRule$Outbound>;
 };
 
 /** @internal */
-export const KubernetesPermissions$outboundSchema: z.ZodType<
-  KubernetesPermissions$Outbound,
-  KubernetesPermissions
-> = z.object({
-  schemaVersion: z.number(),
-  rules: z.array(z.lazy(() => Rule$outboundSchema)),
-});
+export const PublishOperationsPluginRequestKubernetesPermissions$outboundSchema:
+  z.ZodType<
+    PublishOperationsPluginRequestKubernetesPermissions$Outbound,
+    PublishOperationsPluginRequestKubernetesPermissions
+  > = z.object({
+    schemaVersion: z.number(),
+    rules: z.array(
+      z.lazy(() => PublishOperationsPluginRequestRule$outboundSchema),
+    ),
+  });
 
-export function kubernetesPermissionsToJSON(
-  kubernetesPermissions: KubernetesPermissions,
+export function publishOperationsPluginRequestKubernetesPermissionsToJSON(
+  publishOperationsPluginRequestKubernetesPermissions:
+    PublishOperationsPluginRequestKubernetesPermissions,
 ): string {
   return JSON.stringify(
-    KubernetesPermissions$outboundSchema.parse(kubernetesPermissions),
+    PublishOperationsPluginRequestKubernetesPermissions$outboundSchema.parse(
+      publishOperationsPluginRequestKubernetesPermissions,
+    ),
   );
 }
 
@@ -1792,9 +1811,9 @@ export type Operation$Outbound = {
   inputSchema?: { [k: string]: any | null } | null | undefined;
   paramsSchema?: { [k: string]: any | null } | null | undefined;
   outputSchema?: { [k: string]: any | null } | null | undefined;
-  permissions?:
-    | Array<PublishOperationsPluginRequestPermission$Outbound | string>
-    | undefined;
+  permissions: Array<
+    PublishOperationsPluginRequestPermission$Outbound | string
+  >;
   requiredPermissions?: Array<RequiredPermission$Outbound | string> | undefined;
   timeoutSeconds?: number | null | undefined;
   retries?: PublishOperationsPluginRequestRetries$Outbound | null | undefined;
@@ -1807,7 +1826,9 @@ export type Operation$Outbound = {
     | PublishOperationsPluginRequestSensitiveOutputRedact$Outbound
     | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound
     | undefined;
-  kubernetesPermissions?: KubernetesPermissions$Outbound | undefined;
+  kubernetesPermissions?:
+    | PublishOperationsPluginRequestKubernetesPermissions$Outbound
+    | undefined;
 };
 
 /** @internal */
@@ -1828,7 +1849,7 @@ export const Operation$outboundSchema: z.ZodType<
       z.lazy(() => PublishOperationsPluginRequestPermission$outboundSchema),
       z.string(),
     ]),
-  ).optional(),
+  ),
   requiredPermissions: z.array(
     z.union([z.lazy(() => RequiredPermission$outboundSchema), z.string()]),
   ).optional(),
@@ -1850,8 +1871,9 @@ export const Operation$outboundSchema: z.ZodType<
       PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema
     ),
   ]).optional(),
-  kubernetesPermissions: z.lazy(() => KubernetesPermissions$outboundSchema)
-    .optional(),
+  kubernetesPermissions: z.lazy(() =>
+    PublishOperationsPluginRequestKubernetesPermissions$outboundSchema
+  ).optional(),
 });
 
 export function operationToJSON(operation: Operation): string {
