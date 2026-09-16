@@ -50,6 +50,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
+      product_lifecycle: ${{ steps.filter.outputs.product_lifecycle }}
     steps:
       - uses: actions/checkout@v7
 
@@ -67,6 +68,10 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+            product_lifecycle:
+              - 'crates/alien-helm/**'
+              - 'crates/alien-terraform/**'
+              - '.github/workflows/ci-fast.yml'
             typescript:
               # `pnpm format-and-lint` runs Biome from the repository root.
               # Match its source formats repository-wide instead of trying to
@@ -241,6 +246,20 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
           )
           cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
+
+      - name: Start disposable Kubernetes cluster
+        if: needs.changes.outputs.product_lifecycle == 'true'
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: alien-product-lifecycle
+
+      - name: Product Remote Operator Helm and Terraform lifecycle
+        if: needs.changes.outputs.product_lifecycle == 'true'
+        env:
+          ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
+        run: |
+          cargo test -p alien-helm --locked --test product_remote_operator_lifecycle -- \
+            --ignored --nocapture --test-threads=1
 
       # The steps below cover code behind non-default cargo features, which the
       # workspace run above compiles with default features only.

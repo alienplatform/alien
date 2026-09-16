@@ -699,6 +699,7 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-operations-sdk",
+ "alien-terraform",
  "indexmap 2.14.1",
  "insta",
  "serde",

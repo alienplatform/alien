@@ -3320,19 +3320,6 @@ fn helm_install_body(
                             [
                                 attr(
                                     "condition",
-                                    expr::raw("(!var.remote_operator_enabled && local.remote_operator_identity_record_count == 0) || var.remote_operator_collector_token != null"),
-                                ),
-                                attr(
-                                    "error_message",
-                                    Expression::String("remote_operator_collector_token is required while Remote Operator identity records are retained.".to_string()),
-                                ),
-                            ],
-                        )),
-                        nested(block(
-                            "precondition",
-                            [
-                                attr(
-                                    "condition",
                                     expr::raw("(!var.remote_operator_enabled && local.remote_operator_identity_record_count == 0) || var.remote_operator_encryption_key != null"),
                                 ),
                                 attr(
@@ -3355,10 +3342,15 @@ fn helm_install_body(
     }
 
     let values = if product_remote_operator {
+        // Carry the setup-created Secret UID into the pod template. Besides
+        // making a Secret recreation restart the Operator, the computed value
+        // keeps Helm planning deferred until the Secret exists. That is
+        // required because the chart's server-side `lookup` checks cannot
+        // validate a Secret that Terraform has only planned to create.
         Expression::Array(vec![
             expr::raw(format!("{provider_resource}.this.helm_values")),
             expr::raw(
-                "yamlencode({ remoteOperator = { enabled = var.remote_operator_enabled, existingSecret = { name = \"${var.helm_release_name}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, serviceAccountAnnotations = {}, podLabels = {} } })",
+                "yamlencode({ remoteOperator = { enabled = var.remote_operator_enabled, existingSecret = { name = \"${var.helm_release_name}-remote\", encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key) : \"\" }, bootstrapIdentity = var.remote_operator_bootstrap_identity, syncTokenRevision = var.remote_operator_sync_token_revision, serviceAccountAnnotations = {}, podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {} } })",
             ),
         ])
     } else {
@@ -3805,7 +3797,7 @@ fn readme_kubernetes_inputs(
     };
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
-            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. Once the embedded Remote Operator has been enabled, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform installs the product chart; its embedded Remote Operator stays disabled by default.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token`, `remote_operator_encryption_key`, and `remote_operator_collector_token` from a separate Remote Operator setup registration. Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep all three credential inputs populated until `terraform destroy`; generated variable files already persist them.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: when first enabling Remote Operator in an existing product release, set this to `true` for one apply only, then set it back to `false` and apply again. Leave it `false` for a new release. The Helm resource is atomic, so a failed first enable removes partial workload changes while retaining the prepared identity and any exact-release identity PVC already created, which pin an exact-key retry.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every token rotation and apply the new token and revision together so later applies cannot restore an old credential. The collector token is independent and remains sourced from the same protected Terraform input.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: it uninstalls the Helm release and removes the credentials Secret and setup registration. In an existing namespace, Helm deliberately leaves the identity PVC and records for audit/recovery safety; after confirming permanent retirement, delete those exact retained objects explicitly. A Terraform-owned namespace is deleted with all of its contents."
+            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. Once the embedded Remote Operator has been enabled, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform installs the product chart; its embedded Remote Operator stays disabled by default.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. Supply `remote_operator_collector_token` only when the product chart includes log collection. Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: when first enabling Remote Operator in an existing product release, set this to `true` for one apply only, then set it back to `false` and apply again. Leave it `false` for a new release. The Helm resource is atomic, so a failed first enable removes partial workload changes while retaining the prepared identity and any exact-release identity PVC already created, which pin an exact-key retry.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every token rotation and apply the new token and revision together so later applies cannot restore an old credential. When present, the collector token is independent and remains sourced from the same protected Terraform input.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: it uninstalls the Helm release and removes the credentials Secret and setup registration. In an existing namespace, Helm deliberately leaves the identity PVC and records for audit/recovery safety; after confirming permanent retirement, delete those exact retained objects explicitly. A Terraform-owned namespace is deleted with all of its contents."
         } else {
             "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration."
         }

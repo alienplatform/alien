@@ -21,5 +21,6 @@ serde_yaml = { workspace = true }
 tempfile = { workspace = true, optional = true }
 
 [dev-dependencies]
+alien-terraform = { workspace = true }
 insta = { workspace = true }
 tempfile = { workspace = true }

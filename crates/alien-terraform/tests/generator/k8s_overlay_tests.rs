@@ -747,6 +747,9 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     );
     assert!(helm.contains("bootstrapIdentity = var.remote_operator_bootstrap_identity"));
     assert!(helm.contains("syncTokenRevision = var.remote_operator_sync_token_revision"));
+    assert!(helm.contains(
+        "podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {}"
+    ));
     assert!(!helm.contains("yamldecode(acme_app_deployment.this.helm_values).management.token"));
     assert!(helm.contains("remoteOperator = {"));
     assert!(helm.contains("enabled = var.remote_operator_enabled"));
@@ -785,7 +788,8 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(readme.contains("identity PVC"));
     assert!(readme.contains("permanently retires the setup"));
     assert!(readme.contains("disabling it in place is unsupported"));
-    assert!(readme.contains("Keep all three credential inputs populated until `terraform destroy`"));
+    assert!(readme.contains("Supply `remote_operator_collector_token` only when"));
+    assert!(readme.contains("Keep the credentials required by the chart populated"));
     let sync_token_variable = variables
         .split("variable \"remote_operator_sync_token\"")
         .nth(1)
@@ -872,6 +876,10 @@ fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_afte
     assert!(compact.contains(
         "condition = (!var.remote_operator_enabled && local.remote_operator_identity_record_count == 0) || var.remote_operator_encryption_key != null"
     ));
+    assert!(
+        !compact.contains("remote_operator_collector_token is required"),
+        "the chart knows whether a collector exists and validates its token only when needed"
+    );
 
     let secret_position = compact
         .find("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\"")

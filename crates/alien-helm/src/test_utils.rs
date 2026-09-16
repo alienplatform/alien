@@ -115,6 +115,11 @@ pub fn helm_template_and_validate_for_release(
             [
                 OsStr::new("-strict"),
                 OsStr::new("-summary"),
+                // kubeconform intentionally has no built-in schema for the CRD
+                // object itself. Helm/Kind lifecycle coverage submits it to the
+                // Kubernetes API; keep validating every namespaced resource here.
+                OsStr::new("-skip"),
+                OsStr::new("CustomResourceDefinition"),
                 OsStr::new("-kubernetes-version"),
                 OsStr::new("1.28.0"),
                 rendered_path.as_os_str(),

@@ -269,6 +269,7 @@ fn generate_helm_chart_internal(
         "templates/networkpolicy.yaml".to_string(),
         networkpolicy_tpl(),
     );
+    let has_remote_operator = remote_operator.is_some();
 
     if let Some(remote_operator) = remote_operator {
         add_remote_operator_files(&mut files, remote_operator)?;
@@ -295,8 +296,13 @@ fn generate_helm_chart_internal(
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
-    files.insert("README.md".to_string(), readme_md(&chart_name, stack));
-
+    let mut readme = readme_md(&chart_name, stack);
+    if has_remote_operator {
+        readme.push_str(
+            "\n## Remote Operator\n\nThe Remote Operator is disabled by default, so a namespace-only product install creates no cluster-scoped resources. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it.\n",
+        );
+    }
+    files.insert("README.md".to_string(), readme);
     files.insert(
         "files/stack.json".to_string(),
         ensure_trailing_newline(stack_json),
@@ -369,8 +375,8 @@ fn add_remote_operator_files(
     }
 
     files.insert(
-        "crds/alien-access-requests.yaml".to_string(),
-        ensure_trailing_newline(crd.to_string()),
+        "templates/remote-operator-crd.yaml".to_string(),
+        remote_operator_crd_tpl(crd)?,
     );
     files.insert(
         "templates/remote-operator.yaml".to_string(),
@@ -429,6 +435,45 @@ fn add_remote_operator_files(
     schema.push('\n');
 
     Ok(())
+}
+
+fn remote_operator_crd_tpl(crd: &str) -> Result<String> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(crd).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse the Remote Operator access-request CRD".to_string(),
+        },
+    )?;
+    let crd_name = parsed
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(serde_yaml::Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "the Remote Operator access-request CRD has no metadata.name".to_string(),
+            })
+        })?;
+    let retained_crd = crd.replacen(
+        "metadata:\n",
+        "metadata:\n  annotations:\n    helm.sh/resource-policy: keep\n",
+        1,
+    );
+    if retained_crd == crd {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "the Remote Operator access-request CRD has no metadata block".to_string(),
+        }));
+    }
+
+    Ok(format!(
+        r#"{{{{- define "deployment.remoteOperatorAccessRequestCrd" -}}}}
+{retained_crd}{{{{- end -}}}}
+{{{{- if .Values.remoteOperator.enabled -}}}}
+{{{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "{crd_name}" -}}}}
+{{{{- if not $existing }}}}
+{{{{ include "deployment.remoteOperatorAccessRequestCrd" . }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+"#
+    ))
 }
 
 fn remote_operator_identity_record_tpl(
@@ -621,7 +666,7 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 {{- if not .Values.management.url -}}
   {{- fail "management.url is required when Remote Operator is enabled." -}}
 {{- end -}}
-{{- $expected := .Files.Get "crds/alien-access-requests.yaml" | fromYaml -}}
+{{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
 {{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" $expected.metadata.name -}}
 {{- if $existing -}}
   {{- range $spec := list $expected.spec $existing.spec -}}
@@ -632,8 +677,6 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
   {{- if ne (toJson $expected.spec) (toJson $existing.spec) -}}
     {{- fail "The shared access-request CRD differs from this reviewed chart. Ask the cluster administrator to review compatibility before changing it; this release will not adopt, upgrade, or delete the CRD." -}}
   {{- end -}}
-{{- else if .Release.IsUpgrade -}}
-  {{- fail "The shared access-request CRD is missing. Ask the cluster administrator to restore the reviewed definition before retrying this release." -}}
 {{- end -}}
 {{- $secretName = required "remoteOperator.existingSecret.name is required when Remote Operator is enabled" $secretName -}}
 {{- $expectedEncryptionKeySha256 = required "remoteOperator.existingSecret.encryptionKeySha256 is required when Remote Operator is enabled" $expectedEncryptionKeySha256 -}}
@@ -5682,7 +5725,15 @@ mod tests {
     fn generated_product_chart_embeds_a_distinct_remote_operator() {
         let chart = sample_product_chart();
 
-        assert!(chart.files.contains_key("crds/alien-access-requests.yaml"));
+        assert!(!chart.files.contains_key("crds/alien-access-requests.yaml"));
+        let crd_template = &chart.files["templates/remote-operator-crd.yaml"];
+        assert!(crd_template.contains("if .Values.remoteOperator.enabled"));
+        assert!(crd_template.contains("helm.sh/resource-policy: keep"));
+        assert!(crd_template.contains("if not $existing"));
+        assert!(chart.files["README.md"].contains(
+            "disabled by default, so a namespace-only product install creates no cluster-scoped resources"
+        ));
+        assert!(chart.files["README.md"].contains("retains that CRD on rollback and uninstall"));
         let remote_template = &chart.files["templates/remote-operator.yaml"];
         assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v1\""));
         assert!(remote_template.contains(".Values.remoteOperator.enabled"));
@@ -5737,10 +5788,16 @@ mod tests {
 
         crate::test_utils::helm_lint(&chart.files)
             .assert_ok("product chart with disabled Remote Operator");
+        let disabled = crate::test_utils::helm_template(&chart.files, None);
+        disabled.assert_ok("product chart with disabled Remote Operator");
+        assert!(
+            !disabled.stdout.contains("kind: CustomResourceDefinition"),
+            "a namespace-only product install must not submit the cluster-scoped CRD"
+        );
 
-        // Client-only rendering cannot satisfy the live `lookup` ownership
-        // checks. Remove only that guard here; the disposable-cluster test
-        // exercises it against the Kubernetes API.
+        // Client-only rendering cannot satisfy the live Secret and ownership
+        // lookups. The Kind lifecycle test exercises this unmodified chart
+        // against the Kubernetes API.
         let mut render_files = chart.files.clone();
         render_files.shift_remove("templates/remote-operator-checks.yaml");
         let rendered = crate::test_utils::helm_template(
@@ -5766,6 +5823,11 @@ remoteOperator:
             .stdout
             .contains("value: 'https://manager.example.com'"));
         let documents = parse_manifest_docs(&rendered.stdout);
+        assert!(documents.iter().any(|document| {
+            yaml_str(document, "kind") == Some("CustomResourceDefinition")
+                && yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("alienaccessrequests.accessrequests.alien")
+        }));
         let identity_record = documents
             .iter()
             .find(|document| {
