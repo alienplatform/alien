@@ -21,7 +21,7 @@ export type RenderOperatorEcsCloudFormationResponse = {
    */
   stackName: string;
   /**
-   * AWS CLI deployment command with placeholders for customer-owned resources and the bootstrap secret ARN, or null while the image is building. The secret must be in the stack account and Region and use the default aws/secretsmanager KMS key.
+   * Local bash/zsh bootstrap-and-deploy command, or null while the image is building. It prompts without echo for the one-time Alien token, preserves or generates the encryption key, writes both directly to customer-owned Secrets Manager, and passes only the secret ARN to CloudFormation.
    */
   deployCommand: string | null;
   /**

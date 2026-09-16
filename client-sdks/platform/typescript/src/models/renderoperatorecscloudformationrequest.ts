@@ -36,6 +36,14 @@ export type RenderOperatorEcsCloudFormationRequest = {
    * Ready operator-image package to pin in the task definition. If omitted, the current project package is prepared or reused.
    */
   operatorImagePackageId?: string | undefined;
+  /**
+   * Installer-owned S3 ceiling. Required when enabled S3 operations need ListBucket or GetObject; the generated role contains only these bucket and object ARNs.
+   */
+  s3BucketArns?: Array<string> | undefined;
+  /**
+   * Installer-owned SQS ceiling. Required when enabled SQS operations read queue attributes; the generated role contains only these queue ARNs.
+   */
+  sqsQueueArns?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -50,6 +58,8 @@ export type RenderOperatorEcsCloudFormationRequest$Outbound = {
   environmentName: string;
   permission: string;
   operatorImagePackageId?: string | undefined;
+  s3BucketArns?: Array<string> | undefined;
+  sqsQueueArns?: Array<string> | undefined;
 };
 
 /** @internal */
@@ -62,6 +72,8 @@ export const RenderOperatorEcsCloudFormationRequest$outboundSchema: z.ZodType<
   permission: RenderOperatorEcsCloudFormationRequestPermission$outboundSchema
     .default("diagnostics"),
   operatorImagePackageId: z.string().optional(),
+  s3BucketArns: z.array(z.string()).optional(),
+  sqsQueueArns: z.array(z.string()).optional(),
 });
 
 export function renderOperatorEcsCloudFormationRequestToJSON(
