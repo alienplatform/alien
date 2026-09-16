@@ -110,6 +110,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
             "--namespace",
             &helm_namespace,
             "--kube-as-user=product-installer",
+            "--set=heartbeat.collection.nodes.enabled=false",
         ],
         None,
     );
@@ -257,6 +258,43 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         None,
     );
     run_ok("kubectl", ["get", "crd", CRD_NAME], None);
+    for selector in [
+        "alien.dev/remote-operator-identity-record=true",
+        "alien.dev/remote-operator-identity-phase=complete",
+    ] {
+        let retained = run_ok(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                "--namespace",
+                &helm_namespace,
+                &format!("--selector={selector}"),
+                "--output=name",
+            ],
+            None,
+        );
+        assert!(
+            retained.stdout.trim().is_empty(),
+            "uninstall must delete retained Remote Operator records: {retained:?}"
+        );
+    }
+    let retained_pvc = run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            "--namespace",
+            &helm_namespace,
+            "--selector=app.kubernetes.io/component=operator",
+            "--output=name",
+        ],
+        None,
+    );
+    assert!(
+        retained_pvc.stdout.trim().is_empty(),
+        "uninstall must delete the retained Remote Operator identity PVC: {retained_pvc:?}"
+    );
     run_ok("kubectl", ["delete", "namespace", &helm_namespace], None);
 
     let terraform_namespace = "alien-product-terraform-lifecycle";
@@ -280,7 +318,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     );
     run_ok(
         "terraform",
-        ["plan", "-input=false", "-no-color", "-out=lifecycle.tfplan"],
+        ["plan", "-input=false", "-no-color", "-out=disabled.tfplan"],
         Some(&terraform_dir),
     );
     run_ok(
@@ -290,8 +328,43 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
             "-input=false",
             "-no-color",
             "-auto-approve",
-            "lifecycle.tfplan",
+            "disabled.tfplan",
         ],
+        Some(&terraform_dir),
+    );
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        true,
+        true,
+    );
+    run_ok(
+        "terraform",
+        ["plan", "-input=false", "-no-color", "-out=enabled.tfplan"],
+        Some(&terraform_dir),
+    );
+    run_ok(
+        "terraform",
+        [
+            "apply",
+            "-input=false",
+            "-no-color",
+            "-auto-approve",
+            "enabled.tfplan",
+        ],
+        Some(&terraform_dir),
+    );
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        true,
+        false,
+    );
+    run_ok(
+        "terraform",
+        ["apply", "-input=false", "-no-color", "-auto-approve"],
         Some(&terraform_dir),
     );
     run_ok(
@@ -536,6 +609,16 @@ variable "remote_operator_collector_token" {{
         ),
     )
     .expect("write Terraform lifecycle provider configuration");
+    write_terraform_lifecycle_variables(directory, chart, namespace, false, false);
+}
+
+fn write_terraform_lifecycle_variables(
+    directory: &Path,
+    chart: &Path,
+    namespace: &str,
+    remote_operator_enabled: bool,
+    remote_operator_bootstrap_identity: bool,
+) {
     fs::write(
         directory.join("terraform.tfvars"),
         format!(
@@ -544,8 +627,8 @@ helm_release_name                   = "terraform-product"
 helm_chart                          = {chart:?}
 kubernetes_namespace                = {namespace:?}
 kubernetes_namespace_create         = true
-remote_operator_enabled             = true
-remote_operator_bootstrap_identity  = false
+remote_operator_enabled             = {remote_operator_enabled}
+remote_operator_bootstrap_identity  = {remote_operator_bootstrap_identity}
 remote_operator_sync_token_revision = 0
 remote_operator_sync_token          = "sync-terraform"
 remote_operator_encryption_key      = {ENCRYPTION_KEY:?}

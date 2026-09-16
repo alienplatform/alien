@@ -299,7 +299,7 @@ fn generate_helm_chart_internal(
     let mut readme = readme_md(&chart_name, stack);
     if has_remote_operator {
         readme.push_str(
-            "\n## Remote Operator\n\nThe Remote Operator is disabled by default, so a namespace-only product install creates no cluster-scoped resources. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it.\n",
+            "\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
         );
     }
     files.insert("README.md".to_string(), readme);
@@ -396,6 +396,10 @@ fn add_remote_operator_files(
     files.insert(
         "templates/remote-operator-checks.yaml".to_string(),
         remote_operator_checks_tpl(requires_collector_token),
+    );
+    files.insert(
+        "templates/remote-operator-cleanup-job.yaml".to_string(),
+        remote_operator_cleanup_job_tpl(),
     );
 
     let values = files.get_mut("values.yaml").ok_or_else(|| {
@@ -558,6 +562,41 @@ data:
   version: "1"
   identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
 {{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_cleanup_job_tpl() -> String {
+    r#"apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-cleanup" (include "deployment.remoteOperatorResourceName" .) | trunc 63 | trimSuffix "-" }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              resource_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
+              kubectl -n {{ .Release.Namespace | quote }} delete configmap "$resource_name" "$resource_name-complete" --ignore-not-found=true
+              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaim "$resource_name-identity" --ignore-not-found=true
 "#
     .to_string()
 }
@@ -5730,10 +5769,10 @@ mod tests {
         assert!(crd_template.contains("if .Values.remoteOperator.enabled"));
         assert!(crd_template.contains("helm.sh/resource-policy: keep"));
         assert!(crd_template.contains("if not $existing"));
-        assert!(chart.files["README.md"].contains(
-            "disabled by default, so a namespace-only product install creates no cluster-scoped resources"
-        ));
+        assert!(chart.files["README.md"]
+            .contains("disabled by default and adds no cluster-scoped resources until enabled"));
         assert!(chart.files["README.md"].contains("retains that CRD on rollback and uninstall"));
+        assert!(chart.files["README.md"].contains("deleting its exact retained identity records"));
         let remote_template = &chart.files["templates/remote-operator.yaml"];
         assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v1\""));
         assert!(remote_template.contains(".Values.remoteOperator.enabled"));
@@ -5744,6 +5783,10 @@ mod tests {
         let checks = &chart.files["templates/remote-operator-checks.yaml"];
         assert!(checks.contains("Refusing adoption"));
         assert!(checks.contains("managedResourceExists"));
+        let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
+        assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
+        assert!(cleanup.contains("$resource_name-complete"));
+        assert!(cleanup.contains("$resource_name-identity"));
         assert!(checks.contains("missing from a partial installation"));
         assert!(checks.contains("Disabling Remote Operator"));
         assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));

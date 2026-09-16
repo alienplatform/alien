@@ -761,8 +761,10 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(helm.contains("remote_operator_identity_record_name"));
     assert!(helm.contains("substr(sha256("));
     assert!(!helm.contains("label_selector"));
-    assert!(helm.contains("local.remote_operator_identity_record_count > 0"));
-    assert!(!helm.contains("var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"));
+    assert!(helm.contains("count = var.helm_install_enabled ? 1 : 0"));
+    assert!(!helm.contains(
+        "count = var.helm_install_enabled && (var.remote_operator_enabled || local.remote_operator_identity_record_count > 0) ? 1 : 0"
+    ));
     assert!(helm.contains("kubernetes_secret_v1.remote_operator_credentials"));
     assert!(compact_helm.contains("atomic = true"));
     assert!(compact_helm.contains("cleanup_on_fail = true"));
@@ -857,9 +859,7 @@ fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_afte
 
     assert_terraform_formatted(&module, "product Remote Operator credential retention");
 
-    assert!(compact.contains(
-        "count = var.helm_install_enabled && (var.remote_operator_enabled || local.remote_operator_identity_record_count > 0) ? 1 : 0"
-    ));
+    assert!(compact.contains("count = var.helm_install_enabled ? 1 : 0"));
     assert!(compact.contains(
         "remote_operator_identity_record_count = try(length(data.kubernetes_resources.remote_operator_identity_records[0].objects), 0)"
     ));
