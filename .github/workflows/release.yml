@@ -1983,6 +1983,17 @@ jobs:
           provenance: true
           sbom: true
 
+      - name: Smoke-test alien-sandbox-agent
+        env:
+          SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent:qualification-${{ inputs.source_ref }}
+        run: |
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$SANDBOX_AGENT" \
+            -c 'id | grep -q "uid=1000(sandbox) gid=1000(sandbox)"'
+          # The unlink rather than the file mode: only the directory permission stops the
+          # supervised command removing its own supervisor.
+          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$SANDBOX_AGENT" \
+            -c '! rm -f /usr/local/bin/alien-sandbox-agent && test -x /usr/local/bin/alien-sandbox-agent'
+
       - name: Record qualified image digests
         env:
           RELEASE_COMMIT: ${{ inputs.source_ref }}

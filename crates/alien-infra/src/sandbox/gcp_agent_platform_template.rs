@@ -44,10 +44,12 @@ fn last_segment(name: &str) -> &str {
 ///
 /// The template is immutable, so any of these differing between the desired and previous
 /// declaration means the old template cannot be updated in place — it is torn down and rebuilt.
-/// The image is the digest the spec names; the ceilings and egress are here because they are baked
-/// into the same immutable body. A body field that is not here, such as the declared port, cannot
-/// force a replace on its own — an existing template picks up a new value only at the next replace,
-/// whichever of these three fields triggers it.
+/// `image` is the reference the spec names, digest or tag, so a re-pushed tag moves nothing here.
+/// The whole `SandboxLimits` is compared but only cpu and memory reach the body, so a disk-only
+/// edit replaces a template with a byte-identical one; `max_processes` cannot vary at all, because
+/// `process_limit: false` refuses it at plan time. A body field that is not here, such as the
+/// declared port, cannot force a replace on its own — an existing template picks up a new value
+/// only at the next replace.
 fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)> {
     let image = match &sandbox.code {
         SandboxCode::Image { image } => image.clone(),

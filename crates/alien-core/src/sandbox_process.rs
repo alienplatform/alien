@@ -652,55 +652,75 @@ mod gcp_image_contract {
             .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
     }
 
-    /// Dockerfile lines with comments dropped, so a commented-out setting cannot shadow the real
-    /// one.
+    /// Code lines of the final build stage, comments dropped. Only the final stage is shipped, so
+    /// a setting in an earlier one is as absent from the image as a commented-out one.
     fn code_lines(dockerfile: &str) -> impl Iterator<Item = &str> {
-        dockerfile
+        let code = dockerfile
             .lines()
             .map(str::trim)
-            .filter(|line| !line.starts_with('#'))
+            .filter(|line| !line.starts_with('#'));
+        let final_stage = code
+            .clone()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("FROM "))
+            .map(|(index, _)| index)
+            .last()
+            .unwrap_or_else(|| panic!("{DOCKERFILE} has no FROM"));
+        code.skip(final_stage + 1)
     }
 
-    /// Panics rather than returning an option: a comparison skipped because the setting was not
-    /// found is exactly the drift this module exists to catch.
+    /// The single match, or a panic.
+    ///
+    /// Missing panics rather than returning an option: a comparison skipped because the setting
+    /// was not found is exactly the drift this module exists to catch. A second match is refused
+    /// too, because Docker takes the last definition and the assertion would be pinning the first.
+    fn only<'a>(mut matches: impl Iterator<Item = &'a str>, what: &str) -> &'a str {
+        let first = matches
+            .next()
+            .unwrap_or_else(|| panic!("{DOCKERFILE} has no {what}"));
+        assert!(
+            matches.next().is_none(),
+            "{DOCKERFILE} has more than one {what}"
+        );
+        first
+    }
+
     fn env_value(dockerfile: &str, name: &str) -> String {
         let prefix = format!("{name}=");
-        code_lines(dockerfile)
-            .flat_map(str::split_whitespace)
-            .find_map(|token| token.strip_prefix(&prefix))
-            .unwrap_or_else(|| panic!("{DOCKERFILE} must set {name}"))
-            .to_string()
+        only(
+            code_lines(dockerfile)
+                .flat_map(str::split_whitespace)
+                .filter_map(|token| token.strip_prefix(&prefix)),
+            name,
+        )
+        .to_string()
     }
 
     /// The argument of a single-token directive such as `EXPOSE` or `USER`.
     fn directive(dockerfile: &str, name: &str) -> String {
         let prefix = format!("{name} ");
-        code_lines(dockerfile)
-            .find_map(|line| line.strip_prefix(&prefix))
-            .unwrap_or_else(|| panic!("{DOCKERFILE} must set {name}"))
-            .trim()
-            .to_string()
+        only(
+            code_lines(dockerfile).filter_map(|line| line.strip_prefix(&prefix)),
+            name,
+        )
+        .trim()
+        .to_string()
     }
 
-    /// The one build step carrying `needle`. A second match would leave the assertion ambiguous
-    /// about which line it pins.
+    /// The one build step carrying `needle`.
     fn step_with(dockerfile: &str, needle: &str) -> String {
-        let mut matches = code_lines(dockerfile).filter(|line| line.contains(needle));
-        let step = matches
-            .next()
-            .unwrap_or_else(|| panic!("{DOCKERFILE} must carry a step with '{needle}'"))
-            .to_string();
-        assert!(
-            matches.next().is_none(),
-            "{DOCKERFILE} has more than one '{needle}' step"
-        );
-        step
+        only(
+            code_lines(dockerfile).filter(|line| line.contains(needle)),
+            &format!("'{needle}' step"),
+        )
+        .to_string()
     }
 
     #[test]
     fn the_image_declares_the_port_and_exec_identity_these_constants_name() {
         let dockerfile = dockerfile();
         let uid = GCP_EXEC_UID;
+        let root = env_value(&dockerfile, "ALIEN_SANDBOX_ROOT");
 
         assert_eq!(
             env_value(&dockerfile, "ALIEN_SANDBOX_PORT"),
@@ -730,8 +750,8 @@ mod gcp_image_contract {
 
         let passwd = step_with(&dockerfile, "/etc/passwd");
         assert!(
-            passwd.contains(&format!("sandbox:x:{uid}:{uid}:")),
-            "{DOCKERFILE} step '{passwd}' names an identity the agent never execs as"
+            passwd.contains(&format!("sandbox:x:{uid}:{uid}::{root}:")),
+            "{DOCKERFILE} step '{passwd}' names an identity or home the agent never works under"
         );
         let group = step_with(&dockerfile, "/etc/group");
         assert!(
@@ -740,7 +760,7 @@ mod gcp_image_contract {
         );
         let chown = step_with(&dockerfile, "chown ");
         assert!(
-            chown.contains(&format!("chown {uid}:{uid} /sandbox")),
+            chown.contains(&format!("chown {uid}:{uid} {root}")),
             "{DOCKERFILE} step '{chown}' leaves the sandbox root unwritable by the identity \
              working in it"
         );
