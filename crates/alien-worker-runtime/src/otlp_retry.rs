@@ -3,6 +3,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use http::{Request, Response};
 use opentelemetry_http::{HttpClient, HttpError};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime};
 
 pub(crate) const DELIVERY_BUDGET: Duration = Duration::from_secs(60);
@@ -10,19 +11,22 @@ const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[derive(Debug)]
 pub(crate) struct RetryingLogClient {
-    client: reqwest::blocking::Client,
+    client: OnceLock<reqwest::blocking::Client>,
     budget: Duration,
 }
 
 impl RetryingLogClient {
     pub(crate) fn new() -> Self {
         Self {
-            client: reqwest::blocking::Client::new(),
+            client: OnceLock::new(),
             budget: DELIVERY_BUDGET,
         }
     }
 
     fn send(&self, request: Request<Bytes>) -> Result<Response<Bytes>, HttpError> {
+        // Exporters are often configured inside an async runtime. Construct the
+        // blocking client lazily on the SDK export thread, never during setup.
+        let client = self.client.get_or_init(reqwest::blocking::Client::new);
         let deadline = Instant::now() + self.budget;
         let mut backoff = Duration::from_millis(200);
         loop {
@@ -33,8 +37,7 @@ impl RetryingLogClient {
                     "OTLP delivery deadline exceeded",
                 )));
             }
-            let result = self
-                .client
+            let result = client
                 .request(request.method().clone(), request.uri().to_string())
                 .headers(request.headers().clone())
                 .body(request.body().clone())
@@ -150,8 +153,8 @@ mod tests {
         (url, task)
     }
 
-    #[test]
-    fn pinned_sdk_exporter_retries_and_reports_permanent_failure() {
+    #[tokio::test]
+    async fn pinned_sdk_exporter_retries_and_reports_permanent_failure() {
         use opentelemetry::logs::{LogRecord, Logger, LoggerProvider};
         use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
         for (statuses, succeeds) in [(vec![503, 200], true), (vec![401], false)] {
@@ -172,12 +175,22 @@ mod tests {
             let mut log = logger.create_log_record();
             log.set_body("acknowledged-or-error".into());
             logger.emit(log);
-            assert_eq!(provider.force_flush().is_ok(), succeeds);
+            let flush_provider = provider.clone();
+            assert_eq!(
+                tokio::task::spawn_blocking(move || flush_provider.force_flush())
+                    .await
+                    .unwrap()
+                    .is_ok(),
+                succeeds
+            );
             let requests = server.join().unwrap();
             assert_eq!(requests.len(), expected_attempts);
             assert!(!requests[0].is_empty());
             assert!(requests.iter().all(|body| *body == requests[0]));
-            provider.shutdown().unwrap();
+            tokio::task::spawn_blocking(move || provider.shutdown())
+                .await
+                .unwrap()
+                .unwrap();
         }
     }
 
