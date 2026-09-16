@@ -6,9 +6,11 @@
 //! dependency and creates templates beneath it, never creating the engine itself.
 //!
 //! Template config is immutable: there is no update verb, so reconciliation is replace-not-update.
-//! A changed image (or any field that lands in the template body) creates a new template, waits for
-//! it to become `ACTIVE`, and only then reaps the old one — so a release never leaves a session
-//! pointing at a template that has already been deleted.
+//! A change to the identity fields — the image, the ceilings, the egress switch — creates a new
+//! template, waits for it to become `ACTIVE`, and only then reaps the old one, so a release never
+//! leaves a session pointing at a template that has already been deleted. A body field outside
+//! that set, such as the declared port, cannot force a replace on its own; a template created
+//! before its value changed keeps the old body until one of the three identity fields moves.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -43,7 +45,9 @@ fn last_segment(name: &str) -> &str {
 /// The template is immutable, so any of these differing between the desired and previous
 /// declaration means the old template cannot be updated in place — it is torn down and rebuilt.
 /// The image is the digest the spec names; the ceilings and egress are here because they are baked
-/// into the same immutable body.
+/// into the same immutable body. A body field that is not here, such as the declared port, cannot
+/// force a replace on its own — an existing template picks up a new value only at the next replace,
+/// whichever of these three fields triggers it.
 fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)> {
     let image = match &sandbox.code {
         SandboxCode::Image { image } => image.clone(),
@@ -107,10 +111,12 @@ fn build_template_body(
                 extra: Default::default(),
             }),
             resources: Some(resources),
-            // Must match the port the published image EXPOSEs and listens on.
+            // Must match the port the published image EXPOSEs and listens on. `TCP` is spelled
+            // out because every create this preview API has accepted carried it, and no request
+            // omitting it has ever been shown to be accepted.
             ports: vec![ContainerPort {
                 port: i32::from(GCP_AGENT_PORT),
-                protocol: None,
+                protocol: Some("TCP".to_string()),
             }],
             extra: Default::default(),
         }),
@@ -1221,21 +1227,18 @@ mod tests {
         assert_eq!(executor.status(), ResourceStatus::Running);
     }
 
+    /// Asserts the serialized body rather than the struct because `protocol` is skipped when it is
+    /// `None`, so a struct that looks right can still put a shape on the wire the API rejects.
     #[test]
     fn build_template_body_declares_the_port_the_agent_image_serves() {
         let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
         let body =
             build_template_body(&sandbox, "agent-sbx").expect("a valid sandbox builds a body");
-        let env = body
-            .custom_container_environment
-            .as_ref()
-            .expect("template carries a container environment");
-        let ports = &env.ports;
-        assert_eq!(ports.len(), 1, "template declares exactly one port");
+        let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
-            ports[0].port,
-            i32::from(GCP_AGENT_PORT),
-            "must match the port the image serves"
+            wire["customContainerEnvironment"]["ports"],
+            serde_json::json!([{ "port": GCP_AGENT_PORT, "protocol": "TCP" }]),
+            "the create body must carry the port and protocol the API has accepted"
         );
     }
 

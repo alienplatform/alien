@@ -1392,7 +1392,8 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}
+          # Bump the -bN suffix whenever the set of cached binaries changes.
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-b2
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1448,7 +1449,8 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}
+          # Bump the -bN suffix whenever the set of cached binaries changes.
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-b2
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'

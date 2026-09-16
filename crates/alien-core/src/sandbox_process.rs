@@ -54,7 +54,8 @@ pub const GCP_AGENT_PORT: u16 = 8080;
 ///
 /// Agent Platform refuses an image that requires root, so the agent runs unprivileged and has no
 /// second uid to drop to. `platform` isolation is what permits an exec identity equal to the
-/// agent's own.
+/// agent's own. 1000 is the conventional first non-root uid, chosen over the 60000 the bundle
+/// renderer uses because that value was never tried against Agent Platform.
 pub const GCP_EXEC_UID: u32 = 1000;
 
 /// How many frames may sit between the process and the caller.
@@ -635,9 +636,7 @@ mod tests {
 }
 
 /// The image build has no way to read a Rust constant, so it repeats these values as literal text.
-/// A constant changed here with the Dockerfile left alone produces an image whose agent is dialled
-/// on one port and listening on another, or refuses to start at all, with nothing to catch it
-/// until a sandbox hangs.
+/// Nothing but this module catches a constant changed here with the Dockerfile left alone.
 #[cfg(test)]
 mod gcp_image_contract {
     use super::*;
@@ -653,29 +652,55 @@ mod gcp_image_contract {
             .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
     }
 
+    /// Dockerfile lines with comments dropped, so a commented-out setting cannot shadow the real
+    /// one.
+    fn code_lines(dockerfile: &str) -> impl Iterator<Item = &str> {
+        dockerfile
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.starts_with('#'))
+    }
+
     /// Panics rather than returning an option: a comparison skipped because the setting was not
     /// found is exactly the drift this module exists to catch.
     fn env_value(dockerfile: &str, name: &str) -> String {
         let prefix = format!("{name}=");
-        dockerfile
-            .split_whitespace()
+        code_lines(dockerfile)
+            .flat_map(str::split_whitespace)
             .find_map(|token| token.strip_prefix(&prefix))
             .unwrap_or_else(|| panic!("{DOCKERFILE} must set {name}"))
             .to_string()
     }
 
-    fn exposed_port(dockerfile: &str) -> String {
-        dockerfile
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("EXPOSE "))
-            .unwrap_or_else(|| panic!("{DOCKERFILE} must expose a port"))
+    /// The argument of a single-token directive such as `EXPOSE` or `USER`.
+    fn directive(dockerfile: &str, name: &str) -> String {
+        let prefix = format!("{name} ");
+        code_lines(dockerfile)
+            .find_map(|line| line.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{DOCKERFILE} must set {name}"))
             .trim()
             .to_string()
+    }
+
+    /// The one build step carrying `needle`. A second match would leave the assertion ambiguous
+    /// about which line it pins.
+    fn step_with(dockerfile: &str, needle: &str) -> String {
+        let mut matches = code_lines(dockerfile).filter(|line| line.contains(needle));
+        let step = matches
+            .next()
+            .unwrap_or_else(|| panic!("{DOCKERFILE} must carry a step with '{needle}'"))
+            .to_string();
+        assert!(
+            matches.next().is_none(),
+            "{DOCKERFILE} has more than one '{needle}' step"
+        );
+        step
     }
 
     #[test]
     fn the_image_declares_the_port_and_exec_identity_these_constants_name() {
         let dockerfile = dockerfile();
+        let uid = GCP_EXEC_UID;
 
         assert_eq!(
             env_value(&dockerfile, "ALIEN_SANDBOX_PORT"),
@@ -683,19 +708,52 @@ mod gcp_image_contract {
             "the agent would listen on a port no caller dials"
         );
         assert_eq!(
-            exposed_port(&dockerfile),
+            directive(&dockerfile, "EXPOSE"),
             GCP_AGENT_PORT.to_string(),
             "the image would advertise a port the agent does not serve"
         );
         assert_eq!(
             env_value(&dockerfile, "ALIEN_SANDBOX_EXEC_UID"),
-            GCP_EXEC_UID.to_string(),
+            uid.to_string(),
             "the agent would drop to a uid the image never created"
         );
         assert_eq!(
             env_value(&dockerfile, "ALIEN_SANDBOX_EXEC_GID"),
-            GCP_EXEC_UID.to_string(),
+            uid.to_string(),
             "the agent would drop to a gid the image never created"
+        );
+        assert_eq!(
+            directive(&dockerfile, "USER"),
+            format!("{uid}:{uid}"),
+            "the agent would start under an identity it cannot exec as"
+        );
+
+        let passwd = step_with(&dockerfile, "/etc/passwd");
+        assert!(
+            passwd.contains(&format!("sandbox:x:{uid}:{uid}:")),
+            "{DOCKERFILE} step '{passwd}' names an identity the agent never execs as"
+        );
+        let group = step_with(&dockerfile, "/etc/group");
+        assert!(
+            group.contains(&format!("sandbox:x:{uid}:")),
+            "{DOCKERFILE} step '{group}' names a gid the agent never execs as"
+        );
+        let chown = step_with(&dockerfile, "chown ");
+        assert!(
+            chown.contains(&format!("chown {uid}:{uid} /sandbox")),
+            "{DOCKERFILE} step '{chown}' leaves the sandbox root unwritable by the identity \
+             working in it"
+        );
+    }
+
+    /// `platform` isolation has no constant to compare against and still belongs here. It is what
+    /// permits an exec identity equal to the agent's own, and an unprivileged agent has no second
+    /// uid to drop to under any other mode.
+    #[test]
+    fn the_image_asks_for_the_only_isolation_mode_an_unprivileged_agent_can_serve() {
+        assert_eq!(
+            env_value(&dockerfile(), "ALIEN_SANDBOX_ISOLATION"),
+            "platform"
         );
     }
 }

@@ -1,7 +1,7 @@
 # Multi-arch build for the alien-sandbox-agent Docker image
-# Used as the sandbox image on GCP Agent Platform
+# Run directly as the GCP Agent Platform sandbox; nothing layers on top of it
 
-FROM docker.io/chainguard/wolfi-base:latest as binary-selector
+FROM docker.io/chainguard/wolfi-base:latest AS binary-selector
 
 COPY target/aarch64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-aarch64
 COPY target/x86_64-unknown-linux-musl/release/alien-sandbox-agent /tmp/alien-sandbox-agent-x86_64
@@ -10,11 +10,14 @@ ARG TARGETARCH
 RUN case "$TARGETARCH" in \
        amd64)  cp /tmp/alien-sandbox-agent-x86_64 /tmp/alien-sandbox-agent ;; \
        arm64)  cp /tmp/alien-sandbox-agent-aarch64 /tmp/alien-sandbox-agent ;; \
+       *)      echo "unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
     esac
 
 FROM docker.io/chainguard/wolfi-base:latest
 
-RUN apk add --no-cache git ca-certificates
+# git is for the sandboxed command, not the agent, and pulls 24 transitive packages. That cost
+# lands here because this image is the sandbox, with no customer base image underneath to carry it.
+RUN apk add --no-cache git
 
 # Root-owned and unwritable by uid 1000: the supervised command runs under that uid and must not
 # be able to rewrite its own supervisor.
@@ -23,7 +26,7 @@ COPY --from=binary-selector --chown=0:0 --chmod=0755 \
 
 # Numeric ids and a plain append rather than adduser, which differs across base distributions.
 # Linux runs a process under a uid with no passwd entry, but tooling inside the sandbox reads one.
-RUN printf 'sandbox:x:1000:1000::/sandbox:/bin/sh\n' >> /etc/passwd \
+RUN printf 'sandbox:x:1000:1000::/sandbox:/sbin/nologin\n' >> /etc/passwd \
  && printf 'sandbox:x:1000:\n' >> /etc/group \
  && mkdir -p /sandbox \
  && chown 1000:1000 /sandbox \
@@ -39,5 +42,8 @@ ENV ALIEN_SANDBOX_ROOT=/sandbox \
     ALIEN_SANDBOX_ISOLATION=platform
 
 EXPOSE 8080
-USER 1000
+# Explicit gid so a runtime that does not read /etc/passwd cannot start the agent in group 0, which
+# makes the exec drop a privilege crossing whose setgroups needs a CAP_SETGID this image lacks, so
+# every exec fails.
+USER 1000:1000
 ENTRYPOINT ["/usr/local/bin/alien-sandbox-agent"]
