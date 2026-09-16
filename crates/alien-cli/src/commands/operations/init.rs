@@ -146,11 +146,12 @@ tokio = {{ version = "1", features = ["macros", "rt-multi-thread", "io-util", "i
 }
 
 #[derive(Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 #[schemars(rename = "HealthParams")]
 struct ScaffoldHealthParams {}
 
 #[derive(Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 #[schemars(rename = "HealthOutput")]
 struct ScaffoldHealthOutput {
     status: String,
@@ -223,10 +224,11 @@ use schemars::JsonSchema;
 use serde::{{Deserialize, Serialize}};
 
 #[derive(Debug, Deserialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct HealthParams {{}}
 
 #[derive(Debug, Serialize, JsonSchema)]
+#[serde(rename_all = "camelCase")]
 struct HealthOutput {{
     status: String,
 }}
@@ -406,6 +408,12 @@ mod tests {
         assert_eq!(manifest.operations[0].name, "health");
         assert!(manifest.operations[0].input_schema.is_some());
         assert!(manifest.operations[0].output_schema.is_some());
+        let lib = std::fs::read_to_string(target.join("src/lib.rs")).expect("read scaffold lib");
+        assert_eq!(
+            lib.matches("#[serde(rename_all = \"camelCase\")]").count(),
+            1
+        );
+        assert!(lib.contains("#[serde(rename_all = \"camelCase\", deny_unknown_fields)]"));
     }
 
     #[test]
