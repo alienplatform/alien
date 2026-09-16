@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{ExportConfig, LogExporter, Protocol, WithExportConfig};
+use opentelemetry_otlp::{ExportConfig, LogExporter, Protocol, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
     logs::{BatchLogProcessor, SdkLoggerProvider},
     Resource,
@@ -218,6 +218,7 @@ fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
 
     let mut exporter_builder = LogExporter::builder()
         .with_http()
+        .with_http_client(crate::otlp_retry::RetryingLogClient::new())
         .with_export_config(export_config);
 
     // Configure headers if any
@@ -464,7 +465,7 @@ pub async fn shutdown_otlp_logs() -> Result<()> {
 
         let shutdown_result = tokio::task::spawn_blocking({
             let provider = provider.clone();
-            move || match provider.shutdown() {
+            move || match provider.shutdown_with_timeout(std::time::Duration::from_secs(65)) {
                 Ok(_) => {
                     info!("OTLP logs shut down successfully");
                     Ok(())

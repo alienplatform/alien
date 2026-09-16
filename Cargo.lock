@@ -1279,6 +1279,7 @@ dependencies = [
  "once_cell",
  "opentelemetry",
  "opentelemetry-appender-tracing",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "pin-project-lite",

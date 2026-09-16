@@ -16,7 +16,7 @@ path = "src/lib.rs"
 
 [features]
 default = ["otlp", "aws", "gcp", "azure", "kubernetes", "local"]
-otlp = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-appender-tracing"]
+otlp = ["opentelemetry", "opentelemetry_sdk", "opentelemetry-otlp", "opentelemetry-appender-tracing", "dep:opentelemetry-http", "reqwest/blocking"]
 aws = ["alien-bindings/aws", "lambda_http", "lambda_runtime", "lambda-extension", "pin-project-lite", "http-body", "aws_lambda_events"]
 gcp = ["alien-bindings/gcp", "cloudevents-sdk"]  
 azure = ["alien-bindings/azure", "cloudevents-sdk"]
@@ -32,6 +32,8 @@ alien-error = { workspace = true }
 async-trait = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+http = { workspace = true }
+opentelemetry-http = { version = "0.30", optional = true }
 chrono = { workspace = true, features = ["serde"] }
 clap = { workspace = true, features = ["derive", "env"] }
 dotenvy = { workspace = true }
