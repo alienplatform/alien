@@ -28,7 +28,7 @@ generation:
     allOfMergeStrategy: shallowMerge
   requestBodyFieldName: ""
   persistentEdits:
-    enabled: never
+    enabled: true
   tests:
     generateTests: false
     generateNewTests: true
