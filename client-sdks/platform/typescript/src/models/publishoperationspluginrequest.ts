@@ -5,6 +5,11 @@
 
 import * as z from "zod/v4";
 import { ClosedEnum } from "../types/enums.js";
+import {
+  KubernetesPermissions,
+  KubernetesPermissions$Outbound,
+  KubernetesPermissions$outboundSchema,
+} from "./kubernetespermissions.js";
 
 /**
  * Plugin-level default risk tier.
@@ -342,30 +347,6 @@ export type PublishOperationsPluginRequestSensitiveOutputUnion =
   | PublishOperationsPluginRequestSensitiveOutputRedact
   | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation;
 
-export const PublishOperationsPluginRequestVerb = {
-  Get: "get",
-  List: "list",
-  Watch: "watch",
-  Delete: "delete",
-  Patch: "patch",
-} as const;
-export type PublishOperationsPluginRequestVerb = ClosedEnum<
-  typeof PublishOperationsPluginRequestVerb
->;
-
-export type PublishOperationsPluginRequestRule = {
-  apiGroup: string;
-  resource: string;
-  verbs: Array<PublishOperationsPluginRequestVerb>;
-  resourceNames?: Array<string> | undefined;
-  reason: string;
-};
-
-export type PublishOperationsPluginRequestKubernetesPermissions = {
-  schemaVersion: number;
-  rules: Array<PublishOperationsPluginRequestRule>;
-};
-
 export type Operation = {
   name: string;
   tier?: OperationTier | null | undefined;
@@ -383,9 +364,7 @@ export type Operation = {
     | PublishOperationsPluginRequestSensitiveOutputRedact
     | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation
     | undefined;
-  kubernetesPermissions?:
-    | PublishOperationsPluginRequestKubernetesPermissions
-    | undefined;
+  kubernetesPermissions?: KubernetesPermissions | undefined;
 };
 
 /**
@@ -1739,71 +1718,6 @@ export function publishOperationsPluginRequestSensitiveOutputUnionToJSON(
 }
 
 /** @internal */
-export const PublishOperationsPluginRequestVerb$outboundSchema: z.ZodEnum<
-  typeof PublishOperationsPluginRequestVerb
-> = z.enum(PublishOperationsPluginRequestVerb);
-
-/** @internal */
-export type PublishOperationsPluginRequestRule$Outbound = {
-  apiGroup: string;
-  resource: string;
-  verbs: Array<string>;
-  resourceNames?: Array<string> | undefined;
-  reason: string;
-};
-
-/** @internal */
-export const PublishOperationsPluginRequestRule$outboundSchema: z.ZodType<
-  PublishOperationsPluginRequestRule$Outbound,
-  PublishOperationsPluginRequestRule
-> = z.object({
-  apiGroup: z.string(),
-  resource: z.string(),
-  verbs: z.array(PublishOperationsPluginRequestVerb$outboundSchema),
-  resourceNames: z.array(z.string()).optional(),
-  reason: z.string(),
-});
-
-export function publishOperationsPluginRequestRuleToJSON(
-  publishOperationsPluginRequestRule: PublishOperationsPluginRequestRule,
-): string {
-  return JSON.stringify(
-    PublishOperationsPluginRequestRule$outboundSchema.parse(
-      publishOperationsPluginRequestRule,
-    ),
-  );
-}
-
-/** @internal */
-export type PublishOperationsPluginRequestKubernetesPermissions$Outbound = {
-  schemaVersion: number;
-  rules: Array<PublishOperationsPluginRequestRule$Outbound>;
-};
-
-/** @internal */
-export const PublishOperationsPluginRequestKubernetesPermissions$outboundSchema:
-  z.ZodType<
-    PublishOperationsPluginRequestKubernetesPermissions$Outbound,
-    PublishOperationsPluginRequestKubernetesPermissions
-  > = z.object({
-    schemaVersion: z.number(),
-    rules: z.array(
-      z.lazy(() => PublishOperationsPluginRequestRule$outboundSchema),
-    ),
-  });
-
-export function publishOperationsPluginRequestKubernetesPermissionsToJSON(
-  publishOperationsPluginRequestKubernetesPermissions:
-    PublishOperationsPluginRequestKubernetesPermissions,
-): string {
-  return JSON.stringify(
-    PublishOperationsPluginRequestKubernetesPermissions$outboundSchema.parse(
-      publishOperationsPluginRequestKubernetesPermissions,
-    ),
-  );
-}
-
-/** @internal */
 export type Operation$Outbound = {
   name: string;
   tier?: string | null | undefined;
@@ -1826,9 +1740,7 @@ export type Operation$Outbound = {
     | PublishOperationsPluginRequestSensitiveOutputRedact$Outbound
     | PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$Outbound
     | undefined;
-  kubernetesPermissions?:
-    | PublishOperationsPluginRequestKubernetesPermissions$Outbound
-    | undefined;
+  kubernetesPermissions?: KubernetesPermissions$Outbound | undefined;
 };
 
 /** @internal */
@@ -1871,9 +1783,7 @@ export const Operation$outboundSchema: z.ZodType<
       PublishOperationsPluginRequestSensitiveOutputRequireConfirmation$outboundSchema
     ),
   ]).optional(),
-  kubernetesPermissions: z.lazy(() =>
-    PublishOperationsPluginRequestKubernetesPermissions$outboundSchema
-  ).optional(),
+  kubernetesPermissions: KubernetesPermissions$outboundSchema.optional(),
 });
 
 export function operationToJSON(operation: Operation): string {

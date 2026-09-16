@@ -8,6 +8,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperationsCatalogKubernetesPermissions,
+  OperationsCatalogKubernetesPermissions$inboundSchema,
+} from "./operationscatalogkubernetespermissions.js";
 
 /**
  * Effective risk tier for this operation.
@@ -103,33 +107,6 @@ export type OperationsPluginOperationPermissions = {
   gcp: Array<OperationsPluginOperationGcp>;
 };
 
-export const OperationsPluginOperationVerb = {
-  Get: "get",
-  List: "list",
-  Watch: "watch",
-  Delete: "delete",
-  Patch: "patch",
-} as const;
-export type OperationsPluginOperationVerb = ClosedEnum<
-  typeof OperationsPluginOperationVerb
->;
-
-export type OperationsPluginOperationRule = {
-  apiGroup: string;
-  resource: string;
-  verbs: Array<OperationsPluginOperationVerb>;
-  resourceNames?: Array<string> | undefined;
-  reason: string;
-};
-
-/**
- * Kubernetes RBAC required to execute this operation. Null when the operation declares none.
- */
-export type OperationsPluginOperationKubernetesPermissions = {
-  schemaVersion: number;
-  rules: Array<OperationsPluginOperationRule>;
-};
-
 export type OperationsPluginOperation = {
   /**
    * Operation name, unique within the plugin.
@@ -167,9 +144,12 @@ export type OperationsPluginOperation = {
    */
   permissions: OperationsPluginOperationPermissions;
   /**
-   * Kubernetes RBAC required to execute this operation. Null when the operation declares none.
+   * Kubernetes RBAC required to execute this operation. Omitted by older servers and null when the operation declares none.
    */
-  kubernetesPermissions: OperationsPluginOperationKubernetesPermissions | null;
+  kubernetesPermissions?:
+    | OperationsCatalogKubernetesPermissions
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -411,58 +391,6 @@ export function operationsPluginOperationPermissionsFromJSON(
 }
 
 /** @internal */
-export const OperationsPluginOperationVerb$inboundSchema: z.ZodEnum<
-  typeof OperationsPluginOperationVerb
-> = z.enum(OperationsPluginOperationVerb);
-
-/** @internal */
-export const OperationsPluginOperationRule$inboundSchema: z.ZodType<
-  OperationsPluginOperationRule,
-  unknown
-> = z.object({
-  apiGroup: z.string(),
-  resource: z.string(),
-  verbs: z.array(OperationsPluginOperationVerb$inboundSchema),
-  resourceNames: z.array(z.string()).optional(),
-  reason: z.string(),
-});
-
-export function operationsPluginOperationRuleFromJSON(
-  jsonString: string,
-): SafeParseResult<OperationsPluginOperationRule, SDKValidationError> {
-  return safeParse(
-    jsonString,
-    (x) => OperationsPluginOperationRule$inboundSchema.parse(JSON.parse(x)),
-    `Failed to parse 'OperationsPluginOperationRule' from JSON`,
-  );
-}
-
-/** @internal */
-export const OperationsPluginOperationKubernetesPermissions$inboundSchema:
-  z.ZodType<OperationsPluginOperationKubernetesPermissions, unknown> = z.object(
-    {
-      schemaVersion: z.number(),
-      rules: z.array(z.lazy(() => OperationsPluginOperationRule$inboundSchema)),
-    },
-  );
-
-export function operationsPluginOperationKubernetesPermissionsFromJSON(
-  jsonString: string,
-): SafeParseResult<
-  OperationsPluginOperationKubernetesPermissions,
-  SDKValidationError
-> {
-  return safeParse(
-    jsonString,
-    (x) =>
-      OperationsPluginOperationKubernetesPermissions$inboundSchema.parse(
-        JSON.parse(x),
-      ),
-    `Failed to parse 'OperationsPluginOperationKubernetesPermissions' from JSON`,
-  );
-}
-
-/** @internal */
 export const OperationsPluginOperation$inboundSchema: z.ZodType<
   OperationsPluginOperation,
   unknown
@@ -489,8 +417,8 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   requiredPermissions: z.array(z.string()),
   permissions: z.lazy(() => OperationsPluginOperationPermissions$inboundSchema),
   kubernetesPermissions: z.nullable(
-    z.lazy(() => OperationsPluginOperationKubernetesPermissions$inboundSchema),
-  ),
+    OperationsCatalogKubernetesPermissions$inboundSchema,
+  ).optional(),
 });
 
 export function operationsPluginOperationFromJSON(
