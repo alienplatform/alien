@@ -69,6 +69,8 @@ export type ApproveAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: ApproveAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -208,6 +210,8 @@ export const ApproveAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: ApproveAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function approveAccessRequestCommandFromJSON(
