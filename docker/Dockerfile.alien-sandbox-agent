@@ -33,8 +33,8 @@ RUN printf 'sandbox:x:1000:1000::/sandbox:/sbin/nologin\n' >> /etc/passwd \
  && chmod 0700 /sandbox
 
 # The template carries no env, so the contract lives here, and none of it is optional. transport
-# serves a request that carries no capability, so what keeps the supervised command off this port
-# is peer::transport_may_serve; the agent refuses that mode where /proc/net/tcp is unreadable.
+# accepts an uncapabilitied request only from a socket peer::transport_may_serve does not trace
+# back to the exec uid, and the agent refuses the mode where /proc/net/tcp is unreadable.
 ENV ALIEN_SANDBOX_ROOT=/sandbox \
     ALIEN_SANDBOX_PORT=8080 \
     ALIEN_SANDBOX_AUTHORIZATION=transport \

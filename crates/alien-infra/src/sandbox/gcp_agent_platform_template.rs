@@ -6,10 +6,10 @@
 //! dependency and creates templates beneath it, never creating the engine itself.
 //!
 //! Template config is immutable: there is no update verb, so reconciliation is replace-not-update.
-//! A change to the identity fields — the image, the ceilings, the egress switch — creates a new
-//! template, waits for it to become `ACTIVE`, and only then reaps the old one, so a release never
-//! leaves a session pointing at a template that has already been deleted. [`template_identity`]
-//! names those fields and says what a change outside them does.
+//! A change to the identity fields creates a new template, waits for it to become `ACTIVE`, and
+//! only then reaps the old one, so a release never leaves a session pointing at a template that
+//! has already been deleted. [`template_identity`] names those fields and says what a change
+//! outside them does.
 
 use std::collections::HashMap;
 use std::time::Duration;
@@ -46,7 +46,8 @@ fn last_segment(name: &str) -> &str {
 /// `image` is the reference the spec names, digest or tag, so a re-pushed tag moves nothing here.
 /// The whole `SandboxLimits` is compared but only cpu and memory reach the body, so a disk-only
 /// edit replaces a template with a byte-identical one; `max_processes` cannot vary at all, because
-/// `process_limit: false` refuses it at plan time. A body field that is not here, such as the
+/// `process_limit: false` refuses it at plan time. The `bool` is `internet_access`, which picks
+/// which egress config the body carries. A body field that is not here, such as the
 /// declared port, cannot force a replace on its own — an existing template picks up a new value
 /// only at the next replace.
 fn template_identity(sandbox: &Sandbox) -> Result<(String, SandboxLimits, bool)> {

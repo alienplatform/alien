@@ -751,6 +751,8 @@ mod gcp_image_contract {
     ///
     /// A substring test would accept `chown 1000:1000 /sandbox/work`, which builds, leaves the
     /// real root root-owned and untraversable at mode 0700, and still reads as green.
+    /// It cannot see a later redirect, so `>> /etc/passwd >/dev/null` satisfies both tokens while
+    /// the record never lands. That is the floor of any lexical read of a shell fragment.
     fn has_tokens(step: &str, words: &[&str]) -> bool {
         let tokens: Vec<&str> = step.split_whitespace().collect();
         tokens.windows(words.len()).any(|window| window == words)
@@ -788,16 +790,19 @@ mod gcp_image_contract {
             "the agent would start under an identity it cannot exec as"
         );
 
+        // Both needles carry the opening quote, and the group needle its `\n` terminator too.
+        // Without them the group record is a prefix of the passwd record, so any folding or
+        // separator that puts the two in one step lets passwd answer for group.
         let passwd = step_with(&dockerfile, "/etc/passwd");
         assert!(
-            passwd.contains(&format!("sandbox:x:{uid}:{uid}::{root}:"))
+            passwd.contains(&format!("'sandbox:x:{uid}:{uid}::{root}:"))
                 && has_tokens(&passwd, &[">>", "/etc/passwd"]),
             "{DOCKERFILE} step '{passwd}' does not append the identity and home the agent works \
              under to /etc/passwd"
         );
         let group = step_with(&dockerfile, "/etc/group");
         assert!(
-            group.contains(&format!("sandbox:x:{uid}:"))
+            group.contains(&format!("'sandbox:x:{uid}:\\n'"))
                 && has_tokens(&group, &[">>", "/etc/group"]),
             "{DOCKERFILE} step '{group}' does not append the gid the agent execs as to /etc/group"
         );
@@ -832,9 +837,10 @@ mod gcp_image_contract {
     }
 
     /// The supervised command runs as the exec uid, and a binary that uid may write is a
-    /// supervisor it can replace. The smoke test's `rm` probe covers only the directory.
+    /// supervisor it can replace. Only the `COPY` flags are read, so a later `chmod` on the same
+    /// path goes unseen here; the smoke test's `rm` probe covers the directory, not the file mode.
     #[test]
-    fn the_agent_binary_is_not_writable_by_the_identity_it_supervises() {
+    fn the_copy_that_ships_the_agent_binary_gives_it_root_ownership_and_0755() {
         let copy = step_with(&dockerfile(), "COPY ");
         assert!(
             has_tokens(&copy, &["--chown=0:0"]) && has_tokens(&copy, &["--chmod=0755"]),
