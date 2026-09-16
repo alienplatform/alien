@@ -295,6 +295,7 @@ impl PluginManifest {
         }
         for (arch, entry) in &self.binaries {
             require_non_empty(entry, &format!("binaries.{}", arch.as_str()))?;
+            reject_reserved_binary_entry(entry, &format!("binaries.{}", arch.as_str()))?;
         }
 
         let mut seen = BTreeSet::new();
@@ -542,6 +543,7 @@ impl CanonicalPluginManifest {
         for (arch, entry) in &self.binaries {
             let field = format!("binaries.{}", arch.as_str());
             require_non_empty(entry, &field)?;
+            reject_reserved_binary_entry(entry, &field)?;
             if !valid_binary_entry(entry) {
                 return Err(AlienError::new(ErrorData::ManifestInvalid {
                     reason: format!(
@@ -1235,6 +1237,17 @@ fn valid_binary_entry(value: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
 }
 
+fn reject_reserved_binary_entry(value: &str, field: &str) -> Result<()> {
+    if value == MANIFEST_FILENAME {
+        return Err(AlienError::new(ErrorData::ManifestInvalid {
+            reason: format!(
+                "{field} must not use the reserved manifest filename '{MANIFEST_FILENAME}'"
+            ),
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1279,6 +1292,20 @@ mod tests {
         assert_eq!(manifest.name, "postgres");
         assert_eq!(manifest.tier, RiskTier::ReadOnly);
         assert!(manifest.operations.is_empty());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn rejects_the_reserved_manifest_filename_as_a_binary_entry() {
+        let json = manifest_json("").replace("postgres-linux-amd64", MANIFEST_FILENAME);
+
+        for result in [
+            PluginManifest::parse_and_validate(json.as_bytes()).map(|_| ()),
+            CanonicalPluginManifest::parse_and_validate(json.as_bytes()).map(|_| ()),
+        ] {
+            let error = result.expect_err("metadata.json must remain reserved for the manifest");
+            assert!(error.to_string().contains("reserved manifest filename"));
+        }
     }
 
     #[test]
