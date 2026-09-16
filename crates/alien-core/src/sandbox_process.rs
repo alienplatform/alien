@@ -43,6 +43,20 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024;
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
+/// Port the agent listens on inside a GCP Agent Platform sandbox.
+///
+/// Agent Platform is only known to serve 8080, on the image and on the declared template port
+/// alike, and whether it honours a declared port or assumes 8080 has never been established.
+/// 8080 is right under either answer; any other number is right under only one.
+pub const GCP_AGENT_PORT: u16 = 8080;
+
+/// Uid and gid the agent and the commands it supervises share on GCP Agent Platform.
+///
+/// Agent Platform refuses an image that requires root, so the agent runs unprivileged and has no
+/// second uid to drop to. `platform` isolation is what permits an exec identity equal to the
+/// agent's own.
+pub const GCP_EXEC_UID: u32 = 1000;
+
 /// How many frames may sit between the process and the caller.
 ///
 /// Small on purpose: this is the backpressure window, and a large one would just be a buffer
@@ -617,5 +631,71 @@ mod tests {
         assert!(matches!(first, ProcessFrame::Output { .. }));
 
         produce.abort();
+    }
+}
+
+/// The image build has no way to read a Rust constant, so it repeats these values as literal text.
+/// A constant changed here with the Dockerfile left alone produces an image whose agent is dialled
+/// on one port and listening on another, or refuses to start at all, with nothing to catch it
+/// until a sandbox hangs.
+#[cfg(test)]
+mod gcp_image_contract {
+    use super::*;
+    use std::path::PathBuf;
+
+    const DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-agent";
+
+    fn dockerfile() -> String {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../..")
+            .join(DOCKERFILE);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
+    }
+
+    /// Panics rather than returning an option: a comparison skipped because the setting was not
+    /// found is exactly the drift this module exists to catch.
+    fn env_value(dockerfile: &str, name: &str) -> String {
+        let prefix = format!("{name}=");
+        dockerfile
+            .split_whitespace()
+            .find_map(|token| token.strip_prefix(&prefix))
+            .unwrap_or_else(|| panic!("{DOCKERFILE} must set {name}"))
+            .to_string()
+    }
+
+    fn exposed_port(dockerfile: &str) -> String {
+        dockerfile
+            .lines()
+            .find_map(|line| line.trim().strip_prefix("EXPOSE "))
+            .unwrap_or_else(|| panic!("{DOCKERFILE} must expose a port"))
+            .trim()
+            .to_string()
+    }
+
+    #[test]
+    fn the_image_declares_the_port_and_exec_identity_these_constants_name() {
+        let dockerfile = dockerfile();
+
+        assert_eq!(
+            env_value(&dockerfile, "ALIEN_SANDBOX_PORT"),
+            GCP_AGENT_PORT.to_string(),
+            "the agent would listen on a port no caller dials"
+        );
+        assert_eq!(
+            exposed_port(&dockerfile),
+            GCP_AGENT_PORT.to_string(),
+            "the image would advertise a port the agent does not serve"
+        );
+        assert_eq!(
+            env_value(&dockerfile, "ALIEN_SANDBOX_EXEC_UID"),
+            GCP_EXEC_UID.to_string(),
+            "the agent would drop to a uid the image never created"
+        );
+        assert_eq!(
+            env_value(&dockerfile, "ALIEN_SANDBOX_EXEC_GID"),
+            GCP_EXEC_UID.to_string(),
+            "the agent would drop to a gid the image never created"
+        );
     }
 }
