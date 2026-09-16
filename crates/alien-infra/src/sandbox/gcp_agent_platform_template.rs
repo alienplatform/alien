@@ -17,14 +17,15 @@ use tracing::{info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::sandbox::GcpAgentPlatformEngineController;
+use alien_core::sandbox_process::GCP_AGENT_PORT;
 use alien_core::{
     GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
     SandboxLimits,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_gcp_clients::agent_platform::{
-    ContainerResources, CustomContainerEnvironment, CustomContainerSpec, EgressControlConfig,
-    SandboxEnvironmentTemplate,
+    ContainerPort, ContainerResources, CustomContainerEnvironment, CustomContainerSpec,
+    EgressControlConfig, SandboxEnvironmentTemplate,
 };
 use alien_gcp_clients::longrunning::OperationResult;
 use alien_macros::controller;
@@ -106,7 +107,11 @@ fn build_template_body(
                 extra: Default::default(),
             }),
             resources: Some(resources),
-            ports: vec![],
+            // Must match the port the published image EXPOSEs and listens on.
+            ports: vec![ContainerPort {
+                port: i32::from(GCP_AGENT_PORT),
+                protocol: None,
+            }],
             extra: Default::default(),
         }),
         egress_control_config: Some(EgressControlConfig {
@@ -1214,6 +1219,24 @@ mod tests {
             .await
             .expect("create runs with the asserted body");
         assert_eq!(executor.status(), ResourceStatus::Running);
+    }
+
+    #[test]
+    fn build_template_body_declares_the_port_the_agent_image_serves() {
+        let sandbox = sandbox_with(SandboxEgress::Allow, "ubuntu:24.04", None, None);
+        let body =
+            build_template_body(&sandbox, "agent-sbx").expect("a valid sandbox builds a body");
+        let env = body
+            .custom_container_environment
+            .as_ref()
+            .expect("template carries a container environment");
+        let ports = &env.ports;
+        assert_eq!(ports.len(), 1, "template declares exactly one port");
+        assert_eq!(
+            ports[0].port,
+            i32::from(GCP_AGENT_PORT),
+            "must match the port the image serves"
+        );
     }
 
     /// Domain-scoped egress has no representation in the single switch, so the template body build
