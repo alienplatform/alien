@@ -509,9 +509,10 @@ fn remote_operator_identity_record_tpl(
 {{{{- define "deployment.remoteOperatorIdentityCompletionName" -}}}}
 {{{{ printf "%s-complete" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
+{{{{- if .Values.remoteOperator.enabled -}}}}
 {{{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}}}
 {{{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}}}
-{{{{- if and .Values.remoteOperator.enabled (not $identityRecord) }}}}
+{{{{- if not $identityRecord }}}}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -535,6 +536,7 @@ data:
   credentialsSecretName: {{{{ include "deployment.remoteOperatorCredentialsSecretName" . | trim | quote }}}}
   encryptionKeySha256: {{{{ include "deployment.remoteOperatorEncryptionKeySha256" . | trim | quote }}}}
 {{{{- end }}}}
+{{{{- end }}}}
 "#,
         credentials_secret_name = credentials_secret_name,
         credentials_encryption_key_sha256 = credentials_encryption_key_sha256,
@@ -542,9 +544,10 @@ data:
 }
 
 fn remote_operator_identity_completion_tpl() -> String {
-    r#"{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+    r#"{{- if .Values.remoteOperator.enabled -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
 {{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
-{{- if and .Values.remoteOperator.enabled (not $identityCompletion) }}
+{{- if not $identityCompletion }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -565,6 +568,7 @@ immutable: true
 data:
   version: "1"
   identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
+{{- end }}
 {{- end }}
 "#
     .to_string()
@@ -599,9 +603,81 @@ spec:
             - -ec
             - |
               resource_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
-              kubectl -n {{ .Release.Namespace | quote }} delete deployment "$resource_name" --ignore-not-found=true
-              kubectl -n {{ .Release.Namespace | quote }} delete configmap "$resource_name" "$resource_name-complete" --ignore-not-found=true
-              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaim "$resource_name-identity" --ignore-not-found=true
+              namespace={{ .Release.Namespace | quote }}
+              release_name={{ .Release.Name | quote }}
+              release_service={{ .Release.Service | quote }}
+              release_id={{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+              identity_record="$resource_name"
+              identity_completion="$resource_name-complete"
+              identity_pvc="$resource_name-identity"
+
+              field() {
+                kubectl -n "$namespace" get "$1" "$2" -o "jsonpath=$3"
+              }
+              require_field() {
+                kind="$1"
+                name="$2"
+                path="$3"
+                expected="$4"
+                description="$5"
+                actual="$(field "$kind" "$name" "$path")" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                if [ "$actual" != "$expected" ]; then
+                  echo "Refusing cleanup: $kind $namespace/$name has unexpected $description." >&2
+                  exit 1
+                fi
+              }
+
+              if ! kubectl -n "$namespace" get configmap "$identity_record" >/dev/null 2>&1; then
+                if kubectl -n "$namespace" get configmap "$identity_completion" >/dev/null 2>&1; then
+                  echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
+                  exit 1
+                fi
+                echo "No Remote Operator identity record exists for this release; nothing to clean up."
+                exit 0
+              fi
+
+              require_field configmap "$identity_record" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+              require_field configmap "$identity_record" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+              require_field configmap "$identity_record" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+              require_field configmap "$identity_record" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+              require_field configmap "$identity_record" '{.metadata.labels.alien\.dev/remote-operator-identity-record}' true identity-record
+              require_field configmap "$identity_record" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+              require_field configmap "$identity_record" '{.immutable}' true immutability
+              require_field configmap "$identity_record" '{.data.version}' 3 version
+
+              if kubectl -n "$namespace" get configmap "$identity_completion" >/dev/null 2>&1; then
+                require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$identity_completion" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$identity_completion" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$identity_completion" '{.metadata.labels.alien\.dev/remote-operator-identity-phase}' complete identity-phase
+                require_field configmap "$identity_completion" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$identity_completion" '{.immutable}' true immutability
+                require_field configmap "$identity_completion" '{.data.version}' 1 version
+                require_field configmap "$identity_completion" '{.data.identityRecordName}' "$identity_record" identity-record-reference
+              fi
+
+              if kubectl -n "$namespace" get deployment "$resource_name" >/dev/null 2>&1; then
+                require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
+              fi
+              if kubectl -n "$namespace" get persistentvolumeclaim "$identity_pvc" >/dev/null 2>&1; then
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
+              fi
+
+              # Stop the exact release-owned workload first so its identity
+              # claim can finish deletion while this pre-delete hook waits.
+              kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
+              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_completion" --ignore-not-found=true
+              kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true
 "#
     .to_string()
 }
@@ -780,7 +856,7 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
   {{- fail (printf "Remote Operator credentials Secret %s/%s has encryption-key SHA-256 %s, but setup recorded %s. Refusing identity replacement; restore the original encryption-key." .Release.Namespace $secretName $actualEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
 {{- end -}}
 __COLLECTOR_CHECK__{{- end -}}
-{{- if or .Release.IsInstall .Release.IsUpgrade -}}
+{{- if and (or .Release.IsInstall .Release.IsUpgrade) (or .Values.remoteOperator.enabled .Release.IsUpgrade) -}}
 {{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
 {{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
 {{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}
@@ -5829,6 +5905,12 @@ mod tests {
         assert!(checks.contains("managedResourceExists"));
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
+        assert!(cleanup.contains("No Remote Operator identity record exists"));
+        assert!(cleanup.contains(
+            "completion record $namespace/$identity_completion exists without its identity record"
+        ));
+        assert!(cleanup.contains("require_field deployment"));
+        assert!(cleanup.contains("require_field persistentvolumeclaim"));
         assert!(cleanup.contains("delete deployment \"$resource_name\""));
         assert!(cleanup.contains("$resource_name-complete"));
         assert!(cleanup.contains("$resource_name-identity"));
@@ -5848,7 +5930,9 @@ mod tests {
         assert!(checks.contains("exact prepared identity retry"));
         assert!(checks.contains("prepared Remote Operator retry may reuse only"));
         assert!(checks.contains("managed resources exist without the retained identity record"));
-        assert!(checks.contains("if or .Release.IsInstall .Release.IsUpgrade"));
+        assert!(checks.contains(
+            "if and (or .Release.IsInstall .Release.IsUpgrade) (or .Values.remoteOperator.enabled .Release.IsUpgrade)"
+        ));
         assert!(remote_template.contains("helm.sh/resource-policy: keep"));
         let identity_record = &chart.files["templates/remote-operator-identity-record.yaml"];
         assert!(identity_record.contains("alien.dev/remote-operator-identity-record"));
@@ -5862,6 +5946,22 @@ mod tests {
         assert!(identity_completion.contains("helm.sh/hook: post-install,post-upgrade"));
         assert!(identity_completion.contains("alien.dev/remote-operator-identity-phase: complete"));
         assert!(!identity_completion.contains("alien.dev/remote-operator-identity-record"));
+        for (name, template) in [
+            ("identity record", identity_record),
+            ("identity completion", identity_completion),
+            ("lifecycle checks", checks),
+        ] {
+            let enabled_gate = template
+                .find("if .Values.remoteOperator.enabled")
+                .unwrap_or_else(|| panic!("{name} must gate live lookups on enablement"));
+            let first_lookup = template
+                .find("lookup \"")
+                .unwrap_or_else(|| panic!("{name} must contain a live lookup"));
+            assert!(
+                enabled_gate < first_lookup,
+                "{name} must not perform a live lookup before checking enablement"
+            );
+        }
         assert!(chart.files["values.yaml"].contains("bootstrapIdentity: false"));
         let schema: serde_json::Value =
             serde_json::from_str(&chart.files["values.schema.json"]).unwrap();

@@ -161,6 +161,104 @@ rules:
         "disabled install must not create the cluster-scoped CRD",
     );
 
+    let cleanup_render = run_ok(
+        "helm",
+        [
+            "template",
+            &helm_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--show-only",
+            "templates/remote-operator-cleanup-job.yaml",
+        ],
+        None,
+    );
+    let cleanup_job: serde_yaml::Value =
+        serde_yaml::from_str(&cleanup_render.stdout).expect("parse cleanup Job");
+    let cleanup_job_name = cleanup_job["metadata"]["name"]
+        .as_str()
+        .expect("cleanup Job name");
+    let remote_operator_resource_name = cleanup_job_name
+        .strip_suffix("-cleanup")
+        .expect("cleanup Job name must identify the Remote Operator");
+    let foreign_pvc = temp.path().join("foreign-identity-pvc.yaml");
+    fs::write(
+        &foreign_pvc,
+        format!(
+            r#"apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {remote_operator_resource_name}-identity
+  namespace: {helm_namespace}
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Mi
+"#,
+        ),
+    )
+    .expect("write foreign identity PVC");
+    run_ok(
+        "kubectl",
+        ["apply", "--filename", path_str(&foreign_pvc)],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            &helm_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "persistentvolumeclaim",
+            &format!("{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            &helm_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--kube-as-user=product-installer",
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+
     let credentials_name = format!("{helm_release}-remote");
     run_ok(
         "kubectl",
