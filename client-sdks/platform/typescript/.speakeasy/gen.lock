@@ -1,16 +1,16 @@
 lockVersion: 2.0.0
 id: bc51eaa5-3f88-4290-b64f-cae16746dd5d
 management:
-  docChecksum: 62ab9837f162fcd3fd766e50b6372a00
+  docChecksum: f285b59fa48fdef48cc95541c6b7f776
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
   releaseVersion: 3.3.22
   configChecksum: 5e4107efd5c7f6e5afe2c9a9edb7eb27
 persistentEdits:
-  generation_id: 84540101-25e4-4aca-9d7a-86f35cc20e1d
-  pristine_commit_hash: 0a8e6a5a200e57b26aeb2d0d3b1c20cf2036c3b6
-  pristine_tree_hash: 0378bfae6d9f380e657903f659c440d629214a28
+  generation_id: 3062744e-d336-4b59-a2bc-530acebd462e
+  pristine_commit_hash: 308b2165fe5da510916415705cb9ab5471cc5aad
+  pristine_tree_hash: 090624de781d2fd505e9cb85553da7a6032a373e
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -33035,8 +33035,8 @@ trackedFiles:
     pristine_git_object: 579aa6979d16f57eda11fb354817970800f65636
   docs/sdks/operations/README.md:
     id: 3ea407c8f6b3
-    last_write_checksum: sha1:968f7c34f40606d0730907d6014197d3d5aa444f
-    pristine_git_object: 145331b0c4d113afd03cabf4ea0792b99efb5045
+    last_write_checksum: sha1:46dc0869e73f838b66f56f772ee722772a729d4d
+    pristine_git_object: d4cce7b6b9d0d60f6a1aba85d2f05f883bb449c9
   docs/sdks/operatormanifests/README.md:
     id: 5797b1d533e4
     last_write_checksum: sha1:7e7b4a823e00887280fe10b2edd6e12fc0c06efa
@@ -33703,8 +33703,8 @@ trackedFiles:
     pristine_git_object: 7bcd366f12834dcf725be81334420ba0423fe457
   src/funcs/operationsVerifyCheck.ts:
     id: a9cc84a5c99f
-    last_write_checksum: sha1:cfd6092479670f3b9e8f5e37505681c4d1467d8a
-    pristine_git_object: e30a24fbddbf2be6b542d6ab7b9c1f4b3d767412
+    last_write_checksum: sha1:bacc08b95f776a83a9e22b6f192a18f6bb01be76
+    pristine_git_object: f0943d4588e31e19f5a0ec0892afae8352e0f4fb
   src/funcs/operatorManifestsPrepareOperatorManifestPackage.ts:
     id: 7c64d517ff24
     last_write_checksum: sha1:5cea17365c7de18284388d1182b3f2092fa09493
@@ -41262,7 +41262,9 @@ examples:
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
-          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
     projectId:
       parameters:
         query:
@@ -41276,7 +41278,9 @@ examples:
         "404":
           application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
         "500":
-          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": true}
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
+        "400":
+          application/json: {"code": "<value>", "message": "<value>", "retryable": false, "internal": false}
     speakeasy-default-verify-operation-check:
       parameters:
         query:
