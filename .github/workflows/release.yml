@@ -2009,8 +2009,12 @@ jobs:
               exit 1
             fi
 
+            # The failing run below never reaches the port parse and overrides the authorization
+            # mode, so both of those are read off the image here instead.
             docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
-              -c 'id | grep -q "uid=1000(sandbox) gid=1000(sandbox)"'
+              -c 'id | grep -q "uid=1000(sandbox) gid=1000(sandbox)" &&
+                  test "$ALIEN_SANDBOX_AUTHORIZATION" = transport &&
+                  test "$ALIEN_SANDBOX_PORT" = 8080'
             # The unlink rather than the file mode: only the directory permission stops the
             # supervised command removing its own supervisor. Removing a file it may remove first,
             # so a denial is what fails the rm and not an rm that is missing or broken.
@@ -2018,17 +2022,19 @@ jobs:
               -c 'touch /sandbox/probe && rm /sandbox/probe &&
                   ! rm -f /usr/local/bin/alien-sandbox-agent &&
                   test -x /usr/local/bin/alien-sandbox-agent'
-            # test -x reads a mode bit, which a binary that cannot start still carries. Matching a
-            # string only the agent emits is what proves the entrypoint is a working agent.
-            if out=$(docker run --rm --platform "$platform" \
+            # test -x reads a mode bit, which a binary that cannot start still carries. Matching
+            # identifiers only the agent emits is what proves the entrypoint is a working agent.
+            if out=$(timeout 60 docker run --rm --platform "$platform" \
                 -e ALIEN_SANDBOX_AUTHORIZATION=nonsense "$SANDBOX_AGENT" 2>&1); then
               echo "::error::${platform}: the agent started with an invalid authorization mode"
               exit 1
             fi
-            case "$out" in
-              *"is not one of: capability, transport"*) ;;
-              *) echo "::error::${platform}: ${out}"; exit 1 ;;
-            esac
+            for token in AGENT_CONFIG_INVALID ALIEN_SANDBOX_AUTHORIZATION; do
+              case "$out" in
+                *"$token"*) ;;
+                *) echo "::error::${platform}: ${out}"; exit 1 ;;
+              esac
+            done
           done
 
       - name: Record qualified image digests

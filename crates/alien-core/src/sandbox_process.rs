@@ -732,13 +732,17 @@ mod gcp_image_contract {
         only(arguments.into_iter(), name).trim().to_string()
     }
 
-    /// The one build step carrying `needle`.
+    /// The one `&&`-delimited step carrying `needle`.
+    ///
+    /// A whole `RUN` is too coarse a unit: the passwd record it opens with satisfies a needle
+    /// meant for the group record two steps later.
     fn step_with(dockerfile: &str, needle: &str) -> String {
         let instructions = code_lines(dockerfile);
         let steps: Vec<&str> = instructions
             .iter()
-            .map(String::as_str)
-            .filter(|instruction| instruction.contains(needle))
+            .flat_map(|instruction| instruction.split("&&"))
+            .map(str::trim)
+            .filter(|step| step.contains(needle))
             .collect();
         only(steps.into_iter(), &format!("'{needle}' step")).to_string()
     }
@@ -786,13 +790,16 @@ mod gcp_image_contract {
 
         let passwd = step_with(&dockerfile, "/etc/passwd");
         assert!(
-            passwd.contains(&format!("sandbox:x:{uid}:{uid}::{root}:")),
-            "{DOCKERFILE} step '{passwd}' names an identity or home the agent never works under"
+            passwd.contains(&format!("sandbox:x:{uid}:{uid}::{root}:"))
+                && has_tokens(&passwd, &[">>", "/etc/passwd"]),
+            "{DOCKERFILE} step '{passwd}' does not append the identity and home the agent works \
+             under to /etc/passwd"
         );
         let group = step_with(&dockerfile, "/etc/group");
         assert!(
-            group.contains(&format!("sandbox:x:{uid}:")),
-            "{DOCKERFILE} step '{group}' names a gid the agent never execs as"
+            group.contains(&format!("sandbox:x:{uid}:"))
+                && has_tokens(&group, &[">>", "/etc/group"]),
+            "{DOCKERFILE} step '{group}' does not append the gid the agent execs as to /etc/group"
         );
         let chown = step_with(&dockerfile, "chown ");
         assert!(
@@ -810,6 +817,28 @@ mod gcp_image_contract {
         assert_eq!(
             env_value(&dockerfile(), "ALIEN_SANDBOX_ISOLATION"),
             "platform"
+        );
+    }
+
+    /// `transport` has no constant either. It is what keeps the supervised command out, because
+    /// the agent serves an uncapabilitied request only from a socket `peer::transport_may_serve`
+    /// does not trace back to the exec uid. `capability` needs a key and session the image lacks.
+    #[test]
+    fn the_image_asks_for_the_only_authorization_mode_the_template_can_supply() {
+        assert_eq!(
+            env_value(&dockerfile(), "ALIEN_SANDBOX_AUTHORIZATION"),
+            "transport"
+        );
+    }
+
+    /// The supervised command runs as the exec uid, and a binary that uid may write is a
+    /// supervisor it can replace. The smoke test's `rm` probe covers only the directory.
+    #[test]
+    fn the_agent_binary_is_not_writable_by_the_identity_it_supervises() {
+        let copy = step_with(&dockerfile(), "COPY ");
+        assert!(
+            has_tokens(&copy, &["--chown=0:0"]) && has_tokens(&copy, &["--chmod=0755"]),
+            "{DOCKERFILE} step '{copy}' ships the agent writable by the identity it supervises"
         );
     }
 }

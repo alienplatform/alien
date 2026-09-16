@@ -8,9 +8,8 @@
 //! Template config is immutable: there is no update verb, so reconciliation is replace-not-update.
 //! A change to the identity fields — the image, the ceilings, the egress switch — creates a new
 //! template, waits for it to become `ACTIVE`, and only then reaps the old one, so a release never
-//! leaves a session pointing at a template that has already been deleted. A body field outside
-//! that set, such as the declared port, cannot force a replace on its own; a template created
-//! before its value changed keeps the old body until one of the three identity fields moves.
+//! leaves a session pointing at a template that has already been deleted. [`template_identity`]
+//! names those fields and says what a change outside them does.
 
 use std::collections::HashMap;
 use std::time::Duration;
