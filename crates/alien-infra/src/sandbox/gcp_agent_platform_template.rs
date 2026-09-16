@@ -1,7 +1,7 @@
 //! GCP Agent Platform sandbox template controller.
 //!
 //! Reconciles the `SandboxEnvironmentTemplate`: the Live, release-owned object that carries
-//! the image digest, ceilings and egress and warms the session pool. The reasoning engine it hangs
+//! the image, ceilings and egress and warms the session pool. The reasoning engine it hangs
 //! under is a separate Live resource with its own controller; this one reads the engine's id as a
 //! dependency and creates templates beneath it, never creating the engine itself.
 //!

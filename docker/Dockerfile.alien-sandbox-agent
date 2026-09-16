@@ -34,7 +34,10 @@ RUN printf 'sandbox:x:1000:1000::/sandbox:/sbin/nologin\n' >> /etc/passwd \
 
 # The contract lives here because the Agent Platform template deliberately carries no env, and the
 # agent refuses to start without every one of these.
-# transport is safe only here: one session per sandbox, and the data plane is the only route in.
+#
+# transport serves a request that carries no capability, so what keeps the supervised command from
+# calling the agent on this same port is peer::transport_may_serve refusing a socket owned by the
+# exec uid. load_authorization will not start the agent where /proc/net/tcp is unreadable.
 ENV ALIEN_SANDBOX_ROOT=/sandbox \
     ALIEN_SANDBOX_PORT=8080 \
     ALIEN_SANDBOX_AUTHORIZATION=transport \

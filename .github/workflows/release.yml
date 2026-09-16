@@ -1843,6 +1843,10 @@ jobs:
       - name: Setup Depot
         uses: depot/setup-action@v1
 
+      # The runner is arm, so running the amd64 half of a published manifest needs emulation.
+      - name: Setup QEMU
+        uses: docker/setup-qemu-action@v3
+
       - name: Metadata (alien-base)
         id: meta_base
         uses: docker/metadata-action@v5
@@ -1971,6 +1975,7 @@ jobs:
             type=raw,value=qualification-${{ inputs.source_ref }}
 
       - name: Publish alien-sandbox-agent
+        id: publish_sandbox_agent
         uses: depot/build-push-action@v1
         with:
           project: ${{ vars.DEPOT_PROJECT_ID }}
@@ -1983,16 +1988,48 @@ jobs:
           provenance: true
           sbom: true
 
+      # Both halves of the manifest, because the runner is arm and the platform may pull either.
       - name: Smoke-test alien-sandbox-agent
         env:
-          SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent:qualification-${{ inputs.source_ref }}
+          SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: |
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$SANDBOX_AGENT" \
-            -c 'id | grep -q "uid=1000(sandbox) gid=1000(sandbox)"'
-          # The unlink rather than the file mode: only the directory permission stops the
-          # supervised command removing its own supervisor.
-          docker run --rm --platform linux/arm64 --entrypoint /bin/sh "$SANDBOX_AGENT" \
-            -c '! rm -f /usr/local/bin/alien-sandbox-agent && test -x /usr/local/bin/alien-sandbox-agent'
+          for platform in linux/amd64 linux/arm64; do
+            # Once binfmt is registered an ELF of either architecture executes whatever the
+            # container declares, so running the agent cannot tell the two apart. The ELF header
+            # can: e_machine sits at offset 18, 0x3e for x86-64 and 0xb7 for aarch64.
+            case "$platform" in
+              linux/amd64) expected=3e00 ;;
+              linux/arm64) expected=b700 ;;
+              *) echo "::error::no expected e_machine for ${platform}"; exit 1 ;;
+            esac
+            machine=$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+              -c 'od -An -tx1 -j18 -N2 /usr/local/bin/alien-sandbox-agent' | tr -d ' \n')
+            if [ "$machine" != "$expected" ]; then
+              echo "::error::${platform}: the agent is e_machine '${machine}', not '${expected}'"
+              exit 1
+            fi
+
+            docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+              -c 'id | grep -q "uid=1000(sandbox) gid=1000(sandbox)"'
+            # The unlink rather than the file mode: only the directory permission stops the
+            # supervised command removing its own supervisor. Removing a file it may remove first,
+            # so a denial is what fails the rm and not an rm that is missing or broken.
+            docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+              -c 'touch /sandbox/probe && rm /sandbox/probe &&
+                  ! rm -f /usr/local/bin/alien-sandbox-agent &&
+                  test -x /usr/local/bin/alien-sandbox-agent'
+            # test -x reads a mode bit, which a binary that cannot start still carries. Matching a
+            # string only the agent emits is what proves the entrypoint is a working agent.
+            if out=$(docker run --rm --platform "$platform" \
+                -e ALIEN_SANDBOX_AUTHORIZATION=nonsense "$SANDBOX_AGENT" 2>&1); then
+              echo "::error::${platform}: the agent started with an invalid authorization mode"
+              exit 1
+            fi
+            case "$out" in
+              *"is not one of: capability, transport"*) ;;
+              *) echo "::error::${platform}: ${out}"; exit 1 ;;
+            esac
+          done
 
       - name: Record qualified image digests
         env:

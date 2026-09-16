@@ -652,21 +652,39 @@ mod gcp_image_contract {
             .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()))
     }
 
-    /// Code lines of the final build stage, comments dropped. Only the final stage is shipped, so
-    /// a setting in an earlier one is as absent from the image as a commented-out one.
-    fn code_lines(dockerfile: &str) -> impl Iterator<Item = &str> {
-        let code = dockerfile
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.starts_with('#'));
-        let final_stage = code
-            .clone()
-            .enumerate()
-            .filter(|(_, line)| line.starts_with("FROM "))
-            .map(|(index, _)| index)
-            .last()
+    /// Instructions of the final build stage: comments and blank lines dropped, backslash
+    /// continuations folded into the instruction that owns them. A setting in an earlier stage is
+    /// as absent from the image as a commented-out one, and the last `FROM` is the stage the image
+    /// ships only because the release workflow builds this file with no `--target`.
+    fn code_lines(dockerfile: &str) -> Vec<String> {
+        let mut instructions: Vec<String> = Vec::new();
+        let mut pending = String::new();
+
+        for line in dockerfile.lines().map(str::trim) {
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            match line.strip_suffix('\\') {
+                Some(head) => {
+                    pending.push_str(head.trim_end());
+                    pending.push(' ');
+                }
+                None => {
+                    pending.push_str(line);
+                    instructions.push(std::mem::take(&mut pending));
+                }
+            }
+        }
+        assert!(
+            pending.is_empty(),
+            "{DOCKERFILE} ends mid-continuation, so its last instruction goes unread"
+        );
+
+        let final_stage = instructions
+            .iter()
+            .rposition(|line| line.starts_with("FROM "))
             .unwrap_or_else(|| panic!("{DOCKERFILE} has no FROM"));
-        code.skip(final_stage + 1)
+        instructions.split_off(final_stage + 1)
     }
 
     /// The single match, or a panic.
@@ -674,6 +692,8 @@ mod gcp_image_contract {
     /// Missing panics rather than returning an option: a comparison skipped because the setting
     /// was not found is exactly the drift this module exists to catch. A second match is refused
     /// too, because Docker takes the last definition and the assertion would be pinning the first.
+    /// A stage that ever needs two (`USER root` to install, then `USER 1000:1000`) loosens to the
+    /// last match, never the first, for that same reason.
     fn only<'a>(mut matches: impl Iterator<Item = &'a str>, what: &str) -> &'a str {
         let first = matches
             .next()
@@ -685,35 +705,51 @@ mod gcp_image_contract {
         first
     }
 
+    /// The value `name` is given in the final stage's `ENV`.
+    ///
+    /// Only `ENV` is read. `ARG`, `LABEL` and a `RUN` that echoes the same text all carry the
+    /// token, and none of them puts the key in the image's `Config.Env`.
     fn env_value(dockerfile: &str, name: &str) -> String {
         let prefix = format!("{name}=");
-        only(
-            code_lines(dockerfile)
-                .flat_map(str::split_whitespace)
-                .filter_map(|token| token.strip_prefix(&prefix)),
-            name,
-        )
-        .to_string()
+        let instructions = code_lines(dockerfile);
+        let values: Vec<&str> = instructions
+            .iter()
+            .filter(|instruction| instruction.starts_with("ENV "))
+            .flat_map(|instruction| instruction.split_whitespace())
+            .filter_map(|token| token.strip_prefix(&prefix))
+            .collect();
+        only(values.into_iter(), name).to_string()
     }
 
     /// The argument of a single-token directive such as `EXPOSE` or `USER`.
     fn directive(dockerfile: &str, name: &str) -> String {
         let prefix = format!("{name} ");
-        only(
-            code_lines(dockerfile).filter_map(|line| line.strip_prefix(&prefix)),
-            name,
-        )
-        .trim()
-        .to_string()
+        let instructions = code_lines(dockerfile);
+        let arguments: Vec<&str> = instructions
+            .iter()
+            .filter_map(|instruction| instruction.strip_prefix(&prefix))
+            .collect();
+        only(arguments.into_iter(), name).trim().to_string()
     }
 
     /// The one build step carrying `needle`.
     fn step_with(dockerfile: &str, needle: &str) -> String {
-        only(
-            code_lines(dockerfile).filter(|line| line.contains(needle)),
-            &format!("'{needle}' step"),
-        )
-        .to_string()
+        let instructions = code_lines(dockerfile);
+        let steps: Vec<&str> = instructions
+            .iter()
+            .map(String::as_str)
+            .filter(|instruction| instruction.contains(needle))
+            .collect();
+        only(steps.into_iter(), &format!("'{needle}' step")).to_string()
+    }
+
+    /// Whether `words` are consecutive whitespace tokens of `step`.
+    ///
+    /// A substring test would accept `chown 1000:1000 /sandbox/work`, which builds, leaves the
+    /// real root root-owned and untraversable at mode 0700, and still reads as green.
+    fn has_tokens(step: &str, words: &[&str]) -> bool {
+        let tokens: Vec<&str> = step.split_whitespace().collect();
+        tokens.windows(words.len()).any(|window| window == words)
     }
 
     #[test]
@@ -760,7 +796,7 @@ mod gcp_image_contract {
         );
         let chown = step_with(&dockerfile, "chown ");
         assert!(
-            chown.contains(&format!("chown {uid}:{uid} {root}")),
+            has_tokens(&chown, &["chown", &format!("{uid}:{uid}"), root.as_str()]),
             "{DOCKERFILE} step '{chown}' leaves the sandbox root unwritable by the identity \
              working in it"
         );
