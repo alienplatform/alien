@@ -1,12 +1,18 @@
-use crate::error::{ErrorData, Result};
+use std::collections::HashMap;
+#[cfg(feature = "local")]
+use std::path::Path as StdPath;
+
 use alien_error::{AlienError, Context, IntoAlienError};
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+#[cfg(feature = "local")]
+use tokio::{fs, io::AsyncReadExt};
 
 #[cfg(feature = "openapi")]
 use utoipa::ToSchema;
+
+use crate::error::{ErrorData, Result};
 
 /// Stable message used when a bounded presigned GET exceeds its caller's
 /// explicit limit. This uses the existing generic error variant so adding the
@@ -385,9 +391,6 @@ impl PresignedRequest {
         body: Option<Bytes>,
         max_response_bytes: Option<usize>,
     ) -> Result<PresignedResponse> {
-        use std::path::Path as StdPath;
-        use tokio::{fs, io::AsyncReadExt};
-
         if self.is_expired() {
             return Err(AlienError::new(ErrorData::PresignedRequestExpired {
                 path: self.path.clone(),

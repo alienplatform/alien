@@ -9,6 +9,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{CreateAccessRequest, CreateAccessRequestMaxRisk};
 use alien_platform_api::SdkResultExt as _;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
@@ -80,7 +81,7 @@ pub enum AccessRequestsAction {
         #[arg(long = "max-risk")]
         max_risk: Option<String>,
 
-        /// Requested approval duration, e.g. 1h, 30m. Informational until approved; the approver sets the actual grant window.
+        /// Requested approval duration, e.g. 1h, 30m. Approvals cannot extend past this deadline.
         #[arg(long)]
         duration: Option<String>,
 
@@ -118,7 +119,7 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
             operation,
             params,
             max_risk,
-            duration: _duration,
+            duration,
             title,
             reason,
         } => {
@@ -134,6 +135,7 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
                     max_risk: max_risk.as_deref(),
                     title: title.as_deref(),
                     reason: reason.as_deref(),
+                    duration: duration.as_deref(),
                     json: args.json,
                 },
             )
@@ -153,6 +155,7 @@ struct CreateTaskOptions<'a> {
     max_risk: Option<&'a str>,
     title: Option<&'a str>,
     reason: Option<&'a str>,
+    duration: Option<&'a str>,
     json: bool,
 }
 
@@ -174,6 +177,7 @@ async fn create_task(
     .await?
     .id
     .to_string();
+    let requested_expires_at = requested_expiration(Utc::now(), options.duration)?;
 
     // `<plugin>/*` is a wildcard request; anything else is an exact operation.
     let is_wildcard = options.operation.ends_with("/*");
@@ -210,7 +214,7 @@ async fn create_task(
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
             replay_key: None,
-            requested_expires_at: None,
+            requested_expires_at,
             commands: Vec::new(),
         }
     } else {
@@ -234,7 +238,7 @@ async fn create_task(
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
             replay_key: None,
-            requested_expires_at: None,
+            requested_expires_at,
             commands: Vec::new(),
         }
     };
@@ -557,6 +561,36 @@ pub(crate) fn parse_duration_minutes(value: &str) -> Result<u64> {
     Ok(minutes)
 }
 
+pub(crate) fn requested_expiration(
+    now: DateTime<Utc>,
+    duration: Option<&str>,
+) -> Result<Option<DateTime<Utc>>> {
+    let Some(duration) = duration else {
+        return Ok(None);
+    };
+    let minutes = parse_duration_minutes(duration)?;
+    if minutes > 6 * 60 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "duration cannot exceed 6h".to_string(),
+        }));
+    }
+    let minutes = i64::try_from(minutes).map_err(|_| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "duration is too large".to_string(),
+        })
+    })?;
+    now.checked_add_signed(chrono::Duration::minutes(minutes))
+        .map(Some)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "duration".to_string(),
+                message: "duration is too large".to_string(),
+            })
+        })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +605,17 @@ mod tests {
         assert!(parse_duration_minutes("abc").is_err());
         assert!(parse_duration_minutes("1d").is_err());
         assert!(parse_duration_minutes("0m").is_err());
+    }
+
+    #[test]
+    fn requested_duration_becomes_an_absolute_utc_deadline() {
+        let now = "2026-09-17T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            requested_expiration(now, Some("90m")).unwrap(),
+            Some("2026-09-17T01:30:00Z".parse().unwrap())
+        );
+        assert_eq!(requested_expiration(now, None).unwrap(), None);
+        assert!(requested_expiration(now, Some("361m")).is_err());
     }
 
     #[test]

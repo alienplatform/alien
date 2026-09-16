@@ -94,6 +94,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
+| errors.APIError          | 409                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
@@ -633,8 +634,8 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 402, 403, 404            | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 402, 403, 404, 409       | application/json         |
+| errors.APIError          | 500, 502                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## verifyCheck
@@ -718,8 +719,8 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404                      | application/json         |
-| errors.APIError          | 500                      | application/json         |
+| errors.APIError          | 400, 403, 404            | application/json         |
+| errors.APIError          | 500, 502                 | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 
 ## createAccessRequest

@@ -8,7 +8,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::CanonicalPluginManifest;
 use alien_platform_api::types::{
-    CommandState, InvokeOperationRequest, InvokeOperationResponseStatus,
+    CommandResultAvailability, CommandState, InvokeOperationRequest, InvokeOperationResponseStatus,
     VerifyOperationCheckRequest, VerifyOperationCheckResponseOutcome,
 };
 use alien_platform_api::SdkResultExt as _;
@@ -274,12 +274,10 @@ async fn wait_for_platform_operation(
                 // Platform intentionally omits output that requires an explicit
                 // sensitive-result confirmation. Never bypass that boundary by
                 // falling back to the Manager endpoint.
-                return Ok(response.result.unwrap_or_else(|| {
-                    json!({
-                        "available": false,
-                        "reason": "The operation completed, but its result is protected or unavailable through Platform API."
-                    })
-                }));
+                return Ok(completed_operation_result(
+                    response.result_availability,
+                    response.result,
+                ));
             }
             CommandState::Failed => {
                 let detail = response
@@ -310,6 +308,29 @@ async fn wait_for_platform_operation(
             tokio::time::sleep(Duration::from_secs(1).min(remaining)).await;
         }
     }
+}
+
+fn completed_operation_result(
+    availability: Option<CommandResultAvailability>,
+    result: Option<Value>,
+) -> Value {
+    match availability {
+        // Serde represents both an absent field and a JSON null as `None` for
+        // `Option<Value>`. The explicit availability field preserves that
+        // distinction for typed operation results.
+        Some(CommandResultAvailability::Available) => result.unwrap_or(Value::Null),
+        Some(CommandResultAvailability::Protected) => protected_operation_result(),
+        // Compatibility with Platform versions that predate the discriminator:
+        // keep returning a present result, but fail closed when it was omitted.
+        None => result.unwrap_or_else(protected_operation_result),
+    }
+}
+
+fn protected_operation_result() -> Value {
+    json!({
+        "available": false,
+        "reason": "The operation completed, but its result is protected or unavailable through Platform API."
+    })
 }
 
 fn operation_wait_timeout(
@@ -351,11 +372,10 @@ async fn request_access_then_reinvoke(
                 message: "Invalid JSON".to_string(),
             })?,
     );
-    // Requested duration is informational on create (the approver sets the
-    // real grant window on approve) — reuse the same parser only to fail
-    // fast on an obviously malformed --access-duration before creating
-    // anything.
-    let _ = crate::commands::access_requests::parse_duration_minutes(access_duration)?;
+    let requested_expires_at = crate::commands::access_requests::requested_expiration(
+        chrono::Utc::now(),
+        Some(access_duration),
+    )?;
 
     let created = sdk_client
         .create_access_request()
@@ -370,7 +390,7 @@ async fn request_access_then_reinvoke(
             reason: None,
             remediation_plan_id: None,
             replay_key: None,
-            requested_expires_at: None,
+            requested_expires_at,
             commands: Vec::new(),
         })
         .send()
@@ -1014,6 +1034,28 @@ mod tests {
             serde_json::json!({
                 "deploymentId": "dep_123",
                 "commandId": command_id,
+            })
+        );
+    }
+
+    #[test]
+    fn available_null_operation_result_remains_json_null() {
+        assert_eq!(
+            completed_operation_result(Some(CommandResultAvailability::Available), None),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn protected_operation_result_remains_withheld() {
+        assert_eq!(
+            completed_operation_result(
+                Some(CommandResultAvailability::Protected),
+                Some(json!({ "must": "not leak" })),
+            ),
+            json!({
+                "available": false,
+                "reason": "The operation completed, but its result is protected or unavailable through Platform API."
             })
         );
     }
