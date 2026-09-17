@@ -73,6 +73,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
 
     let temp = tempfile::tempdir().expect("lifecycle temp directory");
     let good_chart_dir = temp.path().join("good-chart");
+    let cluster_chart_dir = temp.path().join("cluster-chart");
     let bad_chart_dir = temp.path().join("bad-chart");
     let operator_fixture_dir = temp.path().join("operator-fixture");
     let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
@@ -135,6 +136,10 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         None,
     );
     write_chart(&good_chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
+    write_chart(
+        &cluster_chart_dir,
+        &product_chart_with_scope(GOOD_OPERATOR_IMAGE, OperatorScope::Cluster),
+    );
     write_chart(&bad_chart_dir, &product_chart(NOT_READY_OPERATOR_IMAGE));
 
     let helm_namespace = "alien-product-helm-lifecycle".to_string();
@@ -187,7 +192,26 @@ rules:
         [
             "install",
             &helm_release,
-            path_str(&good_chart_dir),
+            path_str(&cluster_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--kube-as-user=product-installer",
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "upgrade",
+            &helm_release,
+            path_str(&cluster_chart_dir),
             "--namespace",
             &helm_namespace,
             "--kube-as-user=product-installer",
@@ -616,6 +640,10 @@ fn terraform_lifecycle_harness_is_formatted_and_parseable_without_a_collector_to
 }
 
 fn product_chart(image: &str) -> HelmChart {
+    product_chart_with_scope(image, OperatorScope::Namespace)
+}
+
+fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
     let stack = Stack::new("product-lifecycle".to_string()).build();
     let registry = HelmRegistry::built_in();
     generate_product_helm_chart(
@@ -637,7 +665,7 @@ fn product_chart(image: &str) -> HelmChart {
                 environment_name: None,
                 install_namespace: None,
                 label_domain: None,
-                scope: OperatorScope::Namespace,
+                scope,
                 label_selector: None,
                 kubernetes_operations_enabled: true,
                 custom_operation_permissions: &[],

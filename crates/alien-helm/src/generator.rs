@@ -957,6 +957,7 @@ __COLLECTOR_CHECK__{{- end -}}
 {{- $preparedIdentity := and $identityRecord (not $identityCompletion) -}}
 {{- $preparedRetry := and .Values.remoteOperator.enabled $preparedIdentity -}}
 {{- $identityState := dict "managedResourceExists" false "otherManagedResourceExists" false "identityMissing" false -}}
+{{- if or .Values.remoteOperator.enabled $identityRecord $identityCompletion -}}
 {{- range $document := splitList "\n---\n" (include "deployment.remoteOperatorResources" .) -}}
   {{- $resource := fromYaml $document -}}
   {{- if and $resource $resource.kind $resource.metadata.name -}}
@@ -978,6 +979,7 @@ __COLLECTOR_CHECK__{{- end -}}
       {{- $_ := set $identityState "identityMissing" true -}}
     {{- end -}}
   {{- end -}}
+{{- end -}}
 {{- end -}}
 {{- if and .Release.IsInstall .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $preparedRetry) -}}
   {{- fail "Remote Operator managed resources already exist before install. Refusing adoption without an exact prepared identity retry." -}}
