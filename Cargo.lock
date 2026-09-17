@@ -806,6 +806,7 @@ dependencies = [
  "alien-helm",
  "alien-infra",
  "alien-infra-aws",
+ "alien-infra-azure",
  "alien-infra-core",
  "alien-infra-local",
  "alien-k8s-clients",
@@ -880,6 +881,36 @@ dependencies = [
  "sha2 0.10.9",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "alien-infra-azure"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-clients",
+ "alien-client-core",
+ "alien-core",
+ "alien-error",
+ "alien-infra",
+ "alien-infra-core",
+ "alien-macros",
+ "alien-permissions",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "futures",
+ "httpmock",
+ "mockall",
+ "p12",
+ "pem",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]

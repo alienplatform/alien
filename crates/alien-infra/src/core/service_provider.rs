@@ -458,6 +458,9 @@ struct LocalServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
 #[cfg(feature = "aws")]
 struct AwsServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
 
+#[cfg(feature = "azure")]
+struct AzureServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
+
 #[cfg(feature = "aws")]
 macro_rules! impl_aws_service_provider {
     ($(($method:ident, $api:ty)),* $(,)?) => {
@@ -498,6 +501,107 @@ impl_aws_service_provider!(
     (get_aws_eventbridge_client, dyn EventBridgeApi),
     (get_aws_kms_client, dyn KmsApi),
 );
+
+#[cfg(feature = "azure")]
+macro_rules! impl_azure_service_provider {
+    ($(($method:ident, $api:ty)),* $(,)?) => {
+        #[async_trait::async_trait]
+        impl alien_infra_azure::AzureServiceProvider for AzureServiceProviderAdapter {
+            $(
+                fn $method(&self, config: &AzureClientConfig) -> Result<Arc<$api>> {
+                    self.0.$method(config)
+                }
+            )*
+
+            async fn get_azure_caller_principal_id(
+                &self,
+                config: &AzureClientConfig,
+            ) -> Result<String> {
+                self.0.get_azure_caller_principal_id(config).await
+            }
+        }
+    };
+}
+
+#[cfg(feature = "azure")]
+impl_azure_service_provider!(
+    (get_azure_authorization_client, dyn AuthorizationApi),
+    (get_azure_blob_container_client, dyn BlobContainerApi),
+    (
+        get_azure_cognitive_services_client,
+        dyn CognitiveServicesAccountsApi
+    ),
+    (get_azure_container_apps_client, dyn ContainerAppsApi),
+    (
+        get_azure_container_registry_client,
+        dyn ContainerRegistryApi
+    ),
+    (get_azure_event_grid_client, dyn EventGridApi),
+    (get_azure_key_vault_keys_client, dyn KeyVaultKeysApi),
+    (
+        get_azure_key_vault_management_client,
+        dyn KeyVaultManagementApi
+    ),
+    (
+        get_azure_long_running_operation_client,
+        dyn LongRunningOperationApi
+    ),
+    (get_azure_managed_identity_client, dyn ManagedIdentityApi),
+    (get_azure_network_client, dyn AzureNetworkApi),
+    (get_azure_resources_client, dyn ResourcesApi),
+    (get_azure_sandbox_groups_client, dyn SandboxGroupsApi),
+    (
+        get_azure_service_bus_management_client,
+        dyn ServiceBusManagementApi
+    ),
+    (get_azure_storage_accounts_client, dyn StorageAccountsApi),
+    (get_azure_table_management_client, dyn TableManagementApi),
+);
+
+#[cfg(feature = "azure")]
+struct AzureResourcePermissionsServiceAdapter;
+
+#[cfg(feature = "azure")]
+#[async_trait::async_trait]
+impl alien_infra_azure::AzureResourcePermissionsService for AzureResourcePermissionsServiceAdapter {
+    fn azure_kubernetes_cluster_permission_context(
+        &self,
+        ctx: &crate::core::ResourceControllerContext<'_>,
+        cluster: &alien_core::KubernetesCluster,
+    ) -> Result<alien_permissions::PermissionContext> {
+        crate::core::ResourcePermissionsHelper::azure_kubernetes_cluster_permission_context(
+            ctx, cluster,
+        )
+    }
+
+    async fn apply_azure_resource_scoped_permissions(
+        &self,
+        ctx: &crate::core::ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_scope: alien_azure_clients::authorization::Scope,
+        resource_type: &str,
+        permission_type: &str,
+    ) -> Result<()> {
+        crate::core::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_scope,
+            resource_type,
+            permission_type,
+        )
+        .await
+    }
+
+    fn build_azure_permission_context(
+        &self,
+        ctx: &crate::core::ResourceControllerContext<'_>,
+        resource_name: &str,
+    ) -> Result<alien_permissions::PermissionContext> {
+        crate::core::ResourcePermissionsHelper::build_azure_permission_context(ctx, resource_name)
+    }
+}
 
 #[cfg(feature = "aws")]
 struct AwsPermissionsServiceAdapter;
@@ -615,6 +719,16 @@ pub(crate) fn register_platform_services(
     services.register::<dyn alien_infra_local::LocalServiceProvider>(Arc::new(
         LocalServiceProviderAdapter(service_provider.clone()),
     ))?;
+
+    #[cfg(feature = "azure")]
+    {
+        services.register::<dyn alien_infra_azure::AzureServiceProvider>(Arc::new(
+            AzureServiceProviderAdapter(service_provider.clone()),
+        ))?;
+        services.register::<dyn alien_infra_azure::AzureResourcePermissionsService>(Arc::new(
+            AzureResourcePermissionsServiceAdapter,
+        ))?;
+    }
 
     services.register::<dyn PlatformServiceProvider>(service_provider)
 }

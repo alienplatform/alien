@@ -12,6 +12,7 @@ members = [
   "crates/alien-infra",
   "crates/alien-infra-core",
   "crates/alien-infra-aws",
+  "crates/alien-infra-azure",
   "crates/alien-infra-local",
   "crates/alien-core",
   "crates/alien-build",
@@ -88,6 +89,7 @@ alien-core = { path = "crates/alien-core", version = "3.3.22" }
 alien-infra = { path = "crates/alien-infra", version = "3.3.22" }
 alien-infra-core = { path = "crates/alien-infra-core", version = "3.3.22" }
 alien-infra-aws = { path = "crates/alien-infra-aws", version = "3.3.22" }
+alien-infra-azure = { path = "crates/alien-infra-azure", version = "3.3.22" }
 alien-infra-local = { path = "crates/alien-infra-local", version = "3.3.22" }
 alien-build = { path = "crates/alien-build", version = "3.3.22" }
 alien-macros = { path = "crates/alien-macros", version = "3.3.22" }
