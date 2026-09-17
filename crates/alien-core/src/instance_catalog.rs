@@ -1399,13 +1399,18 @@ pub fn select_instance_type(
         ));
     }
 
-    // Cap at MAX_STANDARD_VCPU for non-GPU/non-storage workloads
-    let vcpu_cap =
-        if family == InstanceFamily::GpuCompute || family == InstanceFamily::StorageOptimized {
-            u32::MAX
-        } else {
-            MAX_STANDARD_VCPU
-        };
+    // Apply the policy for the candidates we will actually select from. A
+    // storage-heavy request can fall back from fixed-local storage machines to
+    // general-purpose machines with provider-backed disks; those machines must
+    // retain the normal horizontal-scaling cap.
+    let effective_family = candidates[0].family;
+    let vcpu_cap = if effective_family == InstanceFamily::GpuCompute
+        || effective_family == InstanceFamily::StorageOptimized
+    {
+        u32::MAX
+    } else {
+        MAX_STANDARD_VCPU
+    };
 
     let desired_target_machines = desired_target_machines(requirements);
     let target_cpu = requirements
@@ -1804,6 +1809,28 @@ mod tests {
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
         assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
         assert_eq!(sel.profile.ephemeral_storage_bytes, 8_000 * GI);
+    }
+
+    #[test]
+    fn test_configurable_storage_fallback_retains_standard_vcpu_cap() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 70.0,
+            total_memory_bytes_at_desired: 140 * GI,
+            total_cpu_at_max: 70.0,
+            total_memory_bytes_at_max: 140 * GI,
+            max_cpu_per_container: 2.0,
+            max_memory_per_container: 4 * GI,
+            max_ephemeral_storage_bytes: 8_000 * GI,
+            gpu: None,
+            architecture: Some(Architecture::X86_64),
+            nested_virt: false,
+        };
+
+        let sel = select_instance_type(Platform::Aws, &req).unwrap();
+        let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
+        assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
+        assert!(spec.vcpu <= MAX_STANDARD_VCPU);
+        assert!(sel.max_machines > 1);
     }
 
     #[test]
