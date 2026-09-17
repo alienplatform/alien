@@ -332,12 +332,8 @@ pub async fn cleanup_deleted_registry_access(
     let Some(artifact_registry) =
         load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
     else {
-        // Nothing was ever recorded as granted, so there is nothing this cleanup can strand. The
-        // guard above is prefix-blind and admits a sandbox whose image Alien never hosted, which
-        // on a manager that hosts no images has no binding to load.
-        if !registry_access_granted {
-            return Ok(());
-        }
+        // Not `Ok` on an unset marker: the grant lands before the marker is persisted, so a false
+        // one still covers a live grant, and the only revoke path is through this binding.
         return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
             deployment_id: deployment_id.to_string(),
             reason: format!("artifact registry binding for '{platform}' is unavailable"),

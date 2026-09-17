@@ -15,7 +15,9 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::{OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet},
+    sync::{
+        OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet,
+    },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };
@@ -1383,14 +1385,15 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
-                            if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
-                                state.deployment_store.as_ref(),
-                                &state.bindings_provider,
-                                &state.target_bindings_providers,
-                                &req.deployment_id,
-                                &agent_state,
-                            )
-                            .await
+                            if let Err(error) =
+                                crate::registry_access::cleanup_deleted_registry_access(
+                                    state.deployment_store.as_ref(),
+                                    &state.bindings_provider,
+                                    &state.target_bindings_providers,
+                                    &req.deployment_id,
+                                    &agent_state,
+                                )
+                                .await
                             {
                                 return error.into_response();
                             }

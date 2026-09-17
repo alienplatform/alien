@@ -17,6 +17,19 @@ use async_trait::async_trait;
 use chrono;
 use tracing::{debug, info, warn};
 
+/// The Google-managed service agent a compute service pulls as.
+///
+/// Google grants the sandbox agent `roles/aiplatform.agentSandboxServiceAgent` on its own project,
+/// which already carries `artifactregistry.repositories.downloadArtifacts`. That covers a
+/// same-project pull; a binding naming this agent is what reaches a repository Alien owns in
+/// another project. Three adjacent Vertex agents exist, and naming one is a 403 on the pull.
+fn agent_domain(service_type: &ComputeServiceType) -> &'static str {
+    match service_type {
+        ComputeServiceType::Worker => "serverless-robot-prod",
+        ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
+    }
+}
+
 /// The IAM members a cross-account grant names, for both the add and the remove path.
 ///
 /// Each compute service pulls as its own Google-managed service agent, so the project number alone
@@ -25,14 +38,7 @@ use tracing::{debug, info, warn};
 fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     let mut members = Vec::new();
     for service_type in &access.allowed_service_types {
-        // Google grants the sandbox agent `roles/aiplatform.agentSandboxServiceAgent` on its own
-        // project, which already carries `artifactregistry.repositories.downloadArtifacts`. That
-        // covers a same-project pull; this binding is what reaches a repository Alien owns in
-        // another project. Three adjacent Vertex agents exist, and naming one is a 403 on pull.
-        let agent_domain = match service_type {
-            ComputeServiceType::Worker => "serverless-robot-prod",
-            ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
-        };
+        let agent_domain = agent_domain(service_type);
         for project_number in &access.project_numbers {
             members.push(format!(
                 "serviceAccount:service-{project_number}@{agent_domain}.iam.gserviceaccount.com"
@@ -439,25 +445,30 @@ impl ArtifactRegistry for GarArtifactRegistry {
                 for member in binding.members {
                     // Parse service account members only
                     if let Some(service_account) = member.strip_prefix("serviceAccount:") {
-                        // Check if this is a serverless robot service account
-                        if service_account
-                            .contains("@serverless-robot-prod.iam.gserviceaccount.com")
-                        {
-                            // Extract project number from: service-{project_number}@serverless-robot-prod.iam.gserviceaccount.com
-                            if let Some(project_number) =
-                                service_account.strip_prefix("service-").and_then(|s| {
-                                    s.strip_suffix("@serverless-robot-prod.iam.gserviceaccount.com")
-                                })
-                            {
+                        // Every domain the write path can emit, so a member this reads back
+                        // carries the service type that produced it rather than passing as an
+                        // ordinary account.
+                        let agent = [ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+                            .into_iter()
+                            .find_map(|service_type| {
+                                let suffix = format!(
+                                    "@{}.iam.gserviceaccount.com",
+                                    agent_domain(&service_type)
+                                );
+                                service_account
+                                    .strip_prefix("service-")
+                                    .and_then(|rest| rest.strip_suffix(&suffix))
+                                    .map(|project_number| (service_type, project_number))
+                            });
+
+                        match agent {
+                            Some((service_type, project_number)) => {
                                 project_numbers.push(project_number.to_string());
-                                // If we found a serverless robot, we can infer Worker resource type
-                                if !allowed_service_types.contains(&ComputeServiceType::Worker) {
-                                    allowed_service_types.push(ComputeServiceType::Worker);
+                                if !allowed_service_types.contains(&service_type) {
+                                    allowed_service_types.push(service_type);
                                 }
                             }
-                        } else {
-                            // Regular service account
-                            service_account_emails.push(service_account.to_string());
+                            None => service_account_emails.push(service_account.to_string()),
                         }
                     }
                 }
@@ -653,6 +664,35 @@ mod tests {
     }
 
     /// Granting and revoking read one list, so a service type that names no project contributes no
+    /// The read path reports what the write path emitted. Without this a sandbox member decodes as
+    /// an ordinary service account, so a caller reading current permissions is told the sandbox has
+    /// no grant while its member sits on the policy.
+    #[test]
+    fn every_service_type_survives_a_write_then_read() {
+        for service_type in [ComputeServiceType::Worker, ComputeServiceType::Sandbox] {
+            let written = cross_account_members(&GcpCrossAccountAccess {
+                project_numbers: vec!["123456789012".to_string()],
+                allowed_service_types: vec![service_type.clone()],
+                service_account_emails: Vec::new(),
+            });
+            let member = written
+                .first()
+                .expect("a project and a type name one member");
+            let account = member
+                .strip_prefix("serviceAccount:")
+                .expect("members carry the IAM principal prefix");
+            let suffix = format!("@{}.iam.gserviceaccount.com", agent_domain(&service_type));
+
+            assert_eq!(
+                account
+                    .strip_prefix("service-")
+                    .and_then(|rest| rest.strip_suffix(&suffix)),
+                Some("123456789012"),
+                "{service_type:?} must decode back to the project that earned it"
+            );
+        }
+    }
+
     /// member to either.
     #[test]
     fn a_service_type_grants_nothing_for_a_project_it_does_not_name() {
