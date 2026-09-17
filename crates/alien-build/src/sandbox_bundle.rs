@@ -18,18 +18,9 @@ use alien_error::{Context, IntoAlienError};
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
-/// Path the agent binary is installed at inside the image.
-pub use alien_core::sandbox_process::AGENT_PATH;
-
-/// Directory a session's files live under, and the only place the untrusted uid can write.
-pub const SESSION_ROOT: &str = "/sandbox";
-
-/// Unprivileged uid and gid commands run as. Never the agent's own — a command running as the
-/// agent could rewrite the agent.
-pub const EXEC_UID: u32 = 60000;
-
-/// Port the agent serves, both its protocol and the image's lifecycle hooks.
-pub use alien_core::sandbox_process::AGENT_PORT;
+use alien_core::sandbox_image::{
+    contract_env, entrypoint, identity_setup, AGENT_PATH, AWS_MICROVM,
+};
 
 /// Name the agent binary must have inside the bundle.
 pub const AGENT_FILENAME: &str = "alien-sandbox-agent";
@@ -65,9 +56,9 @@ fn checked_reference<'a>(reference: &'a str, what: &str) -> Result<&'a str> {
 
 /// Renders the Dockerfile for a sandbox image built on `base_image`.
 ///
-/// The agent runs as root so it can drop to [`EXEC_UID`] before every spawn; inside a MicroVM
-/// that is contained by hardware virtualisation, which is the tenant boundary. A shared-kernel
-/// backend must give the agent `CAP_SETUID` instead of root.
+/// Everything below the base image comes from [`AWS_MICROVM`]; what is rendered here is the
+/// `COPY` that installs the agent, which has no counterpart in the GCP image because the agent
+/// can arrive from a published image or from the bundle itself.
 pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
     let base_image = checked_reference(base_image, "base image")?;
     // Both lines pin ownership and mode themselves: the untrusted code the agent supervises must
@@ -90,25 +81,18 @@ pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
 # Written with numeric ids and a plain append rather than useradd/adduser, which differ across
 # base distributions. Linux runs a process under a uid with no passwd entry, but some tooling
 # inside the sandbox reads one.
-RUN printf 'sandbox:x:{EXEC_UID}:{EXEC_UID}::{SESSION_ROOT}:/sbin/nologin\n' >> /etc/passwd \
- && printf 'sandbox:x:{EXEC_UID}:\n' >> /etc/group \
- && mkdir -p {SESSION_ROOT} \
- && chown {EXEC_UID}:{EXEC_UID} {SESSION_ROOT} \
- && chmod 0700 {SESSION_ROOT}
+{identity}
 
 # The full contract, in the image rather than only in the template. The ready hook runs during
 # the image build, and the agent refuses to start without every one of these — so a value
 # supplied only at run time leaves the build waiting on an agent that never came up.
-ENV ALIEN_SANDBOX_ROOT={SESSION_ROOT} \
-    ALIEN_SANDBOX_PORT={AGENT_PORT} \
-    ALIEN_SANDBOX_AUTHORIZATION=transport \
-    ALIEN_SANDBOX_EXEC_UID={EXEC_UID} \
-    ALIEN_SANDBOX_EXEC_GID={EXEC_UID} \
-    ALIEN_SANDBOX_ISOLATION=uid-split
+{contract}
 
-EXPOSE {AGENT_PORT}
-ENTRYPOINT ["{AGENT_PATH}"]
-"#
+{entry}
+"#,
+        identity = identity_setup(&AWS_MICROVM),
+        contract = contract_env(&AWS_MICROVM),
+        entry = entrypoint(&AWS_MICROVM),
     ))
 }
 
@@ -244,8 +228,9 @@ mod tests {
     #[test]
     fn the_session_root_belongs_to_the_exec_uid_alone() {
         let dockerfile = rendered();
-        assert!(dockerfile.contains(&format!("chown {EXEC_UID}:{EXEC_UID} {SESSION_ROOT}")));
-        assert!(dockerfile.contains(&format!("chmod 0700 {SESSION_ROOT}")));
+        let (uid, root) = (AWS_MICROVM.exec_uid, AWS_MICROVM.session_root);
+        assert!(dockerfile.contains(&format!("chown {uid}:{uid} {root}")));
+        assert!(dockerfile.contains(&format!("chmod 0700 {root}")));
     }
 
     /// The agent refuses to start without these, so an image that omits them is a sandbox that
@@ -253,10 +238,11 @@ mod tests {
     #[test]
     fn the_agent_contract_is_baked_into_the_image() {
         let dockerfile = rendered();
+        let (uid, root) = (AWS_MICROVM.exec_uid, AWS_MICROVM.session_root);
         for expected in [
-            &format!("ALIEN_SANDBOX_ROOT={SESSION_ROOT}"),
-            &format!("ALIEN_SANDBOX_EXEC_UID={EXEC_UID}"),
-            &format!("ALIEN_SANDBOX_EXEC_GID={EXEC_UID}"),
+            &format!("ALIEN_SANDBOX_ROOT={root}"),
+            &format!("ALIEN_SANDBOX_EXEC_UID={uid}"),
+            &format!("ALIEN_SANDBOX_EXEC_GID={uid}"),
             &"ALIEN_SANDBOX_AUTHORIZATION=transport".to_string(),
             &"ALIEN_SANDBOX_ISOLATION=uid-split".to_string(),
         ] {
@@ -270,14 +256,13 @@ mod tests {
         assert!(rendered().contains(&format!(r#"ENTRYPOINT ["{AGENT_PATH}"]"#)));
     }
 
-    /// The uid the image creates and the uid the agent is told to use are the same number in
-    /// three places — the image, the Terraform emitter and the CloudFormation emitter. This
-    /// pins the one the other two are asserted against.
+    /// The Terraform and CloudFormation emitters each repeat the exec uid as a literal of their
+    /// own, because a `&'static str` cannot be derived from the contract in a const. This pins the
+    /// value those two are asserted against.
     #[test]
     fn the_exec_uid_is_unprivileged() {
-        assert_ne!(EXEC_UID, 0, "the exec uid must never be root");
-        assert_eq!(EXEC_UID, 60000);
-        assert_eq!(AGENT_PORT, 8971);
+        assert_ne!(AWS_MICROVM.exec_uid, 0, "the exec uid must never be root");
+        assert_eq!(AWS_MICROVM.exec_uid, 60000);
     }
 
     /// The archive has to be flat and contain both entries: `CreateMicrovmImage` looks for the
