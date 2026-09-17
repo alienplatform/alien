@@ -2054,6 +2054,7 @@ async fn create_command_round_trips_target_columns() {
             CommandState::Pending,
             None,
             None,
+            None,
         )
         .await
         .unwrap();

@@ -9,6 +9,7 @@ use std::time::Duration;
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_platform_api::types::{CreateAccessRequest, CreateAccessRequestMaxRisk};
 use alien_platform_api::SdkResultExt as _;
+use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
 use serde_json::Value;
 
@@ -80,7 +81,7 @@ pub enum AccessRequestsAction {
         #[arg(long = "max-risk")]
         max_risk: Option<String>,
 
-        /// Requested approval duration, e.g. 1h, 30m. Informational until approved; the approver sets the actual grant window.
+        /// Requested approval duration, e.g. 1h, 30m. Approvals cannot extend past this deadline.
         #[arg(long)]
         duration: Option<String>,
 
@@ -118,7 +119,7 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
             operation,
             params,
             max_risk,
-            duration: _duration,
+            duration,
             title,
             reason,
         } => {
@@ -134,6 +135,7 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
                     max_risk: max_risk.as_deref(),
                     title: title.as_deref(),
                     reason: reason.as_deref(),
+                    duration: duration.as_deref(),
                     json: args.json,
                 },
             )
@@ -153,6 +155,7 @@ struct CreateTaskOptions<'a> {
     max_risk: Option<&'a str>,
     title: Option<&'a str>,
     reason: Option<&'a str>,
+    duration: Option<&'a str>,
     json: bool,
 }
 
@@ -174,6 +177,7 @@ async fn create_task(
     .await?
     .id
     .to_string();
+    let requested_expires_at = requested_expiration(Utc::now(), options.duration)?;
 
     // `<plugin>/*` is a wildcard request; anything else is an exact operation.
     let is_wildcard = options.operation.ends_with("/*");
@@ -209,6 +213,8 @@ async fn create_task(
             title: options.title.map(str::to_string),
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
+            replay_key: None,
+            requested_expires_at,
             commands: Vec::new(),
         }
     } else {
@@ -231,6 +237,8 @@ async fn create_task(
             title: options.title.map(str::to_string),
             reason: options.reason.map(str::to_string),
             remediation_plan_id: None,
+            replay_key: None,
+            requested_expires_at,
             commands: Vec::new(),
         }
     };
@@ -352,12 +360,12 @@ async fn get_task(
     // Only worth polling while queued and not yet materialized — if it's
     // pending-approval there's genuinely nothing to wait for yet, and any
     // other status already has its final answer.
-    let kubectl_approve = if request.status == alien_platform_api::types::AccessRequestStatus::Queued
-    {
-        poll_for_kubectl_approve(sdk_client, workspace, id).await?
-    } else {
-        fetch_kubectl_approve(sdk_client, workspace, id).await?
-    };
+    let kubectl_approve =
+        if request.status == alien_platform_api::types::AccessRequestStatus::Queued {
+            poll_for_kubectl_approve(sdk_client, workspace, id).await?
+        } else {
+            fetch_kubectl_approve(sdk_client, workspace, id).await?
+        };
 
     if json {
         print_json(&serde_json::json!({
@@ -504,7 +512,10 @@ async fn wait_task(
             alien_platform_api::types::AccessRequestStatus::Rejected
             | alien_platform_api::types::AccessRequestStatus::Expired => {
                 return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!("access request '{id}' is '{}', not approved", request.status),
+                    message: format!(
+                        "access request '{id}' is '{}', not approved",
+                        request.status
+                    ),
                     url: None,
                 }));
             }
@@ -523,8 +534,8 @@ async fn wait_task(
     }
 }
 
-/// Parse a short duration string (`1h`, `30m`, `90s`) into whole minutes.
-pub(crate) fn parse_duration_minutes(value: &str) -> Result<u64> {
+/// Parse a short duration string (`1h`, `30m`, `90s`) without rounding.
+pub(crate) fn parse_duration_seconds(value: &str) -> Result<u64> {
     let invalid = || {
         AlienError::new(ErrorData::ValidationError {
             field: "duration".to_string(),
@@ -538,16 +549,47 @@ pub(crate) fn parse_duration_minutes(value: &str) -> Result<u64> {
             .ok_or_else(invalid)?,
     );
     let amount: u64 = digits.parse().map_err(|_| invalid())?;
-    let minutes = match unit {
-        "h" => amount.saturating_mul(60),
-        "m" => amount,
-        "s" => amount.div_ceil(60).max(1),
+    let seconds = match unit {
+        "h" => amount.checked_mul(60 * 60),
+        "m" => amount.checked_mul(60),
+        "s" => Some(amount),
         _ => return Err(invalid()),
-    };
-    if minutes == 0 {
+    }
+    .ok_or_else(invalid)?;
+    if seconds == 0 {
         return Err(invalid());
     }
-    Ok(minutes)
+    Ok(seconds)
+}
+
+pub(crate) fn requested_expiration(
+    now: DateTime<Utc>,
+    duration: Option<&str>,
+) -> Result<Option<DateTime<Utc>>> {
+    let Some(duration) = duration else {
+        return Ok(None);
+    };
+    let seconds = parse_duration_seconds(duration)?;
+    if seconds > 6 * 60 * 60 {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "duration cannot exceed 6h".to_string(),
+        }));
+    }
+    let seconds = i64::try_from(seconds).map_err(|_| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "duration".to_string(),
+            message: "duration is too large".to_string(),
+        })
+    })?;
+    now.checked_add_signed(chrono::Duration::seconds(seconds))
+        .map(Some)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "duration".to_string(),
+                message: "duration is too large".to_string(),
+            })
+        })
 }
 
 #[cfg(test)]
@@ -555,15 +597,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn duration_strings_parse_to_minutes() {
-        assert_eq!(parse_duration_minutes("1h").unwrap(), 60);
-        assert_eq!(parse_duration_minutes("90m").unwrap(), 90);
-        assert_eq!(parse_duration_minutes("30s").unwrap(), 1);
-        assert_eq!(parse_duration_minutes("120s").unwrap(), 2);
-        assert!(parse_duration_minutes("").is_err());
-        assert!(parse_duration_minutes("abc").is_err());
-        assert!(parse_duration_minutes("1d").is_err());
-        assert!(parse_duration_minutes("0m").is_err());
+    fn duration_strings_parse_to_seconds_without_rounding() {
+        assert_eq!(parse_duration_seconds("1h").unwrap(), 3_600);
+        assert_eq!(parse_duration_seconds("90m").unwrap(), 5_400);
+        assert_eq!(parse_duration_seconds("1s").unwrap(), 1);
+        assert_eq!(parse_duration_seconds("90s").unwrap(), 90);
+        assert!(parse_duration_seconds("").is_err());
+        assert!(parse_duration_seconds("abc").is_err());
+        assert!(parse_duration_seconds("1d").is_err());
+        assert!(parse_duration_seconds("0m").is_err());
+    }
+
+    #[test]
+    fn requested_duration_becomes_an_absolute_utc_deadline() {
+        let now = "2026-09-17T00:00:00Z".parse::<DateTime<Utc>>().unwrap();
+        assert_eq!(
+            requested_expiration(now, Some("90s")).unwrap(),
+            Some("2026-09-17T00:01:30Z".parse().unwrap())
+        );
+        assert_eq!(requested_expiration(now, None).unwrap(), None);
+        assert!(requested_expiration(now, Some("361m")).is_err());
     }
 
     #[test]

@@ -6981,6 +6981,9 @@
             ],
             "description": "Optional idempotency key"
           },
+          "operationResultContract": {
+            "description": "Opaque result-handling contract the registry must persist atomically\nwith command creation before the command becomes executable."
+          },
           "params": {
             "$ref": "#/components/schemas/BodySpec",
             "description": "Command parameters (JSON, can be large)"
@@ -7007,6 +7010,10 @@
           "commandId": {
             "type": "string",
             "description": "Unique command identifier"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "Whether this request created the returned command. False means an\nidempotent replay returned a command created by another request."
           },
           "inlineAllowedUpTo": {
             "type": "integer",
@@ -9419,6 +9426,10 @@
           "status"
         ],
         "properties": {
+          "operationResultContract": {
+            "type": "boolean",
+            "description": "True when operation result contracts are persisted before commands\nbecome executable."
+          },
           "status": {
             "type": "string"
           }

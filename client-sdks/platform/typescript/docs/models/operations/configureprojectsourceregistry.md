@@ -6,12 +6,12 @@
 import { ConfigureProjectSourceRegistry } from "@alienplatform/platform-api/models/operations";
 
 let value: ConfigureProjectSourceRegistry = {
-  enabled: true,
+  enabled: false,
   repositories: [
     "<value 1>",
     "<value 2>",
   ],
-  credentialPolicy: "push-and-pull",
+  credentialPolicy: "pull-only",
 };
 ```
 
@@ -19,6 +19,6 @@ let value: ConfigureProjectSourceRegistry = {
 
 | Field                                                                                                                  | Type                                                                                                                   | Required                                                                                                               | Description                                                                                                            |
 | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                                              | *true*                                                                                                                 | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
+| `enabled`                                                                                                              | *boolean*                                                                                                              | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `repositories`                                                                                                         | *string*[]                                                                                                             | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |
 | `credentialPolicy`                                                                                                     | [operations.ConfigureProjectSourceCredentialPolicy](../../models/operations/configureprojectsourcecredentialpolicy.md) | :heavy_check_mark:                                                                                                     | N/A                                                                                                                    |

@@ -52,6 +52,27 @@ impl PluginInvocation {
 /// command response path without translation.
 pub type PluginResult = CommandResponse;
 
+/// Exact protocol marker used when a plugin explicitly declares that an
+/// operation failure is safe to retry. Absence means non-retryable.
+pub const RETRYABLE_ERROR_DETAILS: &str = r#"{"retryable":true}"#;
+
+/// Build an explicitly retryable plugin error.
+pub fn retryable_error(code: impl Into<String>, message: impl Into<String>) -> PluginResult {
+    PluginResult::error_with_details(code, message, RETRYABLE_ERROR_DETAILS)
+}
+
+/// Return whether a plugin result carries the exact, versioned retry marker.
+/// Free-form details and error-code guesses never authorize retrying a write.
+pub fn is_explicitly_retryable(result: &PluginResult) -> bool {
+    matches!(
+        result,
+        PluginResult::Error {
+            details: Some(details),
+            ..
+        } if details == RETRYABLE_ERROR_DETAILS
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -77,5 +98,20 @@ mod tests {
         let json = serde_json::to_vec(&err).unwrap();
         let back: PluginResult = serde_json::from_slice(&json).unwrap();
         assert!(back.is_error());
+    }
+
+    #[test]
+    fn only_the_exact_protocol_marker_is_retryable() {
+        let retryable = retryable_error("THROTTLED", "try later");
+        assert!(is_explicitly_retryable(&retryable));
+        assert!(!is_explicitly_retryable(&PluginResult::error(
+            "THROTTLED",
+            "try later"
+        )));
+        assert!(!is_explicitly_retryable(&PluginResult::error_with_details(
+            "THROTTLED",
+            "try later",
+            r#"{"retryable":false}"#,
+        )));
     }
 }

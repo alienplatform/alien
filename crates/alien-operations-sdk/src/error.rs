@@ -47,7 +47,7 @@ pub enum ErrorData {
     )]
     FieldEmpty {
         /// A description of which field was empty, e.g. "name",
-        /// "operations[1].name", "binaries.amd64".
+        /// "operations\[1\].name", "binaries.amd64".
         field: String,
     },
 
@@ -67,6 +67,52 @@ pub enum ErrorData {
         operation: String,
         /// The `pollOperation` value that failed validation.
         poll_operation: String,
+    },
+
+    /// An operation declaration contains an invalid field combination.
+    #[error(
+        code = "PLUGIN_OPERATION_CONTRACT_INVALID",
+        message = "Plugin '{plugin}' operation '{operation}' has invalid '{field}': {reason}",
+        retryable = "false",
+        internal = "false"
+    )]
+    OperationContractInvalid {
+        /// Plugin declaring the operation.
+        plugin: String,
+        /// Operation with the invalid declaration.
+        operation: String,
+        /// Contract field that failed validation.
+        field: String,
+        /// Actionable reason the field is invalid.
+        reason: String,
+    },
+
+    /// A typed runtime registry attempted to register an operation twice.
+    #[error(
+        code = "PLUGIN_OPERATION_DUPLICATE",
+        message = "Operation '{operation}' was registered more than once",
+        retryable = "false",
+        internal = "false"
+    )]
+    OperationRegistrationDuplicate {
+        /// Duplicate operation name.
+        operation: String,
+    },
+
+    /// A plugin manifest has no binary for the requested architecture.
+    #[error(
+        code = "PLUGIN_ARCH_UNSUPPORTED",
+        message = "Plugin '{plugin}' has no binary for architecture '{arch}' (available: {available})",
+        retryable = "false",
+        internal = "false"
+    )]
+    ArchUnsupported {
+        /// Plugin name from the manifest.
+        plugin: String,
+        /// Requested architecture.
+        arch: String,
+        /// Comma-separated architectures present in the manifest.
+        available: String,
     },
 
     /// A requested operation is not exposed by the plugin.

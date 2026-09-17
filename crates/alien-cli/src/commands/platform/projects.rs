@@ -459,9 +459,8 @@ fn remote_sandbox_request(
     }
     Ok(ConfigureRemoteSandboxRequest {
         base_image: Some(base_image),
-        image_bundle_uri: None,
         azure: None,
-        max_session_lifetime_seconds: Some(max_session_lifetime_seconds),
+        max_lifetime_seconds: Some(max_session_lifetime_seconds),
     })
 }
 
@@ -726,7 +725,7 @@ mod tests {
             serde_json::to_value(request).expect("request should serialize"),
             serde_json::json!({
                 "baseImage": "public.ecr.aws/example/analysis:v1",
-                "maxSessionLifetimeSeconds": 28_800,
+                "maxLifetimeSeconds": 28_800,
             }),
         );
     }
@@ -809,13 +808,13 @@ mod tests {
 
     #[test]
     fn remote_sandbox_requires_a_base_image() {
-        sandbox_options(
+        remote_sandbox_request(
             Some("public.ecr.aws/x/y:v1"),
             std::num::NonZeroU64::new(3600),
         )
         .expect("a base image is accepted");
 
-        let error = sandbox_options(None, std::num::NonZeroU64::new(3600))
+        let error = remote_sandbox_request(None, std::num::NonZeroU64::new(3600))
             .expect_err("a missing base image must be refused");
         assert!(
             error.to_string().contains("--base-image"),

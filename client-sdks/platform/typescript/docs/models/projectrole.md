@@ -13,5 +13,5 @@ let value: ProjectRole = "project.remote-bindings";
 ## Values
 
 ```typescript
-"project.viewer" | "project.developer" | "project.encryption" | "project.ai-gateway" | "project.remote-bindings"
+"project.viewer" | "project.developer" | "project.encryption" | "project.ai-gateway" | "project.sandbox-gateway" | "project.remote-bindings"
 ```

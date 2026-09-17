@@ -7,15 +7,14 @@ import { ProjectRemoteSandbox } from "@alienplatform/platform-api/models";
 
 let value: ProjectRemoteSandbox = {
   enabled: true,
-  maxSessionLifetimeSeconds: 13352,
 };
 ```
 
 ## Fields
 
-| Field                       | Type                        | Required                    | Description                 |
-| --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `enabled`                   | *true*                      | :heavy_check_mark:          | N/A                         |
-| `baseImage`                 | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `imageBundleUri`            | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `maxSessionLifetimeSeconds` | *number*                    | :heavy_check_mark:          | N/A                         |
+| Field                                            | Type                                             | Required                                         | Description                                      |
+| ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ | ------------------------------------------------ |
+| `enabled`                                        | *boolean*                                        | :heavy_check_mark:                               | N/A                                              |
+| `baseImage`                                      | *string*                                         | :heavy_minus_sign:                               | N/A                                              |
+| `azure`                                          | [models.ProjectAzure](../models/projectazure.md) | :heavy_minus_sign:                               | N/A                                              |
+| `maxLifetimeSeconds`                             | *number*                                         | :heavy_minus_sign:                               | N/A                                              |

@@ -16,7 +16,7 @@ use crate::manifest::RetryPolicy;
 /// elapses, at which point verification is reported as failed (the write
 /// itself is not undone — verification only confirms, it never rolls back).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Verification {
     /// Human-readable description of what changes as a result of this
     /// operation, surfaced in access-request prompts.

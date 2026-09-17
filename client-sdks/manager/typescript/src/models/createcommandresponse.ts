@@ -18,6 +18,13 @@ export type CreateCommandResponse = {
    */
   commandId: string;
   /**
+   * Whether this request created the returned command. False means an
+   *
+   * @remarks
+   * idempotent replay returned a command created by another request.
+   */
+  created?: boolean | undefined;
+  /**
    * Maximum inline body size allowed
    */
   inlineAllowedUpTo: number;
@@ -38,6 +45,7 @@ export const CreateCommandResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   commandId: z.string(),
+  created: z.boolean().optional(),
   inlineAllowedUpTo: z.int(),
   next: z.string(),
   state: CommandState$inboundSchema,

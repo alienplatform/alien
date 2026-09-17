@@ -252,14 +252,14 @@ const alienManager = new AlienManager({
 });
 
 async function run() {
-  await alienManager.deployments.deleteDeployment({
+  const result = await alienManager.deployments.deleteDeployment({
     id: "<id>",
     deleteDeploymentRequest: {
       action: "forget",
     },
   });
 
-
+  console.log(result);
 }
 
 run();
@@ -289,7 +289,7 @@ async function run() {
   });
   if (res.ok) {
     const { value: result } = res;
-
+    console.log(result);
   } else {
     console.log("deploymentsDeleteDeployment failed:", res.error);
   }
@@ -309,7 +309,7 @@ run();
 
 ### Response
 
-**Promise\<void\>**
+**Promise\<[models.DeleteDeploymentResponse](../../models/deletedeploymentresponse.md)\>**
 
 ### Errors
 

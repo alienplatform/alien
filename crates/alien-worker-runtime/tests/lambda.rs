@@ -835,6 +835,7 @@ async fn test_lambda_cmd_small_params_small_response(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     };
 
     // Create command - should auto-dispatch via CargoLambdaInvokeDispatcher
@@ -900,6 +901,7 @@ async fn test_lambda_cmd_small_params_large_response(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     };
 
     let response = command_server.create_command(request).await?;
@@ -989,6 +991,7 @@ async fn test_lambda_cmd_large_params_small_response(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     };
 
     // Create command - should require upload
@@ -1082,6 +1085,7 @@ async fn test_lambda_cmd_large_params_large_response(
         deadline: None,
         idempotency_key: None,
         target_resource_id: None,
+        operation_result_contract: None,
     };
 
     let response = command_server.create_command(request).await?;

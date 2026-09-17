@@ -9,8 +9,10 @@ let value: CreateProjectRegistry = {
   enabled: true,
   repositories: [
     "<value 1>",
+    "<value 2>",
+    "<value 3>",
   ],
-  credentialPolicy: "push-and-pull",
+  credentialPolicy: "pull-only",
 };
 ```
 
@@ -18,6 +20,6 @@ let value: CreateProjectRegistry = {
 
 | Field                                                                                                | Type                                                                                                 | Required                                                                                             | Description                                                                                          |
 | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                            | *true*                                                                                               | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
+| `enabled`                                                                                            | *boolean*                                                                                            | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
 | `repositories`                                                                                       | *string*[]                                                                                           | :heavy_check_mark:                                                                                   | N/A                                                                                                  |
 | `credentialPolicy`                                                                                   | [operations.CreateProjectCredentialPolicy](../../models/operations/createprojectcredentialpolicy.md) | :heavy_check_mark:                                                                                   | N/A                                                                                                  |

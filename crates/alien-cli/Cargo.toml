@@ -50,6 +50,7 @@ tracing-subscriber = { workspace = true, features = ["env-filter"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
 serde_yaml = { workspace = true }
+schemars = { workspace = true }
 url = { workspace = true }
 dockdash = { workspace = true }
 which = "6.0.1"
