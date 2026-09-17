@@ -1993,11 +1993,26 @@ jobs:
         env:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: |
-          # Without it a pipeline reports its last stage, so a pull that never produced an image
-          # is read as an agent whose e_machine is empty.
+          # The one pipeline below ends in `tr`, which succeeds on whatever it is handed. Without
+          # this the assignment takes tr's zero and a failed `docker run` reads as a passing probe.
           set -o pipefail
 
           for platform in linux/amd64 linux/arm64; do
+            # This image is wolfi-base plus git's 24 transitive packages plus the agent, and the
+            # amd64 half arrives under emulation. Inside a probe's own budget, the pull expires.
+            status=0
+            pull=$(timeout -k 5 300 docker pull --platform "$platform" "$SANDBOX_AGENT" 2>&1) || status=$?
+            case "$status" in
+              0) ;;
+              124|137)
+                echo "::error::${platform}: the agent image did not pull within 300s"
+                exit 1 ;;
+              *)
+                echo "$pull"
+                echo "::error::${platform}: the agent image could not be pulled"
+                exit 1 ;;
+            esac
+
             # Once binfmt is registered an ELF of either architecture executes whatever the
             # container declares, so running the agent cannot tell the two apart. The ELF header
             # can: e_machine sits at offset 18, 0x3e for x86-64 and 0xb7 for aarch64.
@@ -2006,8 +2021,18 @@ jobs:
               linux/arm64) expected=b700 ;;
               *) echo "::error::no expected e_machine for ${platform}"; exit 1 ;;
             esac
+            status=0
             machine=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
-              -c 'od -An -tx1 -j18 -N2 /usr/local/bin/alien-sandbox-agent' | tr -d ' \n')
+              -c 'od -An -tx1 -j18 -N2 /usr/local/bin/alien-sandbox-agent' | tr -d ' \n') || status=$?
+            case "$status" in
+              0) ;;
+              124|137)
+                echo "::error::${platform}: the header read did not finish within 60s"
+                exit 1 ;;
+              *)
+                echo "::error::${platform}: the header read failed with exit ${status}"
+                exit 1 ;;
+            esac
             if [ "$machine" != "$expected" ]; then
               echo "::error::${platform}: the agent is e_machine '${machine}', not '${expected}'"
               exit 1
@@ -2031,10 +2056,21 @@ jobs:
             # The unlink rather than the file mode: only the directory permission stops the
             # supervised command removing its own supervisor. Removing a file it may remove first,
             # so a denial is what fails the rm and not an rm that is missing or broken.
-            timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+            status=0
+            unlink=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
               -c 'touch /sandbox/probe && rm /sandbox/probe &&
                   ! rm -f /usr/local/bin/alien-sandbox-agent &&
-                  test -x /usr/local/bin/alien-sandbox-agent'
+                  test -x /usr/local/bin/alien-sandbox-agent' 2>&1) || status=$?
+            case "$status" in
+              0) ;;
+              124|137)
+                echo "::error::${platform}: the unlink probe did not finish within 60s"
+                exit 1 ;;
+              *)
+                echo "${unlink:-the unlink probe said nothing}"
+                echo "::error::${platform}: /sandbox is not writable by the exec uid, or that uid can unlink its own supervisor"
+                exit 1 ;;
+            esac
             # test -x reads a mode bit, which a binary that cannot start still carries. Matching
             # identifiers only the agent emits is what proves the entrypoint is a working agent.
             status=0
@@ -2064,18 +2100,37 @@ jobs:
             # Every run above is built to fail. Started as it ships, the listening line means
             # attribution_works() returned true under USER 1000:1000 and the bind took. A dead
             # container's log reads the same, so the inspect is what makes the line mean it still.
-            container=$(timeout -k 5 60 docker run -d --platform "$platform" "$SANDBOX_AGENT")
+            status=0
+            container=$(timeout -k 5 60 docker run -d --platform "$platform" "$SANDBOX_AGENT") || status=$?
+            case "$status" in
+              0) ;;
+              124|137)
+                echo "::error::${platform}: the detached run did not return a container within 60s"
+                exit 1 ;;
+              *)
+                echo "::error::${platform}: the agent container did not start with exit ${status}"
+                exit 1 ;;
+            esac
             listening=0
             if timeout -k 5 60 sh -c \
                 "until docker logs ${container} 2>&1 | grep -q 'sandbox agent listening on'; do sleep 1; done"; then
               listening=1
             fi
-            running=$(docker inspect -f '{{.State.Running}}' "$container" || true)
+            # The inspect is instantaneous, so an agent that logs the line and dies a second
+            # later reads as serving. The dwell is what makes .State.Running mean it is still up.
+            sleep 3
+            inspected=0
+            running=$(docker inspect -f '{{.State.Running}}' "$container" 2>&1) || inspected=$?
             logs=$(docker logs "$container" 2>&1 || true)
             docker rm -f "$container" >/dev/null || true
             if [ "$listening" -ne 1 ]; then
               echo "$logs"
               echo "::error::${platform}: the agent never reported a listener within 60s"
+              exit 1
+            fi
+            if [ "$inspected" -ne 0 ]; then
+              echo "$running"
+              echo "::error::${platform}: the container state could not be read, so the listener proves nothing"
               exit 1
             fi
             if [ "$running" != true ]; then

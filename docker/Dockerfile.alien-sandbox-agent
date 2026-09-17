@@ -42,6 +42,11 @@ ENV ALIEN_SANDBOX_ROOT=/sandbox \
     ALIEN_SANDBOX_EXEC_GID=1000 \
     ALIEN_SANDBOX_ISOLATION=platform
 
+# The release build resolves tracing-subscriber once across every package it names, and five of
+# them ask for env-filter, so the agent's fmt::init() has an EnvFilter under it. Unset, that
+# filter discards the startup warning saying this image serves requests without a capability.
+ENV RUST_LOG=info
+
 EXPOSE 8080
 # Explicit gid so a runtime that does not read /etc/passwd cannot start the agent in group 0, which
 # makes the exec drop a privilege crossing whose setgroups needs a CAP_SETGID this image lacks, so

@@ -653,6 +653,8 @@ mod tests {
 /// - `AGENT_PATH` does have a consumer, but it renders the AWS bundle's Dockerfile rather than
 ///   this one, so a mismatch is divergence between two images and not a break in either. What it
 ///   pins here is that the `COPY` lands the binary where the `ENTRYPOINT` execs it.
+/// - `RUST_LOG` mirrors no constant. What it pins is the image against the agent's own logging,
+///   which ships an `EnvFilter` that discards every level below `ERROR` when the value is absent.
 #[cfg(test)]
 mod gcp_image_contract {
     use super::*;
@@ -840,6 +842,14 @@ mod gcp_image_contract {
             env_value(&dockerfile(), "ALIEN_SANDBOX_ISOLATION"),
             "platform"
         );
+    }
+
+    /// Unset, the `EnvFilter` the release build unifies into the agent discards the startup warning
+    /// that this image serves requests without a capability. `warn` keeps that warning and still
+    /// loses the line the release smoke test waits for, so the value is compared, not its presence.
+    #[test]
+    fn the_image_asks_for_a_level_that_reaches_the_warning_it_ships() {
+        assert_eq!(env_value(&dockerfile(), "RUST_LOG"), "info");
     }
 
     /// `transport` has no constant either. It is what keeps the supervised command out, because
