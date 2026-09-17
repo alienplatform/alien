@@ -24,7 +24,7 @@ use crate::error::{ErrorData, Result};
 use crate::traits::{CommandOutput, JobError, JobExit, JobPoll, JobStart, RunCommandRequest};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 
-pub use alien_core::sandbox_process::AGENT_PORT;
+pub use alien_core::sandbox_image::AGENT_PORT;
 
 /// Named once: `send` treats it as the one operation a 5xx must not be retried for.
 const RUN_COMMAND: &str = "sandbox.runCommand";

@@ -12,7 +12,7 @@
 //! a build genuinely needs identity to push images.
 
 use crate::emitter::{HelmEmitter, HelmFragment};
-use alien_core::sandbox_process::AGENT_PORT;
+use alien_core::sandbox_image::AGENT_PORT;
 use alien_core::{import::EmitContext, ErrorData, Result, Sandbox, SandboxEgress};
 use alien_error::AlienError;
 

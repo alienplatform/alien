@@ -16,6 +16,7 @@ use crate::{
     },
     expr,
 };
+use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
     NetworkSettings, RemoteBindings, ResourceLifecycle, Result, Sandbox, SandboxCode,
@@ -59,10 +60,7 @@ fn internet_egress_connector_arn() -> Expression {
 const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
-const AGENT_PORT: i64 = 8971;
-
-/// Unprivileged identity commands run as inside the sandbox, never the agent's own.
-const EXEC_UID: &str = "60000";
+const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
 
 /// The one destination the session's security group permits, which reaches nothing.
 pub const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
@@ -967,11 +965,14 @@ fn hooks() -> Expression {
 /// MicroVM before a request arrives, and one MicroVM is one session.
 fn environment_variables() -> Expression {
     let pairs = [
-        ("ALIEN_SANDBOX_ROOT", "/sandbox".to_string()),
-        ("ALIEN_SANDBOX_PORT", AGENT_PORT.to_string()),
-        ("ALIEN_SANDBOX_AUTHORIZATION", "transport".to_string()),
-        ("ALIEN_SANDBOX_EXEC_UID", EXEC_UID.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID", EXEC_UID.to_string()),
+        ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
+        ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
+        (
+            "ALIEN_SANDBOX_AUTHORIZATION",
+            AWS_MICROVM.authorization.env_value().to_string(),
+        ),
+        ("ALIEN_SANDBOX_EXEC_UID", AWS_MICROVM.exec_uid.to_string()),
+        ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
     Expression::from(
