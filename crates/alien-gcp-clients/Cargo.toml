@@ -13,6 +13,7 @@ crate-type = ["rlib"]
 alien-client-core = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
+alien-gcp-compute-types = { workspace = true }
 
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
