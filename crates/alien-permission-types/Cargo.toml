@@ -1,0 +1,16 @@
+[package]
+name = "alien-permission-types"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[features]
+default = []
+openapi = ["dep:utoipa"]
+
+[dependencies]
+indexmap = { workspace = true, features = ["serde"] }
+serde = { workspace = true, features = ["derive"] }
+utoipa = { workspace = true, features = ["indexmap"], optional = true }

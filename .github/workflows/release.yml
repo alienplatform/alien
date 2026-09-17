@@ -555,6 +555,7 @@ jobs:
             alien-error-derive \
             alien-macros \
             alien-error \
+            alien-permission-types \
             alien-core \
             alien-client-core \
             alien-aws-clients \
