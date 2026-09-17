@@ -1994,6 +1994,8 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -2161,30 +2163,65 @@ mod tests {
         assert_eq!(input_body["releaseChannel"], "staging");
     }
 
-    #[test]
-    fn provisioning_always_uses_deployment_bearer_with_optional_workspace_routing() {
+    #[tokio::test]
+    async fn provisioning_always_uses_deployment_bearer_with_optional_workspace_routing() {
         for workspace in [None, Some("acme")] {
-            let client = deployment_manager_http_client("deployment-secret", workspace)
-                .expect("manager client should build");
-            let request = client
-                .get("https://manager.example.test/v1/deployments/dep_test")
-                .build()
-                .expect("request should build");
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind manager test server");
+            let address = listener.local_addr().expect("read manager test address");
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept manager request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = stream
+                        .read(&mut buffer)
+                        .await
+                        .expect("read manager request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let body = r#"{"id":"dep_test","name":"test","platform":"aws","status":"pending","deploymentGroupId":"dg_test","deploymentProtocolVersion":1,"projectId":"proj_test","workspaceId":"ws_test","retryRequested":false,"createdAt":"2026-09-17T00:00:00Z"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write manager response");
+                String::from_utf8(request).expect("manager request is HTTP text")
+            });
 
-            assert_eq!(
-                request
-                    .headers()
-                    .get(reqwest::header::AUTHORIZATION)
-                    .unwrap(),
-                "Bearer deployment-secret"
+            let http_client = deployment_manager_http_client("deployment-secret", workspace)
+                .expect("manager client should build");
+            let client = alien_manager_api::Client::new_with_client(
+                &format!("http://{address}"),
+                http_client,
             );
-            assert_eq!(
-                request
-                    .headers()
-                    .get("x-alien-workspace")
-                    .and_then(|value| value.to_str().ok()),
-                workspace
-            );
+            client
+                .get_deployment()
+                .id("dep_test")
+                .send()
+                .await
+                .expect("manager request should succeed");
+            let request = server.await.expect("manager test server task");
+            let request_lower = request.to_ascii_lowercase();
+
+            assert!(request_lower.contains("authorization: bearer deployment-secret\r\n"));
+            match workspace {
+                Some(workspace) => {
+                    assert!(request_lower.contains(&format!("x-alien-workspace: {workspace}\r\n")))
+                }
+                None => assert!(!request_lower.contains("x-alien-workspace:")),
+            }
         }
     }
 }
