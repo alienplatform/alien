@@ -8,7 +8,8 @@ edition = "2021"
 include = ["build.rs", "src/**/*", "openapi.json"]
 
 [features]
-default = ["rustls"]
+default = ["rustls", "full-api"]
+full-api = []
 native-tls = ["reqwest/native-tls"]
 rustls = ["reqwest/rustls-tls-webpki-roots"]
 
