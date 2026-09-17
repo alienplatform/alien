@@ -348,7 +348,7 @@ fn machine_options(
         .filter(|spec| instance_satisfies(spec, requirements, resolved_architecture))
         .map(|spec| ComputeMachineOption {
             machine: spec.name.to_string(),
-            profile: spec.to_machine_profile(),
+            profile: spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
             recommended: spec.name == recommended || Some(spec.name) == selected_machine,
         })
         .collect();
@@ -373,7 +373,9 @@ fn instance_satisfies(
     if spec.memory_bytes < requirements.max_memory_per_container {
         return false;
     }
-    if spec.ephemeral_storage_bytes < requirements.max_ephemeral_storage_bytes {
+    if !spec.has_configurable_ephemeral_storage()
+        && spec.ephemeral_storage_bytes < requirements.max_ephemeral_storage_bytes
+    {
         return false;
     }
     match (&requirements.gpu, spec.gpu) {
@@ -876,6 +878,42 @@ mod tests {
         let pool = plan.pools.first().expect("general pool should exist");
         assert_eq!(pool.selected.machine(), Some("m7g.xlarge"));
         assert!(pool.errors.is_empty());
+    }
+
+    #[test]
+    fn configurable_cloud_disk_satisfies_storage_above_fixed_local_catalog() {
+        let mut stack = stack_with_container();
+        let container = stack
+            .resources
+            .get_mut("api")
+            .and_then(|entry| entry.config.downcast_mut::<Container>())
+            .expect("test stack should contain a container");
+        container.ephemeral_storage = Some("8000Gi".to_string());
+        let settings = ComputeSettings {
+            pools: [(
+                "storage".to_string(),
+                ComputePoolSelection::Fixed {
+                    machines: 1,
+                    machine: Some("m8i.2xlarge".to_string()),
+                    failure_domains: None,
+                },
+            )]
+            .into_iter()
+            .collect(),
+        };
+
+        let plan = plan_compute(&stack, Platform::Aws, Some(&settings)).expect("plan should build");
+        let pool = plan.pools.first().expect("general pool should exist");
+        assert!(pool.errors.is_empty());
+        let selected = pool
+            .machines
+            .iter()
+            .find(|option| option.machine == "m8i.2xlarge")
+            .expect("selected machine should remain an option");
+        assert_eq!(
+            selected.profile.ephemeral_storage_bytes,
+            8_000 * 1024 * 1024 * 1024
+        );
     }
 
     #[test]

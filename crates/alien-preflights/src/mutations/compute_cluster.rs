@@ -696,7 +696,8 @@ fn materialize_group(
         })
     })?;
     group.instance_type = Some(machine.to_string());
-    group.profile = Some(spec.to_machine_profile());
+    group.profile =
+        Some(spec.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes));
     group.min_size = selection.min_size();
     group.max_size = selection.max_size();
     Ok(())
@@ -1029,7 +1030,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistent_stateful_container_gets_pool_with_single_capacity_group() {
-        let container = Container::new("database".to_string())
+        let mut container = Container::new("database".to_string())
             .code(ContainerCode::Image {
                 image: "database:latest".to_string(),
             })
@@ -1050,6 +1051,7 @@ mod tests {
             .port(8080)
             .permissions("database".to_string())
             .build();
+        container.ephemeral_storage = Some("100Gi".to_string());
         let stack = Stack::new("test-stack".to_string())
             .add(container, ResourceLifecycle::Live)
             .build();
@@ -1119,6 +1121,19 @@ mod tests {
             .capacity_groups
             .iter()
             .any(|group| Some(group.group_id.as_str()) == container.pool.as_deref()));
+        let capacity_group = cluster
+            .capacity_groups
+            .iter()
+            .find(|group| Some(group.group_id.as_str()) == container.pool.as_deref())
+            .expect("container pool should be materialized");
+        assert_eq!(
+            capacity_group
+                .profile
+                .as_ref()
+                .expect("materialized group should have a profile")
+                .ephemeral_storage_bytes,
+            100 * 1024 * 1024 * 1024,
+        );
         assert_eq!(cluster.failure_domain_spread.get("stateful"), Some(&1));
 
         assert!(!mutation.should_run(&result, &stack_state, &config));

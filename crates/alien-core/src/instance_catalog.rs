@@ -162,6 +162,12 @@ pub struct InstanceTypeSpec {
 }
 
 impl InstanceTypeSpec {
+    /// Whether ephemeral storage is a provider disk that can be sized at
+    /// deployment time instead of fixed local instance storage.
+    pub fn has_configurable_ephemeral_storage(&self) -> bool {
+        self.family != InstanceFamily::StorageOptimized
+    }
+
     /// Whether this instance type supports nested virtualization.
     ///
     /// Classify by documented provider families rather than adding a flag to
@@ -201,6 +207,17 @@ impl InstanceTypeSpec {
                 count: g.count,
             }),
         }
+    }
+
+    /// Convert this entry to the profile controllers should provision for a
+    /// workload. Configurable cloud disks grow to the requested capacity;
+    /// fixed local disks retain their catalog capacity.
+    pub fn to_machine_profile_for_storage(&self, requested_bytes: u64) -> MachineProfile {
+        let mut profile = self.to_machine_profile();
+        if self.has_configurable_ephemeral_storage() {
+            profile.ephemeral_storage_bytes = profile.ephemeral_storage_bytes.max(requested_bytes);
+        }
+        profile
     }
 }
 
@@ -1302,12 +1319,27 @@ pub fn select_instance_type(
             .filter(|spec| spec.ephemeral_storage_bytes >= requirements.max_ephemeral_storage_bytes)
             .collect();
         if filtered.is_empty() {
-            return Err(format!(
-                "no storage-optimized instance with >= {} bytes ephemeral storage on platform {platform}",
-                requirements.max_ephemeral_storage_bytes
-            ));
+            // Fixed-local NVMe is preferred for large requests, but provider
+            // disks on ordinary cloud machines remain configurable. Fall back
+            // when no fixed-local catalog entry can satisfy the request.
+            CATALOG
+                .iter()
+                .filter(|spec| {
+                    spec.platform == platform
+                        && spec.family == InstanceFamily::GeneralPurpose
+                        && spec.has_configurable_ephemeral_storage()
+                })
+                .filter(|spec| {
+                    if requirements.nested_virt {
+                        spec.is_nested_virt_capable()
+                    } else {
+                        platform != Platform::Aws || !spec.is_nested_virt_capable()
+                    }
+                })
+                .collect()
+        } else {
+            filtered
         }
-        filtered
     } else {
         candidates
     };
@@ -1374,7 +1406,7 @@ pub fn select_instance_type(
 
     Ok(InstanceSelection {
         instance_type: selected.name,
-        profile: selected.to_machine_profile(),
+        profile: selected.to_machine_profile_for_storage(requirements.max_ephemeral_storage_bytes),
         min_machines,
         max_machines,
     })
@@ -1711,6 +1743,26 @@ mod tests {
         let sel = select_instance_type(Platform::Aws, &req).unwrap();
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
         assert_eq!(spec.family, InstanceFamily::StorageOptimized);
+    }
+
+    #[test]
+    fn test_select_configurable_storage_above_fixed_local_catalog() {
+        let req = WorkloadRequirements {
+            total_cpu_at_desired: 8.0,
+            total_memory_bytes_at_desired: 32 * GI,
+            total_cpu_at_max: 8.0,
+            total_memory_bytes_at_max: 32 * GI,
+            max_cpu_per_container: 2.0,
+            max_memory_per_container: 8 * GI,
+            max_ephemeral_storage_bytes: 8_000 * GI,
+            gpu: None,
+            architecture: Some(Architecture::X86_64),
+            nested_virt: false,
+        };
+        let sel = select_instance_type(Platform::Aws, &req).unwrap();
+        let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
+        assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
+        assert_eq!(sel.profile.ephemeral_storage_bytes, 8_000 * GI);
     }
 
     #[test]
