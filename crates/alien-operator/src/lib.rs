@@ -28,6 +28,7 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod readiness_server;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -126,6 +127,7 @@ pub async fn run_operator_with_cancel_and_loops(
         telemetry_enabled = config.is_telemetry_enabled(),
         otlp_host = %config.otlp_server_host,
         otlp_port = config.otlp_server_port,
+        readiness_port = config.readiness_server_port,
         "Starting operator"
     );
 
@@ -138,6 +140,17 @@ pub async fn run_operator_with_cancel_and_loops(
 
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+
+    if let Some(readiness_port) = config.readiness_server_port {
+        let readiness_cancel = cancel.clone();
+        tokio::spawn(async move {
+            if let Err(error) =
+                readiness_server::start_readiness_server(readiness_port, readiness_cancel).await
+            {
+                warn!(%error, "Operator readiness server failed");
+            }
+        });
+    }
 
     // Capture command-address support before moving the receiver into its
     // task. Readiness requires both version-aware execution and current

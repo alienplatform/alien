@@ -19,7 +19,9 @@ const CRD_NAME: &str = "alienaccessrequests.accessrequests.alien";
 const ENCRYPTION_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ENCRYPTION_KEY_SHA256: &str =
     "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e";
-const GOOD_OPERATOR_IMAGE: &str = "registry.k8s.io/pause:3.10.1";
+const GOOD_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator:local";
+const NOT_READY_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator-not-ready:local";
+const OPERATOR_FIXTURE_BASE_IMAGE: &str = "busybox:1.36.1";
 const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "registry.k8s.io/pause";
 const GOOD_RUNTIME_IMAGE_TAG: &str = "3.10.1";
 
@@ -72,7 +74,44 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let temp = tempfile::tempdir().expect("lifecycle temp directory");
     let good_chart_dir = temp.path().join("good-chart");
     let bad_chart_dir = temp.path().join("bad-chart");
-    run_ok("docker", ["pull", GOOD_OPERATOR_IMAGE], None);
+    let operator_fixture_dir = temp.path().join("operator-fixture");
+    let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
+    fs::create_dir_all(&operator_fixture_dir).expect("create Operator fixture directory");
+    fs::create_dir_all(&not_ready_operator_fixture_dir)
+        .expect("create not-ready Operator fixture directory");
+    fs::write(
+        operator_fixture_dir.join("Dockerfile"),
+        format!(
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"httpd\", \"-f\", \"-p\", \"8081\", \"-h\", \"/www\"]\n"
+        ),
+    )
+    .expect("write Operator readiness fixture Dockerfile");
+    fs::write(
+        not_ready_operator_fixture_dir.join("Dockerfile"),
+        format!("FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nCMD [\"sleep\", \"3600\"]\n"),
+    )
+    .expect("write not-ready Operator fixture Dockerfile");
+    run_ok("docker", ["pull", OPERATOR_FIXTURE_BASE_IMAGE], None);
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            GOOD_OPERATOR_IMAGE,
+            path_str(&operator_fixture_dir),
+        ],
+        None,
+    );
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            NOT_READY_OPERATOR_IMAGE,
+            path_str(&not_ready_operator_fixture_dir),
+        ],
+        None,
+    );
     run_ok(
         "kind",
         [
@@ -84,11 +123,19 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         ],
         None,
     );
-    write_chart(&good_chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
-    write_chart(
-        &bad_chart_dir,
-        &product_chart("registry.invalid/alien/operator:missing"),
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            NOT_READY_OPERATOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
     );
+    write_chart(&good_chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
+    write_chart(&bad_chart_dir, &product_chart(NOT_READY_OPERATOR_IMAGE));
 
     let helm_namespace = "alien-product-helm-lifecycle".to_string();
     let helm_release = "alien-product".to_string();
@@ -287,7 +334,7 @@ spec:
         "helm",
         failed_enable.iter().map(String::as_str),
         None,
-        "an unavailable Operator image must trigger atomic rollback",
+        "an Operator that never initializes identity must trigger atomic rollback",
     );
     assert_output_contains(
         &run_ok(

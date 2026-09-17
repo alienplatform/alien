@@ -390,6 +390,10 @@ fn add_remote_operator_files(
         identity_record,
     );
     files.insert(
+        "templates/remote-operator-identity-gate.yaml".to_string(),
+        remote_operator_identity_gate_tpl(),
+    );
+    files.insert(
         "templates/remote-operator-identity-complete.yaml".to_string(),
         remote_operator_identity_completion_tpl(),
     );
@@ -569,6 +573,44 @@ data:
   version: "1"
   identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
 {{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_identity_gate_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ printf "%s-identity-gate" (include "deployment.remoteOperatorResourceName" .) | trunc 63 | trimSuffix "-" }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "90"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.remoteOperatorResourceName" . }}
+      restartPolicy: Never
+      containers:
+        - name: wait-for-identity
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - kubectl
+            - --namespace={{ .Release.Namespace }}
+            - rollout
+            - status
+            - deployment/{{ include "deployment.remoteOperatorResourceName" . }}
+            - --timeout=5m
 {{- end }}
 "#
     .to_string()
@@ -1945,6 +1987,7 @@ fn operator_deployment_doc(
     append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
     if options.log_collector.is_some() {
         append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
         append_env_value(&mut yaml, "OTLP_PORT", "8080");
@@ -1972,11 +2015,19 @@ fn operator_deployment_doc(
         "/etc/operator/secrets/encryption-key",
     );
     append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
+    yaml.push_str("          ports:\n");
+    yaml.push_str("            - name: readiness\n");
+    yaml.push_str("              containerPort: 8081\n");
     if options.log_collector.is_some() {
-        yaml.push_str("          ports:\n");
         yaml.push_str("            - name: http\n");
         yaml.push_str("              containerPort: 8080\n");
     }
+    yaml.push_str("          readinessProbe:\n");
+    yaml.push_str("            httpGet:\n");
+    yaml.push_str("              path: /ready\n");
+    yaml.push_str("              port: readiness\n");
+    yaml.push_str("            periodSeconds: 2\n");
+    yaml.push_str("            failureThreshold: 150\n");
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: credentials\n");
     yaml.push_str("              mountPath: /etc/operator/secrets\n");
@@ -5981,6 +6032,16 @@ mod tests {
         assert!(identity_completion.contains("helm.sh/hook: post-install,post-upgrade"));
         assert!(identity_completion.contains("alien.dev/remote-operator-identity-phase: complete"));
         assert!(!identity_completion.contains("alien.dev/remote-operator-identity-record"));
+        let identity_gate = &chart.files["templates/remote-operator-identity-gate.yaml"];
+        assert!(identity_gate.contains("helm.sh/hook-weight\": \"90"));
+        assert!(identity_gate.contains("rollout\n            - status"));
+        assert!(identity_gate.contains("deployment.remoteOperatorResourceName"));
+        assert!(identity_gate.contains(
+            "serviceAccountName: {{ include \"deployment.remoteOperatorResourceName\" . }}"
+        ));
+        assert!(remote_template.contains("name: 'OPERATOR_READINESS_PORT'"));
+        assert!(remote_template.contains("path: /ready"));
+        assert!(remote_template.contains("port: readiness"));
         for (name, template) in [
             ("identity record", identity_record),
             ("identity completion", identity_completion),
