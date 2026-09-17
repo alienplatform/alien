@@ -640,12 +640,6 @@ spec:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
-          {{- if .Values.remoteOperator.enabled }}
-          volumeMounts:
-            - name: identity
-              mountPath: /var/lib/operator
-              readOnly: true
-          {{- end }}
           command:
             - /bin/sh
             - -ec
@@ -683,6 +677,15 @@ spec:
                   echo "Refusing cleanup: $kind $namespace/$name has unexpected $description." >&2
                   exit 1
                 fi
+              }
+              operator_has_started() {
+                started_at="$(kubectl -n "$namespace" get pods \
+                  --selector="app.kubernetes.io/instance=$resource_name,app.kubernetes.io/component=operator" \
+                  --output='jsonpath={range .items[*].status.containerStatuses[*]}{.state.running.startedAt}{.state.terminated.startedAt}{.lastState.terminated.startedAt}{end}')" || {
+                  echo "Refusing cleanup: cannot determine whether the Remote Operator container started." >&2
+                  exit 1
+                }
+                [ -n "$started_at" ]
               }
 
               if ! resource_exists configmap "$identity_record"; then
@@ -728,22 +731,15 @@ spec:
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
               fi
 
-              if ! resource_exists configmap "$identity_completion" && [ -f /var/lib/operator/.alien-identity-initialization-started ]; then
+              if ! resource_exists configmap "$identity_completion" && operator_has_started; then
                 echo "Retaining the prepared Remote Operator identity because initialization started before this incomplete install was deleted."
                 exit 0
               fi
 
-              # Stop the exact release-owned workload first. PVC deletion must
-              # not wait for this cleanup pod, which is itself reading the claim.
+              # Stop the exact release-owned workload first.
               kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
               kubectl -n "$namespace" delete configmap "$identity_record" "$identity_completion" --ignore-not-found=true
               kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true --wait=false
-      {{- if .Values.remoteOperator.enabled }}
-      volumes:
-        - name: identity
-          persistentVolumeClaim:
-            claimName: {{ printf "%s-identity" (include "deployment.remoteOperatorResourceName" .) | quote }}
-      {{- end }}
 "#
     .to_string()
 }
@@ -6078,9 +6074,10 @@ mod tests {
         ));
         assert!(cleanup.contains("require_field deployment"));
         assert!(cleanup.contains("require_field persistentvolumeclaim"));
-        assert!(cleanup.contains(".alien-identity-initialization-started"));
+        assert!(cleanup.contains("operator_has_started"));
+        assert!(cleanup.contains(".lastState.terminated.startedAt"));
         assert!(cleanup.contains("Retaining the prepared Remote Operator identity"));
-        assert!(cleanup.contains("claimName: {{ printf \"%s-identity\""));
+        assert!(!cleanup.contains("claimName:"));
         assert!(cleanup.contains("delete deployment \"$resource_name\""));
         assert!(cleanup.contains("$resource_name-complete"));
         assert!(cleanup.contains("$resource_name-identity"));

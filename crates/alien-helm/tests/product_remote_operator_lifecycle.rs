@@ -83,7 +83,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
         format!(
-            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"sh\", \"-c\", \"touch /var/lib/operator/.alien-identity-initialization-started && exec httpd -f -p 8081 -h /www\"]\n"
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"httpd\", \"-f\", \"-p\", \"8081\", \"-h\", \"/www\"]\n"
         ),
     )
     .expect("write Operator readiness fixture Dockerfile");
