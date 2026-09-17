@@ -19,6 +19,12 @@ members = [
   "crates/alien-aws-clients",
   "crates/alien-gcp-clients", 
   "crates/alien-azure-clients",
+  "crates/alien-azure-model-generator",
+  "crates/alien-azure-models-1",
+  "crates/alien-azure-models-2",
+  "crates/alien-azure-models-3",
+  "crates/alien-azure-models-4",
+  "crates/alien-azure-models-5",
   "crates/alien-k8s-clients",
   "crates/alien-observer",
   "crates/alien-error",
@@ -83,6 +89,11 @@ alien-client-config = { path = "crates/alien-client-config", version = "3.3.22" 
 alien-aws-clients = { path = "crates/alien-aws-clients", version = "3.3.22" }
 alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "3.3.22" }
 alien-azure-clients = { path = "crates/alien-azure-clients", version = "3.3.22", default-features = false }
+alien-azure-models-1 = { path = "crates/alien-azure-models-1", version = "3.3.22", default-features = false }
+alien-azure-models-2 = { path = "crates/alien-azure-models-2", version = "3.3.22", default-features = false }
+alien-azure-models-3 = { path = "crates/alien-azure-models-3", version = "3.3.22", default-features = false }
+alien-azure-models-4 = { path = "crates/alien-azure-models-4", version = "3.3.22", default-features = false }
+alien-azure-models-5 = { path = "crates/alien-azure-models-5", version = "3.3.22", default-features = false }
 alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "3.3.22" }
 alien-error = { path = "crates/alien-error", version = "3.3.22", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "3.3.22" }

@@ -559,6 +559,12 @@ jobs:
             alien-client-core \
             alien-aws-clients \
             alien-gcp-clients \
+            alien-azure-model-generator \
+            alien-azure-models-1 \
+            alien-azure-models-2 \
+            alien-azure-models-3 \
+            alien-azure-models-4 \
+            alien-azure-models-5 \
             alien-azure-clients \
             alien-k8s-clients \
             alien-platform-api \
