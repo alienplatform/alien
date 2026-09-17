@@ -1,5 +1,6 @@
 use alien_helm::{
-    generate_operator_manifest, generate_product_operator_manifest, HelmChart,
+    generate_operator_manifest, generate_operator_manifest_with_image_identity,
+    generate_product_operator_manifest, HelmChart, OperatorImageIdentityOptions,
     OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
     OperatorScope, ProductOperatorManifestOptions,
 };
@@ -629,5 +630,69 @@ fn operator_template_can_reference_setup_owned_credentials() {
         collector["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]
             ["secretKeyRef"]["name"],
         "setup-owned"
+    );
+}
+
+#[test]
+fn operator_manifest_reports_exact_package_image_identity() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let image = format!("registry.example.com/operator@{digest}");
+    let manifest = generate_operator_manifest_with_image_identity(
+        OperatorManifestOptions {
+            custom_operation_permissions: &[],
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_ENCRYPTION_KEY,
+            image: &image,
+            log_collector: None,
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            kubernetes_operations_enabled: true,
+            permission: OperatorPermission::Remediation,
+            format: OperatorOutputFormat::RawManifest,
+        },
+        OperatorImageIdentityOptions::Package {
+            package_id: "pkg_operator",
+            package_version: "1.2.3",
+        },
+    )
+    .expect("exact image identity should render");
+
+    let documents = parse_manifest(&manifest);
+    let deployment = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment")
+        .expect("operator Deployment");
+    let env = &deployment["spec"]["template"]["spec"]["containers"][0]["env"];
+    let env_value = |name: &str| {
+        env.as_sequence()
+            .expect("env sequence")
+            .iter()
+            .find(|entry| entry["name"].as_str() == Some(name))
+            .and_then(|entry| entry["value"].as_str())
+    };
+
+    assert_eq!(env_value("ALIEN_OPERATOR_IMAGE_SOURCE"), Some("package"));
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_RECEIPT"),
+        Some(image.as_str())
+    );
+    assert_eq!(env_value("ALIEN_OPERATOR_IMAGE"), None);
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_DIGEST"),
+        Some(digest.as_str())
+    );
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_PACKAGE_ID"),
+        Some("pkg_operator")
+    );
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION"),
+        Some("1.2.3")
     );
 }

@@ -21,10 +21,12 @@ pub mod test_utils;
 
 pub use emitter::{HelmEmitter, HelmFragment, InfrastructureValue, ServiceAccountIdentity};
 pub use generator::{
-    generate_helm_chart, generate_operator_manifest, generate_product_helm_chart,
-    generate_product_operator_manifest, render_manager_fetch_values, HelmChart, HelmOptions,
-    ManagerFetchHelmValuesOptions, OperatorLogCollectorOptions, OperatorManifestOptions,
-    OperatorOutputFormat, OperatorPermission, OperatorScope, ProductOperatorManifestOptions,
-    OPERATOR_RBAC_POLICY_VERSION,
+    generate_helm_chart, generate_operator_manifest,
+    generate_operator_manifest_with_image_identity, generate_product_helm_chart,
+    generate_product_helm_chart_with_image_identity, generate_product_operator_manifest,
+    generate_product_operator_manifest_with_image_identity, render_manager_fetch_values, HelmChart,
+    HelmOptions, ManagerFetchHelmValuesOptions, OperatorImageIdentityOptions,
+    OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
+    OperatorScope, ProductOperatorManifestOptions, OPERATOR_RBAC_POLICY_VERSION,
 };
 pub use registry::HelmRegistry;

@@ -203,6 +203,8 @@ export type {
   ObservedHealth,
   ObservedInventoryBatch,
   ObservedResourceSample,
+  OperatorImageReport,
+  OperatorImageSource,
   Platform,
   PresignedRequest,
   // Command Protocol types
@@ -417,6 +419,8 @@ export {
   ObservedHealthSchema,
   ObservedInventoryBatchSchema,
   ObservedResourceSampleSchema,
+  OperatorImageReportSchema,
+  OperatorImageSourceSchema,
   PlatformSchema,
   // Command Protocol types
   PresignedRequestBackendSchema,

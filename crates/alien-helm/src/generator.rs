@@ -10,11 +10,13 @@ use crate::{
     registry::HelmRegistry,
 };
 use alien_core::{
-    access_request_crd::AccessRequestCrdNames, import::EmitContext, AzureResourceGroupOutputs,
-    Container, ContainerCode, Daemon, DaemonCode, ErrorData, KubernetesCluster,
-    KubernetesClusterOutputs, KubernetesClusterOwnership, KubernetesClusterProvider, Platform,
-    RemoteStackManagementOutputs, ResourceLifecycle, Result, ServiceAccount, ServiceAccountOutputs,
-    Stack, StackSettings, Worker, WorkerCode,
+    access_request_crd::AccessRequestCrdNames,
+    import::EmitContext,
+    sync::{OperatorImageReport, OperatorImageSource},
+    AzureResourceGroupOutputs, Container, ContainerCode, Daemon, DaemonCode, ErrorData,
+    KubernetesCluster, KubernetesClusterOutputs, KubernetesClusterOwnership,
+    KubernetesClusterProvider, Platform, RemoteStackManagementOutputs, ResourceLifecycle, Result,
+    ServiceAccount, ServiceAccountOutputs, Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::KubernetesOperationPermissions;
@@ -155,6 +157,20 @@ pub struct OperatorManifestOptions<'a> {
     pub format: OperatorOutputFormat,
 }
 
+/// Installer-owned source identity for an exact Operator image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorImageIdentityOptions<'a> {
+    /// An immutable image configured directly by the installer.
+    Configured,
+    /// An immutable image selected from an exact generated package.
+    Package {
+        /// Exact package ID resolved by the installer.
+        package_id: &'a str,
+        /// Exact package version resolved by the installer.
+        package_version: &'a str,
+    },
+}
+
 /// Product-chart overrides for an embedded Remote Operator.
 ///
 /// This separate input keeps [`OperatorManifestOptions`] source-compatible for
@@ -191,13 +207,30 @@ pub fn generate_product_helm_chart(
     options: HelmOptions<'_>,
     remote_operator: ProductOperatorManifestOptions<'_>,
 ) -> Result<HelmChart> {
-    generate_helm_chart_internal(stack, options, Some(remote_operator))
+    generate_helm_chart_internal(stack, options, Some((remote_operator, None)))
+}
+
+/// Generate a product Helm chart carrying an exact Remote Operator image receipt.
+pub fn generate_product_helm_chart_with_image_identity(
+    stack: &Stack,
+    options: HelmOptions<'_>,
+    remote_operator: ProductOperatorManifestOptions<'_>,
+    image_identity: OperatorImageIdentityOptions<'_>,
+) -> Result<HelmChart> {
+    generate_helm_chart_internal(
+        stack,
+        options,
+        Some((remote_operator, Some(image_identity))),
+    )
 }
 
 fn generate_helm_chart_internal(
     stack: &Stack,
     options: HelmOptions<'_>,
-    remote_operator: Option<ProductOperatorManifestOptions<'_>>,
+    remote_operator: Option<(
+        ProductOperatorManifestOptions<'_>,
+        Option<OperatorImageIdentityOptions<'_>>,
+    )>,
 ) -> Result<HelmChart> {
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
@@ -271,8 +304,8 @@ fn generate_helm_chart_internal(
     );
     let has_remote_operator = remote_operator.is_some();
 
-    if let Some(remote_operator) = remote_operator {
-        add_remote_operator_files(&mut files, remote_operator)?;
+    if let Some((remote_operator, image_identity)) = remote_operator {
+        add_remote_operator_files(&mut files, remote_operator, image_identity)?;
     }
 
     // Per-resource extra templates contributed by emitters.
@@ -321,6 +354,7 @@ fn generate_helm_chart_internal(
 fn add_remote_operator_files(
     files: &mut IndexMap<String, String>,
     mut options: ProductOperatorManifestOptions<'_>,
+    image_identity: Option<OperatorImageIdentityOptions<'_>>,
 ) -> Result<()> {
     if options.manifest.format != OperatorOutputFormat::HelmTemplate {
         return Err(AlienError::new(ErrorData::GenericError {
@@ -341,7 +375,7 @@ fn add_remote_operator_files(
         options.credentials_encryption_key_sha256,
     );
     options.resource_name = Some("{{ include \"deployment.remoteOperatorResourceName\" . }}");
-    let manifest = generate_product_operator_manifest(options)?;
+    let manifest = generate_product_operator_manifest_inner(options, image_identity)?;
     let mut crd = None;
     let mut templates = Vec::new();
     for document in manifest
@@ -1176,18 +1210,42 @@ __COLLECTOR_CHECK__{{- end -}}
 }
 
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    generate_operator_manifest_inner(options, None, None, None)
+    generate_operator_manifest_inner(options, None, None, None, None)
+}
+
+/// Generate a standalone Operator manifest carrying an exact image receipt.
+pub fn generate_operator_manifest_with_image_identity(
+    options: OperatorManifestOptions<'_>,
+    image_identity: OperatorImageIdentityOptions<'_>,
+) -> Result<String> {
+    generate_operator_manifest_inner(options, None, None, None, Some(image_identity))
 }
 
 /// Render a Remote Operator for inclusion in a product Helm chart.
 pub fn generate_product_operator_manifest(
     options: ProductOperatorManifestOptions<'_>,
 ) -> Result<String> {
+    generate_product_operator_manifest_inner(options, None)
+}
+
+/// Render a product Remote Operator manifest carrying an exact image receipt.
+pub fn generate_product_operator_manifest_with_image_identity(
+    options: ProductOperatorManifestOptions<'_>,
+    image_identity: OperatorImageIdentityOptions<'_>,
+) -> Result<String> {
+    generate_product_operator_manifest_inner(options, Some(image_identity))
+}
+
+fn generate_product_operator_manifest_inner(
+    options: ProductOperatorManifestOptions<'_>,
+    image_identity: Option<OperatorImageIdentityOptions<'_>>,
+) -> Result<String> {
     generate_operator_manifest_inner(
         options.manifest,
         Some(options.credentials_secret_name),
         Some(options.credentials_encryption_key_sha256),
         options.resource_name,
+        image_identity,
     )
 }
 
@@ -1196,6 +1254,7 @@ fn generate_operator_manifest_inner(
     credentials_secret_name: Option<&str>,
     credentials_encryption_key_sha256: Option<&str>,
     resource_name: Option<&str>,
+    image_identity: Option<OperatorImageIdentityOptions<'_>>,
 ) -> Result<String> {
     if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
@@ -1206,6 +1265,9 @@ fn generate_operator_manifest_inner(
         credentials_encryption_key_sha256,
         resource_name,
     )?;
+    let operator_image_report = image_identity
+        .map(|identity| build_operator_image_report(options.image, identity))
+        .transpose()?;
 
     let stack_settings_json = options
         .stack_settings
@@ -1329,6 +1391,7 @@ fn generate_operator_manifest_inner(
         options.label_selector,
         &labels,
         stack_settings_json.as_deref(),
+        operator_image_report.as_ref(),
     ));
     if let Some(log_collector) = options.log_collector.as_ref() {
         let mut collector_labels = labels.clone();
@@ -1494,6 +1557,45 @@ fn validate_runtime_encryption_key(key: &str) -> Result<()> {
     Err(AlienError::new(ErrorData::GenericError {
         message: "runtime encryption key must be exactly 64 hex characters".to_string(),
     }))
+}
+
+fn build_operator_image_report(
+    image: &str,
+    identity: OperatorImageIdentityOptions<'_>,
+) -> Result<OperatorImageReport> {
+    let digest = image
+        .rsplit_once('@')
+        .map(|(_, digest)| digest.to_string())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "operator image identity requires repository@sha256:digest form"
+                    .to_string(),
+            })
+        })?;
+    let (source, package_id, package_version) = match identity {
+        OperatorImageIdentityOptions::Configured => (OperatorImageSource::Configured, None, None),
+        OperatorImageIdentityOptions::Package {
+            package_id,
+            package_version,
+        } => (
+            OperatorImageSource::Package,
+            Some(package_id.to_string()),
+            Some(package_version.to_string()),
+        ),
+    };
+    let report = OperatorImageReport {
+        source,
+        package_id,
+        package_version,
+        image: image.to_string(),
+        digest,
+    };
+    report.validate().map_err(|message| {
+        AlienError::new(ErrorData::GenericError {
+            message: message.to_string(),
+        })
+    })?;
+    Ok(report)
 }
 
 fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()> {
@@ -2097,6 +2199,7 @@ fn operator_deployment_doc(
     label_selector: Option<&str>,
     labels: &BTreeMap<String, String>,
     stack_settings_json: Option<&str>,
+    operator_image_report: Option<&OperatorImageReport>,
 ) -> String {
     let mut yaml = operator_metadata_doc("apps/v1", "Deployment", namespace, operator_name, labels);
     yaml.push_str("spec:\n");
@@ -2143,6 +2246,28 @@ fn operator_deployment_doc(
     yaml.push_str("          env:\n");
     append_env_value(&mut yaml, "PLATFORM", "kubernetes");
     append_env_value(&mut yaml, "SYNC_URL", options.manager_url);
+    if let Some(report) = operator_image_report {
+        append_env_value(
+            &mut yaml,
+            "ALIEN_OPERATOR_IMAGE_SOURCE",
+            match report.source {
+                OperatorImageSource::Package => "package",
+                OperatorImageSource::Configured => "configured",
+            },
+        );
+        append_env_value(&mut yaml, "ALIEN_OPERATOR_IMAGE_RECEIPT", &report.image);
+        append_env_value(&mut yaml, "ALIEN_OPERATOR_IMAGE_DIGEST", &report.digest);
+        if let Some(package_id) = report.package_id.as_deref() {
+            append_env_value(&mut yaml, "ALIEN_OPERATOR_IMAGE_PACKAGE_ID", package_id);
+        }
+        if let Some(package_version) = report.package_version.as_deref() {
+            append_env_value(
+                &mut yaml,
+                "ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION",
+                package_version,
+            );
+        }
+    }
     append_env_value(&mut yaml, "OPERATOR_NAME", environment_name);
     append_env_value(&mut yaml, "KUBERNETES_NAMESPACE", namespace);
     append_env_value(&mut yaml, "OPERATOR_SCOPE", observed_namespace);

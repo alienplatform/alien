@@ -168,6 +168,8 @@ export * from "./operationsbundledownload.js";
 export * from "./operationsreport.js";
 export * from "./operatorcapabilityreport.js";
 export * from "./operatorcapabilitystate.js";
+export * from "./operatorimagereport.js";
+export * from "./operatorimagesource.js";
 export * from "./platformenum.js";
 export * from "./postgresheartbeatdata.js";
 export * from "./postgresheartbeatstatus.js";

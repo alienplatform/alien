@@ -24,13 +24,13 @@
  */
 
 import fs from "node:fs"
-
-const INPUT_FILE = "openapi-3.0.json"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 /**
  * Recursively traverse the OpenAPI spec and fix nullable patterns
  */
-function fixNullablePatterns(obj) {
+export function fixNullablePatterns(obj) {
   if (typeof obj !== "object" || obj === null) {
     return obj
   }
@@ -65,9 +65,16 @@ function fixNullablePatterns(obj) {
     // Get the non-null schema
     const nonNullSchema = items[nullIndex === 0 ? 1 : 0]
 
-    // Merge the non-null schema into current object and add nullable flag
-    const fixed = { ...result, ...nonNullSchema, nullable: true }
+    const fixed = { ...result, nullable: true }
     delete fixed[combinator]
+
+    if (nonNullSchema && typeof nonNullSchema === "object" && "$ref" in nonNullSchema) {
+      const { $ref, ...siblings } = nonNullSchema
+      Object.assign(fixed, siblings)
+      fixed.allOf = [...(Array.isArray(fixed.allOf) ? fixed.allOf : []), { $ref }]
+    } else {
+      Object.assign(fixed, nonNullSchema)
+    }
 
     return fixed
   }
@@ -75,10 +82,14 @@ function fixNullablePatterns(obj) {
   return result
 }
 
-// Read, fix, and write back
-const spec = JSON.parse(fs.readFileSync(INPUT_FILE, "utf8"))
-const fixed = fixNullablePatterns(spec)
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const inputFiles = process.argv.slice(2)
+  if (inputFiles.length === 0) inputFiles.push("openapi-3.0.json")
 
-fs.writeFileSync(INPUT_FILE, JSON.stringify(fixed, null, 2), "utf8")
-
-console.log("Fixed OpenAPI nullable patterns for progenitor compatibility")
+  for (const inputFile of inputFiles) {
+    const spec = JSON.parse(fs.readFileSync(inputFile, "utf8"))
+    const fixed = fixNullablePatterns(spec)
+    fs.writeFileSync(inputFile, JSON.stringify(fixed, null, 2), "utf8")
+    console.log(`Fixed OpenAPI nullable patterns in ${inputFile}`)
+  }
+}

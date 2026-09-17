@@ -110,6 +110,7 @@ export * from "./getprojectgcpoauthprovider.js";
 export * from "./getprojectsandboxmetrics.js";
 export * from "./getprojecttemplateurls.js";
 export * from "./getrelease.js";
+export * from "./getremoteoperatorprojectsummary.js";
 export * from "./getresourcedeploymentdetail.js";
 export * from "./getsetupregistrationoperation.js";
 export * from "./getworkspace.js";

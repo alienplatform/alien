@@ -36,6 +36,7 @@ pub use db::{Approval, ApprovalStatus};
 pub use error::ErrorData;
 pub use lock::InstanceLock;
 
+use alien_core::sync::OperatorImageReport;
 use alien_error::AlienError;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
@@ -111,6 +112,32 @@ pub async fn run_operator_with_cancel_and_debug_loop(
 ///   catalog back; OSS builds inject none and report nothing.
 pub async fn run_operator_with_cancel_and_loops(
     config: OperatorConfig,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
+    operations_exec_loop: Option<Arc<dyn loops::operations_exec::OperationsExecLoop>>,
+    operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
+    cancel: CancellationToken,
+) -> error::Result<()> {
+    run_operator_with_cancel_and_loops_with_image_report(
+        config,
+        None,
+        service_provider,
+        debug_session_loop,
+        access_request_loop,
+        operations_exec_loop,
+        operations_sync_handler,
+        cancel,
+    )
+    .await
+}
+
+/// CLI-only extension of [`run_operator_with_cancel_and_loops`] that reports
+/// the immutable image receipt injected by an installer. Keeping this outside
+/// [`OperatorConfig`] preserves the public struct-literal API for embedders.
+pub(crate) async fn run_operator_with_cancel_and_loops_with_image_report(
+    config: OperatorConfig,
+    operator_image: Option<OperatorImageReport>,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
     access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
@@ -212,6 +239,7 @@ pub async fn run_operator_with_cancel_and_loops(
                 loops::sync::run_sync_loop_with_command_address_support(
                     state,
                     operations_command_address_v1,
+                    operator_image,
                 )
                 .await;
             }
