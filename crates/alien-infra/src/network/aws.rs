@@ -154,6 +154,89 @@ fn subnets_needing_association<'a>(
         .collect()
 }
 
+const EC2_VPC_EIP_QUOTA_CODE: &str = "L-0263D0A3";
+
+#[derive(Debug, PartialEq)]
+enum EipQuotaPreflight {
+    Available { used: usize, limit: f64 },
+    Exhausted { used: usize, limit: f64 },
+    Unknown(&'static str),
+}
+
+fn assess_eip_quota(used: Option<usize>, limit: Option<f64>) -> EipQuotaPreflight {
+    match (
+        used,
+        limit.filter(|value| value.is_finite() && *value >= 0.0),
+    ) {
+        (Some(used), Some(limit)) if used as f64 + 1.0 > limit => {
+            EipQuotaPreflight::Exhausted { used, limit }
+        }
+        (Some(used), Some(limit)) => EipQuotaPreflight::Available { used, limit },
+        (None, _) => EipQuotaPreflight::Unknown("current Elastic IP usage is unavailable"),
+        (_, None) => EipQuotaPreflight::Unknown("the applied Elastic IP quota is unavailable"),
+    }
+}
+
+async fn preflight_aws_eip_quota(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Result<()> {
+    let aws_config = ctx.get_aws_config()?;
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
+    let quotas = ctx
+        .service_provider
+        .get_aws_service_quotas_client(aws_config)
+        .await?;
+
+    let used = match ec2.describe_addresses().await {
+        Ok(response) => Some(
+            response
+                .addresses_set
+                .map(|set| {
+                    set.items
+                        .into_iter()
+                        .filter(|address| address.domain.as_deref() == Some("vpc"))
+                        .count()
+                })
+                .unwrap_or_default(),
+        ),
+        Err(error) => {
+            warn!(error = %error, "Could not verify current AWS Elastic IP usage; continuing because quota preflight is best-effort");
+            None
+        }
+    };
+    let limit = match quotas
+        .get_service_quota("ec2", EC2_VPC_EIP_QUOTA_CODE)
+        .await
+    {
+        Ok(response) => response.quota.and_then(|quota| quota.value),
+        Err(error) => {
+            warn!(error = %error, "Could not read the applied AWS Elastic IP quota; continuing because quota preflight is best-effort");
+            None
+        }
+    };
+
+    match assess_eip_quota(used, limit) {
+        EipQuotaPreflight::Available { used, limit } => {
+            info!(used, limit, required = 1, "AWS Elastic IP quota preflight passed");
+            Ok(())
+        }
+        EipQuotaPreflight::Exhausted { used, limit } => {
+            Err(AlienError::new(ErrorData::InfrastructureError {
+                message: format!(
+                    "Cannot create the managed AWS network: its NAT gateway requires 1 Elastic IP, but this Region already uses {used} of the applied {limit} EC2-VPC Elastic IP quota. Release an owned Elastic IP, request a quota increase, or configure NetworkSettings::ByoVpcAws. No network resources were created."
+                ),
+                operation: Some("preflight_elastic_ip_quota".to_string()),
+                resource_id: Some(resource_id.to_string()),
+            }))
+        }
+        EipQuotaPreflight::Unknown(reason) => {
+            warn!(reason, required = 1, "AWS managed network requires one Elastic IP, but quota preflight is uncertain");
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use alien_aws_clients::ec2::{IpPermissionSet, IpRangeResponse, IpRangeSet};
@@ -314,6 +397,40 @@ mod tests {
         let to_attach = subnets_needing_association(&desired, &existing);
 
         assert!(to_attach.is_empty());
+    }
+
+    #[test]
+    fn eip_preflight_blocks_when_required_address_exceeds_quota() {
+        assert_eq!(
+            assess_eip_quota(Some(5), Some(5.0)),
+            EipQuotaPreflight::Exhausted {
+                used: 5,
+                limit: 5.0
+            }
+        );
+    }
+
+    #[test]
+    fn eip_preflight_accepts_last_available_address() {
+        assert_eq!(
+            assess_eip_quota(Some(4), Some(5.0)),
+            EipQuotaPreflight::Available {
+                used: 4,
+                limit: 5.0
+            }
+        );
+    }
+
+    #[test]
+    fn eip_preflight_is_uncertain_without_usage_or_applied_limit() {
+        assert!(matches!(
+            assess_eip_quota(None, Some(5.0)),
+            EipQuotaPreflight::Unknown(_)
+        ));
+        assert!(matches!(
+            assess_eip_quota(Some(0), None),
+            EipQuotaPreflight::Unknown(_)
+        ));
     }
 }
 
@@ -922,7 +1039,9 @@ impl AwsNetworkController {
                 })
             }
             NetworkSettings::Create { .. } => {
-                // Continue to VPC creation flow
+                // A managed AWS network needs one EIP for its NAT gateway. Check before
+                // creating the VPC so a known quota exhaustion cannot leave partial resources.
+                preflight_aws_eip_quota(ctx, &config.id).await?;
                 Ok(HandlerAction::Continue {
                     state: CreatingVpc,
                     suggested_delay: None,
