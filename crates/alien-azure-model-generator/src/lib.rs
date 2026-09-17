@@ -1,18 +1,40 @@
 use std::collections::{BTreeMap, HashSet};
 
-#[path = "build/schema_filter.rs"]
-mod schema_filter;
+pub mod schema_filter;
 
-fn main() {
-    generate_azure_models();
+pub const MODEL_ROOTS_JSON: &str = include_str!("../model_roots.json");
+pub const MODEL_SHARDS_JSON: &str = include_str!("../model_shards.json");
+
+/// Return the specification filenames assigned to a line-balanced model shard.
+pub fn model_specs(shard: usize) -> Vec<String> {
+    let shards: BTreeMap<String, Vec<String>> = serde_json::from_str(MODEL_SHARDS_JSON).unwrap();
+    shards
+        .get(&shard.to_string())
+        .unwrap_or_else(|| panic!("missing Azure model shard {shard}"))
+        .clone()
 }
 
-fn generate_azure_models() {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=build/model_roots.json");
+/// Find the line-balanced shard that owns an Azure specification.
+pub fn model_shard_for_spec(spec_name: &str) -> Option<usize> {
+    let shards: BTreeMap<String, Vec<String>> = serde_json::from_str(MODEL_SHARDS_JSON).unwrap();
+    shards.into_iter().find_map(|(shard, specs)| {
+        specs
+            .iter()
+            .any(|candidate| candidate == spec_name)
+            .then(|| shard.parse().unwrap())
+    })
+}
 
+/// Generate a selected subset of Azure model modules into Cargo's output directory.
+pub fn generate_azure_models(
+    selected_specs: &[String],
+    openapi_dir: &std::path::Path,
+    model_roots_json: &str,
+    full_models: bool,
+    max_filtered_lines: usize,
+) -> usize {
     let model_roots: BTreeMap<String, Vec<String>> =
-        serde_json::from_str(include_str!("build/model_roots.json")).unwrap();
+        serde_json::from_str(model_roots_json).unwrap();
     let mut total_generated_lines = 0;
 
     let specs = [
@@ -88,16 +110,23 @@ fn generate_azure_models() {
         ),
     ];
 
-    for (src, output_file) in specs.iter() {
-        println!("cargo:rerun-if-changed={}", src);
-        let file = std::fs::File::open(src).unwrap();
+    for (src, output_file) in specs.iter().filter(|(src, _)| {
+        let spec_name = std::path::Path::new(src)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Azure spec path must end in a UTF-8 filename");
+        selected_specs.iter().any(|selected| selected == spec_name)
+    }) {
+        let spec_name = std::path::Path::new(src)
+            .file_name()
+            .and_then(|name| name.to_str())
+            .expect("Azure spec path must end in a UTF-8 filename");
+        let source_path = openapi_dir.join(spec_name);
+        println!("cargo:rerun-if-changed={}", source_path.display());
+        let file = std::fs::File::open(source_path).unwrap();
         let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
         remove_zero_min_length(&mut spec_json);
-        if !cfg!(feature = "full-models") {
-            let spec_name = std::path::Path::new(src)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("Azure spec path must end in a UTF-8 filename");
+        if !full_models {
             let roots = model_roots
                 .get(spec_name)
                 .unwrap_or_else(|| panic!("missing model roots for {spec_name}"));
@@ -117,9 +146,7 @@ fn generate_azure_models() {
             .iter()
             .find_map(|item| {
                 if let syn::Item::Mod(module) = item {
-                    if module.ident == "types"
-                        && module.vis == syn::Visibility::Public(Default::default())
-                    {
+                    if module.ident == "types" && matches!(module.vis, syn::Visibility::Public(_)) {
                         return Some(module);
                     }
                 }
@@ -133,33 +160,6 @@ fn generate_azure_models() {
         } else {
             panic!("Types module has no content");
         };
-
-        // Add bon::Builder to all struct derives
-        // for item in types_content.iter_mut() {
-        //     if let syn::Item::Struct(struct_item) = item {
-        //         // Only add bon::Builder to structs with named fields
-        //         if matches!(struct_item.fields, syn::Fields::Named(_)) {
-        //             // Find the derive attribute and add bon::Builder to it
-        //             for attr in struct_item.attrs.iter_mut() {
-        //                 if attr.path().is_ident("derive") {
-        //                     if let syn::Meta::List(ref mut meta_list) = attr.meta {
-        //                         // Convert the existing tokens to string, add bon::Builder, and reparse
-        //                         let existing_derives = meta_list.tokens.to_string();
-        //                         let new_derives = if existing_derives.is_empty() {
-        //                             "bon::Builder".to_string()
-        //                         } else {
-        //                             format!("{}, bon::Builder", existing_derives)
-        //                         };
-
-        //                         // Parse the new derive list back into tokens
-        //                         meta_list.tokens = new_derives.parse().unwrap();
-        //                     }
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
 
         // Add deserialize_with for fields with serde(default)
         for item in types_content.iter_mut() {
@@ -327,12 +327,13 @@ fn generate_azure_models() {
         std::fs::write(out_file, content).unwrap();
     }
 
-    if !cfg!(feature = "full-models") {
+    if !full_models {
         assert!(
-            total_generated_lines <= 165_000,
+            total_generated_lines <= max_filtered_lines,
             "filtered Azure models expanded to {total_generated_lines} lines; update model roots intentionally or investigate newly reachable schemas"
         );
     }
+    total_generated_lines
 }
 
 fn remove_zero_min_length(value: &mut serde_json::Value) {

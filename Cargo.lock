@@ -188,6 +188,12 @@ dependencies = [
 name = "alien-azure-clients"
 version = "3.3.22"
 dependencies = [
+ "alien-azure-model-generator",
+ "alien-azure-models-1",
+ "alien-azure-models-2",
+ "alien-azure-models-3",
+ "alien-azure-models-4",
+ "alien-azure-models-5",
  "alien-client-core",
  "alien-core",
  "alien-error",
@@ -201,12 +207,8 @@ dependencies = [
  "http 1.5.0",
  "httpmock",
  "mockall",
- "openapiv3",
  "p12",
  "pem",
- "prettyplease 0.2.37",
- "progenitor",
- "quote",
  "rand 0.9.5",
  "rcgen",
  "regex",
@@ -216,7 +218,6 @@ dependencies = [
  "serde-aux",
  "serde_json",
  "sha2 0.10.9",
- "syn 2.0.119",
  "tempfile",
  "test-context",
  "tokio",
@@ -226,6 +227,82 @@ dependencies = [
  "urlencoding",
  "uuid",
  "workspace_root",
+]
+
+[[package]]
+name = "alien-azure-model-generator"
+version = "3.3.22"
+dependencies = [
+ "openapiv3",
+ "prettyplease 0.2.37",
+ "progenitor",
+ "serde_json",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "alien-azure-models-1"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-model-generator",
+ "chrono",
+ "regress 0.11.1",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "alien-azure-models-2"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-model-generator",
+ "chrono",
+ "regress 0.11.1",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "alien-azure-models-3"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-model-generator",
+ "chrono",
+ "regress 0.11.1",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "alien-azure-models-4"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-model-generator",
+ "chrono",
+ "regress 0.11.1",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "uuid",
+]
+
+[[package]]
+name = "alien-azure-models-5"
+version = "3.3.22"
+dependencies = [
+ "alien-azure-model-generator",
+ "chrono",
+ "regress 0.11.1",
+ "serde",
+ "serde-aux",
+ "serde_json",
+ "uuid",
 ]
 
 [[package]]
