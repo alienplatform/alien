@@ -8,9 +8,9 @@ management:
   releaseVersion: 3.3.22
   configChecksum: 5e4107efd5c7f6e5afe2c9a9edb7eb27
 persistentEdits:
-  generation_id: 3062744e-d336-4b59-a2bc-530acebd462e
-  pristine_commit_hash: 308b2165fe5da510916415705cb9ab5471cc5aad
-  pristine_tree_hash: 090624de781d2fd505e9cb85553da7a6032a373e
+  generation_id: a31dd794-1416-4a85-bfaa-a56c87a1a2b3
+  pristine_commit_hash: ed016c3ff151dbc4456789e972b447b46a708783
+  pristine_tree_hash: 6a9da3c146cfdb427b605d6cebc4c76845a16f16
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -33115,8 +33115,8 @@ trackedFiles:
     pristine_git_object: e224da720e2e7d86f40a08b023af2fedb058d1bf
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:e50a59c379be3cab9a4a697f96abf1c1e844f982
-    pristine_git_object: a6f90763b39eb3c2535f88d230925d4979e68422
+    last_write_checksum: sha1:469c034120f0430938537336e984f393ab81c9d4
+    pristine_git_object: 3335982dcc4e90c645d3e6a121919d85904a183b
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:2c8456470fbe7e8a2b8a1203800ee463beb209f4

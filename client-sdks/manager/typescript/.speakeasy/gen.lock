@@ -1,18 +1,18 @@
 lockVersion: 2.0.0
 id: 8940d7e8-6d5d-4ea9-9632-85457ecd75f0
 management:
-  docChecksum: 012e67764f53c9f4bd726c62ab907680
+  docChecksum: c0627d093aac9d2a29b58d510ee2d649
   docVersion: 1.0.0
   speakeasyVersion: 1.680.11
   generationVersion: 2.788.15
-  releaseVersion: 3.3.23
-  configChecksum: ac5e36ea9f161e732363b34d9b183e56
+  releaseVersion: 3.3.24
+  configChecksum: d12c7f83cf0a6e4372bf664fc6dd9e47
   repoURL: https://github.com/alienplatform/alien.git
   repoSubDirectory: client-sdks/manager/typescript
 persistentEdits:
-  generation_id: 3681aac5-04ca-45df-84f7-ee4c1b62e99a
-  pristine_commit_hash: c4e9d0db33a8334503f114dffafec7b4366d213f
-  pristine_tree_hash: 06036f0017d411a1b0ea9dbede5f8002720ee8f1
+  generation_id: de6fdafd-2498-4a53-8631-df2275e4716e
+  pristine_commit_hash: c1f89dd9f55b0a905392f24d0cb27bb71c8ee6aa
+  pristine_tree_hash: 8da50e8e5b02464808185fee0dba33587da3dd31
 features:
   typescript:
     additionalDependencies: 0.1.0
@@ -532,8 +532,8 @@ trackedFiles:
     pristine_git_object: 295402e7f1c545c99ef62e33851f66a769e803ea
   docs/models/createcommandresponse.md:
     id: ad0bb560505d
-    last_write_checksum: sha1:37d0adbe1ee57d0b069d77bbdb86ed39c663dd60
-    pristine_git_object: e2b0f4a32a98e86358b199de4f954d0827baf515
+    last_write_checksum: sha1:de7ca9be53d4df6c3a157437e7c9542a7114cb2f
+    pristine_git_object: 26c15e439eabed4e981a8c3284e6971f615c5f2d
   docs/models/createdeploymentgrouprequest.md:
     id: c766039a815c
     last_write_checksum: sha1:f649ae500610b629fd1652501ec42dd3b355a683
@@ -720,8 +720,8 @@ trackedFiles:
     pristine_git_object: 73922d5328b4052df80cbe3a54ebaecfbba4ca77
   docs/models/healthresponse.md:
     id: bb500e6ba0cc
-    last_write_checksum: sha1:4526ab6c1fa1f04719023998e9f211a91fc26597
-    pristine_git_object: e64ad7c73331ed4091d296904ad1d82730f12d3a
+    last_write_checksum: sha1:f21d17c764700e6a630bcc7d6f93b8b4b5c8ab24
+    pristine_git_object: 6b2433caa067cdc31c8d977878510edbeda3160f
   docs/models/heartbeatbackend.md:
     id: f156657d78b8
     last_write_checksum: sha1:e88f9a4fe52654647120a88bb8f173d1813a1313
@@ -1936,12 +1936,12 @@ trackedFiles:
     pristine_git_object: ee6bb1a089f199ee421f67dd2cfd0e26a3b112c9
   jsr.json:
     id: 7f6ab7767282
-    last_write_checksum: sha1:eabc5b2fb228aa2b6eaf7fed43e7b46024c4a2e2
-    pristine_git_object: 250f4c4a190282d6ad6931777ed2017127e3e294
+    last_write_checksum: sha1:080246aa62cc442fa01b73583297b8d31b126bf1
+    pristine_git_object: 9621c18595be8cbde16c96a35c21976c4a15ec13
   package.json:
     id: 7030d0b2f71b
-    last_write_checksum: sha1:10d90b73a38f73e12f7fa4a3251f26bd2eb5fe95
-    pristine_git_object: 2e7dc499762eae441360de7df6406490d2581ca9
+    last_write_checksum: sha1:9e6d7c85e300b8d8846bf5dc7a67b4ec73c1e4de
+    pristine_git_object: f8c8e8d935ef2483b825c36645f261d80a88bb5d
   src/core.ts:
     id: f431fdbcd144
     last_write_checksum: sha1:a3b94f76908a8f9a4857fea8aac869403adb797c
@@ -2104,8 +2104,8 @@ trackedFiles:
     pristine_git_object: 962ea486e17eabe13bcf068493a556110c944df8
   src/lib/config.ts:
     id: 320761608fb3
-    last_write_checksum: sha1:516c32f0a5ac7c2945c8a3d8b03a34237f4223d4
-    pristine_git_object: 0200589995f37f3d82e5ac99b5d65d23de6f8fd9
+    last_write_checksum: sha1:0c0d3bed8720e55088935a04d1e24ce27ca3e1b3
+    pristine_git_object: 5db22189a1c11d03e3fcee9be17d3c9f926d28da
   src/lib/dlv.ts:
     id: b1988214835a
     last_write_checksum: sha1:1dd3e3fbb4550c4bf31f5ef997faff355d6f3250
@@ -2412,8 +2412,8 @@ trackedFiles:
     pristine_git_object: f2d899b7d24fb8086971d021fcfd3e457d8ecc4b
   src/models/createcommandresponse.ts:
     id: 403a3b6639c1
-    last_write_checksum: sha1:d1bcf56715ff6ce7763d7031db93abf558fbb23f
-    pristine_git_object: 2d15e2f41dba091df4e2df53230c795f78af4cd1
+    last_write_checksum: sha1:d60c2d8db154ccce0945a10324ca9357a6da7597
+    pristine_git_object: 51586c4bfde0a2c9a7b25a6d1f7eda7afe5198a2
   src/models/createdeploymentgrouprequest.ts:
     id: 64ab1ce49c4b
     last_write_checksum: sha1:463153e088b6ded99af40d3d48f753dab8e010ec
@@ -2568,8 +2568,8 @@ trackedFiles:
     pristine_git_object: f57a7bda4d5bd628e949dcb8a67952524b202c22
   src/models/healthresponse.ts:
     id: 864a79cfd88c
-    last_write_checksum: sha1:21215212b42c492b8f2b2188bd28ff02ed995cb4
-    pristine_git_object: 7ecad7067c25a8806690411216a5740855f09382
+    last_write_checksum: sha1:2dc9aae37db703a1dc5919a94f987a0ba0813cc6
+    pristine_git_object: 72b4f3ba2e3863792be905409cacc62c00b4f115
   src/models/heartbeatbackend.ts:
     id: df9404d6ba74
     last_write_checksum: sha1:3e976e7ff380f093eb508be824d5d782ba49cbeb
@@ -3347,7 +3347,7 @@ examples:
     speakeasy-default-health:
       responses:
         "200":
-          application/json: {"operationResultContract": false, "status": "<value>"}
+          application/json: {"status": "<value>"}
   list_deployment_groups:
     speakeasy-default-list-deployment-groups:
       responses:
@@ -3496,7 +3496,7 @@ examples:
         application/json: {"command": "<value>", "deploymentId": "<id>", "params": {"mode": "storage"}}
       responses:
         "200":
-          application/json: {"commandId": "<id>", "created": false, "inlineAllowedUpTo": 608134, "next": "<value>", "state": "DISPATCHED"}
+          application/json: {"commandId": "<id>", "inlineAllowedUpTo": 608134, "next": "<value>", "state": "DISPATCHED"}
         "400":
           application/json: {"code": "<value>", "message": "<value>"}
         "500":

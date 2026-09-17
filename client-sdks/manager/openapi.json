@@ -7002,7 +7002,6 @@
         "description": "Response to command creation",
         "required": [
           "commandId",
-          "created",
           "state",
           "inlineAllowedUpTo",
           "next"
@@ -9424,8 +9423,7 @@
       "HealthResponse": {
         "type": "object",
         "required": [
-          "status",
-          "operationResultContract"
+          "status"
         ],
         "properties": {
           "operationResultContract": {

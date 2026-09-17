@@ -23,7 +23,7 @@ export type CreateCommandResponse = {
    * @remarks
    * idempotent replay returned a command created by another request.
    */
-  created: boolean;
+  created?: boolean | undefined;
   /**
    * Maximum inline body size allowed
    */
@@ -45,7 +45,7 @@ export const CreateCommandResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   commandId: z.string(),
-  created: z.boolean(),
+  created: z.boolean().optional(),
   inlineAllowedUpTo: z.int(),
   next: z.string(),
   state: CommandState$inboundSchema,

@@ -14,14 +14,14 @@ export type HealthResponse = {
    * @remarks
    * become executable.
    */
-  operationResultContract: boolean;
+  operationResultContract?: boolean | undefined;
   status: string;
 };
 
 /** @internal */
 export const HealthResponse$inboundSchema: z.ZodType<HealthResponse, unknown> =
   z.object({
-    operationResultContract: z.boolean(),
+    operationResultContract: z.boolean().optional(),
     status: z.string(),
   });
 

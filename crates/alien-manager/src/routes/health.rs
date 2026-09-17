@@ -1,17 +1,18 @@
 //! Health check endpoint.
 
 use axum::{extract::State, Json};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use super::AppState;
 
-#[derive(Serialize)]
+#[derive(Deserialize, Serialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
 pub struct HealthResponse {
     pub status: String,
     /// True when operation result contracts are persisted before commands
     /// become executable.
-    #[serde(rename = "operationResultContract")]
+    #[serde(default)]
     pub operation_result_contract: bool,
 }
 

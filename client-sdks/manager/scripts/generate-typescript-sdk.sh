@@ -3,7 +3,7 @@
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-sdk_dir="$repo_root/client-sdks/platform/typescript"
+sdk_dir="$repo_root/client-sdks/manager/typescript"
 speakeasy_bin="${SPEAKEASY_BIN:-speakeasy}"
 expected_cli_version="1.680.11"
 
@@ -14,17 +14,15 @@ if [[ "$actual_cli_version" != "$expected_cli_version" ]]; then
 fi
 
 if [[ -n "$(git -C "$repo_root" status --porcelain --untracked-files=all -- "$sdk_dir")" ]]; then
-  echo "The Platform TypeScript SDK must be clean before generation." >&2
+  echo "The Manager TypeScript SDK must be clean before generation." >&2
   exit 1
 fi
 
-(
-  cd "$sdk_dir"
-  "$speakeasy_bin" run \
-    --target platform-typescript \
-    --skip-upload-spec \
-    --skip-versioning
-)
+"$speakeasy_bin" generate sdk \
+  --lang typescript \
+  --schema "$repo_root/client-sdks/manager/openapi.json" \
+  --out "$sdk_dir" \
+  --skip-versioning
 
 while IFS= read -r -d '' generated_file; do
   if [[ "$generated_file" == *.md && -f "$repo_root/$generated_file" ]]; then
@@ -33,5 +31,4 @@ while IFS= read -r -d '' generated_file; do
 done < <(git -C "$repo_root" ls-files -mo --exclude-standard -z -- "$sdk_dir")
 
 NODE_OPTIONS=--max-old-space-size=12288 pnpm -C "$sdk_dir" build
-pnpm -C "$repo_root" install --lockfile-only
-node --test "$repo_root/client-sdks/platform/scripts/typescript-sdk.test.mjs"
+node --test "$repo_root/client-sdks/manager/scripts/typescript-sdk.test.mjs"
