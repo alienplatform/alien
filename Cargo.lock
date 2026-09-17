@@ -530,6 +530,7 @@ version = "3.3.22"
 dependencies = [
  "alien-error",
  "alien-macros",
+ "alien-permission-types",
  "async-trait",
  "axum 0.8.9",
  "base64 0.22.1",
@@ -1012,11 +1013,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "alien-permission-types"
+version = "3.3.22"
+dependencies = [
+ "indexmap 2.14.1",
+ "serde",
+ "utoipa",
+]
+
+[[package]]
 name = "alien-permissions"
 version = "3.3.22"
 dependencies = [
  "alien-core",
  "alien-error",
+ "alien-permission-types",
  "anyhow",
  "indexmap 2.14.1",
  "insta",

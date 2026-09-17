@@ -25,6 +25,7 @@ members = [
   "crates/alien-ai-gateway",
   "crates/alien-error-derive",
   "crates/alien-permissions",
+  "crates/alien-permission-types",
   "crates/alien-operations-sdk",
   "crates/alien-sandbox-agent",
   "crates/alien-preflights",
@@ -87,6 +88,7 @@ alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "3.3.22" }
 alien-error = { path = "crates/alien-error", version = "3.3.22", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "3.3.22" }
 alien-permissions = { path = "crates/alien-permissions", version = "3.3.22" }
+alien-permission-types = { path = "crates/alien-permission-types", version = "3.3.22" }
 alien-operations-sdk = { path = "crates/alien-operations-sdk", version = "3.3.22" }
 alien-preflights = { path = "crates/alien-preflights", version = "3.3.22" }
 alien-deployment = { path = "crates/alien-deployment", version = "3.3.22" }

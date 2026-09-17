@@ -8,7 +8,7 @@ license-file.workspace = true
 
 [features]
 default = []
-openapi = ["dep:utoipa"]
+openapi = ["dep:utoipa", "alien-permission-types/openapi"]
 jsonschema = ["dep:schemars"]
 test-utils = []
 local = ["tokio/fs"]
@@ -40,6 +40,7 @@ base64 = { workspace = true }
 ed25519-compact = { workspace = true, optional = true }
 alien-macros = { workspace = true }
 alien-error = { workspace = true, features = ["openapi"] }
+alien-permission-types = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true, features = ["serde"] }
