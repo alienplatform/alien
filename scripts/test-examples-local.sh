@@ -34,8 +34,10 @@ trap cleanup EXIT
 
 # Use depot cargo when available (CI with Depot Cache); fall back to plain cargo locally
 if command -v depot &>/dev/null; then
+  depot cargo build -p alien-cli --bin alien-local-runtime --features local-runtime
   depot cargo build -p alien-cli --bin alien
 else
+  cargo build -p alien-cli --bin alien-local-runtime --features local-runtime
   cargo build -p alien-cli --bin alien
 fi
 

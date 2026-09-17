@@ -85,7 +85,7 @@ url = "2.5"
 hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 hex = { workspace = true, optional = true }
-alien-bindings = { workspace = true, optional = true }
+alien-bindings = { workspace = true, optional = true, default-features = false }
 alien-aws-clients = { workspace = true, optional = true }
 alien-gcp-clients = { workspace = true, optional = true }
 alien-azure-clients = { workspace = true, optional = true }

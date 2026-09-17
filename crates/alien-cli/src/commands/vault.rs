@@ -4,17 +4,22 @@
 //! - `alien dev vault` — local dev mode, reads/writes local filesystem
 //! - `alien vault` — standalone/platform mode, calls manager vault API
 
-use crate::{
-    error::{ErrorData, Result},
-    get_current_dir,
-};
+use crate::error::{ErrorData, Result};
+#[cfg(feature = "local-runtime")]
+use crate::get_current_dir;
+#[cfg(feature = "local-runtime")]
 use alien_bindings::providers::vault::LocalVault;
+#[cfg(feature = "local-runtime")]
 use alien_bindings::traits::Vault as VaultTrait;
 use alien_error::{AlienError, Context, IntoAlienError};
+#[cfg(feature = "local-runtime")]
 use alien_manager_api::SdkResultExt;
 use clap::{Parser, Subcommand};
+#[cfg(feature = "local-runtime")]
 use std::collections::HashMap;
+#[cfg(feature = "local-runtime")]
 use std::path::PathBuf;
+#[cfg(feature = "local-runtime")]
 use tracing::info;
 
 #[derive(Parser, Debug, Clone)]
@@ -101,6 +106,7 @@ fn validate_vault_name(name: &str) -> Result<()> {
 }
 
 /// Execute vault command (dev mode only)
+#[cfg(feature = "local-runtime")]
 pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
     // Ensure dev server is running (deployments are registered there)
     crate::commands::ensure_server_running(port).await?;
@@ -163,6 +169,7 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
 }
 
 /// Get deployment ID by name using the manager API
+#[cfg(feature = "local-runtime")]
 async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<String> {
     let client = alien_manager_api::Client::new(&format!("http://localhost:{}", port));
 
@@ -195,6 +202,7 @@ async fn get_deployment_id_by_name(deployment_name: &str, port: u16) -> Result<S
 }
 
 /// Set a secret in a vault
+#[cfg(feature = "local-runtime")]
 async fn set_secret(
     vault_name: &str,
     secret_name: &str,
@@ -227,6 +235,7 @@ async fn set_secret(
 }
 
 /// Get a secret from a vault
+#[cfg(feature = "local-runtime")]
 async fn get_secret(
     vault_name: &str,
     secret_name: &str,
@@ -258,6 +267,7 @@ async fn get_secret(
 }
 
 /// List all secrets in a vault
+#[cfg(feature = "local-runtime")]
 async fn list_secrets(vault_name: &str, vault_base_path: &PathBuf) -> Result<Vec<String>> {
     let vault_path = vault_base_path.join(vault_name);
     let secrets_file = vault_path.join("secrets.json");

@@ -16,6 +16,7 @@ use alien_core::{
     AgentStatus, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+#[cfg(feature = "local-runtime")]
 use alien_manager::{
     providers::{
         in_memory_telemetry::InMemoryTelemetryBackend, local_credentials::LocalCredentialResolver,
@@ -29,9 +30,12 @@ use alien_manager_api::SdkResultExt;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+#[cfg(feature = "local-runtime")]
 use std::io::ErrorKind;
+#[cfg(feature = "local-runtime")]
 use std::net::{SocketAddr, TcpListener};
 use std::path::PathBuf;
+#[cfg(feature = "local-runtime")]
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::info;
@@ -73,6 +77,7 @@ pub async fn check_server_health(port: u16) -> bool {
 }
 
 /// Ensure the dev server is running (start if not)
+#[cfg(feature = "local-runtime")]
 pub async fn ensure_server_running(port: u16) -> Result<()> {
     ensure_server_running_with_env(port, None, Vec::new()).await
 }
@@ -81,6 +86,7 @@ pub async fn ensure_server_running(port: u16) -> Result<()> {
 ///
 /// When we need to start a fresh embedded manager, clear stale runtime state so
 /// deployment recovery from older sessions does not leak into the new run.
+#[cfg(feature = "local-runtime")]
 pub async fn ensure_server_running_for_dev_session(
     port: u16,
     status_file: Option<PathBuf>,
@@ -90,6 +96,7 @@ pub async fn ensure_server_running_for_dev_session(
 }
 
 /// Ensure the dev server is running with user-provided env vars and optional status file (start if not)
+#[cfg(feature = "local-runtime")]
 pub async fn ensure_server_running_with_env(
     port: u16,
     status_file: Option<PathBuf>,
@@ -98,6 +105,7 @@ pub async fn ensure_server_running_with_env(
     ensure_server_running_internal(port, status_file, user_env_vars, false).await
 }
 
+#[cfg(feature = "local-runtime")]
 async fn ensure_server_running_internal(
     port: u16,
     status_file: Option<PathBuf>,
@@ -141,6 +149,7 @@ async fn ensure_server_running_internal(
     start_embedded_dev_manager(port).await
 }
 
+#[cfg(feature = "local-runtime")]
 fn ensure_dev_port_available(port: u16) -> Result<()> {
     match TcpListener::bind(("127.0.0.1", port)) {
         Ok(listener) => {
@@ -161,6 +170,7 @@ fn ensure_dev_port_available(port: u16) -> Result<()> {
     }
 }
 
+#[cfg(feature = "local-runtime")]
 fn reset_local_dev_runtime_state() -> Result<()> {
     let state_dir = get_current_dir()?.join(".alien");
     if !state_dir.exists() {
@@ -235,6 +245,7 @@ fn reset_local_dev_runtime_state() -> Result<()> {
 /// - In-memory telemetry (for dev UI log streaming)
 /// - Local credential resolution
 /// - Binds to localhost only
+#[cfg(feature = "local-runtime")]
 pub async fn build_embedded_dev_manager(
     port: u16,
 ) -> Result<(alien_manager::AlienManager, SocketAddr)> {
@@ -282,6 +293,7 @@ pub async fn build_embedded_dev_manager(
 }
 
 /// Start the embedded dev manager in the background and wait for it to be healthy.
+#[cfg(feature = "local-runtime")]
 pub async fn start_embedded_dev_manager(port: u16) -> Result<()> {
     info!("Starting dev server on port {}...", port);
     let (server, addr) = build_embedded_dev_manager(port).await?;
@@ -309,6 +321,7 @@ fn local_dev_client(port: u16) -> AlienManagerClient {
     AlienManagerClient::new(&format!("http://localhost:{port}"))
 }
 
+#[cfg(feature = "local-runtime")]
 pub(crate) async fn wait_for_dev_server_ready(port: u16) -> Result<()> {
     for _ in 0..50 {
         if check_server_health(port).await {
@@ -322,6 +335,7 @@ pub(crate) async fn wait_for_dev_server_ready(port: u16) -> Result<()> {
     }))
 }
 
+#[cfg(feature = "local-runtime")]
 pub(crate) async fn ensure_local_dev_deployment_group(port: u16) -> Result<()> {
     let client = local_dev_client(port);
 

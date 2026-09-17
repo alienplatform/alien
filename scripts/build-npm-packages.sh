@@ -107,7 +107,7 @@ for platform_def in "${PLATFORMS[@]}"; do
 
   # Copy binaries
   src_dir="./artifacts/binaries-${target}"
-  for binary in alien alien-deploy; do
+  for binary in alien alien-local-runtime alien-deploy; do
     cp "${src_dir}/${binary}${ext}" "${vendor_dir}/${binary}${ext}"
     chmod +x "${vendor_dir}/${binary}${ext}"
   done

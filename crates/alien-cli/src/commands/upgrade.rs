@@ -141,16 +141,53 @@ async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()
         return Ok(());
     }
 
-    let artifact_url = artifact_url(&releases_url, &stable)?;
+    let cli_artifact_url = artifact_url(&releases_url, &stable, executable_name())?;
+    let local_runtime_url = artifact_url(&releases_url, &stable, local_runtime_executable_name())?;
     if args.dry_run {
         println!("Would upgrade Alien from v{current} to v{stable}");
-        println!("  {artifact_url}");
+        println!("  {cli_artifact_url}");
+        println!("  {local_runtime_url}");
         return Ok(());
     }
 
     println!("Upgrading Alien from v{current} to v{stable}...");
+    let temp_dir = tempfile::Builder::new()
+        .prefix("alien-upgrade-")
+        .tempdir()
+        .into_alien_error()
+        .context(ErrorData::UpgradeFailed {
+            message: "Could not create a temporary upgrade directory".to_string(),
+        })?;
+    let staged_exe = temp_dir.path().join(executable_name());
+    let staged_local_runtime = temp_dir.path().join(local_runtime_executable_name());
+    download_artifact(&client, &cli_artifact_url, &staged_exe).await?;
+    download_artifact(&client, &local_runtime_url, &staged_local_runtime).await?;
+    validate_download(&staged_exe, &stable)?;
+    validate_download(&staged_local_runtime, &stable)?;
+    install_local_runtime(&staged_local_runtime, current_exe)?;
+    self_replace::self_replace(&staged_exe)
+        .into_alien_error()
+        .context(ErrorData::UpgradeFailed {
+            message: "Could not replace the current Alien executable; check that it is writable"
+                .to_string(),
+        })?;
+    if let Err(error) = sync_replacement(current_exe) {
+        eprintln!(
+            "Warning: Alien was replaced, but the change could not be fully synchronized to disk: {error}"
+        );
+    }
+
+    println!("Alien was upgraded successfully to v{stable}.");
+    Ok(())
+}
+
+async fn download_artifact(
+    client: &reqwest::Client,
+    artifact_url: &str,
+    staged_exe: &Path,
+) -> Result<()> {
     let response = client
-        .get(&artifact_url)
+        .get(artifact_url)
         .send()
         .await
         .into_alien_error()
@@ -163,15 +200,7 @@ async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()
             message: format!("The release download failed: {artifact_url}"),
         })?;
     let expected_checksum = checksum_header(response.headers())?;
-    let temp_dir = tempfile::Builder::new()
-        .prefix("alien-upgrade-")
-        .tempdir()
-        .into_alien_error()
-        .context(ErrorData::UpgradeFailed {
-            message: "Could not create a temporary upgrade directory".to_string(),
-        })?;
-    let staged_exe = temp_dir.path().join(executable_name());
-    let mut staged_file = tokio::fs::File::create(&staged_exe)
+    let mut staged_file = tokio::fs::File::create(staged_exe)
         .await
         .into_alien_error()
         .context(ErrorData::UpgradeFailed {
@@ -207,21 +236,28 @@ async fn upgrade_standalone(args: &UpgradeArgs, current_exe: &Path) -> Result<()
             ),
         })?;
     let actual_checksum = hex::encode(hasher.finalize());
-    verify_checksum_value(&actual_checksum, &expected_checksum)?;
-    validate_download(&staged_exe, &stable)?;
-    self_replace::self_replace(&staged_exe)
+    verify_checksum_value(&actual_checksum, &expected_checksum)
+}
+
+fn install_local_runtime(staged_exe: &Path, current_exe: &Path) -> Result<()> {
+    let install_dir = current_exe.parent().ok_or_else(|| {
+        alien_error::AlienError::new(ErrorData::UpgradeFailed {
+            message: format!(
+                "Could not locate the installation directory for {}",
+                current_exe.display()
+            ),
+        })
+    })?;
+    let destination = install_dir.join(local_runtime_executable_name());
+    fs::copy(staged_exe, &destination)
         .into_alien_error()
         .context(ErrorData::UpgradeFailed {
-            message: "Could not replace the current Alien executable; check that it is writable"
-                .to_string(),
+            message: format!(
+                "Could not install the Alien local runtime at {}",
+                destination.display()
+            ),
         })?;
-    if let Err(error) = sync_replacement(current_exe) {
-        eprintln!(
-            "Warning: Alien was replaced, but the change could not be fully synchronized to disk: {error}"
-        );
-    }
-
-    println!("Alien was upgraded successfully to v{stable}.");
+    make_executable(&destination)?;
     Ok(())
 }
 
@@ -281,11 +317,11 @@ fn should_install(stable: &Version, current: &Version, force: bool) -> bool {
     stable > current || (stable == current && force)
 }
 
-fn artifact_url(releases_url: &str, version: &Version) -> Result<String> {
+fn artifact_url(releases_url: &str, version: &Version, executable: &str) -> Result<String> {
     let (os, arch) = platform()?;
     Ok(format!(
-        "{releases_url}/alien/v{version}/{os}-{arch}/{}",
-        executable_name()
+        "{releases_url}/{}/v{version}/{os}-{arch}/{executable}",
+        executable.trim_end_matches(".exe")
     ))
 }
 
@@ -321,6 +357,14 @@ fn executable_name() -> &'static str {
         "alien.exe"
     } else {
         "alien"
+    }
+}
+
+fn local_runtime_executable_name() -> &'static str {
+    if cfg!(windows) {
+        "alien-local-runtime.exe"
+    } else {
+        "alien-local-runtime"
     }
 }
 
@@ -431,6 +475,36 @@ mod tests {
         assert_eq!(
             detect_install_method(Path::new("/opt/homebrew/Cellar/alien/3.3.18/bin/alien")),
             InstallMethod::Homebrew
+        );
+    }
+
+    #[test]
+    fn artifact_urls_use_each_binary_release_namespace() {
+        let version = Version::new(3, 3, 18);
+        let cli = artifact_url("https://releases.example", &version, executable_name()).unwrap();
+        let local_runtime = artifact_url(
+            "https://releases.example",
+            &version,
+            local_runtime_executable_name(),
+        )
+        .unwrap();
+
+        assert!(cli.contains("/alien/v3.3.18/"));
+        assert!(local_runtime.contains("/alien-local-runtime/v3.3.18/"));
+    }
+
+    #[test]
+    fn local_runtime_is_installed_next_to_primary_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        let staged = temp.path().join("staged-runtime");
+        fs::write(&staged, b"runtime-binary").unwrap();
+        let primary = temp.path().join(executable_name());
+
+        install_local_runtime(&staged, &primary).unwrap();
+
+        assert_eq!(
+            fs::read(temp.path().join(local_runtime_executable_name())).unwrap(),
+            b"runtime-binary"
         );
     }
 }

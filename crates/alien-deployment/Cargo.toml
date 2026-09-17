@@ -5,13 +5,14 @@ edition = "2021"
 license-file.workspace = true
 [features]
 openapi = ["dep:utoipa"]
+local = ["alien-bindings/local", "alien-infra/local"]
 
 [dependencies]
 # Core Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }
-alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
-alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes", "test", "local"] }
+alien-bindings = { workspace = true, default-features = false, features = ["aws", "gcp", "azure", "test"] }
+alien-infra = { workspace = true, default-features = false, features = ["aws", "gcp", "azure", "kubernetes", "test"] }
 alien-observer = { workspace = true, features = ["aws", "azure", "gcp", "kubernetes"] }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
 

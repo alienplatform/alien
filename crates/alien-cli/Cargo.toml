@@ -14,18 +14,30 @@ path = "src/lib.rs"
 name = "alien"
 path = "src/main.rs"
 
+[[bin]]
+name = "alien-local-runtime"
+path = "src/bin/alien-local-runtime.rs"
+required-features = ["local-runtime"]
+
 [features]
 default = ["otlp", "platform"]
 otlp = ["dep:alien-worker-runtime", "alien-worker-runtime/otlp"]
 platform = ["dep:oauth2", "dep:open", "dep:keyring"]
+local-runtime = [
+    "dep:alien-local",
+    "dep:alien-manager",
+    "alien-bindings/local",
+    "alien-deployment/local",
+    "alien-infra/local",
+]
 
 [dependencies]
 alien-core = { workspace = true }
 alien-cloudformation = { workspace = true }
 alien-helm = { workspace = true }
 alien-terraform = { workspace = true }
-alien-worker-runtime = { workspace = true, optional = true }
-alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
+alien-worker-runtime = { workspace = true, optional = true, default-features = false }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "test"] }
 alien-build = { workspace = true }
 alien-error = { workspace = true }
 alien-preflights = { workspace = true, features = ["runtime-checks"] }
@@ -33,12 +45,12 @@ alien-cli-common = { workspace = true }
 alien-operations-sdk = { workspace = true }
 alien-permissions = { workspace = true }
 
-# Local development dependencies (always enabled)
-alien-local = { workspace = true }
-alien-deployment = { workspace = true }
-alien-bindings = { workspace = true }
+# Local development dependencies
+alien-local = { workspace = true, optional = true }
+alien-deployment = { workspace = true, default-features = false }
+alien-bindings = { workspace = true, default-features = false }
 alien-commands = { workspace = true, features = ["server"] }
-alien-manager = { workspace = true }
+alien-manager = { workspace = true, optional = true }
 alien-manager-api = { path = "../../client-sdks/manager/rust" }
 alien-commands-client = { workspace = true }
 object_store = { workspace = true, features = ["fs", "aws", "gcp", "azure", "tls-webpki-roots"] }

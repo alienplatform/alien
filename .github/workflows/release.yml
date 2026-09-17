@@ -1387,6 +1387,7 @@ jobs:
         with:
           path: |
             target/x86_64-unknown-linux-musl/release/alien
+            target/x86_64-unknown-linux-musl/release/alien-local-runtime
             target/x86_64-unknown-linux-musl/release/alien-deploy
             target/x86_64-unknown-linux-musl/release/alien-operator
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
@@ -1409,11 +1410,13 @@ jobs:
           depot cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
             --target x86_64-unknown-linux-musl
+          depot cargo build --release -p alien-cli --bin alien-local-runtime \
+            --features local-runtime --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator alien-worker-runtime alien-manager; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
 
@@ -1442,6 +1445,7 @@ jobs:
         with:
           path: |
             target/aarch64-unknown-linux-musl/release/alien
+            target/aarch64-unknown-linux-musl/release/alien-local-runtime
             target/aarch64-unknown-linux-musl/release/alien-deploy
             target/aarch64-unknown-linux-musl/release/alien-operator
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
@@ -1464,11 +1468,13 @@ jobs:
           depot cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager \
             --target aarch64-unknown-linux-musl
+          depot cargo build --release -p alien-cli --bin alien-local-runtime \
+            --features local-runtime --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator alien-worker-runtime alien-manager; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
 
@@ -1499,6 +1505,7 @@ jobs:
         with:
           path: |
             target/aarch64-apple-darwin/release/alien
+            target/aarch64-apple-darwin/release/alien-local-runtime
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
           key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}
@@ -1534,11 +1541,13 @@ jobs:
           depot cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-operator \
             --target aarch64-apple-darwin
+          depot cargo build --release -p alien-cli --bin alien-local-runtime \
+            --features local-runtime --target aarch64-apple-darwin
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-apple-darwin
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator; do
             cp "target/aarch64-apple-darwin/release/${binary}" "staged/aarch64-apple-darwin/${binary}"
           done
 
@@ -1569,6 +1578,7 @@ jobs:
         with:
           path: |
             target/x86_64-pc-windows-msvc/release/alien.exe
+            target/x86_64-pc-windows-msvc/release/alien-local-runtime.exe
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
           key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}
@@ -1606,12 +1616,15 @@ jobs:
           cargo build --release \
             -p alien-cli -p alien-deploy-cli -p alien-operator \
             --target x86_64-pc-windows-msvc
+          cargo build --release -p alien-cli --bin alien-local-runtime \
+            --features local-runtime --target x86_64-pc-windows-msvc
 
       - name: Stage binaries for upload
         shell: bash
         run: |
           mkdir -p staged/x86_64-pc-windows-msvc
           cp target/x86_64-pc-windows-msvc/release/alien.exe staged/x86_64-pc-windows-msvc/
+          cp target/x86_64-pc-windows-msvc/release/alien-local-runtime.exe staged/x86_64-pc-windows-msvc/
           cp target/x86_64-pc-windows-msvc/release/alien-deploy.exe staged/x86_64-pc-windows-msvc/
           cp target/x86_64-pc-windows-msvc/release/alien-operator.exe staged/x86_64-pc-windows-msvc/
 
@@ -1670,12 +1683,12 @@ jobs:
             fi
           }
 
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator alien-worker-runtime alien-manager; do
             upload "$binary" x86_64-unknown-linux-musl linux x86_64
             upload "$binary" aarch64-unknown-linux-musl linux aarch64
           done
 
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator; do
             upload "$binary" aarch64-apple-darwin darwin aarch64
           done
 
@@ -1699,7 +1712,7 @@ jobs:
             fi
           }
 
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien alien-local-runtime alien-deploy alien-operator; do
             upload_exe "$binary" x86_64-pc-windows-msvc windows x86_64
           done
 
@@ -1732,22 +1745,22 @@ jobs:
           # Linux x86_64 tarball
           tar -czf "dist/alien-v${VERSION}-x86_64-unknown-linux-musl.tar.gz" \
             -C artifacts/binaries-x86_64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-worker-runtime alien-manager
+            alien alien-local-runtime alien-deploy alien-operator alien-worker-runtime alien-manager
 
           # Linux aarch64 tarball
           tar -czf "dist/alien-v${VERSION}-aarch64-unknown-linux-musl.tar.gz" \
             -C artifacts/binaries-aarch64-unknown-linux-musl \
-            alien alien-deploy alien-operator alien-worker-runtime alien-manager
+            alien alien-local-runtime alien-deploy alien-operator alien-worker-runtime alien-manager
 
           # macOS aarch64 tarball
           tar -czf "dist/alien-v${VERSION}-aarch64-apple-darwin.tar.gz" \
             -C artifacts/binaries-aarch64-apple-darwin \
-            alien alien-deploy alien-operator
+            alien alien-local-runtime alien-deploy alien-operator
 
           # Windows x86_64 zip
           (cd artifacts/binaries-x86_64-pc-windows-msvc && \
             zip "../../dist/alien-v${VERSION}-x86_64-pc-windows-msvc.zip" \
-            alien.exe alien-deploy.exe alien-operator.exe)
+            alien.exe alien-local-runtime.exe alien-deploy.exe alien-operator.exe)
 
       - name: Generate checksums
         run: |

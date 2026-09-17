@@ -36,25 +36,34 @@ use crate::commands::{
     ExamplesArgs, UsageArgs,
 };
 use crate::commands::{
-    build_and_post_release_simple, build_command, build_dev_status, commands_task,
-    commands_task_dev, debug_task, debug_task_dev, deploy_task, deployments_task, destroy_task,
+    build_command, commands_task, debug_task, deploy_task, deployments_task, destroy_task, init_task,
+    local_operations_task, logs_task, onboard_task, operations_task, release_command,
+    releases_task, render_task, status_task, upgrade_task, vault_remote_task, whoami_task, BuildArgs,
+    BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs, DeploymentsArgs, DestroyArgs,
+    InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs,
+    UpgradeArgs, WhoamiArgs,
+};
+#[cfg(feature = "local-runtime")]
+use crate::commands::{
+    build_and_post_release_simple, build_dev_status, commands_task_dev, debug_task_dev,
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
-    fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
-    onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, vault_remote_task, vault_task, whoami_task,
-    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
-    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
-    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    fetch_all_dev_deployment_live_states, prepare_dev_session_deployment, vault_task,
+    write_dev_status,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{
-    accent, command, contextual_heading, dim_label, event_bus_for_command,
-    format_deployment_status, print_cli_banner, success_line, DevCardScreen, DevDeploymentCard,
-    DevResourceEntry, FixedSteps, UiCommandKind,
+    event_bus_for_command, print_cli_banner, UiCommandKind,
 };
+#[cfg(feature = "local-runtime")]
+use crate::ui::{
+    accent, command, contextual_heading, dim_label, format_deployment_status, success_line,
+    DevCardScreen, DevDeploymentCard, DevResourceEntry, FixedSteps,
+};
+#[cfg(feature = "local-runtime")]
 use alien_core::Platform;
 use alien_error::{AlienError, Context, IntoAlienError};
+#[cfg(feature = "local-runtime")]
 use alien_manager::AlienManager;
 use clap::{CommandFactory, Parser, Subcommand};
 use std::env;
@@ -108,6 +117,10 @@ fn non_blank(value: String) -> Option<String> {
 }
 
 impl Cli {
+    pub fn requires_local_runtime(&self) -> bool {
+        matches!(self.command, Some(Commands::Serve(_) | Commands::Dev(_)))
+    }
+
     pub fn wants_json_output(&self) -> bool {
         match &self.command {
             Some(Commands::Build(args)) => match &args.command {
@@ -462,6 +475,7 @@ pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEn
     })
 }
 
+#[cfg(any(feature = "local-runtime", test))]
 pub(crate) fn cli_env_vars_to_core(
     cli_vars: &[CliEnvVar],
 ) -> Option<Vec<alien_core::EnvironmentVariable>> {
@@ -500,6 +514,18 @@ mod tests {
     #[test]
     fn non_blank_trims_non_blank_values() {
         assert_eq!(non_blank("  my-project  ".to_string()), Some("my-project".to_string()));
+    }
+
+    #[test]
+    fn local_commands_require_the_companion_runtime() {
+        let cli = Cli::try_parse_from(["alien", "serve"]).unwrap();
+        assert!(cli.requires_local_runtime());
+    }
+
+    #[test]
+    fn ordinary_commands_do_not_require_the_companion_runtime() {
+        let cli = Cli::try_parse_from(["alien", "whoami"]).unwrap();
+        assert!(!cli.requires_local_runtime());
     }
 
     #[test]
@@ -634,6 +660,7 @@ mod tests {
     }
 }
 
+#[cfg(feature = "local-runtime")]
 async fn serve_task(args: ServeArgs) -> Result<()> {
     use alien_manager::standalone_config::ManagerTomlConfig;
     use alien_manager::traits::TokenType;
@@ -859,6 +886,7 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
     watch_serve_deployments(deployment_store, server_handle).await
 }
 
+#[cfg(feature = "local-runtime")]
 fn hash_token(token: &str) -> String {
     use sha2::Digest;
     let mut hasher = sha2::Sha256::new();
@@ -867,6 +895,7 @@ fn hash_token(token: &str) -> String {
 }
 
 /// Poll deployment store and render auto-updating deployment cards.
+#[cfg(feature = "local-runtime")]
 async fn watch_serve_deployments(
     deployment_store: std::sync::Arc<dyn alien_manager::traits::DeploymentStore>,
     server_handle: tokio::task::JoinHandle<
@@ -979,6 +1008,7 @@ async fn watch_serve_deployments(
 }
 
 /// Convert a DeploymentRecord to a DevDeploymentCard for rendering.
+#[cfg(feature = "local-runtime")]
 fn deployment_record_to_card(
     record: &alien_manager::traits::DeploymentRecord,
     group_names: &std::collections::HashMap<String, String>,
@@ -1021,6 +1051,7 @@ fn deployment_record_to_card(
     }
 }
 
+#[cfg(feature = "local-runtime")]
 async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
     let port = dev_cmd.port;
     let ctx = ExecutionMode::Dev { port };
@@ -1055,6 +1086,7 @@ async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "local-runtime")]
 async fn run_dev_session(
     port: u16,
     skip_build: bool,
@@ -1145,6 +1177,7 @@ async fn run_dev_session(
     result
 }
 
+#[cfg(feature = "local-runtime")]
 async fn run_dev_server_only(
     port: u16,
     status_file: Option<PathBuf>,
@@ -1196,6 +1229,7 @@ async fn run_dev_server_only(
     Ok(())
 }
 
+#[cfg(feature = "local-runtime")]
 fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
     // For DEPLOYMENT_FAILED errors, extract per-resource root causes
     // instead of the generic "Deployment failed: N resource error(s)..." summary.
@@ -1230,6 +1264,7 @@ fn deployment_error_message(error: &serde_json::Value) -> Option<String> {
 
 /// Walk the source chain of a serialized AlienError to find the root cause message.
 /// Prefers the deepest non-internal error; falls back to the deepest error overall.
+#[cfg(feature = "local-runtime")]
 fn root_cause_message(error: &serde_json::Value) -> Option<String> {
     let mut deepest_non_internal: Option<&str> = None;
     let mut deepest: Option<&str> = None;
@@ -1258,6 +1293,7 @@ fn root_cause_message(error: &serde_json::Value) -> Option<String> {
     deepest_non_internal.or(deepest).map(ToOwned::to_owned)
 }
 
+#[cfg(feature = "local-runtime")]
 async fn watch_dev_deployments_until_ctrl_c(
     port: u16,
     primary_deployment_name: &str,
@@ -1364,6 +1400,7 @@ async fn watch_dev_deployments_until_ctrl_c(
     }
 }
 
+#[cfg(feature = "local-runtime")]
 fn build_deployment_cards(states: &[commands::DevDeploymentLiveState]) -> Vec<DevDeploymentCard> {
     states
         .iter()
@@ -1407,6 +1444,7 @@ fn build_deployment_cards(states: &[commands::DevDeploymentLiveState]) -> Vec<De
         .collect()
 }
 
+#[cfg(feature = "local-runtime")]
 fn format_dev_resource_value(
     resource_name: &str,
     public_resource: Option<&alien_core::DevResourceInfo>,
@@ -1433,6 +1471,7 @@ fn format_dev_resource_value(
     }
 }
 
+#[cfg(feature = "local-runtime")]
 fn is_local_private_url(url: &str) -> bool {
     url.starts_with("http://localhost:")
         || url.starts_with("https://localhost:")
@@ -1442,6 +1481,7 @@ fn is_local_private_url(url: &str) -> bool {
 
 /// Non-TTY: print one line per deployment state transition. Print full resource
 /// listing on initial ready, then just status changes afterward.
+#[cfg(feature = "local-runtime")]
 fn print_deployment_log_updates(
     states: &[commands::DevDeploymentLiveState],
     last_printed: &mut std::collections::HashMap<String, alien_core::DeploymentStatus>,
@@ -1508,6 +1548,7 @@ fn print_deployment_log_updates(
     }
 }
 
+#[cfg(feature = "local-runtime")]
 fn print_dev_actions_footer_non_tty() {
     println!();
     println!(
@@ -1549,8 +1590,16 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         return init_task(args).await;
     }
 
+    #[cfg(not(feature = "local-runtime"))]
+    if cli.requires_local_runtime() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "The Alien local runtime companion is required for this command. Reinstall or upgrade the Alien CLI.".to_string(),
+        }));
+    }
+
     // Handle serve command early — it starts a standalone manager and doesn't
     // need the CLI execution context.
+    #[cfg(feature = "local-runtime")]
     if let Some(Commands::Serve(args)) = cli.command {
         return serve_task(args).await;
     }
@@ -1578,6 +1627,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     }
 
     // Handle dev command early — it creates its own execution context.
+    #[cfg(feature = "local-runtime")]
     if let Some(Commands::Dev(dev_cmd)) = cli.command {
         return handle_dev_command(dev_cmd).await;
     }
@@ -1650,7 +1700,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
             Some(Commands::Vault(args)) => vault_remote_task(args, ctx).await?,
             Some(Commands::Commands(args)) => commands_task(args, ctx).await?,
             Some(Commands::Debug(args)) => debug_task(args, ctx).await?,
-            Some(Commands::Dev(dev_cmd)) => handle_dev_command(dev_cmd).await?,
+            Some(Commands::Dev(_)) => unreachable!("handled before ctx resolution"),
             Some(Commands::Whoami(args)) => whoami_task(args, ctx).await?,
             #[cfg(feature = "platform")]
             Some(Commands::Platform(command)) => match command {
