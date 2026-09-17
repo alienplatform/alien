@@ -833,6 +833,17 @@ async fn create_deployment_with_group_session(
     parse_api_response(response, "Failed to create deployment").await
 }
 
+fn deployment_manager_http_client(
+    deployment_token: &str,
+    workspace: Option<&str>,
+) -> Result<reqwest::Client> {
+    let deployment_auth = format!("Bearer {deployment_token}");
+    match workspace {
+        Some(workspace) => crate::auth::client_with_auth_and_workspace(&deployment_auth, workspace),
+        None => crate::auth::client_with_header(&deployment_auth),
+    }
+}
+
 fn deployment_create_request_body(
     resolved_args: &ResolvedDeployArgs,
     args: &DeployArgs,
@@ -1448,13 +1459,10 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     // Provisioning calls the manager's sync endpoints, which require
     // deployment-scoped authorization. Manager discovery may use a user or
     // project credential, but that credential must never leak into setup.
-    let deployment_auth = format!("Bearer {}", tracked_deployment.api_key);
-    let manager_http_client = match manager_ctx.workspace.as_deref() {
-        Some(workspace) => {
-            crate::auth::client_with_auth_and_workspace(&deployment_auth, workspace)?
-        }
-        None => crate::auth::client_with_header(&deployment_auth)?,
-    };
+    let manager_http_client = deployment_manager_http_client(
+        &tracked_deployment.api_key,
+        manager_ctx.workspace.as_deref(),
+    )?;
     let manager_client =
         alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, manager_http_client);
 
@@ -2151,5 +2159,32 @@ mod tests {
             "staging",
         );
         assert_eq!(input_body["releaseChannel"], "staging");
+    }
+
+    #[test]
+    fn provisioning_always_uses_deployment_bearer_with_optional_workspace_routing() {
+        for workspace in [None, Some("acme")] {
+            let client = deployment_manager_http_client("deployment-secret", workspace)
+                .expect("manager client should build");
+            let request = client
+                .get("https://manager.example.test/v1/deployments/dep_test")
+                .build()
+                .expect("request should build");
+
+            assert_eq!(
+                request
+                    .headers()
+                    .get(reqwest::header::AUTHORIZATION)
+                    .unwrap(),
+                "Bearer deployment-secret"
+            );
+            assert_eq!(
+                request
+                    .headers()
+                    .get("x-alien-workspace")
+                    .and_then(|value| value.to_str().ok()),
+                workspace
+            );
+        }
     }
 }
