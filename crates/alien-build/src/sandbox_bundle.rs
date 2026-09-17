@@ -19,7 +19,7 @@ use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
 
 /// Path the agent binary is installed at inside the image.
-pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
+pub use alien_core::sandbox_process::AGENT_PATH;
 
 /// Directory a session's files live under, and the only place the untrusted uid can write.
 pub const SESSION_ROOT: &str = "/sandbox";

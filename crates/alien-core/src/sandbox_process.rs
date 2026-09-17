@@ -43,6 +43,12 @@ const MAX_FRAME_BYTES: u64 = 64 * 1024;
 /// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
 pub const AGENT_PORT: u16 = 8971;
 
+/// Path the agent binary is installed at inside a sandbox image.
+///
+/// Every image copies the agent here and execs the same path. A build that installs one path and
+/// entrypoints another exits before it serves, and the session times out on connect.
+pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
+
 /// Port the agent listens on inside a GCP Agent Platform sandbox.
 ///
 /// Agent Platform is only known to serve 8080, on the image and on the declared template port
@@ -636,7 +642,17 @@ mod tests {
 }
 
 /// The image build has no way to read a Rust constant, so it repeats these values as literal text.
-/// Nothing but this module catches a constant changed here with the Dockerfile left alone.
+/// What each assertion buys differs, and only the first is drift between two live definitions:
+///
+/// - `GCP_AGENT_PORT` is declared again by the Agent Platform template, so a literal left behind
+///   here is a template that routes to a port the image does not serve. Nothing else compares them.
+/// - `GCP_EXEC_UID` has no consumer outside these tests, so editing it and the Dockerfile together
+///   is a no-op. What the uid assertions pin is the Dockerfile against itself: `ENV` uid, `ENV`
+///   gid, `USER`, the passwd and group records and the `chown` are all one value or the agent
+///   cannot exec.
+/// - `AGENT_PATH` does have a consumer, but it renders the AWS bundle's Dockerfile rather than
+///   this one, so a mismatch is divergence between two images and not a break in either. What it
+///   pins here is that the `COPY` lands the binary where the `ENTRYPOINT` execs it.
 #[cfg(test)]
 mod gcp_image_contract {
     use super::*;
@@ -743,7 +759,7 @@ mod gcp_image_contract {
             .iter()
             .flat_map(|instruction| instruction.split(|c| c == '&' || c == ';' || c == '|'))
             .map(str::trim)
-            .filter(|step| !step.is_empty() && step.contains(needle))
+            .filter(|step| step.contains(needle))
             .collect();
         only(steps.into_iter(), &format!("'{needle}' step")).to_string()
     }
@@ -837,15 +853,34 @@ mod gcp_image_contract {
         );
     }
 
-    /// The supervised command runs as the exec uid, and a binary that uid may write is a
-    /// supervisor it can replace. Only the `COPY` flags are read, so a later `chmod` on the same
-    /// path goes unseen here; the smoke test's `rm` probe covers the directory, not the file mode.
+    /// A path the `ENTRYPOINT` names but no `COPY` installs is a container that exits before it
+    /// serves, and a binary the exec uid may write is a supervisor the supervised command can
+    /// replace. Only the `COPY` flags are read, so a later `chmod` on the same path goes unseen
+    /// here; the smoke test's `rm` probe covers the directory, not the file mode.
     #[test]
-    fn the_copy_that_ships_the_agent_binary_gives_it_root_ownership_and_0755() {
-        let copy = step_with(&dockerfile(), "COPY ");
+    fn the_agent_lands_where_the_entrypoint_execs_it_and_the_exec_uid_cannot_write_it() {
+        let dockerfile = dockerfile();
+
+        let copy = step_with(&dockerfile, "COPY ");
+        // The destination is a COPY's last argument, and the only argument every form shares.
+        let destination = copy
+            .split_whitespace()
+            .next_back()
+            .unwrap_or_else(|| panic!("{DOCKERFILE} step '{copy}' has no argument"));
+        assert_eq!(
+            destination, AGENT_PATH,
+            "{DOCKERFILE} step '{copy}' installs the agent somewhere the entrypoint does not exec"
+        );
         assert!(
             has_tokens(&copy, &["--chown=0:0"]) && has_tokens(&copy, &["--chmod=0755"]),
             "{DOCKERFILE} step '{copy}' ships the agent writable by the identity it supervises"
+        );
+
+        assert_eq!(
+            directive(&dockerfile, "ENTRYPOINT"),
+            format!(r#"["{AGENT_PATH}"]"#),
+            "{DOCKERFILE} execs a path nothing installs, or execs it through a shell that would \
+             take PID 1 from the agent"
         );
     }
 }
