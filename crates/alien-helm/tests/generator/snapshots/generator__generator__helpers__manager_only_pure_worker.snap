@@ -1422,6 +1422,87 @@ spec:
       targetPort: otlp
 {{- end }}
 
+=== templates/cleanup-rbac.yaml ===
+{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+{{- if dig "enabled" true $cleanup }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-13"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-12"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services"]
+    verbs: ["get", "list", "delete"]
+  {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  {{- end }}
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-cleanup
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-cleanup
+{{- end }}
+
 === templates/cleanup-job.yaml ===
 {{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- if dig "enabled" true $cleanup }}
@@ -1442,7 +1523,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      serviceAccountName: {{ include "deployment.fullname" . }}-cleanup
       restartPolicy: Never
       containers:
         - name: cleanup
@@ -1452,16 +1533,26 @@ spec:
             - /bin/sh
             - -ec
             - |
+              cleanup_name={{ printf "%s-cleanup" (include "deployment.fullname" .) | quote }}
+              namespace={{ .Release.Namespace | quote }}
+              cleanup_uid="$(kubectl -n "$namespace" get job "$cleanup_name" -o jsonpath='{.metadata.uid}')"
+              adopt_cleanup_resource() {
+                kind="$1"
+                kubectl -n "$namespace" patch "$kind" "$cleanup_name" --type=merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$cleanup_name\",\"uid\":\"$cleanup_uid\"}]}}"
+              }
+              adopt_cleanup_resource serviceaccount
+              adopt_cleanup_resource role.rbac.authorization.k8s.io
+              adopt_cleanup_resource rolebinding.rbac.authorization.k8s.io
               selector='managed-by=runtime'
-              kubectl -n {{ .Release.Namespace | quote }} delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
+              kubectl -n "$namespace" delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
               if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'httproutes'; then
-                kubectl -n {{ .Release.Namespace | quote }} delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+                kubectl -n "$namespace" delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
               fi
               if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'gateways'; then
-                kubectl -n {{ .Release.Namespace | quote }} delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+                kubectl -n "$namespace" delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
               fi
               {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
-              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
+              kubectl -n "$namespace" delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
               {{- else }}
               echo "Preserving runtime PersistentVolumeClaims. Set runtime.cleanup.onUninstall.deletePersistentVolumeClaims=true to delete them."
               {{- end }}

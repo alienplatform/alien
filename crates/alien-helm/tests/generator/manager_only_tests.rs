@@ -407,6 +407,15 @@ fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
     let stack = Stack::new("cleanup-hook".to_string()).build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
+    let cleanup_rbac = files
+        .get("templates/cleanup-rbac.yaml")
+        .expect("cleanup RBAC");
+    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-13""#));
+    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-12""#));
+    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-11""#));
+    assert!(cleanup_rbac.contains(r#"resources: ["jobs"]"#));
+    assert!(cleanup_rbac.contains(r#"resources: ["serviceaccounts"]"#));
+    assert!(cleanup_rbac.contains(r#"resources: ["roles", "rolebindings"]"#));
 
     let rendered = test_utils::helm_template(&files, None);
     match &rendered.status {
@@ -414,6 +423,12 @@ fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
             assert!(rendered.stdout.contains("kind: Job"));
             assert!(rendered.stdout.contains("helm.sh/hook"));
             assert!(rendered.stdout.contains("pre-delete"));
+            assert!(rendered
+                .stdout
+                .contains("serviceAccountName: test-release-cleanup"));
+            assert!(rendered
+                .stdout
+                .contains("adopt_cleanup_resource serviceaccount"));
             assert!(rendered.stdout.contains("selector='managed-by=runtime'"));
             assert!(rendered
                 .stdout

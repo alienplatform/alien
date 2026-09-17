@@ -155,6 +155,26 @@ pub struct OperatorManifestOptions<'a> {
     pub format: OperatorOutputFormat,
 }
 
+/// Product-chart overrides for an embedded Remote Operator.
+///
+/// This separate input keeps [`OperatorManifestOptions`] source-compatible for
+/// callers that construct it with a struct literal while allowing a product
+/// chart to use a setup-owned credentials Secret and release-aware object name.
+pub struct ProductOperatorManifestOptions<'a> {
+    pub manifest: OperatorManifestOptions<'a>,
+    /// Existing Secret containing `sync-token` and `encryption-key` (and
+    /// `collector-token` when the log collector is enabled).
+    pub credentials_secret_name: &'a str,
+    /// Expected lowercase SHA-256 fingerprint of the existing Secret's decoded
+    /// `encryption-key`. Product charts normally source this from the reviewed
+    /// Helm values that setup produced for the installation.
+    pub credentials_encryption_key_sha256: &'a str,
+    /// Optional exact Kubernetes object name for standalone manifest
+    /// generation. Product chart composition replaces this with a name derived
+    /// from the immutable Helm release namespace and name.
+    pub resource_name: Option<&'a str>,
+}
+
 pub struct OperatorLogCollectorOptions<'a> {
     pub image: &'a str,
     pub token: &'a str,
@@ -162,6 +182,23 @@ pub struct OperatorLogCollectorOptions<'a> {
 
 /// Generate a Helm chart for `stack`.
 pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<HelmChart> {
+    generate_helm_chart_internal(stack, options, None)
+}
+
+/// Generate a product Helm chart with the Remote Operator in the same release.
+pub fn generate_product_helm_chart(
+    stack: &Stack,
+    options: HelmOptions<'_>,
+    remote_operator: ProductOperatorManifestOptions<'_>,
+) -> Result<HelmChart> {
+    generate_helm_chart_internal(stack, options, Some(remote_operator))
+}
+
+fn generate_helm_chart_internal(
+    stack: &Stack,
+    options: HelmOptions<'_>,
+    remote_operator: Option<ProductOperatorManifestOptions<'_>>,
+) -> Result<HelmChart> {
     let chart_name = sanitize_chart_name(&options.chart_name);
     let analysis = ChartAnalysis::from_stack(stack, options.registry)?;
 
@@ -218,6 +255,10 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     );
     files.insert("templates/pvc.yaml".to_string(), pvc_tpl());
     files.insert("templates/service.yaml".to_string(), service_tpl());
+    files.insert(
+        "templates/cleanup-rbac.yaml".to_string(),
+        cleanup_rbac_tpl(),
+    );
     files.insert("templates/cleanup-job.yaml".to_string(), cleanup_job_tpl());
     files.insert("templates/app-service.yaml".to_string(), app_service_tpl());
     files.insert(
@@ -232,6 +273,11 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         "templates/networkpolicy.yaml".to_string(),
         networkpolicy_tpl(),
     );
+    let has_remote_operator = remote_operator.is_some();
+
+    if let Some(remote_operator) = remote_operator {
+        add_remote_operator_files(&mut files, remote_operator)?;
+    }
 
     // Per-resource extra templates contributed by emitters.
     for (path, contents) in &analysis.extra_templates {
@@ -254,8 +300,13 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
         "examples/onprem.yaml".to_string(),
         onprem_values_example(&analysis),
     );
-    files.insert("README.md".to_string(), readme_md(&chart_name, stack));
-
+    let mut readme = readme_md(&chart_name, stack);
+    if has_remote_operator {
+        readme.push_str(
+            "\n## Remote Operator\n\nThe Remote Operator is disabled by default and adds no cluster-scoped resources until enabled. Enabling it may create the shared access-request CustomResourceDefinition and therefore requires cluster-administrator approval. The chart retains that CRD on rollback and uninstall, reuses an existing matching definition without adopting it, and refuses a conflicting definition instead of changing it. Protected upgrades use the Secret Helm history backend by default. When Helm is configured with `HELM_DRIVER=configmap`, set `remoteOperator.helmHistoryBackend=configmap` so the chart queries only that backend. The SQL storage backend is rejected because the chart cannot verify or prune its rollback history. Uninstall permanently retires this release by deleting its exact retained identity records and identity PVC.\n",
+        );
+    }
+    files.insert("README.md".to_string(), readme);
     files.insert(
         "files/stack.json".to_string(),
         ensure_trailing_newline(stack_json),
@@ -271,11 +322,1314 @@ pub fn generate_helm_chart(stack: &Stack, options: HelmOptions<'_>) -> Result<He
     })
 }
 
+fn add_remote_operator_files(
+    files: &mut IndexMap<String, String>,
+    mut options: ProductOperatorManifestOptions<'_>,
+) -> Result<()> {
+    if options.manifest.format != OperatorOutputFormat::HelmTemplate {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "a product chart requires the Helm Remote Operator template".to_string(),
+        }));
+    }
+
+    let chart = files.get_mut("Chart.yaml").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "the product chart is missing Chart.yaml".to_string(),
+        })
+    })?;
+    chart.push_str("annotations:\n  alien.dev/remote-operator-lifecycle: \"v2\"\n");
+
+    let requires_collector_token = options.manifest.log_collector.is_some();
+    let identity_record = remote_operator_identity_record_tpl(
+        options.credentials_secret_name,
+        options.credentials_encryption_key_sha256,
+    );
+    options.resource_name = Some("{{ include \"deployment.remoteOperatorResourceName\" . }}");
+    let manifest = generate_product_operator_manifest_with_identity_marker(
+        options,
+        Some("{{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"),
+        Some("{{ include \"deployment.remoteOperatorLogCollectorName\" . }}"),
+    )?;
+    let mut crd = None;
+    let mut templates = Vec::new();
+    for document in manifest
+        .split("\n---\n")
+        .map(str::trim)
+        .filter(|doc| !doc.is_empty())
+    {
+        let kind = document
+            .lines()
+            .find_map(|line| line.strip_prefix("kind: "))
+            .map(|kind| kind.trim_matches(['\'', '"']));
+        if kind == Some("CustomResourceDefinition") {
+            if crd.replace(document).is_some() {
+                return Err(AlienError::new(ErrorData::GenericError {
+                    message: "the Remote Operator renderer emitted more than one CRD".to_string(),
+                }));
+            }
+        } else {
+            templates.push(document);
+        }
+    }
+    let crd = crd.ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "the Remote Operator renderer did not emit its access-request CRD".to_string(),
+        })
+    })?;
+    if templates.is_empty() {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "the Remote Operator renderer did not emit workload resources".to_string(),
+        }));
+    }
+
+    files.insert(
+        "templates/remote-operator-crd.yaml".to_string(),
+        remote_operator_crd_tpl(crd)?,
+    );
+    files.insert(
+        "templates/remote-operator.yaml".to_string(),
+        format!(
+            "{{{{- define \"deployment.remoteOperatorResources\" }}}}\n{}\n{{{{- end }}}}\n{{{{- if .Values.remoteOperator.enabled }}}}\n{{{{ include \"deployment.remoteOperatorResources\" . }}}}\n{{{{- end }}}}\n",
+            templates.join("\n---\n")
+        ),
+    );
+    files.insert(
+        "templates/remote-operator-identity-record.yaml".to_string(),
+        identity_record,
+    );
+    files.insert(
+        "templates/remote-operator-lifecycle-capability.yaml".to_string(),
+        remote_operator_lifecycle_capability_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-identity-initialized.yaml".to_string(),
+        remote_operator_identity_initialized_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-identity-initialized-rbac.yaml".to_string(),
+        remote_operator_identity_initialized_rbac_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-lifecycle-check-rbac.yaml".to_string(),
+        remote_operator_lifecycle_check_rbac_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-identity-gate.yaml".to_string(),
+        remote_operator_identity_gate_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-identity-complete.yaml".to_string(),
+        remote_operator_identity_completion_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-checks.yaml".to_string(),
+        remote_operator_checks_tpl(requires_collector_token),
+    );
+    files.insert(
+        "templates/remote-operator-cleanup-rbac.yaml".to_string(),
+        remote_operator_cleanup_rbac_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-history-guard.yaml".to_string(),
+        remote_operator_history_guard_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-cleanup-job.yaml".to_string(),
+        remote_operator_cleanup_job_tpl(),
+    );
+    files.insert(
+        "templates/remote-operator-rollback-guard.yaml".to_string(),
+        remote_operator_rollback_guard_tpl(),
+    );
+
+    let values = files.get_mut("values.yaml").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "the product chart is missing values.yaml".to_string(),
+        })
+    })?;
+    values.push_str(remote_operator_values());
+
+    let schema = files.get_mut("values.schema.json").ok_or_else(|| {
+        AlienError::new(ErrorData::GenericError {
+            message: "the product chart is missing values.schema.json".to_string(),
+        })
+    })?;
+    let mut schema_json: serde_json::Value = serde_json::from_str(schema)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to parse the product chart values schema".to_string(),
+        })?;
+    let properties = schema_json
+        .get_mut("properties")
+        .and_then(serde_json::Value::as_object_mut)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "the product chart values schema has no properties object".to_string(),
+            })
+        })?;
+    properties.insert(
+        "remoteOperator".to_string(),
+        remote_operator_values_schema(),
+    );
+    *schema = serde_json::to_string_pretty(&schema_json)
+        .into_alien_error()
+        .context(ErrorData::JsonSerializationFailed {
+            reason: "failed to serialize the product chart values schema".to_string(),
+        })?;
+    schema.push('\n');
+
+    Ok(())
+}
+
+fn remote_operator_crd_tpl(crd: &str) -> Result<String> {
+    let parsed: serde_yaml::Value = serde_yaml::from_str(crd).into_alien_error().context(
+        ErrorData::JsonSerializationFailed {
+            reason: "failed to parse the Remote Operator access-request CRD".to_string(),
+        },
+    )?;
+    let crd_name = parsed
+        .get("metadata")
+        .and_then(|metadata| metadata.get("name"))
+        .and_then(serde_yaml::Value::as_str)
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::GenericError {
+                message: "the Remote Operator access-request CRD has no metadata.name".to_string(),
+            })
+        })?;
+    let retained_crd = crd.replacen(
+        "metadata:\n",
+        "metadata:\n  annotations:\n    helm.sh/resource-policy: keep\n",
+        1,
+    );
+    if retained_crd == crd {
+        return Err(AlienError::new(ErrorData::GenericError {
+            message: "the Remote Operator access-request CRD has no metadata block".to_string(),
+        }));
+    }
+
+    Ok(format!(
+        r#"{{{{- define "deployment.remoteOperatorAccessRequestCrd" -}}}}
+{retained_crd}{{{{- end -}}}}
+{{{{- if .Values.remoteOperator.enabled -}}}}
+{{{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "{crd_name}" -}}}}
+{{{{- if not $existing }}}}
+{{{{ include "deployment.remoteOperatorAccessRequestCrd" . }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+"#
+    ))
+}
+
+fn remote_operator_identity_record_tpl(
+    credentials_secret_name: &str,
+    credentials_encryption_key_sha256: &str,
+) -> String {
+    format!(
+        r#"{{{{- define "deployment.remoteOperatorReleaseIdentity" -}}}}
+{{{{- printf "%s/%s" .Release.Namespace .Release.Name | sha256sum | trunc 16 -}}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorResourceName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 21 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-remote-operator-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityRecordName" -}}}}
+{{{{ include "deployment.remoteOperatorResourceName" . }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorCredentialsSecretName" -}}}}
+{credentials_secret_name}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorEncryptionKeySha256" -}}}}
+{credentials_encryption_key_sha256}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityCompletionName" -}}}}
+{{{{ printf "%s-complete" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityInitializedName" -}}}}
+{{{{ printf "%s-initialized" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityInitializedRbacName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-identity-init-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLifecycleCheckName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-lifecycle-check-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLogCollectorName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 22 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{- printf "%s-log-collector-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
+{{{{ printf "%s-lifecycle-v2" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorCleanupName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{ printf "%s-cleanup-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorHistoryGuardName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{ printf "%s-history-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityGateName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{ printf "%s-identity-gate-%s" $releasePrefix $releaseIdentity }}}}
+{{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorRollbackGuardName" -}}}}
+{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
+{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
+{{{{ printf "%s-rollback-guard-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" }}}}
+{{{{- end -}}}}
+{{{{- if .Values.remoteOperator.enabled -}}}}
+{{{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}}}
+{{{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}}}
+{{{{- if not $identityRecord }}}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{{{ $identityRecordName }}}}
+  namespace: {{{{ .Release.Namespace }}}}
+  annotations:
+    meta.helm.sh/release-name: {{{{ .Release.Name | quote }}}}
+    meta.helm.sh/release-namespace: {{{{ .Release.Namespace | quote }}}}
+    helm.sh/hook: pre-install,pre-upgrade
+    helm.sh/hook-weight: "-100"
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{{{ .Release.Service | quote }}}}
+    app.kubernetes.io/instance: {{{{ .Release.Name | quote }}}}
+    alien.dev/remote-operator-identity-record: "true"
+    alien.dev/remote-operator-identity-phase: prepared
+    alien.dev/remote-operator-release-id: {{{{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}}}
+immutable: true
+data:
+  version: "3"
+  credentialsSecretName: {{{{ include "deployment.remoteOperatorCredentialsSecretName" . | trim | quote }}}}
+  encryptionKeySha256: {{{{ include "deployment.remoteOperatorEncryptionKeySha256" . | trim | quote }}}}
+{{{{- end }}}}
+{{{{- end }}}}
+"#,
+        credentials_secret_name = credentials_secret_name,
+        credentials_encryption_key_sha256 = credentials_encryption_key_sha256,
+    )
+}
+
+fn remote_operator_lifecycle_capability_tpl() -> String {
+    r#"{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+{{- $lifecycleCapability := lookup "v1" "ConfigMap" .Release.Namespace $lifecycleCapabilityName -}}
+{{- if not $lifecycleCapability }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $lifecycleCapabilityName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    alien.dev/remote-operator-lifecycle-capability: "v2"
+    alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+immutable: true
+data:
+  version: "2"
+  firstGuardRevision: {{ .Release.Revision | quote }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_identity_initialized_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
+{{- if not $identityInitialized }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $identityInitializedName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    alien.dev/remote-operator-identity-phase: pending
+    alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+immutable: false
+data:
+  version: "1"
+  identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
+{{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_identity_initialized_rbac_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.remoteOperatorIdentityInitializedRbacName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorIdentityInitializedName" . }}
+    verbs: ["get", "patch", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.remoteOperatorIdentityInitializedRbacName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.remoteOperatorResourceName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.remoteOperatorIdentityInitializedRbacName" . }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_identity_completion_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
+{{- if not $identityCompletion }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $identityCompletionName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "100"
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    alien.dev/remote-operator-identity-phase: complete
+    alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+immutable: true
+data:
+  version: "1"
+  identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
+{{- end }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_lifecycle_check_rbac_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-113"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-112"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorIdentityInitializedName" . }}
+      - {{ include "deployment.remoteOperatorIdentityCompletionName" . }}
+    verbs: ["get"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorResourceName" . }}
+    verbs: ["get"]
+{{- if eq .Values.remoteOperator.helmHistoryBackend "secret" }}
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - {{ printf "sh.helm.release.v1.%s.v%d" .Release.Name (int .Release.Revision) | quote }}
+    verbs: ["get"]
+{{- else }}
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ printf "sh.helm.release.v1.%s.v%d" .Release.Name (int .Release.Revision) | quote }}
+    verbs: ["get"]
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-111"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_identity_gate_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.remoteOperatorIdentityGateName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "90"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+      restartPolicy: Never
+      containers:
+        - name: wait-for-identity
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              deployment_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
+              deployment_ready=false
+              for _ in $(seq 1 150); do
+                generation="$(kubectl --namespace={{ .Release.Namespace | quote }} get deployment "$deployment_name" --output='jsonpath={.metadata.generation}')"
+                observed="$(kubectl --namespace={{ .Release.Namespace | quote }} get deployment "$deployment_name" --output='jsonpath={.status.observedGeneration}')"
+                desired="$(kubectl --namespace={{ .Release.Namespace | quote }} get deployment "$deployment_name" --output='jsonpath={.spec.replicas}')"
+                available="$(kubectl --namespace={{ .Release.Namespace | quote }} get deployment "$deployment_name" --output='jsonpath={.status.availableReplicas}')"
+                desired="${desired:-1}"
+                available="${available:-0}"
+                if [ "$observed" = "$generation" ] && [ "$available" = "$desired" ]; then
+                  deployment_ready=true
+                  break
+                fi
+                sleep 2
+              done
+              if [ "$deployment_ready" != "true" ]; then
+                echo "Remote Operator deployment $deployment_name did not become ready within 5 minutes." >&2
+                exit 1
+              fi
+              initialized_name={{ include "deployment.remoteOperatorIdentityInitializedName" . | quote }}
+              phase="$(kubectl --namespace={{ .Release.Namespace | quote }} get configmap "$initialized_name" --output='jsonpath={.metadata.labels.alien\.dev/remote-operator-identity-phase}')"
+              immutable="$(kubectl --namespace={{ .Release.Namespace | quote }} get configmap "$initialized_name" --output='jsonpath={.immutable}')"
+              if [ "$phase" != "initialized" ] || [ "$immutable" != "true" ]; then
+                echo "Remote Operator became ready without recording a durable initialized identity." >&2
+                exit 1
+              fi
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_cleanup_rbac_tpl() -> String {
+    r#"apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.remoteOperatorCleanupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-130"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.remoteOperatorCleanupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-129"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorIdentityRecordName" . }}
+      - {{ include "deployment.remoteOperatorIdentityInitializedName" . }}
+      - {{ include "deployment.remoteOperatorIdentityCompletionName" . }}
+      - {{ include "deployment.remoteOperatorLifecycleCapabilityName" . }}
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    resourceNames:
+      - {{ printf "%s-identity" (include "deployment.remoteOperatorResourceName" .) }}
+    verbs: ["get", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorResourceName" . }}
+    verbs: ["get", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorCleanupName" . }}
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorCleanupName" . }}
+      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+    verbs: ["get", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    resourceNames:
+      - {{ include "deployment.remoteOperatorCleanupName" . }}
+      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+    verbs: ["get", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.remoteOperatorCleanupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-128"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.remoteOperatorCleanupName" . }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.remoteOperatorCleanupName" . }}
+"#
+    .to_string()
+}
+
+fn remote_operator_history_guard_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.remoteOperatorHistoryGuardName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-install,pre-upgrade
+    "helm.sh/hook-weight": "-110"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+      restartPolicy: Never
+      containers:
+        - name: verify-history-backend
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              history_kind={{ .Values.remoteOperator.helmHistoryBackend | quote }}
+              history_record={{ printf "sh.helm.release.v1.%s.v%d" .Release.Name (int .Release.Revision) | quote }}
+              release_name={{ .Release.Name | quote }}
+              release_revision={{ .Release.Revision | quote }}
+              {{- if .Release.IsInstall }}
+              expected_status=pending-install
+              {{- else }}
+              expected_status=pending-upgrade
+              {{- end }}
+              record_labels="$(kubectl -n {{ .Release.Namespace | quote }} get "$history_kind" "$history_record" --output='jsonpath={.metadata.labels.owner}/{.metadata.labels.name}/{.metadata.labels.version}/{.metadata.labels.status}')" || {
+                echo "Refusing Remote Operator enablement: the pending record $history_record is absent from the configured $history_kind Helm history backend. Ensure remoteOperator.helmHistoryBackend matches HELM_DRIVER. SQL and memory history backends are unsupported." >&2
+                exit 1
+              }
+              expected_labels="helm/$release_name/$release_revision/$expected_status"
+              if [ "$record_labels" != "$expected_labels" ]; then
+                echo "Refusing Remote Operator enablement: pending record $history_record has labels $record_labels, expected $expected_labels." >&2
+                exit 1
+              fi
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_cleanup_job_tpl() -> String {
+    r#"apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.remoteOperatorCleanupName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-20"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
+      restartPolicy: Never
+      containers:
+        - name: cleanup
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              resource_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
+              namespace={{ .Release.Namespace | quote }}
+              release_name={{ .Release.Name | quote }}
+              release_service={{ .Release.Service | quote }}
+              release_id={{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+              cleanup_name={{ include "deployment.remoteOperatorCleanupName" . | quote }}
+              lifecycle_check_name={{ include "deployment.remoteOperatorLifecycleCheckName" . | quote }}
+              identity_record="$resource_name"
+              identity_initialized={{ include "deployment.remoteOperatorIdentityInitializedName" . | quote }}
+              identity_completion="$resource_name-complete"
+              lifecycle_capability={{ include "deployment.remoteOperatorLifecycleCapabilityName" . | quote }}
+              identity_pvc="$resource_name-identity"
+              remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}
+
+              cleanup_uid="$(kubectl -n "$namespace" get job "$cleanup_name" -o jsonpath='{.metadata.uid}')" || {
+                echo "Refusing cleanup: cannot read cleanup Job $namespace/$cleanup_name." >&2
+                exit 1
+              }
+              if [ -z "$cleanup_uid" ]; then
+                echo "Refusing cleanup: cleanup Job $namespace/$cleanup_name has no UID." >&2
+                exit 1
+              fi
+              adopt_cleanup_resource() {
+                kind="$1"
+                kubectl -n "$namespace" patch "$kind" "$cleanup_name" --type=merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$cleanup_name\",\"uid\":\"$cleanup_uid\"}]}}"
+              }
+              adopt_cleanup_resource serviceaccount
+              adopt_cleanup_resource role.rbac.authorization.k8s.io
+              adopt_cleanup_resource rolebinding.rbac.authorization.k8s.io
+
+              delete_lifecycle_check_rbac() {
+                kubectl -n "$namespace" delete \
+                  "rolebinding.rbac.authorization.k8s.io/$lifecycle_check_name" \
+                  "role.rbac.authorization.k8s.io/$lifecycle_check_name" \
+                  "serviceaccount/$lifecycle_check_name" \
+                  --ignore-not-found=true
+              }
+
+              field() {
+                kubectl -n "$namespace" get "$1" "$2" -o "jsonpath=$3"
+              }
+              resource_exists() {
+                resource_ref="$(kubectl -n "$namespace" get "$1" "$2" --ignore-not-found -o name)" || {
+                  echo "Refusing cleanup: cannot determine whether $1 $namespace/$2 exists." >&2
+                  exit 1
+                }
+                [ -n "$resource_ref" ]
+              }
+              require_field() {
+                kind="$1"
+                name="$2"
+                path="$3"
+                expected="$4"
+                description="$5"
+                actual="$(field "$kind" "$name" "$path")" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                if [ "$actual" != "$expected" ]; then
+                  echo "Refusing cleanup: $kind $namespace/$name has unexpected $description." >&2
+                  exit 1
+                fi
+              }
+              identity_initialized_phase=""
+              validate_identity_initialized() {
+                require_field configmap "$identity_initialized" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$identity_initialized" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$identity_initialized" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                require_field configmap "$identity_initialized" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$identity_initialized" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$identity_initialized" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$identity_initialized" '{.data.version}' 1 version
+                require_field configmap "$identity_initialized" '{.data.identityRecordName}' "$identity_record" identity-record-reference
+                identity_initialized_phase="$(field configmap "$identity_initialized" '{.metadata.labels.alien\.dev/remote-operator-identity-phase}')" || {
+                  echo "Refusing cleanup: cannot read configmap $namespace/$identity_initialized." >&2
+                  exit 1
+                }
+                case "$identity_initialized_phase" in
+                  pending)
+                    require_field configmap "$identity_initialized" '{.immutable}' false immutability
+                    ;;
+                  initialized)
+                    require_field configmap "$identity_initialized" '{.immutable}' true immutability
+                    ;;
+                  *)
+                    echo "Refusing cleanup: configmap $namespace/$identity_initialized has an unknown identity phase." >&2
+                    exit 1
+                    ;;
+                esac
+              }
+              if ! resource_exists configmap "$identity_record"; then
+                if resource_exists configmap "$identity_completion"; then
+                  echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
+                  exit 1
+                fi
+                if resource_exists configmap "$identity_initialized"; then
+                  validate_identity_initialized
+                  if [ "$identity_initialized_phase" = "initialized" ]; then
+                    echo "Refusing cleanup: initialized record $namespace/$identity_initialized exists without its identity record." >&2
+                    exit 1
+                  fi
+                  kubectl -n "$namespace" delete configmap "$identity_initialized"
+                fi
+                if resource_exists configmap "$lifecycle_capability"; then
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v2 lifecycle-capability
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                  require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
+                  require_field configmap "$lifecycle_capability" '{.data.version}' 2 version
+                  kubectl -n "$namespace" delete configmap "$lifecycle_capability"
+                fi
+                delete_lifecycle_check_rbac
+                echo "No Remote Operator identity record exists for this release; nothing to clean up."
+                exit 0
+              fi
+
+              require_field configmap "$identity_record" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+              require_field configmap "$identity_record" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+              require_field configmap "$identity_record" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+              require_field configmap "$identity_record" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+              require_field configmap "$identity_record" '{.metadata.labels.alien\.dev/remote-operator-identity-record}' true identity-record
+              require_field configmap "$identity_record" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+              require_field configmap "$identity_record" '{.immutable}' true immutability
+              require_field configmap "$identity_record" '{.data.version}' 3 version
+
+              if resource_exists configmap "$identity_initialized"; then
+                validate_identity_initialized
+              fi
+
+              if resource_exists configmap "$identity_completion"; then
+                require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$identity_completion" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$identity_completion" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$identity_completion" '{.metadata.labels.alien\.dev/remote-operator-identity-phase}' complete identity-phase
+                require_field configmap "$identity_completion" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$identity_completion" '{.immutable}' true immutability
+                require_field configmap "$identity_completion" '{.data.version}' 1 version
+                require_field configmap "$identity_completion" '{.data.identityRecordName}' "$identity_record" identity-record-reference
+              fi
+
+              if resource_exists configmap "$lifecycle_capability"; then
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v2 lifecycle-capability
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
+                require_field configmap "$lifecycle_capability" '{.data.version}' 2 version
+              fi
+
+              if resource_exists deployment "$resource_name"; then
+                require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
+              fi
+              if resource_exists persistentvolumeclaim "$identity_pvc"; then
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
+              fi
+
+              if [ "$remote_operator_enabled" = "true" ] && [ "$identity_initialized_phase" = "initialized" ] && ! resource_exists configmap "$identity_completion"; then
+                echo "Retaining the prepared Remote Operator identity because its durable database initialized before this incomplete install was deleted."
+                exit 0
+              fi
+
+              # Stop the exact release-owned workload first.
+              kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
+              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_initialized" "$identity_completion" "$lifecycle_capability" --ignore-not-found=true
+              kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true --wait=false
+              delete_lifecycle_check_rbac
+"#
+    .to_string()
+}
+
+fn remote_operator_rollback_guard_tpl() -> String {
+    r#"{{- if not .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deployment.remoteOperatorRollbackGuardName" . }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-rollback
+    "helm.sh/hook-weight": "-100"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded,hook-failed
+spec:
+  backoffLimit: 0
+  template:
+    metadata:
+      labels:
+        {{- include "deployment.labels" . | nindent 8 }}
+    spec:
+      serviceAccountName: {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
+      restartPolicy: Never
+      containers:
+        - name: rollback-guard
+          image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
+          imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              identity_completion={{ include "deployment.remoteOperatorIdentityCompletionName" . | quote }}
+              identity_completion_resource="$(kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" --ignore-not-found=true --output=name)"
+              if [ -n "$identity_completion_resource" ]; then
+                echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. Use the explicit uninstall lifecycle instead." >&2
+                exit 1
+              fi
+{{- end }}
+"#
+    .to_string()
+}
+
+fn remote_operator_values() -> &'static str {
+    r#"
+remoteOperator:
+  enabled: false
+  # Must match Helm's Kubernetes history backend. Set to configmap when
+  # HELM_DRIVER=configmap. The SQL backend is unsupported.
+  helmHistoryBackend: secret
+  # Created by the one-time setup flow, not by Helm. It must contain
+  # sync-token and encryption-key.
+  existingSecret:
+    name: ""
+    # Lowercase SHA-256 of the decoded encryption-key. Setup records this
+    # non-secret fingerprint so token rotation cannot replace the identity.
+    encryptionKeySha256: ""
+  # Set true only for the first upgrade that enables Remote Operator in an
+  # existing product release, then immediately persist false.
+  bootstrapIdentity: false
+  syncTokenRevision: 0
+  # Rollout marker for the independently rotatable collector token. Setup
+  # tooling should set this to a digest or revision that changes with the token.
+  collectorTokenRevision: ""
+  serviceAccountAnnotations: {}
+  podLabels: {}
+"#
+}
+
+fn remote_operator_values_schema() -> serde_json::Value {
+    serde_json::json!({
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+            "enabled",
+            "helmHistoryBackend",
+            "existingSecret",
+            "bootstrapIdentity",
+            "syncTokenRevision",
+            "collectorTokenRevision",
+            "serviceAccountAnnotations",
+            "podLabels"
+        ],
+        "properties": {
+            "enabled": { "type": "boolean" },
+            "helmHistoryBackend": {
+                "type": "string",
+                "enum": ["secret", "configmap"]
+            },
+            "bootstrapIdentity": { "type": "boolean" },
+            "existingSecret": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["name", "encryptionKeySha256"],
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "maxLength": 253
+                    },
+                    "encryptionKeySha256": {
+                        "type": "string",
+                        "maxLength": 64
+                    }
+                }
+            },
+            "syncTokenRevision": { "type": "integer", "minimum": 0 },
+            "collectorTokenRevision": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^$|^[0-9a-f]{64}$"
+            },
+            "serviceAccountAnnotations": {
+                "type": "object",
+                "additionalProperties": { "type": "string" }
+            },
+            "podLabels": {
+                "type": "object",
+                "propertyNames": {
+                    "not": {
+                        "enum": ["app.kubernetes.io/name", "app.kubernetes.io/instance"]
+                    }
+                },
+                "additionalProperties": { "type": "string" }
+            }
+        },
+        "allOf": [{
+            "if": {
+                "properties": { "enabled": { "const": true } },
+                "required": ["enabled"]
+            },
+            "then": {
+                "properties": {
+                    "existingSecret": {
+                        "properties": {
+                            "name": {
+                                "minLength": 1,
+                                "pattern": "^[a-z0-9]([-.a-z0-9]*[a-z0-9])?$"
+                            },
+                            "encryptionKeySha256": {
+                                "minLength": 64,
+                                "pattern": "^[0-9a-f]{64}$"
+                            }
+                        }
+                    }
+                }
+            }
+        }]
+    })
+}
+
+fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
+    let collector_check = if requires_collector_token {
+        r#"{{- $collectorToken := "" -}}
+{{- if hasKey $credentials.data "collector-token" -}}
+  {{- $collectorToken = index $credentials.data "collector-token" | b64dec -}}
+{{- end -}}
+{{- if empty $collectorToken -}}
+  {{- fail "The Remote Operator credentials Secret must contain a non-empty collector-token when log collection is enabled." -}}
+{{- end -}}
+"#
+    } else {
+        ""
+    };
+    r#"{{- $secretName := include "deployment.remoteOperatorCredentialsSecretName" . | trim -}}
+{{- $expectedEncryptionKeySha256 := include "deployment.remoteOperatorEncryptionKeySha256" . | trim -}}
+{{- if .Values.remoteOperator.enabled -}}
+{{- if not .Values.management.url -}}
+  {{- fail "management.url is required when Remote Operator is enabled." -}}
+{{- end -}}
+{{- $expected := include "deployment.remoteOperatorAccessRequestCrd" . | fromYaml -}}
+{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" $expected.metadata.name -}}
+{{- if $existing -}}
+  {{- range $spec := list $expected.spec $existing.spec -}}
+    {{- $_ := set $spec.names "listKind" (default (printf "%sList" $spec.names.kind) $spec.names.listKind) -}}
+    {{- $_ := set $spec "conversion" (default (dict "strategy" "None") $spec.conversion) -}}
+    {{- $_ := set $spec "preserveUnknownFields" (default false $spec.preserveUnknownFields) -}}
+  {{- end -}}
+  {{- if ne (toJson $expected.spec) (toJson $existing.spec) -}}
+    {{- fail "The shared access-request CRD differs from this reviewed chart. Ask the cluster administrator to review compatibility before changing it; this release will not adopt, upgrade, or delete the CRD." -}}
+  {{- end -}}
+{{- end -}}
+{{- $secretName = required "remoteOperator.existingSecret.name is required when Remote Operator is enabled" $secretName -}}
+{{- $expectedEncryptionKeySha256 = required "remoteOperator.existingSecret.encryptionKeySha256 is required when Remote Operator is enabled" $expectedEncryptionKeySha256 -}}
+{{- $credentials := lookup "v1" "Secret" .Release.Namespace $secretName -}}
+{{- if not $credentials -}}
+  {{- fail (printf "Remote Operator credentials Secret %s/%s is missing. Create it through the setup flow before installing this release." .Release.Namespace $secretName) -}}
+{{- end -}}
+{{- if not (and (hasKey $credentials.data "sync-token") (hasKey $credentials.data "encryption-key")) -}}
+  {{- fail "The Remote Operator credentials Secret must contain sync-token and encryption-key." -}}
+{{- end -}}
+{{- $syncToken := index $credentials.data "sync-token" | b64dec -}}
+{{- $encryptionKey := index $credentials.data "encryption-key" | b64dec -}}
+{{- if or (empty $syncToken) (empty $encryptionKey) -}}
+  {{- fail "The Remote Operator credentials Secret must contain non-empty sync-token and encryption-key values." -}}
+{{- end -}}
+{{- $actualEncryptionKeySha256 := $encryptionKey | sha256sum -}}
+{{- if ne $actualEncryptionKeySha256 $expectedEncryptionKeySha256 -}}
+  {{- fail (printf "Remote Operator credentials Secret %s/%s has encryption-key SHA-256 %s, but setup recorded %s. Refusing identity replacement; restore the original encryption-key." .Release.Namespace $secretName $actualEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
+{{- end -}}
+__COLLECTOR_CHECK__{{- end -}}
+{{- if or .Release.IsInstall .Release.IsUpgrade -}}
+{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}
+{{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
+{{- $lifecycleCapability := lookup "v1" "ConfigMap" .Release.Namespace $lifecycleCapabilityName -}}
+{{- if and .Release.IsInstall (or $identityRecord $identityInitialized $identityCompletion $lifecycleCapability) -}}
+  {{- fail "Retained Remote Operator lifecycle records already exist for this release name. Refusing reinstall; complete the explicit cleanup lifecycle before reusing the name." -}}
+{{- end -}}
+{{- if $lifecycleCapability -}}
+  {{- $capabilityAnnotations := default dict $lifecycleCapability.metadata.annotations -}}
+  {{- $capabilityLabels := default dict $lifecycleCapability.metadata.labels -}}
+  {{- $capabilityData := default dict $lifecycleCapability.data -}}
+  {{- if or (ne (index $capabilityAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $capabilityAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $capabilityAnnotations "helm.sh/resource-policy") "keep") (ne (index $capabilityLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $capabilityLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $capabilityLabels "alien.dev/remote-operator-lifecycle-capability") "v2") (ne (index $capabilityLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $lifecycleCapability.immutable)) (ne (len $capabilityData) 2) (ne (index $capabilityData "version") "2") (not (hasKey $capabilityData "firstGuardRevision")) -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the immutable lifecycle-capability contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $lifecycleCapabilityName) -}}
+  {{- end -}}
+  {{- $firstGuardRevision := int (index $capabilityData "firstGuardRevision") -}}
+  {{- if or (lt $firstGuardRevision 1) (gt $firstGuardRevision (int .Release.Revision)) -}}
+    {{- fail (printf "ConfigMap %s/%s records invalid first guard revision %d. Refusing adoption." .Release.Namespace $lifecycleCapabilityName $firstGuardRevision) -}}
+  {{- end -}}
+  {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled -}}
+    {{- $historyState := dict "records" 0 -}}
+    {{- $historyStore := dict -}}
+    {{- if eq .Values.remoteOperator.helmHistoryBackend "secret" -}}
+      {{- $historyStore = lookup "v1" "Secret" .Release.Namespace "" -}}
+    {{- else -}}
+      {{- $historyStore = lookup "v1" "ConfigMap" .Release.Namespace "" -}}
+    {{- end -}}
+    {{- range $historyRecord := default (list) (get $historyStore "items") -}}
+      {{- $historyLabels := default dict $historyRecord.metadata.labels -}}
+      {{- if and (eq (default "" (index $historyLabels "owner")) "helm") (eq (default "" (index $historyLabels "name")) $.Release.Name) -}}
+        {{- $_ := set $historyState "records" (add1 (int (get $historyState "records"))) -}}
+        {{- $historyRevision := int (default "0" (index $historyLabels "version")) -}}
+        {{- if lt $historyRevision $firstGuardRevision -}}
+          {{- fail (printf "Helm revision %d predates the Remote Operator rollback guard introduced at revision %d. Remove every older stored revision (for example, perform a disabled bridge upgrade with --history-max 1) before enabling Remote Operator." $historyRevision $firstGuardRevision) -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
+    {{- if eq (int (get $historyState "records")) 0 -}}
+      {{- fail (printf "Remote Operator lifecycle protection found no records for this release in the configured %s Helm history backend. Ensure remoteOperator.helmHistoryBackend matches HELM_DRIVER. The Helm SQL storage backend is unsupported; migrate to a Kubernetes storage backend and prune every pre-guard revision before enabling." .Values.remoteOperator.helmHistoryBackend) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (not $lifecycleCapability) -}}
+  {{- fail "This release predates the Remote Operator rollback guard. Upgrade once with remoteOperator.enabled=false before first enable so the previous revision can reject an unsafe rollback." -}}
+{{- end -}}
+{{- if $identityRecord -}}
+  {{- $recordAnnotations := default dict $identityRecord.metadata.annotations -}}
+  {{- $recordLabels := default dict $identityRecord.metadata.labels -}}
+  {{- $recordData := default dict $identityRecord.data -}}
+  {{- if or (ne (index $recordAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $recordAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $recordAnnotations "helm.sh/hook") "pre-install,pre-upgrade") (ne (index $recordAnnotations "helm.sh/hook-weight") "-100") (ne (index $recordAnnotations "helm.sh/resource-policy") "keep") (ne (index $recordLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $recordLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $recordLabels "alien.dev/remote-operator-identity-record") "true") (ne (index $recordLabels "alien.dev/remote-operator-identity-phase") "prepared") (ne (index $recordLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $identityRecord.immutable)) (ne (len $recordData) 3) (ne (index $recordData "version") "3") (not (hasKey $recordData "credentialsSecretName")) (not (hasKey $recordData "encryptionKeySha256")) -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the immutable prepared identity-record contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $identityRecordName) -}}
+  {{- end -}}
+  {{- if .Values.remoteOperator.enabled -}}
+    {{- $recordedSecretName := default "" (index $recordData "credentialsSecretName") -}}
+    {{- $recordedEncryptionKeySha256 := default "" (index $recordData "encryptionKeySha256") -}}
+    {{- if ne $recordedSecretName $secretName -}}
+      {{- fail (printf "Remote Operator identity record %s/%s pins credentials Secret %s, not %s. Refusing identity replacement; sync-token rotation must keep the original Secret name." .Release.Namespace $identityRecordName $recordedSecretName $secretName) -}}
+    {{- end -}}
+    {{- if ne $recordedEncryptionKeySha256 $expectedEncryptionKeySha256 -}}
+      {{- fail (printf "Remote Operator identity record %s/%s pins encryption-key SHA-256 %s, not %s. Refusing identity replacement; sync-token rotation must keep the original encryption-key." .Release.Namespace $identityRecordName $recordedEncryptionKeySha256 $expectedEncryptionKeySha256) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- if $identityInitialized -}}
+  {{- $initializedAnnotations := default dict $identityInitialized.metadata.annotations -}}
+  {{- $initializedLabels := default dict $identityInitialized.metadata.labels -}}
+  {{- $initializedData := default dict $identityInitialized.data -}}
+  {{- $initializedPhase := default "" (index $initializedLabels "alien.dev/remote-operator-identity-phase") -}}
+  {{- $initializedImmutable := default false $identityInitialized.immutable -}}
+  {{- $initializedPhaseValid := or (and (eq $initializedPhase "pending") (not $initializedImmutable)) (and (eq $initializedPhase "initialized") $initializedImmutable) -}}
+  {{- if or (ne (index $initializedAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $initializedAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $initializedAnnotations "helm.sh/resource-policy") "keep") (ne (index $initializedLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $initializedLabels "app.kubernetes.io/instance") .Release.Name) (not $initializedPhaseValid) (ne (index $initializedLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (ne (len $initializedData) 2) (ne (index $initializedData "version") "1") (not (hasKey $initializedData "identityRecordName")) -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the pending-or-initialized identity contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $identityInitializedName) -}}
+  {{- end -}}
+  {{- if not $identityRecord -}}
+    {{- fail (printf "Remote Operator initialization record %s/%s exists without identity record %s. Restore the retained identity record before retrying." .Release.Namespace $identityInitializedName $identityRecordName) -}}
+  {{- end -}}
+  {{- if ne (default "" (index $initializedData "identityRecordName")) $identityRecordName -}}
+    {{- fail (printf "Remote Operator initialization record %s/%s does not reference identity record %s. Refusing adoption." .Release.Namespace $identityInitializedName $identityRecordName) -}}
+  {{- end -}}
+{{- end -}}
+{{- if $identityCompletion -}}
+  {{- if .Release.IsInstall -}}
+    {{- fail (printf "ConfigMap %s/%s records a completed Remote Operator identity from an earlier release. Refusing reinstall even when stale Helm ownership metadata names this release." .Release.Namespace $identityCompletionName) -}}
+  {{- end -}}
+  {{- $completionAnnotations := default dict $identityCompletion.metadata.annotations -}}
+  {{- $completionLabels := default dict $identityCompletion.metadata.labels -}}
+  {{- $completionData := default dict $identityCompletion.data -}}
+  {{- if or (ne (index $completionAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $completionAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $completionAnnotations "helm.sh/hook") "post-install,post-upgrade") (ne (index $completionAnnotations "helm.sh/hook-weight") "100") (ne (index $completionAnnotations "helm.sh/resource-policy") "keep") (ne (index $completionLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $completionLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $completionLabels "alien.dev/remote-operator-identity-phase") "complete") (ne (index $completionLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $identityCompletion.immutable)) (ne (len $completionData) 2) (ne (index $completionData "version") "1") (not (hasKey $completionData "identityRecordName")) -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the immutable completion-record contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $identityCompletionName) -}}
+  {{- end -}}
+  {{- if not $identityRecord -}}
+    {{- fail (printf "Remote Operator completion record %s/%s exists without identity record %s. Restore the retained identity record before retrying." .Release.Namespace $identityCompletionName $identityRecordName) -}}
+  {{- end -}}
+  {{- if not $identityInitialized -}}
+    {{- fail (printf "Remote Operator completion record %s/%s exists without initialization record %s. Restore the retained initialization record before retrying." .Release.Namespace $identityCompletionName $identityInitializedName) -}}
+  {{- end -}}
+  {{- if ne (default "" (index (default dict $identityInitialized.metadata.labels) "alien.dev/remote-operator-identity-phase")) "initialized" -}}
+    {{- fail (printf "Remote Operator completion record %s/%s requires a successfully initialized identity record %s." .Release.Namespace $identityCompletionName $identityInitializedName) -}}
+  {{- end -}}
+  {{- if ne (default "" (index $completionData "identityRecordName")) $identityRecordName -}}
+    {{- fail (printf "Remote Operator completion record %s/%s does not reference identity record %s. Refusing adoption." .Release.Namespace $identityCompletionName $identityRecordName) -}}
+  {{- end -}}
+{{- end -}}
+{{- $preparedIdentity := and $identityRecord (not $identityCompletion) -}}
+{{- $preparedRetry := and .Values.remoteOperator.enabled $preparedIdentity -}}
+{{- $identityState := dict "managedResourceExists" false "otherManagedResourceExists" false "identityMissing" false -}}
+{{- if or .Values.remoteOperator.enabled $identityRecord $identityInitialized $identityCompletion -}}
+{{- range $document := splitList "\n---\n" (include "deployment.remoteOperatorResources" .) -}}
+  {{- $resource := fromYaml $document -}}
+  {{- if and $resource $resource.kind $resource.metadata.name -}}
+    {{- $lookupNamespace := default "" $resource.metadata.namespace -}}
+    {{- $current := lookup $resource.apiVersion $resource.kind $lookupNamespace $resource.metadata.name -}}
+    {{- if $current -}}
+      {{- if or $.Values.remoteOperator.enabled $.Release.IsUpgrade -}}
+      {{- $annotations := default dict $current.metadata.annotations -}}
+      {{- $labels := default dict $current.metadata.labels -}}
+      {{- if or (ne (index $annotations "meta.helm.sh/release-name") $.Release.Name) (ne (index $annotations "meta.helm.sh/release-namespace") $.Release.Namespace) (ne (index $labels "app.kubernetes.io/managed-by") $.Release.Service) -}}
+        {{- fail (printf "%s %s/%s is not owned by this exact Helm release. Refusing adoption." $resource.kind $lookupNamespace $resource.metadata.name) -}}
+      {{- end -}}
+      {{- $_ := set $identityState "managedResourceExists" true -}}
+      {{- if ne $resource.kind "PersistentVolumeClaim" -}}
+        {{- $_ := set $identityState "otherManagedResourceExists" true -}}
+      {{- end -}}
+      {{- end -}}
+    {{- else if and $.Values.remoteOperator.enabled (eq $resource.kind "PersistentVolumeClaim") -}}
+      {{- $_ := set $identityState "identityMissing" true -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- end -}}
+{{- if and .Release.IsInstall .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $preparedRetry) -}}
+  {{- fail "Remote Operator managed resources already exist before install. Refusing adoption without an exact prepared identity retry." -}}
+{{- end -}}
+{{- if and $preparedRetry (get $identityState "otherManagedResourceExists") -}}
+  {{- fail "A prepared Remote Operator retry may reuse only its exact-release owned retained identity PVC. Refusing adoption of another managed resource." -}}
+{{- end -}}
+{{- $safePreparedRollback := and (not .Values.remoteOperator.enabled) $preparedIdentity -}}
+{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) -}}
+  {{- fail "Disabling Remote Operator on an existing release would delete its identity and managed resources. Uninstall the Remote Operator through the explicit lifecycle flow instead." -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $identityRecord) -}}
+  {{- fail "Remote Operator managed resources exist without the retained identity record. Refusing adoption; restore the original identity record before retrying." -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled .Values.remoteOperator.bootstrapIdentity $identityCompletion -}}
+  {{- fail "remoteOperator.bootstrapIdentity has already been consumed by this release. Set it to false; the retained completion record prevents replacement after total workload deletion." -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "identityMissing") (or $identityInitialized $identityCompletion) -}}
+  {{- fail "The Remote Operator identity volume is missing from a partial installation. Restore it; an upgrade must not bootstrap a replacement identity." -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "identityMissing") (not $preparedRetry) (not .Values.remoteOperator.bootstrapIdentity) -}}
+  {{- fail "The Remote Operator identity volume is missing. Use the explicit first-enable bootstrap flow; an ordinary upgrade must not create a replacement identity." -}}
+{{- end -}}
+{{- end -}}
+"#
+    .replace("__COLLECTOR_CHECK__", collector_check)
+}
+
 pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Result<String> {
-    if options.format == OperatorOutputFormat::RawManifest {
+    generate_operator_manifest_inner(options, None, None, None, None, None)
+}
+
+/// Render a Remote Operator for inclusion in a product Helm chart.
+pub fn generate_product_operator_manifest(
+    options: ProductOperatorManifestOptions<'_>,
+) -> Result<String> {
+    generate_product_operator_manifest_with_identity_marker(options, None, None)
+}
+
+fn generate_product_operator_manifest_with_identity_marker(
+    options: ProductOperatorManifestOptions<'_>,
+    identity_initialized_config_map: Option<&str>,
+    log_collector_name: Option<&str>,
+) -> Result<String> {
+    generate_operator_manifest_inner(
+        options.manifest,
+        Some(options.credentials_secret_name),
+        Some(options.credentials_encryption_key_sha256),
+        options.resource_name,
+        identity_initialized_config_map,
+        log_collector_name,
+    )
+}
+
+fn generate_operator_manifest_inner(
+    options: OperatorManifestOptions<'_>,
+    credentials_secret_name: Option<&str>,
+    credentials_encryption_key_sha256: Option<&str>,
+    resource_name: Option<&str>,
+    identity_initialized_config_map: Option<&str>,
+    log_collector_name: Option<&str>,
+) -> Result<String> {
+    if options.format == OperatorOutputFormat::RawManifest && credentials_secret_name.is_none() {
         validate_runtime_encryption_key(options.encryption_key)?;
     }
     validate_operator_options(&options)?;
+    validate_product_operator_options(
+        credentials_secret_name,
+        credentials_encryption_key_sha256,
+        resource_name,
+    )?;
 
     let stack_settings_json = options
         .stack_settings
@@ -287,8 +1641,19 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         })?;
 
     let base_name = sanitize_chart_name(options.project_name);
-    let operator_name = format!("{base_name}-operator");
+    let operator_name = resource_name
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{base_name}-operator"));
     let identity_pvc_name = format!("{operator_name}-identity");
+    let log_collector_name = log_collector_name
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("{operator_name}-whitelabeled-log-collector"));
+    // Product charts pin an Operator image built with the readiness server.
+    // The standalone generator accepts arbitrary released images, including
+    // versions that predate that endpoint, so it must not require the probe.
+    let supports_readiness = credentials_secret_name.is_some();
+    let creates_credentials_secret = credentials_secret_name.is_none();
+    let credentials_secret_name = credentials_secret_name.unwrap_or(operator_name.as_str());
 
     // The install namespace: where every operator object lives, the binding
     // subject's namespace, and (in `Namespace` scope) the observed namespace. A
@@ -314,7 +1679,8 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
             .to_string(),
     };
 
-    let labels = operator_labels(&base_name);
+    let label_instance = resource_name.unwrap_or(base_name.as_str());
+    let labels = operator_labels(label_instance, options.format);
     let cluster_wide = options.scope.is_cluster_wide();
 
     // White-labeled access-request CRD names, derived from the branded domain.
@@ -359,26 +1725,32 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         ));
         docs.push(operator_rolebinding_doc(namespace, &operator_name, &labels));
     }
-    docs.push(operator_secret_doc(
-        namespace,
-        &operator_name,
-        options.group_token,
-        options.encryption_key,
-        options
-            .log_collector
-            .as_ref()
-            .map(|collector| collector.token),
-        &labels,
-    ));
+    if creates_credentials_secret {
+        docs.push(operator_secret_doc(
+            namespace,
+            &operator_name,
+            options.group_token,
+            options.encryption_key,
+            options
+                .log_collector
+                .as_ref()
+                .map(|collector| collector.token),
+            &labels,
+        ));
+    }
     docs.push(operator_identity_pvc_doc(
         namespace,
         &identity_pvc_name,
         &labels,
+        resource_name.is_some(),
     ));
     docs.push(operator_deployment_doc(
         namespace,
         &operator_name,
         &identity_pvc_name,
+        credentials_secret_name,
+        supports_readiness,
+        identity_initialized_config_map,
         &options,
         namespace,
         &environment_name_expr,
@@ -395,30 +1767,33 @@ pub fn generate_operator_manifest(options: OperatorManifestOptions<'_>) -> Resul
         docs.push(operator_service_doc(namespace, &operator_name, &labels));
         docs.push(operator_log_collector_service_account_doc(
             namespace,
-            &operator_name,
+            &log_collector_name,
             &collector_labels,
         ));
         docs.push(operator_log_collector_role_doc(
             namespace,
-            &operator_name,
+            &log_collector_name,
             &collector_labels,
         ));
         docs.push(operator_log_collector_role_binding_doc(
             namespace,
-            &operator_name,
+            &log_collector_name,
             &collector_labels,
         ));
         docs.push(operator_log_collector_configmap_doc(
             namespace,
             &operator_name,
+            &log_collector_name,
             namespace,
             &collector_labels,
         ));
         docs.push(operator_log_collector_daemonset_doc(
             namespace,
-            &operator_name,
+            &log_collector_name,
+            credentials_secret_name,
             log_collector.image,
             &collector_labels,
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
     }
 
@@ -594,12 +1969,39 @@ fn validate_operator_options(options: &OperatorManifestOptions<'_>) -> Result<()
     Ok(())
 }
 
-fn operator_labels(base_name: &str) -> BTreeMap<String, String> {
+fn validate_product_operator_options(
+    credentials_secret_name: Option<&str>,
+    credentials_encryption_key_sha256: Option<&str>,
+    resource_name: Option<&str>,
+) -> Result<()> {
+    let invalid = |message: &str| {
+        Err(AlienError::new(ErrorData::GenericError {
+            message: message.to_string(),
+        }))
+    };
+    if credentials_secret_name.is_some_and(|name| name.trim().is_empty()) {
+        return invalid("operator credentials Secret name must not be empty");
+    }
+    if credentials_encryption_key_sha256.is_some_and(|fingerprint| fingerprint.trim().is_empty()) {
+        return invalid("operator credentials encryption-key SHA-256 must not be empty");
+    }
+    if credentials_secret_name.is_some() != credentials_encryption_key_sha256.is_some() {
+        return invalid(
+            "operator product credentials require both a Secret name and encryption-key SHA-256",
+        );
+    }
+    if resource_name.is_some_and(|name| name.trim().is_empty()) {
+        return invalid("operator resource name must not be empty");
+    }
+    Ok(())
+}
+
+fn operator_labels(instance_name: &str, format: OperatorOutputFormat) -> BTreeMap<String, String> {
     BTreeMap::from([
         ("app.kubernetes.io/name".to_string(), "operator".to_string()),
         (
             "app.kubernetes.io/instance".to_string(),
-            base_name.to_string(),
+            instance_name.to_string(),
         ),
         (
             "app.kubernetes.io/component".to_string(),
@@ -607,7 +2009,11 @@ fn operator_labels(base_name: &str) -> BTreeMap<String, String> {
         ),
         (
             "app.kubernetes.io/managed-by".to_string(),
-            "kubectl".to_string(),
+            match format {
+                OperatorOutputFormat::RawManifest => "kubectl",
+                OperatorOutputFormat::HelmTemplate => "{{ .Release.Service }}",
+            }
+            .to_string(),
         ),
     ])
 }
@@ -1088,9 +2494,14 @@ fn operator_identity_pvc_doc(
     namespace: &str,
     pvc_name: &str,
     labels: &BTreeMap<String, String>,
+    retain_on_helm_uninstall: bool,
 ) -> String {
     let mut yaml =
         operator_metadata_doc("v1", "PersistentVolumeClaim", namespace, pvc_name, labels);
+    if retain_on_helm_uninstall {
+        yaml.push_str("  annotations:\n");
+        yaml.push_str("    helm.sh/resource-policy: keep\n");
+    }
     yaml.push_str(
         r#"spec:
   accessModes: ["ReadWriteOnce"]
@@ -1107,6 +2518,9 @@ fn operator_deployment_doc(
     namespace: &str,
     operator_name: &str,
     identity_pvc_name: &str,
+    credentials_secret_name: &str,
+    supports_readiness: bool,
+    identity_initialized_config_map: Option<&str>,
     options: &OperatorManifestOptions<'_>,
     observed_namespace: &str,
     environment_name: &str,
@@ -1187,6 +2601,16 @@ fn operator_deployment_doc(
     append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
+    if supports_readiness {
+        append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
+        if let Some(config_map_name) = identity_initialized_config_map {
+            append_env_value(
+                &mut yaml,
+                "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP",
+                config_map_name,
+            );
+        }
+    }
     if options.log_collector.is_some() {
         append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
         append_env_value(&mut yaml, "OTLP_PORT", "8080");
@@ -1214,10 +2638,24 @@ fn operator_deployment_doc(
         "/etc/operator/secrets/encryption-key",
     );
     append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
-    if options.log_collector.is_some() {
+    if supports_readiness || options.log_collector.is_some() {
         yaml.push_str("          ports:\n");
+    }
+    if supports_readiness {
+        yaml.push_str("            - name: readiness\n");
+        yaml.push_str("              containerPort: 8081\n");
+    }
+    if options.log_collector.is_some() {
         yaml.push_str("            - name: http\n");
         yaml.push_str("              containerPort: 8080\n");
+    }
+    if supports_readiness {
+        yaml.push_str("          readinessProbe:\n");
+        yaml.push_str("            httpGet:\n");
+        yaml.push_str("              path: /ready\n");
+        yaml.push_str("              port: readiness\n");
+        yaml.push_str("            periodSeconds: 2\n");
+        yaml.push_str("            failureThreshold: 150\n");
     }
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: credentials\n");
@@ -1239,7 +2677,7 @@ fn operator_deployment_doc(
     yaml.push_str("          secret:\n");
     yaml.push_str(&format!(
         "            secretName: {}\n",
-        yaml_string(operator_name)
+        yaml_string(credentials_secret_name)
     ));
     yaml.push_str("            defaultMode: 384\n");
     yaml.push_str("        - name: identity\n");
@@ -1273,26 +2711,24 @@ fn operator_service_doc(
 
 fn operator_log_collector_service_account_doc(
     namespace: &str,
-    operator_name: &str,
+    collector_name: &str,
     labels: &BTreeMap<String, String>,
 ) -> String {
-    let name = format!("{operator_name}-whitelabeled-log-collector");
-    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, &name, labels);
+    let mut yaml = operator_metadata_doc("v1", "ServiceAccount", namespace, collector_name, labels);
     yaml.push_str("automountServiceAccountToken: true\n");
     yaml
 }
 
 fn operator_log_collector_role_doc(
     namespace: &str,
-    operator_name: &str,
+    collector_name: &str,
     labels: &BTreeMap<String, String>,
 ) -> String {
-    let name = format!("{operator_name}-whitelabeled-log-collector");
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
         "Role",
         namespace,
-        &name,
+        collector_name,
         labels,
     );
     yaml.push_str("rules:\n");
@@ -1304,24 +2740,23 @@ fn operator_log_collector_role_doc(
 
 fn operator_log_collector_role_binding_doc(
     namespace: &str,
-    operator_name: &str,
+    collector_name: &str,
     labels: &BTreeMap<String, String>,
 ) -> String {
-    let name = format!("{operator_name}-whitelabeled-log-collector");
     let mut yaml = operator_metadata_doc(
         "rbac.authorization.k8s.io/v1",
         "RoleBinding",
         namespace,
-        &name,
+        collector_name,
         labels,
     );
     yaml.push_str("roleRef:\n");
     yaml.push_str("  apiGroup: rbac.authorization.k8s.io\n");
     yaml.push_str("  kind: Role\n");
-    yaml.push_str(&format!("  name: {}\n", yaml_string(&name)));
+    yaml.push_str(&format!("  name: {}\n", yaml_string(collector_name)));
     yaml.push_str("subjects:\n");
     yaml.push_str("  - kind: ServiceAccount\n");
-    yaml.push_str(&format!("    name: {}\n", yaml_string(&name)));
+    yaml.push_str(&format!("    name: {}\n", yaml_string(collector_name)));
     yaml.push_str(&format!("    namespace: {}\n", yaml_string(namespace)));
     yaml
 }
@@ -1329,11 +2764,11 @@ fn operator_log_collector_role_binding_doc(
 fn operator_log_collector_configmap_doc(
     namespace: &str,
     operator_name: &str,
+    collector_name: &str,
     observed_namespace: &str,
     labels: &BTreeMap<String, String>,
 ) -> String {
-    let name = format!("{operator_name}-whitelabeled-log-collector");
-    let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, &name, labels);
+    let mut yaml = operator_metadata_doc("v1", "ConfigMap", namespace, collector_name, labels);
     yaml.push_str("data:\n");
     yaml.push_str("  collector.conf: |\n");
     yaml.push_str("    [SERVICE]\n");
@@ -1351,7 +2786,7 @@ fn operator_log_collector_configmap_doc(
     ));
     yaml.push_str(&format!(
         "        Exclude_Path      /var/log/pods/{}_{}-*/*/*.log\n",
-        observed_namespace, operator_name
+        observed_namespace, collector_name
     ));
     yaml.push_str("        Path_Key          filename\n");
     // Built-in multiline parsers auto-detect the runtime log format: `cri` for
@@ -1360,7 +2795,7 @@ fn operator_log_collector_configmap_doc(
     yaml.push_str("        multiline.parser  docker, cri\n");
     yaml.push_str("        Tag               kube.*\n");
     yaml.push_str(&format!(
-        "        DB                /buffers/{operator_name}-whitelabeled-log-collector.db\n"
+        "        DB                /buffers/{collector_name}.db\n"
     ));
     yaml.push_str("        Mem_Buf_Limit     64MB\n");
     yaml.push_str("        Skip_Long_Lines   On\n");
@@ -1401,12 +2836,13 @@ fn operator_log_collector_configmap_doc(
 
 fn operator_log_collector_daemonset_doc(
     namespace: &str,
-    operator_name: &str,
+    collector_name: &str,
+    credentials_secret_name: &str,
     image: &str,
     labels: &BTreeMap<String, String>,
+    include_credential_revision: bool,
 ) -> String {
-    let name = format!("{operator_name}-whitelabeled-log-collector");
-    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, &name, labels);
+    let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, collector_name, labels);
     yaml.push_str("spec:\n");
     yaml.push_str("  selector:\n");
     yaml.push_str("    matchLabels:\n");
@@ -1418,7 +2854,7 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("    spec:\n");
     yaml.push_str(&format!(
         "      serviceAccountName: {}\n",
-        yaml_string(&name)
+        yaml_string(collector_name)
     ));
     yaml.push_str("      tolerations:\n");
     yaml.push_str("        - operator: Exists\n");
@@ -1433,9 +2869,15 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("                secretKeyRef:\n");
     yaml.push_str(&format!(
         "                  name: {}\n",
-        yaml_string(operator_name)
+        yaml_string(credentials_secret_name)
     ));
     yaml.push_str("                  key: collector-token\n");
+    if include_credential_revision {
+        yaml.push_str("            - name: COLLECTOR_TOKEN_REVISION\n");
+        yaml.push_str(
+            "              value: {{ default \"\" .Values.remoteOperator.collectorTokenRevision | quote }}\n",
+        );
+    }
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: config\n");
     yaml.push_str("              mountPath: /collector/etc\n");
@@ -1454,7 +2896,10 @@ fn operator_log_collector_daemonset_doc(
     yaml.push_str("      volumes:\n");
     yaml.push_str("        - name: config\n");
     yaml.push_str("          configMap:\n");
-    yaml.push_str(&format!("            name: {}\n", yaml_string(&name)));
+    yaml.push_str(&format!(
+        "            name: {}\n",
+        yaml_string(collector_name)
+    ));
     yaml.push_str("        - name: varlog\n");
     yaml.push_str("          hostPath:\n");
     yaml.push_str("            path: /var/log\n");
@@ -3180,6 +4625,90 @@ data:
     .to_string()
 }
 
+fn cleanup_rbac_tpl() -> String {
+    r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
+{{- if dig "enabled" true $cleanup }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-13"
+    "helm.sh/hook-delete-policy": before-hook-creation
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-12"
+    "helm.sh/hook-delete-policy": before-hook-creation
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets", "services"]
+    verbs: ["get", "list", "delete"]
+  {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  {{- end }}
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies", "ingresses"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["gateways", "httproutes"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get", "patch"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    resourceNames:
+      - {{ include "deployment.fullname" . }}-cleanup
+    verbs: ["get", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "deployment.fullname" . }}-cleanup
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": pre-delete
+    "helm.sh/hook-weight": "-11"
+    "helm.sh/hook-delete-policy": before-hook-creation
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "deployment.fullname" . }}-cleanup
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "deployment.fullname" . }}-cleanup
+{{- end }}
+"#
+    .to_string()
+}
+
 fn cleanup_job_tpl() -> String {
     r#"{{- $cleanup := dig "cleanup" "onUninstall" dict .Values.runtime -}}
 {{- if dig "enabled" true $cleanup }}
@@ -3200,7 +4729,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      serviceAccountName: {{ include "deployment.fullname" . }}-cleanup
       restartPolicy: Never
       containers:
         - name: cleanup
@@ -3210,16 +4739,26 @@ spec:
             - /bin/sh
             - -ec
             - |
+              cleanup_name={{ printf "%s-cleanup" (include "deployment.fullname" .) | quote }}
+              namespace={{ .Release.Namespace | quote }}
+              cleanup_uid="$(kubectl -n "$namespace" get job "$cleanup_name" -o jsonpath='{.metadata.uid}')"
+              adopt_cleanup_resource() {
+                kind="$1"
+                kubectl -n "$namespace" patch "$kind" "$cleanup_name" --type=merge -p "{\"metadata\":{\"ownerReferences\":[{\"apiVersion\":\"batch/v1\",\"kind\":\"Job\",\"name\":\"$cleanup_name\",\"uid\":\"$cleanup_uid\"}]}}"
+              }
+              adopt_cleanup_resource serviceaccount
+              adopt_cleanup_resource role.rbac.authorization.k8s.io
+              adopt_cleanup_resource rolebinding.rbac.authorization.k8s.io
               selector='managed-by=runtime'
-              kubectl -n {{ .Release.Namespace | quote }} delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
+              kubectl -n "$namespace" delete deployments.apps,statefulsets.apps,daemonsets.apps,services,configmaps,secrets,networkpolicies.networking.k8s.io,ingresses.networking.k8s.io -l "$selector" --ignore-not-found=true
               if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'httproutes'; then
-                kubectl -n {{ .Release.Namespace | quote }} delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+                kubectl -n "$namespace" delete httproutes.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
               fi
               if kubectl api-resources --api-group gateway.networking.k8s.io --no-headers 2>/dev/null | awk '{print $1}' | grep -qx 'gateways'; then
-                kubectl -n {{ .Release.Namespace | quote }} delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
+                kubectl -n "$namespace" delete gateways.gateway.networking.k8s.io -l "$selector" --ignore-not-found=true
               fi
               {{- if dig "deletePersistentVolumeClaims" false $cleanup }}
-              kubectl -n {{ .Release.Namespace | quote }} delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
+              kubectl -n "$namespace" delete persistentvolumeclaims -l "$selector" --ignore-not-found=true
               {{- else }}
               echo "Preserving runtime PersistentVolumeClaims. Set runtime.cleanup.onUninstall.deletePersistentVolumeClaims=true to delete them."
               {{- end }}
@@ -4684,9 +6223,19 @@ mod tests {
         assert!(env_names.contains(&"OPERATOR_PERMISSION"));
         assert!(env_names.contains(&"OPERATOR_INITIAL_DESIRED_RELEASE"));
         assert!(env_names.contains(&"SYNC_TOKEN_FILE"));
+        assert!(!env_names.contains(&"OPERATOR_READINESS_PORT"));
         assert!(
             !env_names.contains(&"DEPLOYMENT_ID"),
             "first boot must self-register and then persist deployment identity"
+        );
+        let container = &deployment["spec"]["template"]["spec"]["containers"][0];
+        assert!(
+            container.get("readinessProbe").is_none(),
+            "standalone manifests accept older pinned Operator images without /ready"
+        );
+        assert!(
+            container.get("ports").is_none(),
+            "standalone manifests without a collector expose no container ports"
         );
 
         // Object names derive from the project (stable per app); the per-environment
@@ -4802,6 +6351,53 @@ mod tests {
             .filter_map(|entry| entry.get("name").and_then(YamlValue::as_str))
             .collect::<Vec<_>>();
         assert_eq!(env_names, vec!["COLLECTOR_TOKEN"]);
+    }
+
+    #[test]
+    fn helm_collector_rolls_when_external_credentials_change() {
+        let labels =
+            BTreeMap::from([("app.kubernetes.io/name".to_string(), "operator".to_string())]);
+        let daemonset = operator_log_collector_daemonset_doc(
+            "{{ .Release.Namespace }}",
+            "operator-whitelabeled-log-collector",
+            "operator-credentials",
+            "fluent/fluent-bit:3.2",
+            &labels,
+            true,
+        );
+
+        let files = indexmap::IndexMap::from([
+            (
+                "Chart.yaml".to_string(),
+                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+            ),
+            (
+                "values.yaml".to_string(),
+                "remoteOperator:\n  collectorTokenRevision: \"\"\n".to_string(),
+            ),
+            ("templates/collector.yaml".to_string(), daemonset),
+        ]);
+
+        let revisions = ["a".repeat(64), "b".repeat(64)];
+        let rendered = revisions.map(|revision| {
+            let values = format!("remoteOperator:\n  collectorTokenRevision: {revision}\n");
+            let output = crate::test_utils::helm_template(&files, Some(&values));
+            output.assert_ok("collector token rotation");
+            let docs = parse_manifest_docs(&output.stdout);
+            let daemonset = docs_by_kind(&docs, "DaemonSet")
+                .into_iter()
+                .next()
+                .expect("rendered collector DaemonSet");
+            assert_eq!(
+                operator_env_value(&daemonset, "COLLECTOR_TOKEN_REVISION"),
+                Some(revision.as_str())
+            );
+            daemonset["spec"]["template"].clone()
+        });
+        assert_ne!(
+            rendered[0], rendered[1],
+            "rotating only the collector token marker must change the pod template"
+        );
     }
 
     #[test]
@@ -5069,6 +6665,52 @@ mod tests {
             .build()
     }
 
+    fn sample_product_chart() -> HelmChart {
+        sample_product_chart_with_collector(false)
+    }
+
+    fn sample_product_chart_with_collector(include_collector: bool) -> HelmChart {
+        let registry = HelmRegistry::built_in();
+        generate_product_helm_chart(
+            &sample_stack(),
+            HelmOptions {
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                chart_name: "sample-stack".to_string(),
+            },
+            ProductOperatorManifestOptions {
+                manifest: OperatorManifestOptions {
+                    manager_url: "{{ .Values.management.url }}",
+                    group_token: "",
+                    encryption_key: "",
+                    image: "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                    log_collector: include_collector.then_some(OperatorLogCollectorOptions {
+                        image: "fluent/fluent-bit:3.2",
+                        token: "",
+                    }),
+                    stack_settings: None,
+                    project_name: "remote-sample-stack",
+                    environment_name: None,
+                    install_namespace: None,
+                    label_domain: None,
+                    scope: OperatorScope::Namespace,
+                    label_selector: None,
+                    kubernetes_operations_enabled: true,
+                    custom_operation_permissions: &[],
+                    permission: OperatorPermission::Remediation,
+                    format: OperatorOutputFormat::HelmTemplate,
+                },
+                credentials_secret_name: "{{ .Values.remoteOperator.existingSecret.name }}",
+                credentials_encryption_key_sha256:
+                    "{{ .Values.remoteOperator.existingSecret.encryptionKeySha256 }}",
+                resource_name: Some(
+                    "{{ printf \"%s-remote-operator\" (include \"deployment.fullname\" .) | trunc 63 | trimSuffix \"-\" }}",
+                ),
+            },
+        )
+        .expect("product chart should render")
+    }
+
     #[test]
     fn generated_chart_lints_and_templates() {
         let registry = HelmRegistry::built_in();
@@ -5088,6 +6730,711 @@ mod tests {
             .assert_ok("helm template registered setup");
         crate::test_utils::helm_template_and_validate(&files, Some(&files["examples/onprem.yaml"]))
             .assert_ok("helm template external-bindings initialize path");
+    }
+
+    #[test]
+    fn generated_product_chart_embeds_a_distinct_remote_operator() {
+        let chart = sample_product_chart();
+
+        assert!(!chart.files.contains_key("crds/alien-access-requests.yaml"));
+        let crd_template = &chart.files["templates/remote-operator-crd.yaml"];
+        assert!(crd_template.contains("if .Values.remoteOperator.enabled"));
+        assert!(crd_template.contains("helm.sh/resource-policy: keep"));
+        assert!(crd_template.contains("if not $existing"));
+        assert!(chart.files["README.md"]
+            .contains("disabled by default and adds no cluster-scoped resources until enabled"));
+        assert!(chart.files["README.md"].contains("retains that CRD on rollback and uninstall"));
+        assert!(chart.files["README.md"].contains("deleting its exact retained identity records"));
+        let remote_template = &chart.files["templates/remote-operator.yaml"];
+        assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v2\""));
+        assert!(remote_template.contains(".Values.remoteOperator.enabled"));
+        assert!(remote_template.contains("deployment.remoteOperatorResourceName"));
+        assert!(!remote_template.contains("deployment.fullname"));
+        assert!(!remote_template.contains("setup-owned"));
+        assert!(!remote_template.contains("kind: 'Secret'"));
+        let checks = &chart.files["templates/remote-operator-checks.yaml"];
+        assert!(checks.contains("Refusing adoption"));
+        assert!(checks.contains("managedResourceExists"));
+        assert!(checks.contains("predates the Remote Operator rollback guard"));
+        assert!(
+            checks.contains("predates the Remote Operator rollback guard introduced at revision")
+        );
+        assert!(checks.contains("perform a disabled bridge upgrade with --history-max 1"));
+        assert!(checks.contains("Helm SQL storage backend is unsupported"));
+        assert!(chart.files["values.yaml"].contains("helmHistoryBackend: secret"));
+        assert!(checks.contains("eq .Values.remoteOperator.helmHistoryBackend \"secret\""));
+        assert!(!checks.contains("$historyStores := list"));
+        let lifecycle_capability =
+            &chart.files["templates/remote-operator-lifecycle-capability.yaml"];
+        assert!(lifecycle_capability.contains("remote-operator-lifecycle-capability: \"v2\""));
+        assert!(lifecycle_capability.contains("helm.sh/resource-policy: keep"));
+        assert!(lifecycle_capability.contains("immutable: true"));
+        assert!(
+            lifecycle_capability.contains("firstGuardRevision: {{ .Release.Revision | quote }}")
+        );
+        let cleanup_rbac = &chart.files["templates/remote-operator-cleanup-rbac.yaml"];
+        assert!(cleanup_rbac.contains("helm.sh/hook\": pre-delete"));
+        assert!(!cleanup_rbac.contains("pre-install"));
+        assert!(!cleanup_rbac.contains("pre-upgrade"));
+        assert!(cleanup_rbac.contains("helm.sh/hook-weight\": \"-130\""));
+        assert!(cleanup_rbac.contains("helm.sh/hook-weight\": \"-129\""));
+        assert!(cleanup_rbac.contains("helm.sh/hook-weight\": \"-128\""));
+        assert!(cleanup_rbac.contains("resources: [\"configmaps\"]"));
+        assert!(cleanup_rbac.contains("resources: [\"persistentvolumeclaims\"]"));
+        assert!(cleanup_rbac.contains("resources: [\"deployments\"]"));
+        assert!(cleanup_rbac.contains("resources: [\"serviceaccounts\"]"));
+        assert!(cleanup_rbac.contains("resources: [\"roles\", \"rolebindings\"]"));
+        assert!(!cleanup_rbac.contains("list"));
+        assert!(!cleanup_rbac.contains("watch"));
+        assert!(!cleanup_rbac.contains("create"));
+        let history_guard = &chart.files["templates/remote-operator-history-guard.yaml"];
+        assert!(history_guard.contains("helm.sh/hook\": pre-install,pre-upgrade"));
+        assert!(history_guard.contains("helm.sh/hook-weight\": \"-110\""));
+        assert!(history_guard.contains(
+            "serviceAccountName: {{ include \"deployment.remoteOperatorLifecycleCheckName\" . }}"
+        ));
+        assert!(history_guard.contains("history_record={{ printf \"sh.helm.release.v1.%s.v%d\""));
+        assert!(history_guard.contains("record_labels"));
+        assert!(history_guard.contains("expected_labels"));
+        assert!(history_guard.contains("SQL and memory history backends are unsupported"));
+        let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
+        assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
+        assert!(cleanup.contains(
+            "serviceAccountName: {{ include \"deployment.remoteOperatorCleanupName\" . }}"
+        ));
+        assert!(cleanup.contains("get job \"$cleanup_name\""));
+        assert!(cleanup.contains("adopt_cleanup_resource serviceaccount"));
+        assert!(cleanup.contains("adopt_cleanup_resource role.rbac.authorization.k8s.io"));
+        assert!(cleanup.contains("adopt_cleanup_resource rolebinding.rbac.authorization.k8s.io"));
+        assert!(cleanup.contains("No Remote Operator identity record exists"));
+        assert!(cleanup.contains("--ignore-not-found -o name"));
+        assert!(cleanup.contains("cannot determine whether $1 $namespace/$2 exists"));
+        assert!(cleanup.contains(
+            "completion record $namespace/$identity_completion exists without its identity record"
+        ));
+        assert!(cleanup.contains("require_field deployment"));
+        assert!(cleanup.contains("require_field persistentvolumeclaim"));
+        assert!(cleanup.contains("identity_initialized"));
+        assert!(cleanup.contains("initialized record"));
+        assert!(cleanup.contains("identity_initialized_phase"));
+        assert!(cleanup.contains("unknown identity phase"));
+        assert!(!cleanup.contains("operator_has_started"));
+        assert!(!cleanup.contains("startedAt"));
+        assert!(cleanup.contains("Retaining the prepared Remote Operator identity"));
+        assert!(!cleanup.contains("claimName:"));
+        assert!(cleanup.contains("delete deployment \"$resource_name\""));
+        assert!(cleanup.contains("$resource_name-complete"));
+        assert!(cleanup.contains("$resource_name-identity"));
+        assert!(cleanup.contains("$lifecycle_capability"));
+        let rollback_guard = &chart.files["templates/remote-operator-rollback-guard.yaml"];
+        assert!(rollback_guard.contains("if not .Values.remoteOperator.enabled"));
+        assert!(rollback_guard.contains("helm.sh/hook\": pre-rollback"));
+        assert!(rollback_guard.contains("--ignore-not-found=true --output=name"));
+        assert!(rollback_guard.contains("if [ -n \"$identity_completion_resource\" ]"));
+        assert!(rollback_guard.contains("Use the explicit uninstall lifecycle instead"));
+        assert!(checks.contains("missing from a partial installation"));
+        assert!(checks.contains("Disabling Remote Operator"));
+        assert!(checks.contains("remoteOperator.bootstrapIdentity has already been consumed"));
+        assert!(checks.contains("(not .Values.remoteOperator.bootstrapIdentity)"));
+        assert!(checks.contains("$encryptionKey | sha256sum"));
+        assert!(checks.contains("pins credentials Secret"));
+        assert!(checks.contains("pins encryption-key SHA-256"));
+        assert!(checks.contains("completed Remote Operator identity"));
+        assert!(checks.contains("exact prepared identity retry"));
+        assert!(checks.contains("prepared Remote Operator retry may reuse only"));
+        assert!(checks.contains("managed resources exist without the retained identity record"));
+        assert!(checks.contains("if or .Release.IsInstall .Release.IsUpgrade"));
+        assert!(checks.contains("Retained Remote Operator lifecycle records already exist"));
+        assert!(remote_template.contains("helm.sh/resource-policy: keep"));
+        let identity_record = &chart.files["templates/remote-operator-identity-record.yaml"];
+        assert!(identity_record.contains("alien.dev/remote-operator-identity-record"));
+        assert!(identity_record.contains("deployment.remoteOperatorIdentityRecordName"));
+        assert!(identity_record.contains("helm.sh/hook: pre-install,pre-upgrade"));
+        assert!(identity_record.contains("helm.sh/resource-policy: keep"));
+        assert!(identity_record.contains("immutable: true"));
+        assert!(identity_record.contains("credentialsSecretName"));
+        assert!(identity_record.contains("encryptionKeySha256"));
+        let identity_initialized =
+            &chart.files["templates/remote-operator-identity-initialized.yaml"];
+        assert!(identity_initialized.contains("remoteOperatorIdentityInitializedName"));
+        assert!(identity_initialized.contains("alien.dev/remote-operator-identity-phase: pending"));
+        assert!(identity_initialized.contains("helm.sh/resource-policy: keep"));
+        assert!(identity_initialized.contains("immutable: false"));
+        let identity_initialized_rbac =
+            &chart.files["templates/remote-operator-identity-initialized-rbac.yaml"];
+        assert!(identity_initialized_rbac.contains("resources: [\"configmaps\"]"));
+        assert!(identity_initialized_rbac.contains("verbs: [\"get\", \"patch\", \"update\"]"));
+        assert!(identity_initialized_rbac.contains(
+            "resourceNames:\n      - {{ include \"deployment.remoteOperatorIdentityInitializedName\" . }}"
+        ));
+        let lifecycle_check_rbac =
+            &chart.files["templates/remote-operator-lifecycle-check-rbac.yaml"];
+        assert!(lifecycle_check_rbac.contains("helm.sh/hook\": pre-install,pre-upgrade"));
+        assert!(lifecycle_check_rbac.contains("resources: [\"deployments\"]"));
+        assert!(lifecycle_check_rbac.contains("resources: [\"configmaps\"]"));
+        assert!(lifecycle_check_rbac.contains("resources: [\"secrets\"]"));
+        assert!(lifecycle_check_rbac.contains("verbs: [\"get\"]"));
+        assert!(!lifecycle_check_rbac.contains("verbs: [\"delete\""));
+        assert!(!lifecycle_check_rbac.contains("verbs: [\"patch\""));
+        let identity_completion = &chart.files["templates/remote-operator-identity-complete.yaml"];
+        assert!(identity_completion.contains("helm.sh/hook: post-install,post-upgrade"));
+        assert!(identity_completion.contains("alien.dev/remote-operator-identity-phase: complete"));
+        assert!(!identity_completion.contains("alien.dev/remote-operator-identity-record"));
+        let identity_gate = &chart.files["templates/remote-operator-identity-gate.yaml"];
+        assert!(identity_gate.contains("helm.sh/hook-weight\": \"90"));
+        assert!(identity_gate.contains("deployment_ready=false"));
+        assert!(identity_gate.contains("Remote Operator became ready without recording"));
+        assert!(identity_gate.contains("deployment.remoteOperatorResourceName"));
+        assert!(identity_gate.contains(
+            "serviceAccountName: {{ include \"deployment.remoteOperatorLifecycleCheckName\" . }}"
+        ));
+        assert!(remote_template.contains("name: 'OPERATOR_READINESS_PORT'"));
+        assert!(remote_template.contains("name: 'OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP'"));
+        assert!(remote_template.contains("path: /ready"));
+        assert!(remote_template.contains("port: readiness"));
+        for (name, template) in [
+            ("identity record", identity_record),
+            ("identity initialization", identity_initialized),
+            ("identity completion", identity_completion),
+        ] {
+            let enabled_gate = template
+                .find("if .Values.remoteOperator.enabled")
+                .unwrap_or_else(|| panic!("{name} must gate live lookups on enablement"));
+            let first_lookup = template
+                .find("lookup \"")
+                .unwrap_or_else(|| panic!("{name} must contain a live lookup"));
+            assert!(
+                enabled_gate < first_lookup,
+                "{name} must not perform a live lookup before checking enablement"
+            );
+        }
+        let lifecycle_gate = checks
+            .find("if or .Release.IsInstall .Release.IsUpgrade")
+            .expect("lifecycle checks must run on every install and upgrade");
+        let first_lifecycle_lookup = checks
+            .find("lookup \"v1\" \"ConfigMap\"")
+            .expect("lifecycle checks must perform exact ConfigMap lookups");
+        assert!(lifecycle_gate < first_lifecycle_lookup);
+        assert!(chart.files["values.yaml"].contains("bootstrapIdentity: false"));
+        let schema: serde_json::Value =
+            serde_json::from_str(&chart.files["values.schema.json"]).unwrap();
+        assert_eq!(
+            schema["properties"]["remoteOperator"]["additionalProperties"],
+            false
+        );
+        assert_eq!(
+            schema["properties"]["remoteOperator"]["properties"]["bootstrapIdentity"]["type"],
+            "boolean"
+        );
+        assert_eq!(
+            schema["properties"]["remoteOperator"]["properties"]["existingSecret"]["properties"]
+                ["encryptionKeySha256"]["maxLength"],
+            64
+        );
+        assert_eq!(
+            schema["properties"]["remoteOperator"]["properties"]["podLabels"]["propertyNames"]
+                ["not"]["enum"],
+            serde_json::json!(["app.kubernetes.io/name", "app.kubernetes.io/instance"])
+        );
+
+        let reserved_pod_label = crate::test_utils::helm_template(
+            &chart.files,
+            Some(
+                r#"
+remoteOperator:
+  podLabels:
+    app.kubernetes.io/name: overridden
+"#,
+            ),
+        );
+        assert!(matches!(
+            reserved_pod_label.status,
+            crate::test_utils::LinterStatus::Failed(_)
+        ));
+        assert!(
+            reserved_pod_label.stderr.contains("app.kubernetes.io/name"),
+            "Helm must identify the reserved pod label: {}",
+            reserved_pod_label.stderr
+        );
+
+        crate::test_utils::helm_lint(&chart.files)
+            .assert_ok("product chart with disabled Remote Operator");
+        let disabled = crate::test_utils::helm_template(&chart.files, None);
+        disabled.assert_ok("product chart with disabled Remote Operator");
+        assert!(
+            !disabled.stdout.contains("kind: CustomResourceDefinition"),
+            "a namespace-only product install must not submit the cluster-scoped CRD"
+        );
+
+        // Client-only rendering cannot satisfy the live Secret and ownership
+        // lookups. The Kind lifecycle test exercises this unmodified chart
+        // against the Kubernetes API.
+        let mut render_files = chart.files.clone();
+        render_files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered = crate::test_utils::helm_template(
+            &render_files,
+            Some(
+                r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#,
+            ),
+        );
+        rendered.assert_ok("enabled Remote Operator product chart");
+        assert!(rendered.stdout.contains("secretName: 'setup-owned'"));
+        assert!(rendered.stdout.contains(
+            "registry.example.com/operator@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(rendered
+            .stdout
+            .contains("value: 'https://manager.example.com'"));
+        let documents = parse_manifest_docs(&rendered.stdout);
+        assert!(documents.iter().any(|document| {
+            yaml_str(document, "kind") == Some("CustomResourceDefinition")
+                && yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("alienaccessrequests.accessrequests.alien")
+        }));
+        let identity_record = documents
+            .iter()
+            .find(|document| {
+                yaml_str(document, "kind") == Some("ConfigMap")
+                    && yaml_path(
+                        document,
+                        &[
+                            "metadata",
+                            "labels",
+                            "alien.dev/remote-operator-identity-record",
+                        ],
+                    )
+                    .and_then(YamlValue::as_str)
+                        == Some("true")
+            })
+            .expect("retained Remote Operator identity record");
+        assert_eq!(
+            yaml_path(identity_record, &["immutable"]).and_then(YamlValue::as_bool),
+            Some(true)
+        );
+        assert_eq!(
+            yaml_path(identity_record, &["data", "credentialsSecretName"])
+                .and_then(YamlValue::as_str),
+            Some("setup-owned")
+        );
+        assert_eq!(
+            yaml_path(identity_record, &["data", "encryptionKeySha256"])
+                .and_then(YamlValue::as_str),
+            Some("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+        );
+        let identity_completion = documents
+            .iter()
+            .find(|document| {
+                yaml_str(document, "kind") == Some("ConfigMap")
+                    && yaml_path(
+                        document,
+                        &[
+                            "metadata",
+                            "labels",
+                            "alien.dev/remote-operator-identity-phase",
+                        ],
+                    )
+                    .and_then(YamlValue::as_str)
+                        == Some("complete")
+            })
+            .expect("retained Remote Operator completion record");
+        assert_eq!(
+            yaml_path(identity_completion, &["data", "identityRecordName"])
+                .and_then(YamlValue::as_str),
+            Some("test-release-remote-operator-ab7b1d5677627240")
+        );
+        assert!(
+            yaml_path(
+                identity_completion,
+                &[
+                    "metadata",
+                    "labels",
+                    "alien.dev/remote-operator-identity-record"
+                ]
+            )
+            .is_none(),
+            "the UI marker selector belongs only on the prepared identity pin"
+        );
+        let remote_deployment = documents
+            .iter()
+            .find(|document| {
+                yaml_str(document, "kind") == Some("Deployment")
+                    && yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                        == Some("test-release-remote-operator-ab7b1d5677627240")
+            })
+            .expect("release-specific Remote Operator Deployment");
+        assert_eq!(
+            yaml_path(
+                remote_deployment,
+                &["metadata", "labels", "app.kubernetes.io/managed-by"]
+            )
+            .and_then(YamlValue::as_str),
+            Some("Helm")
+        );
+        assert_eq!(
+            yaml_path(
+                remote_deployment,
+                &[
+                    "spec",
+                    "template",
+                    "metadata",
+                    "labels",
+                    "app.kubernetes.io/instance"
+                ]
+            )
+            .and_then(YamlValue::as_str),
+            Some("test-release-remote-operator-ab7b1d5677627240")
+        );
+        assert!(documents.iter().any(|document| {
+            yaml_str(document, "kind") == Some("ServiceAccount")
+                && yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some("test-release-remote-operator-ab7b1d5677627240")
+        }));
+    }
+
+    #[test]
+    fn product_chart_fullname_override_cannot_hide_completed_remote_identity() {
+        let chart = sample_product_chart();
+        let identity_record = &chart.files["templates/remote-operator-identity-record.yaml"];
+        let checks = &chart.files["templates/remote-operator-checks.yaml"];
+
+        assert!(identity_record.contains(".Release.Namespace .Release.Name | sha256sum"));
+        assert!(identity_record.contains("deployment.remoteOperatorReleaseIdentity"));
+        assert!(!chart.files["templates/remote-operator.yaml"].contains("deployment.fullname"));
+        assert!(checks.contains("$identityCompletion := lookup"));
+        assert!(checks.contains("identity volume is missing from a partial installation"));
+
+        let render = |fullname_override: &str| {
+            let mut files = chart.files.clone();
+            files.shift_remove("templates/remote-operator-checks.yaml");
+            let values = format!(
+                r#"
+fullnameOverride: {fullname_override}
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#
+            );
+            let rendered = crate::test_utils::helm_template(&files, Some(&values));
+            rendered.assert_ok("Remote Operator name ignores product fullnameOverride");
+            rendered.stdout
+        };
+
+        let before = render("first-product-name");
+        let after = render("replacement-product-name");
+        let stable_name = "test-release-remote-operator-ab7b1d5677627240";
+        for manifest in [&before, &after] {
+            assert!(manifest.contains(&format!("name: {stable_name}")));
+            assert!(manifest.contains(&format!("identityRecordName: \"{stable_name}\"")));
+            assert!(manifest.contains(&format!("name: {stable_name}-complete")));
+        }
+    }
+
+    #[test]
+    fn product_chart_normalizes_a_dotted_release_name_for_remote_operator_resources() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+
+        crate::test_utils::helm_template_and_validate_for_release(
+            &files,
+            Some(values),
+            "leading.middle.trailing",
+        )
+        .assert_ok("product Remote Operator with a dotted Helm release name");
+
+        let rendered = crate::test_utils::helm_template_for_release(
+            &files,
+            Some(values),
+            "leading.middle.trailing",
+        );
+        rendered.assert_ok("render product Remote Operator with a dotted Helm release name");
+        assert!(rendered
+            .stdout
+            .contains("name: leading-middle-traili-remote-operator-"));
+        assert!(!rendered
+            .stdout
+            .contains("name: leading.middle.trailing-remote-operator-"));
+    }
+
+    #[test]
+    fn product_chart_reserves_the_cleanup_suffix_for_long_release_names() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let release_name = "a".repeat(53);
+        let rendered =
+            crate::test_utils::helm_template_for_release(&files, Some(values), &release_name);
+        rendered.assert_ok("product Remote Operator with a maximum-length Helm release name");
+
+        let documents = parse_manifest_docs(&rendered.stdout);
+        let service_accounts = docs_by_kind(&documents, "ServiceAccount");
+        let operator_name = service_accounts
+            .iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "annotations", "helm.sh/hook"]).is_none()
+                    && yaml_path(document, &["metadata", "name"])
+                        .and_then(YamlValue::as_str)
+                        .is_some_and(|name| name.contains("-remote-operator-"))
+            })
+            .and_then(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+            })
+            .expect("Remote Operator ServiceAccount");
+        let cleanup_name = service_accounts
+            .iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "annotations", "helm.sh/hook"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|hook| hook.contains("pre-delete"))
+                    && yaml_path(document, &["metadata", "name"])
+                        .and_then(YamlValue::as_str)
+                        .is_some_and(|name| name.contains("-cleanup-"))
+            })
+            .and_then(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+            })
+            .expect("Remote Operator cleanup ServiceAccount");
+
+        assert_eq!(operator_name.len(), 54);
+        assert_eq!(cleanup_name.len(), 55);
+        assert!(cleanup_name.contains("-cleanup-"));
+        assert_ne!(cleanup_name, operator_name);
+    }
+
+    #[test]
+    fn product_chart_identity_initialization_rbac_names_keep_release_identity_hash() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let render_names = |release_name: &str| {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&files, Some(values), release_name);
+            rendered.assert_ok("product Remote Operator identity-initialization RBAC");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let role = docs_by_kind(&documents, "Role")
+                .into_iter()
+                .find(|document| {
+                    yaml_path(document, &["metadata", "name"])
+                        .and_then(YamlValue::as_str)
+                        .is_some_and(|name| name.contains("-identity-init-"))
+                })
+                .expect("identity-initialization Role");
+            let role_binding = docs_by_kind(&documents, "RoleBinding")
+                .into_iter()
+                .find(|document| {
+                    yaml_path(document, &["metadata", "name"])
+                        .and_then(YamlValue::as_str)
+                        .is_some_and(|name| name.contains("-identity-init-"))
+                })
+                .expect("identity-initialization RoleBinding");
+            (
+                yaml_path(&role, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .expect("identity-initialization Role name")
+                    .to_string(),
+                yaml_path(&role_binding, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .expect("identity-initialization RoleBinding name")
+                    .to_string(),
+                yaml_path(&role_binding, &["roleRef", "name"])
+                    .and_then(YamlValue::as_str)
+                    .expect("identity-initialization roleRef name")
+                    .to_string(),
+            )
+        };
+
+        let shared_prefix = "a".repeat(51);
+        let first = render_names(&format!("{shared_prefix}aa"));
+        let second = render_names(&format!("{shared_prefix}ab"));
+        assert_eq!(first.0, first.1);
+        assert_eq!(first.0, first.2);
+        assert_eq!(second.0, second.1);
+        assert_eq!(second.0, second.2);
+        assert!(first.0.len() <= 63);
+        assert!(second.0.len() <= 63);
+        assert_ne!(first.0, second.0);
+    }
+
+    #[test]
+    fn product_chart_collector_names_fit_kubernetes_limits_and_keep_release_identity() {
+        let mut files = sample_product_chart_with_collector(true).files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let values = r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#;
+        let render_collector_name = |release_name: &str| {
+            let rendered =
+                crate::test_utils::helm_template_for_release(&files, Some(values), release_name);
+            rendered.assert_ok("product Remote Operator log collector");
+            let documents = parse_manifest_docs(&rendered.stdout);
+            let collector_name = docs_by_kind(&documents, "DaemonSet")
+                .into_iter()
+                .find_map(|document| {
+                    yaml_path(&document, &["metadata", "name"])
+                        .and_then(YamlValue::as_str)
+                        .filter(|name| name.contains("-log-collector-"))
+                        .map(str::to_string)
+                })
+                .expect("Remote Operator log-collector DaemonSet");
+            assert!(
+                collector_name.len() <= 63,
+                "rendered collector name is too long: {collector_name}"
+            );
+            collector_name
+        };
+
+        let shared_prefix = "a".repeat(51);
+        let first = render_collector_name(&format!("{shared_prefix}aa"));
+        let second = render_collector_name(&format!("{shared_prefix}ab"));
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn product_chart_rejects_invalid_encryption_key_fingerprint() {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered = crate::test_utils::helm_template(
+            &files,
+            Some(
+                r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: not-a-sha256
+"#,
+            ),
+        );
+
+        assert!(
+            !rendered.is_ok(),
+            "enabled Remote Operator values must reject a malformed encryption-key fingerprint"
+        );
+        assert!(
+            format!("{}\n{}", rendered.stdout, rendered.stderr).contains("encryptionKeySha256"),
+            "schema diagnostic must identify the malformed fingerprint: {rendered:?}"
+        );
+    }
+
+    #[test]
+    fn product_chart_requires_non_empty_decoded_external_credentials() {
+        let checks = remote_operator_checks_tpl(true);
+
+        for required_check in [
+            "$syncToken := index $credentials.data \"sync-token\" | b64dec",
+            "$encryptionKey := index $credentials.data \"encryption-key\" | b64dec",
+            "if or (empty $syncToken) (empty $encryptionKey)",
+            "$collectorToken = index $credentials.data \"collector-token\" | b64dec",
+            "if empty $collectorToken",
+        ] {
+            assert!(
+                checks.contains(required_check),
+                "server-side Secret validation must include: {required_check}"
+            );
+        }
+        assert!(checks.contains("non-empty sync-token and encryption-key values"));
+        assert!(checks.contains("non-empty collector-token"));
+    }
+
+    #[test]
+    fn product_chart_allows_prepared_identity_rollback_to_clean_partial_resources() {
+        let chart = sample_product_chart();
+        let checks = &chart.files["templates/remote-operator-checks.yaml"];
+
+        assert!(
+            checks.contains(
+                "$preparedIdentity := and $identityRecord (not $identityCompletion)"
+            ) && checks.contains(
+                "$safePreparedRollback := and (not .Values.remoteOperator.enabled) $preparedIdentity"
+            ) && checks.contains("(not $safePreparedRollback)"),
+            "disabled rollback must allow an exact-owned prepared installation to clean partial resources"
+        );
+    }
+
+    #[test]
+    fn product_chart_allows_prepared_retry_with_zero_resources_or_only_the_identity_pvc() {
+        let chart = sample_product_chart();
+        let checks = &chart.files["templates/remote-operator-checks.yaml"];
+
+        assert!(checks
+            .contains("$preparedRetry := and .Values.remoteOperator.enabled $preparedIdentity"));
+        assert!(checks
+            .contains("if and $preparedRetry (get $identityState \"otherManagedResourceExists\")"));
+        assert!(checks.contains(
+            "A prepared Remote Operator retry may reuse only its exact-release owned retained identity PVC"
+        ));
+        assert!(
+            !checks.contains(
+                "and $preparedRetry (not (get $identityState \"managedResourceExists\"))"
+            ),
+            "a prepared retry must remain live when the pre-hook succeeded before any managed resource was created"
+        );
+    }
+
+    #[test]
+    fn product_chart_rejects_a_forged_mutable_prepared_marker() {
+        let chart = sample_product_chart();
+        let checks = &chart.files["templates/remote-operator-checks.yaml"];
+
+        for required_contract in [
+            "(not (default false $identityRecord.immutable))",
+            "(ne (index $recordAnnotations \"helm.sh/hook\") \"pre-install,pre-upgrade\")",
+            "(ne (index $recordAnnotations \"helm.sh/hook-weight\") \"-100\")",
+            "(ne (index $recordAnnotations \"helm.sh/resource-policy\") \"keep\")",
+            "(ne (index $recordLabels \"app.kubernetes.io/instance\") .Release.Name)",
+            "(ne (len $recordData) 3)",
+            "(ne (index $recordData \"version\") \"3\")",
+        ] {
+            assert!(
+                checks.contains(required_contract),
+                "prepared marker contract must reject a forged mutable record: {required_contract}"
+            );
+        }
+        assert!(checks.contains("does not match the immutable prepared identity-record contract"));
     }
 
     #[test]

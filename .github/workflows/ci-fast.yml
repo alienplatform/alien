@@ -50,6 +50,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       typescript: ${{ steps.filter.outputs.typescript }}
+      product_lifecycle: ${{ steps.filter.outputs.product_lifecycle }}
     steps:
       - uses: actions/checkout@v7
 
@@ -75,6 +76,12 @@ jobs:
               # The smoke test qualifies the published image, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
+              - '.github/workflows/ci-fast.yml'
+            product_lifecycle:
+              - 'crates/alien-core/**'
+              - 'crates/alien-helm/**'
+              - 'crates/alien-terraform/**'
+              - '.github/workflows/ci-fast.yml'
             typescript:
               # `pnpm format-and-lint` runs Biome from the repository root.
               # Match its source formats repository-wide instead of trying to
@@ -253,6 +260,20 @@ jobs:
           cargo nextest run --workspace \
             --features alien-manager/openapi,alien-bindings/platform-sdk \
             --filter-expr "${FILTER_CLAUSES[*]}"
+
+      - name: Start disposable Kubernetes cluster
+        if: needs.changes.outputs.product_lifecycle == 'true'
+        uses: helm/kind-action@v1.14.0
+        with:
+          cluster_name: alien-product-lifecycle
+
+      - name: Product Remote Operator Helm and Terraform lifecycle
+        if: needs.changes.outputs.product_lifecycle == 'true'
+        env:
+          ALIEN_RUN_PRODUCT_LIFECYCLE_E2E: "1"
+        run: |
+          cargo test -p alien-helm --locked --test product_remote_operator_lifecycle -- \
+            --ignored --nocapture --test-threads=1
 
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.

@@ -77,6 +77,17 @@ pub struct OperatorConfig {
     #[builder(default = IpAddr::V4(Ipv4Addr::LOCALHOST))]
     pub otlp_server_host: IpAddr,
 
+    /// Optional Kubernetes readiness server port.
+    ///
+    /// The listener starts only after the encrypted identity database opens.
+    pub readiness_server_port: Option<u16>,
+
+    /// Exact ConfigMap that records a successfully opened durable identity.
+    ///
+    /// Product Helm charts set this for their retained identity marker. The
+    /// Operator patches it only after the encrypted database opens.
+    pub identity_initialized_config_map: Option<String>,
+
     /// HTTP server port for airgapped CLI APIs (None = disabled)
     pub api_server_port: Option<u16>,
 
@@ -174,6 +185,8 @@ mod tests {
         assert_eq!(config.deployment_interval_seconds, 1);
         assert_eq!(config.otlp_server_host, IpAddr::V4(Ipv4Addr::LOCALHOST));
         assert_eq!(config.otlp_server_port, 4318);
+        assert_eq!(config.readiness_server_port, None);
+        assert_eq!(config.identity_initialized_config_map, None);
         assert_eq!(config.agent_name, None);
         assert!(!config.is_airgapped());
         assert!(!config.requires_deployment_approval());
@@ -191,6 +204,8 @@ mod tests {
             .data_dir("/var/operator")
             .sync_interval_seconds(60)
             .otlp_server_host(IpAddr::V4(Ipv4Addr::UNSPECIFIED))
+            .readiness_server_port(8081)
+            .identity_initialized_config_map("product-operator-initialized")
             .agent_name("local-runner")
             .maybe_stack_settings(Some(alien_core::StackSettings {
                 updates: alien_core::UpdatesMode::ApprovalRequired,
@@ -210,6 +225,11 @@ mod tests {
         assert_eq!(config.data_dir, "/var/operator");
         assert_eq!(config.sync_interval_seconds, 60);
         assert_eq!(config.otlp_server_host, IpAddr::V4(Ipv4Addr::UNSPECIFIED));
+        assert_eq!(config.readiness_server_port, Some(8081));
+        assert_eq!(
+            config.identity_initialized_config_map.as_deref(),
+            Some("product-operator-initialized")
+        );
         assert!(config.requires_deployment_approval());
         assert!(!config.requires_telemetry_approval());
         assert!(config.is_telemetry_enabled());

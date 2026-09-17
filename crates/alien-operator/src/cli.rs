@@ -136,6 +136,12 @@ pub struct Args {
     #[arg(long, env = "OTLP_HOST", default_value = "127.0.0.1")]
     pub otlp_host: IpAddr,
 
+    #[arg(long, env = "OPERATOR_READINESS_PORT")]
+    pub readiness_port: Option<u16>,
+
+    #[arg(long, env = "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP")]
+    pub identity_initialized_config_map: Option<String>,
+
     #[arg(short, long)]
     pub verbose: bool,
 
@@ -506,6 +512,8 @@ async fn run(
         .sync_interval_seconds(args.sync_interval)
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
+        .maybe_readiness_server_port(args.readiness_port)
+        .maybe_identity_initialized_config_map(args.identity_initialized_config_map)
         .maybe_namespace(args.namespace)
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
