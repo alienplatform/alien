@@ -56,14 +56,6 @@ pub const AGENT_PATH: &str = "/usr/local/bin/alien-sandbox-agent";
 /// 8080 is right under either answer; any other number is right under only one.
 pub const GCP_AGENT_PORT: u16 = 8080;
 
-/// Uid and gid the agent and the commands it supervises share on GCP Agent Platform.
-///
-/// Agent Platform refuses an image that requires root, so the agent runs unprivileged and has no
-/// second uid to drop to. `platform` isolation is what permits an exec identity equal to the
-/// agent's own. 1000 is the conventional first non-root uid, chosen over the 60000 the bundle
-/// renderer uses because that value was never tried against Agent Platform.
-pub const GCP_EXEC_UID: u32 = 1000;
-
 /// How many frames may sit between the process and the caller.
 ///
 /// Small on purpose: this is the backpressure window, and a large one would just be a buffer
@@ -661,6 +653,14 @@ mod gcp_image_contract {
     use std::path::PathBuf;
 
     const DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-agent";
+
+    /// Uid and gid the agent and the commands it supervises share on GCP Agent Platform.
+    ///
+    /// Agent Platform refuses an image that requires root, so the agent runs unprivileged and has
+    /// no second uid to drop to. `platform` isolation is what permits an exec identity equal to
+    /// the agent's own. 1000 is the conventional first non-root uid, chosen over the 60000 the
+    /// bundle renderer uses because that value was never tried against Agent Platform.
+    const GCP_EXEC_UID: u32 = 1000;
 
     fn dockerfile() -> String {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
