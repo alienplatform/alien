@@ -373,9 +373,13 @@ fn instance_satisfies(
     if spec.memory_bytes < requirements.max_memory_per_container {
         return false;
     }
-    if !spec.has_configurable_ephemeral_storage()
-        && spec.ephemeral_storage_bytes < requirements.max_ephemeral_storage_bytes
-    {
+    if spec.has_configurable_ephemeral_storage() {
+        if crate::instance_catalog::max_configurable_ephemeral_storage_bytes(spec.platform)
+            .is_none_or(|max| requirements.max_ephemeral_storage_bytes > max)
+        {
+            return false;
+        }
+    } else if spec.ephemeral_storage_bytes < requirements.max_ephemeral_storage_bytes {
         return false;
     }
     match (&requirements.gpu, spec.gpu) {

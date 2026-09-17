@@ -165,7 +165,13 @@ impl InstanceTypeSpec {
     /// Whether ephemeral storage is a provider disk that can be sized at
     /// deployment time instead of fixed local instance storage.
     pub fn has_configurable_ephemeral_storage(&self) -> bool {
-        self.family != InstanceFamily::StorageOptimized
+        matches!(
+            self.family,
+            InstanceFamily::Burstable
+                | InstanceFamily::GeneralPurpose
+                | InstanceFamily::ComputeOptimized
+                | InstanceFamily::MemoryOptimized
+        )
     }
 
     /// Whether this instance type supports nested virtualization.
@@ -225,6 +231,22 @@ impl InstanceTypeSpec {
 const KI: u64 = 1024;
 const MI: u64 = KI * 1024;
 const GI: u64 = MI * 1024;
+const TI: u64 = GI * 1024;
+
+/// Maximum workload storage that the current cloud controllers can turn into
+/// their provider-backed root disk after adding 25% filesystem headroom and
+/// 12 GiB of runtime overhead. Keep these bounds in sync with the provider
+/// controller contract; rejecting here is preferable to failing after cloud
+/// resources have already been created.
+pub fn max_configurable_ephemeral_storage_bytes(platform: Platform) -> Option<u64> {
+    match platform {
+        // AWS gp3 and GCP persistent disks currently top out at 64 TiB.
+        Platform::Aws | Platform::Gcp => Some((64 * TI - 12 * GI) * 4 / 5),
+        // Azure managed OS disks currently top out at 4,095 GiB.
+        Platform::Azure => Some((4_095 * GI - 12 * GI) * 4 / 5),
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => None,
+    }
+}
 
 /// The complete instance type catalog.
 ///
@@ -1258,6 +1280,11 @@ pub fn select_instance_type(
     platform: Platform,
     requirements: &WorkloadRequirements,
 ) -> Result<InstanceSelection, String> {
+    let architecture = requirements
+        .architecture
+        .or_else(|| default_architecture(platform))
+        .ok_or_else(|| format!("platform {platform} has no default compute architecture"))?;
+
     // Determine which family to use. Nested virt isn't available on
     // burstable hardware on any cloud, so a workload that classifies as
     // Burstable but needs nested virt must be upgraded to GeneralPurpose
@@ -1279,9 +1306,28 @@ pub fn select_instance_type(
                 platform != Platform::Aws || !spec.is_nested_virt_capable()
             }
         })
+        .filter(|spec| spec.architecture == architecture)
         .collect();
 
-    if candidates.is_empty() {
+    // A storage-heavy workload may have no fixed-local candidate for the
+    // requested architecture/nested-virtualization contract. That is exactly
+    // when we must consider a provider-backed disk on a general-purpose VM;
+    // rejecting here made the fallback below unreachable.
+    if candidates.is_empty() && family != InstanceFamily::StorageOptimized {
+        let family_has_other_architecture = CATALOG.iter().any(|spec| {
+            spec.platform == platform
+                && spec.family == family
+                && if requirements.nested_virt {
+                    spec.is_nested_virt_capable()
+                } else {
+                    platform != Platform::Aws || !spec.is_nested_virt_capable()
+                }
+        });
+        if family_has_other_architecture {
+            return Err(format!(
+                "architecture {architecture:?} is unavailable for this workload on platform {platform}"
+            ));
+        }
         return Err(if requirements.nested_virt {
             format!(
                 "no nested-virt-capable {family:?} instance types in catalog for platform {platform}"
@@ -1328,6 +1374,8 @@ pub fn select_instance_type(
                     spec.platform == platform
                         && spec.family == InstanceFamily::GeneralPurpose
                         && spec.has_configurable_ephemeral_storage()
+                        && max_configurable_ephemeral_storage_bytes(platform)
+                            .is_some_and(|max| requirements.max_ephemeral_storage_bytes <= max)
                 })
                 .filter(|spec| {
                     if requirements.nested_virt {
@@ -1336,6 +1384,7 @@ pub fn select_instance_type(
                         platform != Platform::Aws || !spec.is_nested_virt_capable()
                     }
                 })
+                .filter(|spec| spec.architecture == architecture)
                 .collect()
         } else {
             filtered
@@ -1344,14 +1393,6 @@ pub fn select_instance_type(
         candidates
     };
 
-    let architecture = requirements
-        .architecture
-        .or_else(|| default_architecture(platform))
-        .ok_or_else(|| format!("platform {platform} has no default compute architecture"))?;
-    let candidates: Vec<&InstanceTypeSpec> = candidates
-        .into_iter()
-        .filter(|spec| spec.architecture == architecture)
-        .collect();
     if candidates.is_empty() {
         return Err(format!(
             "architecture {architecture:?} is unavailable for this workload on platform {platform}"
@@ -1763,6 +1804,62 @@ mod tests {
         let spec = find_instance_type(Platform::Aws, sel.instance_type).unwrap();
         assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
         assert_eq!(sel.profile.ephemeral_storage_bytes, 8_000 * GI);
+    }
+
+    #[test]
+    fn test_nested_virtualization_storage_falls_back_to_configurable_disk() {
+        for platform in [Platform::Aws, Platform::Gcp, Platform::Azure] {
+            let req = WorkloadRequirements {
+                total_cpu_at_desired: 2.0,
+                total_memory_bytes_at_desired: 8 * GI,
+                total_cpu_at_max: 2.0,
+                total_memory_bytes_at_max: 8 * GI,
+                max_cpu_per_container: 2.0,
+                max_memory_per_container: 8 * GI,
+                max_ephemeral_storage_bytes: 500 * GI,
+                gpu: None,
+                architecture: Some(Architecture::X86_64),
+                nested_virt: true,
+            };
+
+            let sel = select_instance_type(platform, &req)
+                .unwrap_or_else(|error| panic!("{platform} should support fallback: {error}"));
+            let spec = find_instance_type(platform, sel.instance_type).unwrap();
+            assert_eq!(spec.family, InstanceFamily::GeneralPurpose);
+            assert!(spec.is_nested_virt_capable());
+            assert_eq!(sel.profile.ephemeral_storage_bytes, 500 * GI);
+        }
+    }
+
+    #[test]
+    fn test_configurable_disk_rejects_capacity_above_provider_limit() {
+        for (platform, requested) in [
+            (Platform::Aws, 100 * TI),
+            (Platform::Gcp, 100 * TI),
+            (Platform::Azure, 8_000 * GI),
+        ] {
+            let req = WorkloadRequirements {
+                total_cpu_at_desired: 2.0,
+                total_memory_bytes_at_desired: 8 * GI,
+                total_cpu_at_max: 2.0,
+                total_memory_bytes_at_max: 8 * GI,
+                max_cpu_per_container: 2.0,
+                max_memory_per_container: 8 * GI,
+                max_ephemeral_storage_bytes: requested,
+                gpu: None,
+                architecture: Some(Architecture::X86_64),
+                nested_virt: true,
+            };
+
+            assert!(select_instance_type(platform, &req).is_err());
+        }
+    }
+
+    #[test]
+    fn test_gpu_local_storage_is_not_treated_as_resizable() {
+        let spec = find_instance_type(Platform::Aws, "g5.xlarge").unwrap();
+        assert_eq!(spec.family, InstanceFamily::GpuCompute);
+        assert!(!spec.has_configurable_ephemeral_storage());
     }
 
     #[test]
