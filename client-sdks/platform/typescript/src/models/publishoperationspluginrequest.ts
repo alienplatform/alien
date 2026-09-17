@@ -11,6 +11,18 @@ import {
   KubernetesPermissions$outboundSchema,
 } from "./kubernetespermissions.js";
 
+export type {
+  KubernetesPermissions,
+  KubernetesPermissions$Outbound,
+} from "./kubernetespermissions.js";
+export {
+  KubernetesPermissions$outboundSchema,
+  kubernetesPermissionsToJSON,
+} from "./kubernetespermissions.js";
+export type { Rule, Rule$Outbound } from "./rule.js";
+export { Rule$outboundSchema, ruleToJSON } from "./rule.js";
+export { Verb, Verb$outboundSchema } from "./verb.js";
+
 /**
  * Plugin-level default risk tier.
  */

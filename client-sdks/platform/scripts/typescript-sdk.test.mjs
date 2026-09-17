@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
+import {
+  KubernetesPermissions$outboundSchema,
+  Rule$outboundSchema,
+  Verb,
+  kubernetesPermissionsToJSON,
+  ruleToJSON,
+} from "../typescript/esm/models/publishoperationspluginrequest.js";
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.
@@ -29,6 +36,21 @@ function client(fetcher) {
     httpClient: new HTTPClient({ fetcher }),
   });
 }
+
+test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
+  const rule = {
+    apiGroup: "apps",
+    resource: "deployments",
+    verbs: [Verb.Get],
+    reason: "Read deployment state",
+  };
+  const permissions = { schemaVersion: 1, rules: [rule] };
+
+  assert.deepEqual(Rule$outboundSchema.parse(rule), rule);
+  assert.equal(ruleToJSON(rule), JSON.stringify(rule));
+  assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions);
+  assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
+});
 
 test("configured server query parameters survive operation globals", async () => {
   const sdk = new Alien({
