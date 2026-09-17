@@ -1994,7 +1994,8 @@ jobs:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: |
           # The one pipeline below ends in `tr`, which succeeds on whatever it is handed. Without
-          # this the assignment takes tr's zero and a failed `docker run` reads as a passing probe.
+          # this the assignment takes tr's zero, and a failed `docker run` is then reported as an
+          # agent whose e_machine is empty rather than as a read that failed.
           set -o pipefail
 
           for platform in linux/amd64 linux/arm64; do
