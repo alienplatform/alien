@@ -35,6 +35,7 @@ export type SetFirstPartyDeploymentInputsRequest = {
    */
   platform: SetFirstPartyDeploymentInputsRequestPlatform;
   inputValues?: { [k: string]: StackInputValueRequest } | undefined;
+  releaseChannel?: string | undefined;
 };
 
 /** @internal */
@@ -47,6 +48,7 @@ export const SetFirstPartyDeploymentInputsRequestPlatform$outboundSchema:
 export type SetFirstPartyDeploymentInputsRequest$Outbound = {
   platform: string;
   inputValues?: { [k: string]: StackInputValueRequest$Outbound } | undefined;
+  releaseChannel?: string | undefined;
 };
 
 /** @internal */
@@ -57,6 +59,7 @@ export const SetFirstPartyDeploymentInputsRequest$outboundSchema: z.ZodType<
   platform: SetFirstPartyDeploymentInputsRequestPlatform$outboundSchema,
   inputValues: z.record(z.string(), StackInputValueRequest$outboundSchema)
     .optional(),
+  releaseChannel: z.string().min(1).max(63).regex(/^[a-z][a-z0-9-]*$/).optional(),
 });
 
 export function setFirstPartyDeploymentInputsRequestToJSON(
