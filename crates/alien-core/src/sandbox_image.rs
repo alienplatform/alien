@@ -215,7 +215,7 @@ COPY --from=binary-selector --chown=0:0 --chmod=0755 \
 {identity}
 
 # The template carries no env, so the contract lives here, and none of it is optional. transport
-# accepts an uncapabilitied request only from a socket peer::transport_may_serve does not trace
+# serves an uncapabilitied request only from a socket `peer::transport_may_serve` cannot trace
 # back to the exec uid, and the agent refuses the mode where /proc/net/tcp is unreadable.
 {env}
 
