@@ -440,16 +440,21 @@ mod tests {
             vec!["init"],
             vec![
                 "config",
-                "url.https://x-access-token:SENTINEL@github.com/.insteadOf",
-                "https://github.com/",
+                "url.https://x-access-token:SENTINEL@git.example.invalid/.insteadOf",
+                "https://git.example.invalid/",
             ],
-            vec!["remote", "add", "origin", "https://github.com/acme/app.git"],
+            vec![
+                "remote",
+                "add",
+                "origin",
+                "https://git.example.invalid/acme/app.git",
+            ],
             vec![
                 "remote",
                 "set-url",
                 "--add",
                 "origin",
-                "https://github.com/acme/mirror.git",
+                "https://git.example.invalid/acme/mirror.git",
             ],
         ] {
             let output = Command::new("git")
@@ -465,7 +470,7 @@ mod tests {
 
         let metadata = collect_git_metadata(repo_path).unwrap().0.unwrap();
         let remote_url = metadata.remote_url.unwrap().to_string();
-        assert_eq!(remote_url, "https://github.com/acme/app");
+        assert_eq!(remote_url, "https://git.example.invalid/acme/app");
         assert!(!remote_url.contains("SENTINEL"));
     }
 
