@@ -410,6 +410,10 @@ fn repository_ids_for_access(
 /// re-runs: gating on today's stack would leave a deployment that adds a sandbox later with no
 /// member and a 403 at its first session. One definition because a type the revoke does not name
 /// stays on the repository policy with nothing left to remove it.
+///
+/// The sandbox agent does not exist until a project's first session, so this names a principal
+/// that may not exist yet. The binding is accepted; that it becomes effective when the agent
+/// materialises is measured by the cross-project pull test, not by anything here.
 fn gcp_service_types() -> Vec<ComputeServiceType> {
     vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
 }
