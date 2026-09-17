@@ -320,6 +320,25 @@ fn validate_compute_settings(compute: Option<&ComputeSettings>) -> Result<()> {
     Ok(())
 }
 
+fn to_sdk_compute_settings(
+    compute: Option<ComputeSettings>,
+) -> Result<Option<alien_platform_api::types::NewDeploymentRequestStackSettingsCompute>> {
+    compute
+        .map(|compute_settings| {
+            let json = serde_json::to_value(&compute_settings)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to serialize compute settings".to_string(),
+                })?;
+            serde_json::from_value(json)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to convert compute settings to SDK type".to_string(),
+                })
+        })
+        .transpose()
+}
+
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
     let resolved_path = resolved_config_path(path);
     let contents = std::fs::read_to_string(path).into_alien_error().context(
@@ -1262,23 +1281,8 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             })
                             .transpose()?;
 
-                        let sdk_compute = resolved_args
-                            .compute_settings
-                            .clone()
-                            .map(|compute_settings| {
-                                let json = serde_json::to_value(&compute_settings)
-                                    .into_alien_error()
-                                    .context(ErrorData::ConfigurationError {
-                                        message: "Failed to serialize compute settings".to_string(),
-                                    })?;
-                                serde_json::from_value(json).into_alien_error().context(
-                                    ErrorData::ConfigurationError {
-                                        message: "Failed to convert compute settings to SDK type"
-                                            .to_string(),
-                                    },
-                                )
-                            })
-                            .transpose()?;
+                        let sdk_compute =
+                            to_sdk_compute_settings(resolved_args.compute_settings.clone())?;
 
                         let deployment_model = if uses_push_deployment_model(
                             resolved_args.platform_enum,
@@ -2153,6 +2157,35 @@ max = 1
             .expect_err("invalid bounds must fail locally");
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("minimum"));
+    }
+
+    #[test]
+    fn fixed_and_autoscale_compute_convert_to_generated_sdk_contract() {
+        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {
+                "fixed": {
+                    "mode": "fixed",
+                    "machines": 2,
+                    "machine": "m8i.2xlarge"
+                },
+                "elastic": {
+                    "mode": "autoscale",
+                    "min": 1,
+                    "max": 4,
+                    "machine": "n2-standard-8"
+                }
+            }
+        }))
+        .expect("core compute settings should parse");
+
+        let sdk = to_sdk_compute_settings(Some(compute))
+            .expect("core settings must match the generated SDK schema")
+            .expect("compute should be present");
+        let json = serde_json::to_value(sdk).expect("SDK compute should serialize");
+
+        assert_eq!(json["pools"]["fixed"]["machines"], 2);
+        assert_eq!(json["pools"]["elastic"]["min"], 1);
+        assert_eq!(json["pools"]["elastic"]["max"], 4);
     }
 
     #[test]
