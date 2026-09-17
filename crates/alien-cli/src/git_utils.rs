@@ -169,14 +169,16 @@ pub fn collect_git_metadata<P: AsRef<Path>>(repo_path: P) -> Result<GitMetadata>
 
     // Get remote URL
     if let Ok(remote_url) = get_remote_url(repo_path) {
-        inner.remote_url = Some(
-            alien_platform_api::types::GitMetadataInnerRemoteUrl::try_from(remote_url)
-                .into_alien_error()
-                .context(ErrorData::ValidationError {
-                    field: "remote_url".to_string(),
-                    message: "Invalid git remote URL format".to_string(),
-                })?,
-        );
+        if let Some(remote_url) = sanitize_git_remote_url(&remote_url) {
+            inner.remote_url = Some(
+                alien_platform_api::types::GitMetadataInnerRemoteUrl::try_from(remote_url)
+                    .into_alien_error()
+                    .context(ErrorData::ValidationError {
+                        field: "remote_url".to_string(),
+                        message: "Invalid git remote URL format".to_string(),
+                    })?,
+            );
+        }
     }
 
     Ok(GitMetadata(Some(inner)))
@@ -189,12 +191,10 @@ fn is_git_repository<P: AsRef<Path>>(repo_path: P) -> bool {
     run_git_command(repo_path, &["rev-parse", "--git-dir"]).is_ok()
 }
 
-/// Get the remote URL from a git repository (try origin first, then any remote)
+/// Get the configured remote URL without applying Git URL rewrite rules.
 fn get_remote_url<P: AsRef<Path>>(repo_path: P) -> Result<String> {
-    // Try to get origin remote first
-    run_git_command(&repo_path, &["remote", "get-url", "origin"])
+    run_git_command(&repo_path, &["config", "--get", "remote.origin.url"])
         .or_else(|_| {
-            // If no origin, try to get any remote
             run_git_command(&repo_path, &["remote"]).and_then(|remotes| {
                 let first_remote = remotes.lines().next().unwrap_or("").trim();
                 if first_remote.is_empty() {
@@ -204,11 +204,36 @@ fn get_remote_url<P: AsRef<Path>>(repo_path: P) -> Result<String> {
                         },
                     ))
                 } else {
-                    run_git_command(&repo_path, &["remote", "get-url", first_remote])
+                    run_git_command(
+                        &repo_path,
+                        &["config", "--get", &format!("remote.{first_remote}.url")],
+                    )
                 }
             })
         })
         .map(|url| url.trim().to_string())
+}
+
+/// Convert a Git remote into a repository URL that contains no credentials.
+fn sanitize_git_remote_url(remote_url: &str) -> Option<String> {
+    let parsed = GitUrl::parse(remote_url.trim()).ok()?;
+    let host = parsed.host?;
+    let path = parsed.path.trim_start_matches('/').trim_end_matches(".git");
+
+    if path.is_empty() || !path.contains('/') {
+        return None;
+    }
+
+    let scheme = match parsed.scheme {
+        git_url_parse::Scheme::Http => "http",
+        _ => "https",
+    };
+    let port = parsed
+        .port
+        .map(|port| format!(":{port}"))
+        .unwrap_or_default();
+
+    Some(format!("{scheme}://{host}{port}/{path}"))
 }
 
 /// Run a git command and return the output
@@ -269,7 +294,9 @@ pub fn detect_git_repository<P: AsRef<Path>>(repo_path: P) -> Result<Option<GitR
     }
 
     // Get the remote URL
-    let remote_url = get_remote_url(repo_path)?;
+    let Some(remote_url) = sanitize_git_remote_url(&get_remote_url(repo_path)?) else {
+        return Ok(None);
+    };
 
     parse_git_remote_url(&remote_url)
 }
@@ -364,6 +391,67 @@ fn determine_provider_from_host(
 #[cfg(all(test, feature = "platform"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sanitizes_git_remote_urls() {
+        let cases = [
+            (
+                "https://github.com/owner/repo.git",
+                Some("https://github.com/owner/repo"),
+            ),
+            (
+                "https://user:secret@github.com/owner/repo.git?token=secret#fragment",
+                Some("https://github.com/owner/repo"),
+            ),
+            (
+                "git@github.com:owner/repo.git",
+                Some("https://github.com/owner/repo"),
+            ),
+            (
+                "ssh://git@github.example.com:2222/owner/repo.git",
+                Some("https://github.example.com:2222/owner/repo"),
+            ),
+            ("../local-repository", None),
+            ("file:///tmp/owner/repo", None),
+        ];
+
+        for (input, expected) in cases {
+            assert_eq!(sanitize_git_remote_url(input).as_deref(), expected);
+        }
+    }
+
+    #[test]
+    fn collection_ignores_git_url_rewrites_with_credentials() {
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let repo_path = temp_dir.path();
+
+        for args in [
+            vec!["init"],
+            vec![
+                "config",
+                "url.https://x-access-token:SENTINEL@github.com/.insteadOf",
+                "https://github.com/",
+            ],
+            vec!["remote", "add", "origin", "https://github.com/acme/app.git"],
+        ] {
+            let output = Command::new("git")
+                .args(args)
+                .current_dir(repo_path)
+                .output()
+                .unwrap();
+            assert!(output.status.success());
+        }
+
+        let expanded = run_git_command(repo_path, &["remote", "get-url", "origin"]).unwrap();
+        assert!(expanded.contains("SENTINEL"));
+
+        let metadata = collect_git_metadata(repo_path).unwrap().0.unwrap();
+        let remote_url = metadata.remote_url.unwrap().to_string();
+        assert_eq!(remote_url, "https://github.com/acme/app");
+        assert!(!remote_url.contains("SENTINEL"));
+    }
 
     #[test]
     fn test_parse_github_ssh_url() {
