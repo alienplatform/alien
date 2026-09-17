@@ -1988,7 +1988,7 @@ jobs:
           provenance: true
           sbom: true
 
-      # Both halves of the manifest, because the runner is arm and the platform may pull either.
+      # Both halves of the manifest, because the platform may pull either.
       - name: Smoke-test alien-sandbox-agent
         env:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
