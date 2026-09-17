@@ -79,8 +79,9 @@ pub fn cross_account_repository_policy(aws_access: &AwsCrossAccountAccess) -> Va
     // Add service-specific access based on compute service types
     for service_type in &aws_access.allowed_service_types {
         match service_type {
-            // The cross-account statement above already covers a MicroVM image pull, and AWS has no
-            // separate service principal for one, so there is nothing further to grant here.
+            // Unreachable from the manager, which names only `Worker` on AWS. Were it reached,
+            // the cross-account statement above already covers a MicroVM image pull and AWS has no
+            // separate service principal for one, so there would be nothing further to grant.
             ComputeServiceType::Sandbox => {}
             ComputeServiceType::Worker => {
                 if !aws_access.account_ids.is_empty() {

@@ -25,9 +25,9 @@ use tracing::{debug, info, warn};
 fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     let mut members = Vec::new();
     for service_type in &access.allowed_service_types {
-        // Observed on a live project that had run a sandbox, alongside `gcp-sa-aiplatform`,
-        // `gcp-sa-aiplatform-re` and `gcp-sa-vertex-agent`; the sandbox agent is the one holding
-        // `roles/aiplatform.agentSandboxServiceAgent`. Naming an adjacent one is a 403 on first pull.
+        // A live sandbox was proven to pull a private Artifact Registry image as the sandbox
+        // service agent holding `roles/artifactregistry.reader`. Three adjacent Vertex agents
+        // exist (`gcp-sa-aiplatform`, `-re`, `gcp-sa-vertex-agent`); naming one is a 403 on pull.
         let agent_domain = match service_type {
             ComputeServiceType::Worker => "serverless-robot-prod",
             ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
@@ -655,12 +655,19 @@ mod tests {
     /// member to either.
     #[test]
     fn a_service_type_grants_nothing_for_a_project_it_does_not_name() {
+        // The service account is what separates this from the whole function returning nothing:
+        // with it empty too, deleting the per-type loop would leave the assertion passing.
         let members = cross_account_members(&GcpCrossAccountAccess {
             project_numbers: Vec::new(),
             allowed_service_types: vec![ComputeServiceType::Sandbox],
-            service_account_emails: Vec::new(),
+            service_account_emails: vec![
+                "management@test-project.iam.gserviceaccount.com".to_string()
+            ],
         });
 
-        assert!(members.is_empty());
+        assert_eq!(
+            members,
+            vec!["serviceAccount:management@test-project.iam.gserviceaccount.com"]
+        );
     }
 }

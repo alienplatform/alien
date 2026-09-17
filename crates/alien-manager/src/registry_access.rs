@@ -142,12 +142,9 @@ async fn revoke_registry_access(
             environment_info,
             CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                // Every service type, whatever this deployment granted: removal is a `retain`, so
-                // naming one never added is a no-op.
-                allowed_service_types: vec![
-                    ComputeServiceType::Worker,
-                    ComputeServiceType::Sandbox,
-                ],
+                // The same list the grant names: removal is a `retain`, so a type this deployment
+                // never added is a no-op, while one the revoke omits stays on the policy forever.
+                allowed_service_types: gcp_service_types(),
                 service_account_emails: Vec::new(),
             }),
             "last project consumer's shared registry access",
@@ -335,6 +332,12 @@ pub async fn cleanup_deleted_registry_access(
     let Some(artifact_registry) =
         load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
     else {
+        // Nothing was ever recorded as granted, so there is nothing this cleanup can strand. The
+        // guard above is prefix-blind and admits a sandbox whose image Alien never hosted, which
+        // on a manager that hosts no images has no binding to load.
+        if !registry_access_granted {
+            return Ok(());
+        }
         return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
             deployment_id: deployment_id.to_string(),
             reason: format!("artifact registry binding for '{platform}' is unavailable"),
@@ -401,11 +404,21 @@ fn repository_ids_for_access(
     repo_ids
 }
 
+/// The GCP service types a grant names, read by both the grant and the revoke path.
+///
+/// Every type whatever the stack declares, because the grant runs once per deployment and never
+/// re-runs: gating on today's stack would leave a deployment that adds a sandbox later with no
+/// member and a 403 at its first session. One definition because a type the revoke does not name
+/// stays on the repository policy with nothing left to remove it.
+fn gcp_service_types() -> Vec<ComputeServiceType> {
+    vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+}
+
 /// Whether this platform's sandbox takes its root filesystem from an image Alien hosts.
 ///
 /// AWS builds a MicroVM image from a published sandbox bundle and a GCP sandbox pulls its container
-/// from Alien's registry, so both earn a grant. Azure names an image from its own catalog and reads
-/// nothing from Alien's registry, so counting one there would claim a grant it never needs.
+/// from Alien's registry, so both earn a grant. Azure names an image from its own catalog, and the
+/// remaining platforms have no cross-account grant path at all.
 fn sandbox_pulls_from_alien_registry(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp)
 }
@@ -602,13 +615,7 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                // Both types whatever this deployment declares. The grant runs once per deployment
-                // and never re-runs, so gating on today's stack would leave a deployment that adds
-                // a sandbox later with no member and a 403 at its first session.
-                allowed_service_types: vec![
-                    ComputeServiceType::Worker,
-                    ComputeServiceType::Sandbox,
-                ],
+                allowed_service_types: gcp_service_types(),
                 service_account_emails,
             }))
         }
@@ -1323,6 +1330,37 @@ mod tests {
         assert!(has_registry_backed_image(&bundle_state, &Platform::Aws));
     }
 
+    /// The guard is prefix-blind, so it admits a GCP sandbox whose image Alien never hosted. That
+    /// deployment was never granted, and on a manager that hosts no images there is no binding to
+    /// load, so cleanup has to answer that there is nothing to strand rather than erroring.
+    #[test]
+    fn a_never_granted_gcp_sandbox_on_a_public_image_still_reaches_the_binding_lookup() {
+        let state = gcp_state_with_stack(sandbox_stack("ubuntu:24.04"));
+
+        assert!(
+            state
+                .runtime_metadata
+                .as_ref()
+                .is_none_or(|metadata| !metadata.registry_access_granted),
+            "the fixture must be a deployment that was never granted"
+        );
+        assert!(
+            has_registry_backed_image(&state, &Platform::Gcp),
+            "the prefix-blind guard admits it, so cleanup proceeds past the early return"
+        );
+        assert!(
+            repository_ids_for_access(
+                &TestArtifactRegistry {
+                    prefix: "alien-artifacts-prj_test".to_string(),
+                    fail_remove: false,
+                },
+                &state
+            )
+            .is_empty(),
+            "nothing under the prefix, which is why no grant was ever recorded"
+        );
+    }
+
     #[test]
     fn aws_registry_access_covers_a_worker_and_a_sandbox_together() {
         let registry = TestArtifactRegistry {
@@ -1383,10 +1421,10 @@ mod tests {
         );
     }
 
-    /// Each compute service pulls as its own Google-managed service agent. Naming the wrong one is
-    /// a 403 at the first session, so the pair is pinned rather than described.
+    /// The grant names both service types whatever the stack declares, so a deployment that adds a
+    /// sandbox after its one-shot grant still has a member. The agent domains are `gar.rs`'s.
     #[test]
-    fn the_gcp_grant_names_both_service_agents() {
+    fn the_gcp_grant_names_both_service_types() {
         let access = build_cross_account_access(
             &EnvironmentInfo::Gcp(GcpEnvironmentInfo {
                 project_number: "123456789012".to_string(),
