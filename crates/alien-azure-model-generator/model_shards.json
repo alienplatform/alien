@@ -1,0 +1,37 @@
+{
+  "1": [
+    "publicIpAddress.json",
+    "networkSecurityGroup.json",
+    "keyvault.json",
+    "certificates.json",
+    "table.json"
+  ],
+  "2": [
+    "ComputeRP.json",
+    "DiskRP.json",
+    "blob.json",
+    "ManagedEnvironmentsDaprComponents.json",
+    "authorization-RoleAssignmentsCalls.json"
+  ],
+  "3": [
+    "managedClusters.json",
+    "ContainerApps.json",
+    "ManagedEnvironments.json",
+    "Queue.json",
+    "authorization-RoleDefinitionsCalls.json"
+  ],
+  "4": [
+    "virtualNetwork.json",
+    "storage.json",
+    "resources.json",
+    "ManagedIdentity.json",
+    "secrets.json"
+  ],
+  "5": [
+    "loadBalancer.json",
+    "containerregistry.json",
+    "Jobs.json",
+    "namespace-preview.json",
+    "natGateway.json"
+  ]
+}

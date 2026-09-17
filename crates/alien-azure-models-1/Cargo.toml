@@ -1,0 +1,24 @@
+[package]
+name = "alien-azure-models-1"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+homepage.workspace = true
+repository.workspace = true
+license-file.workspace = true
+
+[features]
+default = ["full-models"]
+full-models = []
+
+[dependencies]
+chrono = { workspace = true, features = ["serde"] }
+regress = "0.11.0"
+serde = { workspace = true, features = ["derive"] }
+serde-aux = "4"
+serde_json = { workspace = true }
+uuid = { workspace = true, features = ["serde"] }
+
+[build-dependencies]
+alien-azure-model-generator = { path = "../alien-azure-model-generator", version = "3.3.22" }
