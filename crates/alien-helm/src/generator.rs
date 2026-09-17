@@ -390,6 +390,10 @@ fn add_remote_operator_files(
         identity_record,
     );
     files.insert(
+        "templates/remote-operator-identity-initialized.yaml".to_string(),
+        remote_operator_identity_initialized_tpl(),
+    );
+    files.insert(
         "templates/remote-operator-identity-gate.yaml".to_string(),
         remote_operator_identity_gate_tpl(),
     );
@@ -513,6 +517,9 @@ fn remote_operator_identity_record_tpl(
 {{{{- define "deployment.remoteOperatorIdentityCompletionName" -}}}}
 {{{{ printf "%s-complete" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorIdentityInitializedName" -}}}}
+{{{{ printf "%s-initialized" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{- end -}}}}
 {{{{- if .Values.remoteOperator.enabled -}}}}
 {{{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}}}
 {{{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}}}
@@ -545,6 +552,35 @@ data:
         credentials_secret_name = credentials_secret_name,
         credentials_encryption_key_sha256 = credentials_encryption_key_sha256,
     )
+}
+
+fn remote_operator_identity_initialized_tpl() -> String {
+    r#"{{- if .Values.remoteOperator.enabled -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
+{{- if not $identityInitialized }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $identityInitializedName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    alien.dev/remote-operator-identity-phase: initialized
+    alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+immutable: true
+data:
+  version: "1"
+  identityRecordName: {{ include "deployment.remoteOperatorIdentityRecordName" . | quote }}
+{{- end }}
+{{- end }}
+"#
+    .to_string()
 }
 
 fn remote_operator_identity_completion_tpl() -> String {
@@ -650,6 +686,7 @@ spec:
               release_service={{ .Release.Service | quote }}
               release_id={{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
               identity_record="$resource_name"
+              identity_initialized={{ include "deployment.remoteOperatorIdentityInitializedName" . | quote }}
               identity_completion="$resource_name-complete"
               identity_pvc="$resource_name-identity"
 
@@ -678,19 +715,13 @@ spec:
                   exit 1
                 fi
               }
-              operator_has_started() {
-                started_at="$(kubectl -n "$namespace" get pods \
-                  --selector="app.kubernetes.io/instance=$resource_name,app.kubernetes.io/component=operator" \
-                  --output='jsonpath={range .items[*].status.containerStatuses[*]}{.state.running.startedAt}{.state.terminated.startedAt}{.lastState.terminated.startedAt}{end}')" || {
-                  echo "Refusing cleanup: cannot determine whether the Remote Operator container started." >&2
-                  exit 1
-                }
-                [ -n "$started_at" ]
-              }
-
               if ! resource_exists configmap "$identity_record"; then
                 if resource_exists configmap "$identity_completion"; then
                   echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
+                  exit 1
+                fi
+                if resource_exists configmap "$identity_initialized"; then
+                  echo "Refusing cleanup: initialization record $namespace/$identity_initialized exists without its identity record." >&2
                   exit 1
                 fi
                 echo "No Remote Operator identity record exists for this release; nothing to clean up."
@@ -705,6 +736,19 @@ spec:
               require_field configmap "$identity_record" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
               require_field configmap "$identity_record" '{.immutable}' true immutability
               require_field configmap "$identity_record" '{.data.version}' 3 version
+
+              if resource_exists configmap "$identity_initialized"; then
+                require_field configmap "$identity_initialized" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$identity_initialized" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$identity_initialized" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                require_field configmap "$identity_initialized" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$identity_initialized" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$identity_initialized" '{.metadata.labels.alien\.dev/remote-operator-identity-phase}' initialized identity-phase
+                require_field configmap "$identity_initialized" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$identity_initialized" '{.immutable}' true immutability
+                require_field configmap "$identity_initialized" '{.data.version}' 1 version
+                require_field configmap "$identity_initialized" '{.data.identityRecordName}' "$identity_record" identity-record-reference
+              fi
 
               if resource_exists configmap "$identity_completion"; then
                 require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
@@ -731,14 +775,14 @@ spec:
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
               fi
 
-              if ! resource_exists configmap "$identity_completion" && operator_has_started; then
+              if ! resource_exists configmap "$identity_completion" && resource_exists configmap "$identity_initialized"; then
                 echo "Retaining the prepared Remote Operator identity because initialization started before this incomplete install was deleted."
                 exit 0
               fi
 
               # Stop the exact release-owned workload first.
               kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
-              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_completion" --ignore-not-found=true
+              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_initialized" "$identity_completion" --ignore-not-found=true
               kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true --wait=false
 "#
     .to_string()
@@ -929,8 +973,10 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 __COLLECTOR_CHECK__{{- end -}}
 {{- if and (or .Release.IsInstall .Release.IsUpgrade) (or .Values.remoteOperator.enabled .Release.IsUpgrade) -}}
 {{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
 {{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
 {{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}
+{{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
 {{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
 {{- if $identityRecord -}}
   {{- $recordAnnotations := default dict $identityRecord.metadata.annotations -}}
@@ -950,6 +996,20 @@ __COLLECTOR_CHECK__{{- end -}}
     {{- end -}}
   {{- end -}}
 {{- end -}}
+{{- if $identityInitialized -}}
+  {{- $initializedAnnotations := default dict $identityInitialized.metadata.annotations -}}
+  {{- $initializedLabels := default dict $identityInitialized.metadata.labels -}}
+  {{- $initializedData := default dict $identityInitialized.data -}}
+  {{- if or (ne (index $initializedAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $initializedAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $initializedAnnotations "helm.sh/resource-policy") "keep") (ne (index $initializedLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $initializedLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $initializedLabels "alien.dev/remote-operator-identity-phase") "initialized") (ne (index $initializedLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $identityInitialized.immutable)) (ne (len $initializedData) 2) (ne (index $initializedData "version") "1") (not (hasKey $initializedData "identityRecordName")) -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the immutable initialization-record contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $identityInitializedName) -}}
+  {{- end -}}
+  {{- if not $identityRecord -}}
+    {{- fail (printf "Remote Operator initialization record %s/%s exists without identity record %s. Restore the retained identity record before retrying." .Release.Namespace $identityInitializedName $identityRecordName) -}}
+  {{- end -}}
+  {{- if ne (default "" (index $initializedData "identityRecordName")) $identityRecordName -}}
+    {{- fail (printf "Remote Operator initialization record %s/%s does not reference identity record %s. Refusing adoption." .Release.Namespace $identityInitializedName $identityRecordName) -}}
+  {{- end -}}
+{{- end -}}
 {{- if $identityCompletion -}}
   {{- if .Release.IsInstall -}}
     {{- fail (printf "ConfigMap %s/%s records a completed Remote Operator identity from an earlier release. Refusing reinstall even when stale Helm ownership metadata names this release." .Release.Namespace $identityCompletionName) -}}
@@ -963,6 +1023,9 @@ __COLLECTOR_CHECK__{{- end -}}
   {{- if not $identityRecord -}}
     {{- fail (printf "Remote Operator completion record %s/%s exists without identity record %s. Restore the retained identity record before retrying." .Release.Namespace $identityCompletionName $identityRecordName) -}}
   {{- end -}}
+  {{- if not $identityInitialized -}}
+    {{- fail (printf "Remote Operator completion record %s/%s exists without initialization record %s. Restore the retained initialization record before retrying." .Release.Namespace $identityCompletionName $identityInitializedName) -}}
+  {{- end -}}
   {{- if ne (default "" (index $completionData "identityRecordName")) $identityRecordName -}}
     {{- fail (printf "Remote Operator completion record %s/%s does not reference identity record %s. Refusing adoption." .Release.Namespace $identityCompletionName $identityRecordName) -}}
   {{- end -}}
@@ -970,7 +1033,7 @@ __COLLECTOR_CHECK__{{- end -}}
 {{- $preparedIdentity := and $identityRecord (not $identityCompletion) -}}
 {{- $preparedRetry := and .Values.remoteOperator.enabled $preparedIdentity -}}
 {{- $identityState := dict "managedResourceExists" false "otherManagedResourceExists" false "identityMissing" false -}}
-{{- if or .Values.remoteOperator.enabled $identityRecord $identityCompletion -}}
+{{- if or .Values.remoteOperator.enabled $identityRecord $identityInitialized $identityCompletion -}}
 {{- range $document := splitList "\n---\n" (include "deployment.remoteOperatorResources" .) -}}
   {{- $resource := fromYaml $document -}}
   {{- if and $resource $resource.kind $resource.metadata.name -}}
@@ -1001,7 +1064,7 @@ __COLLECTOR_CHECK__{{- end -}}
   {{- fail "A prepared Remote Operator retry may reuse only its exact-release owned retained identity PVC. Refusing adoption of another managed resource." -}}
 {{- end -}}
 {{- $safePreparedRollback := and (not .Values.remoteOperator.enabled) $preparedIdentity -}}
-{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) -}}
+{{- if and .Release.IsUpgrade (not .Values.remoteOperator.enabled) (or $identityRecord $identityInitialized $identityCompletion (get $identityState "managedResourceExists")) (not $safePreparedRollback) -}}
   {{- fail "Disabling Remote Operator on an existing release would delete its identity and managed resources. Uninstall the Remote Operator through the explicit lifecycle flow instead." -}}
 {{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "managedResourceExists") (not $identityRecord) -}}
@@ -1010,7 +1073,7 @@ __COLLECTOR_CHECK__{{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled .Values.remoteOperator.bootstrapIdentity $identityCompletion -}}
   {{- fail "remoteOperator.bootstrapIdentity has already been consumed by this release. Set it to false; the retained completion record prevents replacement after total workload deletion." -}}
 {{- end -}}
-{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "identityMissing") $identityCompletion -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "identityMissing") (or $identityInitialized $identityCompletion) -}}
   {{- fail "The Remote Operator identity volume is missing from a partial installation. Restore it; an upgrade must not bootstrap a replacement identity." -}}
 {{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (get $identityState "identityMissing") (not $preparedRetry) (not .Values.remoteOperator.bootstrapIdentity) -}}
@@ -6074,8 +6137,10 @@ mod tests {
         ));
         assert!(cleanup.contains("require_field deployment"));
         assert!(cleanup.contains("require_field persistentvolumeclaim"));
-        assert!(cleanup.contains("operator_has_started"));
-        assert!(cleanup.contains(".lastState.terminated.startedAt"));
+        assert!(cleanup.contains("identity_initialized"));
+        assert!(cleanup.contains("initialization record"));
+        assert!(!cleanup.contains("operator_has_started"));
+        assert!(!cleanup.contains("startedAt"));
         assert!(cleanup.contains("Retaining the prepared Remote Operator identity"));
         assert!(!cleanup.contains("claimName:"));
         assert!(cleanup.contains("delete deployment \"$resource_name\""));
@@ -6109,6 +6174,14 @@ mod tests {
         assert!(identity_record.contains("immutable: true"));
         assert!(identity_record.contains("credentialsSecretName"));
         assert!(identity_record.contains("encryptionKeySha256"));
+        let identity_initialized =
+            &chart.files["templates/remote-operator-identity-initialized.yaml"];
+        assert!(identity_initialized.contains("remoteOperatorIdentityInitializedName"));
+        assert!(
+            identity_initialized.contains("alien.dev/remote-operator-identity-phase: initialized")
+        );
+        assert!(identity_initialized.contains("helm.sh/resource-policy: keep"));
+        assert!(identity_initialized.contains("immutable: true"));
         let identity_completion = &chart.files["templates/remote-operator-identity-complete.yaml"];
         assert!(identity_completion.contains("helm.sh/hook: post-install,post-upgrade"));
         assert!(identity_completion.contains("alien.dev/remote-operator-identity-phase: complete"));
@@ -6125,6 +6198,7 @@ mod tests {
         assert!(remote_template.contains("port: readiness"));
         for (name, template) in [
             ("identity record", identity_record),
+            ("identity initialization", identity_initialized),
             ("identity completion", identity_completion),
             ("lifecycle checks", checks),
         ] {

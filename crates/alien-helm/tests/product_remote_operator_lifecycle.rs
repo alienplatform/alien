@@ -285,6 +285,23 @@ rules:
         1,
         "atomic cleanup must retain the prepared identity after initialization starts: {retained_prepared:?}"
     );
+    let retained_initialization = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            "--namespace",
+            &helm_namespace,
+            "--selector=alien.dev/remote-operator-identity-phase=initialized",
+            "--output=name",
+        ],
+        None,
+    );
+    assert_eq!(
+        retained_initialization.stdout.lines().count(),
+        1,
+        "atomic cleanup must retain the durable initialization record after the pod is gone: {retained_initialization:?}"
+    );
     let retained_identity = run_ok(
         "kubectl",
         [
@@ -518,7 +535,24 @@ spec:
     );
     assert!(
         completion.stdout.trim().is_empty(),
-        "failed enable must retain only the prepared identity record: {completion:?}"
+        "failed enable must not claim identity completion: {completion:?}"
+    );
+    let initialized = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            "--namespace",
+            &helm_namespace,
+            "--selector=alien.dev/remote-operator-identity-phase=initialized",
+            "--output=name",
+        ],
+        None,
+    );
+    assert_eq!(
+        initialized.stdout.lines().count(),
+        1,
+        "failed enable must retain a durable initialization record independently of live pods: {initialized:?}"
     );
 
     let retry = helm_upgrade_args(
@@ -598,6 +632,7 @@ spec:
     run_ok("kubectl", ["get", "crd", CRD_NAME], None);
     for selector in [
         "alien.dev/remote-operator-identity-record=true",
+        "alien.dev/remote-operator-identity-phase=initialized",
         "alien.dev/remote-operator-identity-phase=complete",
     ] {
         let retained = run_ok(
