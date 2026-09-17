@@ -156,6 +156,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Validate the config locally without authentication, API calls, or deployment tracking.
+    #[arg(long, requires = "config")]
+    pub validate_only: bool,
+
     /// Stack input value for setup (id=value).
     #[arg(long = "input")]
     pub input_values: Vec<String>,
@@ -1429,6 +1433,33 @@ region = "old"
     }
 
     #[test]
+    fn validate_only_needs_no_token_and_rejects_cross_provider_network() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+platform = "aws"
+
+[network]
+type = "byo-vpc-gcp"
+network_name = "network"
+subnet_name = "subnet"
+region = "us-central1"
+"#,
+        )
+        .expect("config syntax should parse");
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+
+        let error = validate_deploy_config(&args, None, Some(&config))
+            .expect_err("cross-provider network must fail locally");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("not compatible"));
+    }
+
+    #[test]
     fn stack_input_values_are_typed() {
         let values = collect_deployer_input_values(
             &[
@@ -1457,6 +1488,11 @@ region = "old"
 
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
     let deploy_config = load_deploy_config(&args)?;
+    if args.validate_only {
+        validate_deploy_config(&args, embedded_config, deploy_config.as_ref())?;
+        output::success("Deployment config is valid.");
+        return Ok(());
+    }
     // Resolve token and platform from args, embedded config, or tracked deployment
     let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
     let token = resolved.token;
@@ -1921,6 +1957,59 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     eprintln!();
     output::success(&format!("Deployment '{}' is active.", name));
 
+    Ok(())
+}
+
+fn validate_deploy_config(
+    args: &UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<()> {
+    let config = deploy_config.expect("clap requires --config with --validate-only");
+    let platform_name = args
+        .platform
+        .as_deref()
+        .or(config.platform.as_deref())
+        .or_else(|| embedded_config.and_then(|value| value.default_platform.as_deref()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: "Config field `platform` or --platform is required for validation."
+                    .to_string(),
+            })
+        })?;
+    let platform = Platform::from_str(platform_name).map_err(|message| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message,
+        })
+    })?;
+    let base_platform = args
+        .base_platform
+        .as_deref()
+        .or(config.base_platform.as_deref());
+    parse_base_platform(platform, base_platform)?;
+    let settings = load_stack_settings(args, platform, Some(config))?;
+    if let Some(network_settings) = settings.network.as_ref() {
+        network::validate_network_settings_for_platform(network_settings, platform).map_err(
+            |message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message,
+                })
+            },
+        )?;
+    }
+    if let Some(compute) = settings.compute.as_ref() {
+        for (pool, selection) in &compute.pools {
+            selection.validate().map_err(|message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: format!("compute.pools.{pool}"),
+                    message,
+                })
+            })?;
+        }
+    }
     Ok(())
 }
 

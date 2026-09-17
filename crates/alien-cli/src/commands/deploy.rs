@@ -87,6 +87,10 @@ pub struct DeployArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Validate the config locally without authentication, API calls, or deployment tracking.
+    #[arg(long, requires = "config")]
+    pub validate_only: bool,
+
     /// Stack input value for setup (id=value).
     #[arg(long = "input")]
     pub input_values: Vec<String>,
@@ -274,6 +278,16 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         })?;
 
     let network_settings = resolve_network_settings(args, config.as_ref(), &platform)?;
+    if let Some(settings) = network_settings.as_ref() {
+        network::validate_network_settings_for_platform(settings, platform_enum).map_err(
+            |message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message,
+                })
+            },
+        )?;
+    }
     let input_values = collect_raw_input_values(
         config.as_ref(),
         &args.input_values,
@@ -1099,6 +1113,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     }
 
     let resolved_args = resolve_deploy_args(&args)?;
+
+    if args.validate_only {
+        println!("Deployment config is valid.");
+        return Ok(());
+    }
 
     if let ExecutionMode::Dev { port } = ctx {
         return deploy_local_dev_task(resolved_args, port).await;
@@ -1993,6 +2012,19 @@ mod tests {
             "aws",
         ])
         .expect_err("deployment-group selector and scoped token must conflict");
+    }
+
+    #[test]
+    fn validate_only_requires_a_config_file() {
+        DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "production",
+            "--platform",
+            "aws",
+            "--validate-only",
+        ])
+        .expect_err("validation must name the config being validated");
     }
 
     #[test]
