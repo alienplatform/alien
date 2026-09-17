@@ -1043,6 +1043,10 @@ fn generate_operator_manifest_inner(
         .map(str::to_string)
         .unwrap_or_else(|| format!("{base_name}-operator"));
     let identity_pvc_name = format!("{operator_name}-identity");
+    // Product charts pin an Operator image built with the readiness server.
+    // The standalone generator accepts arbitrary released images, including
+    // versions that predate that endpoint, so it must not require the probe.
+    let supports_readiness = credentials_secret_name.is_some();
     let creates_credentials_secret = credentials_secret_name.is_none();
     let credentials_secret_name = credentials_secret_name.unwrap_or(operator_name.as_str());
 
@@ -1140,6 +1144,7 @@ fn generate_operator_manifest_inner(
         &operator_name,
         &identity_pvc_name,
         credentials_secret_name,
+        supports_readiness,
         &options,
         namespace,
         &environment_name_expr,
@@ -1907,6 +1912,7 @@ fn operator_deployment_doc(
     operator_name: &str,
     identity_pvc_name: &str,
     credentials_secret_name: &str,
+    supports_readiness: bool,
     options: &OperatorManifestOptions<'_>,
     observed_namespace: &str,
     environment_name: &str,
@@ -1987,7 +1993,9 @@ fn operator_deployment_doc(
     append_env_value(&mut yaml, "OPERATOR_INITIAL_DESIRED_RELEASE", "none");
     append_env_value(&mut yaml, "OPERATOR_SETUP_METHOD", "manual");
     append_env_value(&mut yaml, "DATA_DIR", "/var/lib/operator");
-    append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
+    if supports_readiness {
+        append_env_value(&mut yaml, "OPERATOR_READINESS_PORT", "8081");
+    }
     if options.log_collector.is_some() {
         append_env_value(&mut yaml, "OTLP_HOST", "0.0.0.0");
         append_env_value(&mut yaml, "OTLP_PORT", "8080");
@@ -2015,19 +2023,25 @@ fn operator_deployment_doc(
         "/etc/operator/secrets/encryption-key",
     );
     append_env_value(&mut yaml, "SYNC_INTERVAL", "30");
-    yaml.push_str("          ports:\n");
-    yaml.push_str("            - name: readiness\n");
-    yaml.push_str("              containerPort: 8081\n");
+    if supports_readiness || options.log_collector.is_some() {
+        yaml.push_str("          ports:\n");
+    }
+    if supports_readiness {
+        yaml.push_str("            - name: readiness\n");
+        yaml.push_str("              containerPort: 8081\n");
+    }
     if options.log_collector.is_some() {
         yaml.push_str("            - name: http\n");
         yaml.push_str("              containerPort: 8080\n");
     }
-    yaml.push_str("          readinessProbe:\n");
-    yaml.push_str("            httpGet:\n");
-    yaml.push_str("              path: /ready\n");
-    yaml.push_str("              port: readiness\n");
-    yaml.push_str("            periodSeconds: 2\n");
-    yaml.push_str("            failureThreshold: 150\n");
+    if supports_readiness {
+        yaml.push_str("          readinessProbe:\n");
+        yaml.push_str("            httpGet:\n");
+        yaml.push_str("              path: /ready\n");
+        yaml.push_str("              port: readiness\n");
+        yaml.push_str("            periodSeconds: 2\n");
+        yaml.push_str("            failureThreshold: 150\n");
+    }
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: credentials\n");
     yaml.push_str("              mountPath: /etc/operator/secrets\n");
@@ -5501,9 +5515,19 @@ mod tests {
         assert!(env_names.contains(&"OPERATOR_PERMISSION"));
         assert!(env_names.contains(&"OPERATOR_INITIAL_DESIRED_RELEASE"));
         assert!(env_names.contains(&"SYNC_TOKEN_FILE"));
+        assert!(!env_names.contains(&"OPERATOR_READINESS_PORT"));
         assert!(
             !env_names.contains(&"DEPLOYMENT_ID"),
             "first boot must self-register and then persist deployment identity"
+        );
+        let container = &deployment["spec"]["template"]["spec"]["containers"][0];
+        assert!(
+            container.get("readinessProbe").is_none(),
+            "standalone manifests accept older pinned Operator images without /ready"
+        );
+        assert!(
+            container.get("ports").is_none(),
+            "standalone manifests without a collector expose no container ports"
         );
 
         // Object names derive from the project (stable per app); the per-environment
