@@ -3869,7 +3869,7 @@ mod volume_operation_tests {
         let response: DescribeAddressesResponse = quick_xml::de::from_str(
             r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
                 <addressesSet>
-                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><publicIpv4Pool>amazon</publicIpv4Pool></item>
                     <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
                     <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
@@ -3883,6 +3883,7 @@ mod volume_operation_tests {
             addresses.items[0].allocation_id.as_deref(),
             Some("eipalloc-1")
         );
+        assert_eq!(addresses.items[0].public_ipv4_pool.as_deref(), Some("amazon"));
         assert!(addresses
             .items
             .iter()

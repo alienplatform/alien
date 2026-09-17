@@ -193,7 +193,8 @@ fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usiz
         addresses
             .into_iter()
             .filter(|address| {
-                address.domain.as_deref() == Some("vpc") && address.public_ipv4_pool.is_none()
+                address.domain.as_deref() == Some("vpc")
+                    && matches!(address.public_ipv4_pool.as_deref(), None | Some("amazon"))
             })
             .count(),
     )
@@ -473,6 +474,12 @@ mod tests {
                         allocation_id: Some("eipalloc-amazon".to_string()),
                         public_ip: None,
                         domain: Some("vpc".to_string()),
+                        public_ipv4_pool: Some("amazon".to_string()),
+                    },
+                    Address {
+                        allocation_id: Some("eipalloc-amazon-legacy".to_string()),
+                        public_ip: None,
+                        domain: Some("vpc".to_string()),
                         public_ipv4_pool: None,
                     },
                     Address {
@@ -485,7 +492,7 @@ mod tests {
             }),
         };
 
-        assert_eq!(quota_consuming_eip_usage(response), Some(1));
+        assert_eq!(quota_consuming_eip_usage(response), Some(2));
     }
 
     #[test]
@@ -515,7 +522,7 @@ mod tests {
                             allocation_id: Some("eipalloc-amazon-1".to_string()),
                             public_ip: None,
                             domain: Some("vpc".to_string()),
-                            public_ipv4_pool: None,
+                            public_ipv4_pool: Some("amazon".to_string()),
                         },
                         Address {
                             allocation_id: Some("eipalloc-byoip".to_string()),
