@@ -239,13 +239,22 @@ const TI: u64 = GI * 1024;
 /// controller contract; rejecting here is preferable to failing after cloud
 /// resources have already been created.
 pub fn max_configurable_ephemeral_storage_bytes(platform: Platform) -> Option<u64> {
-    match platform {
+    let disk_limit_gib = match platform {
         // AWS gp3 and GCP persistent disks currently top out at 64 TiB.
-        Platform::Aws | Platform::Gcp => Some((64 * TI - 12 * GI) * 4 / 5),
+        Platform::Aws | Platform::Gcp => 64 * 1024,
         // Azure managed OS disks currently top out at 4,095 GiB.
-        Platform::Azure => Some((4_095 * GI - 12 * GI) * 4 / 5),
-        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => None,
-    }
+        Platform::Azure => 4_095,
+        Platform::Kubernetes | Platform::Machines | Platform::Local | Platform::Test => {
+            return None;
+        }
+    };
+
+    // Controllers first round the requested bytes up to a whole GiB, then
+    // round the 25% headroom up again. Returning a fractional-GiB bound would
+    // therefore admit `bound + 1 byte` and materialize a disk one GiB over the
+    // provider limit.
+    let max_requested_gib = (disk_limit_gib - 12) * 4 / 5;
+    Some(max_requested_gib * GI)
 }
 
 /// The complete instance type catalog.
@@ -1879,6 +1888,24 @@ mod tests {
             };
 
             assert!(select_instance_type(platform, &req).is_err());
+        }
+    }
+
+    #[test]
+    fn test_configurable_disk_limits_account_for_controller_rounding() {
+        for (platform, disk_limit_gib) in [
+            (Platform::Aws, 64 * 1024),
+            (Platform::Gcp, 64 * 1024),
+            (Platform::Azure, 4_095),
+        ] {
+            let max = max_configurable_ephemeral_storage_bytes(platform).unwrap();
+            let materialized_disk_gib = |requested_bytes: u64| {
+                let requested_gib = requested_bytes.div_ceil(GI);
+                (requested_gib * 5).div_ceil(4) + 12
+            };
+
+            assert!(materialized_disk_gib(max) <= disk_limit_gib);
+            assert!(materialized_disk_gib(max + 1) > disk_limit_gib);
         }
     }
 
