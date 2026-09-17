@@ -288,6 +288,22 @@ mod tests {
 
     /// The ending an image declares and the isolation it claims come off one value, so they
     /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
+    /// Every consumer now derives these, so nothing else compares them against a number. The
+    /// setup emitters tell the agent which uid to drop to; if that stops matching the uid the
+    /// image creates, the sandbox starts and every exec fails.
+    #[test]
+    fn the_two_images_carry_the_identities_their_stacks_were_built_against() {
+        assert_eq!(AWS_MICROVM.port, 8971);
+        assert_eq!(AWS_MICROVM.exec_uid, 60000);
+        assert_eq!(AWS_MICROVM.session_root, "/sandbox");
+        assert_eq!(GCP_AGENT_PLATFORM.port, 8080);
+        assert_eq!(GCP_AGENT_PLATFORM.exec_uid, 1000);
+        assert_eq!(GCP_AGENT_PLATFORM.session_root, "/sandbox");
+        for image in [&AWS_MICROVM, &GCP_AGENT_PLATFORM] {
+            assert_ne!(image.exec_uid, 0, "the exec uid must never be root");
+        }
+    }
+
     /// is why the whole-file comparison above covers only the GCP side of it.
     #[test]
     fn the_ending_an_image_declares_follows_its_isolation() {
