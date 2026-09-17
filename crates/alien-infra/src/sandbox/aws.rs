@@ -25,6 +25,7 @@ use alien_aws_clients::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
     ResourceStatus, Sandbox, SandboxCode, SandboxOutputs,
@@ -32,12 +33,6 @@ use alien_core::{
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_macros::controller;
 use sha2::{Digest, Sha256};
-
-/// Port the in-image agent serves, both its own protocol and the lifecycle hooks.
-const AGENT_PORT: u16 = 8971;
-
-/// Unprivileged identity commands run as inside the sandbox, never the agent's own.
-const EXEC_UID: &str = "60000";
 
 /// The only architecture MicroVM images accept.
 const ARCHITECTURE: &str = "ARM_64";
@@ -1113,7 +1108,7 @@ fn aws_partition(region: &str) -> &'static str {
 /// CSPRNG after each start, because every MicroVM shares the state resident at capture.
 fn agent_hooks() -> MicrovmImageHooks {
     MicrovmImageHooks::builder()
-        .port(AGENT_PORT)
+        .port(AWS_MICROVM.port)
         .microvm_image_hooks(MicrovmImageBuildHooks {
             ready: "ENABLED".to_string(),
             ready_timeout_in_seconds: 120,
@@ -1128,16 +1123,31 @@ fn agent_hooks() -> MicrovmImageHooks {
 }
 
 /// The agent's configuration contract, identical to the setup emitters' rendering.
+///
+/// `ALIEN_SANDBOX_ISOLATION` is absent here and from both setup emitters. The image's own `ENV`
+/// is the only place it is set.
 fn agent_environment() -> BTreeMap<String, String> {
     BTreeMap::from([
-        ("ALIEN_SANDBOX_ROOT".to_string(), "/sandbox".to_string()),
-        ("ALIEN_SANDBOX_PORT".to_string(), AGENT_PORT.to_string()),
+        (
+            "ALIEN_SANDBOX_ROOT".to_string(),
+            AWS_MICROVM.session_root.to_string(),
+        ),
+        (
+            "ALIEN_SANDBOX_PORT".to_string(),
+            AWS_MICROVM.port.to_string(),
+        ),
         (
             "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
-            "transport".to_string(),
+            AWS_MICROVM.authorization.env_value().to_string(),
         ),
-        ("ALIEN_SANDBOX_EXEC_UID".to_string(), EXEC_UID.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID".to_string(), EXEC_UID.to_string()),
+        (
+            "ALIEN_SANDBOX_EXEC_UID".to_string(),
+            AWS_MICROVM.exec_uid.to_string(),
+        ),
+        (
+            "ALIEN_SANDBOX_EXEC_GID".to_string(),
+            AWS_MICROVM.exec_uid.to_string(),
+        ),
     ])
 }
 
@@ -1580,7 +1590,7 @@ mod tests {
                     && request
                         .hooks
                         .as_ref()
-                        .is_some_and(|hooks| hooks.port == AGENT_PORT)
+                        .is_some_and(|hooks| hooks.port == AWS_MICROVM.port)
                     && request
                         .environment_variables
                         .get("ALIEN_SANDBOX_PORT")

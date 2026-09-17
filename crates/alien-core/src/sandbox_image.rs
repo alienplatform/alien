@@ -38,7 +38,8 @@ pub enum Isolation {
 }
 
 impl Isolation {
-    fn env_value(self) -> &'static str {
+    /// The `ALIEN_SANDBOX_ISOLATION` value the agent parses.
+    pub fn env_value(self) -> &'static str {
         match self {
             Self::UidSplit => "uid-split",
             Self::Platform => "platform",
@@ -57,7 +58,8 @@ pub enum Authorization {
 }
 
 impl Authorization {
-    fn env_value(self) -> &'static str {
+    /// The `ALIEN_SANDBOX_AUTHORIZATION` value the agent parses.
+    pub fn env_value(self) -> &'static str {
         match self {
             Self::Transport => "transport",
             Self::Capability => "capability",

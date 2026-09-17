@@ -24,8 +24,8 @@ use base64::Engine as _;
 use tempfile::TempDir;
 use tokio::sync::mpsc;
 
-/// The uid the shipped image runs commands as, from `alien_build::sandbox_bundle`.
-const EXEC_UID: u32 = 60000;
+/// The uid the shipped image runs commands as.
+const EXEC_UID: u32 = alien_core::sandbox_image::AWS_MICROVM.exec_uid;
 
 fn exec_identity() -> ExecIdentity {
     ExecIdentity {

@@ -18,7 +18,7 @@ use tracing::{info, warn};
 use crate::core::ResourceControllerContext;
 use crate::error::{ErrorData, Result};
 use crate::sandbox::GcpAgentPlatformEngineController;
-use alien_core::sandbox_process::GCP_AGENT_PORT;
+use alien_core::sandbox_image::GCP_AGENT_PLATFORM;
 use alien_core::{
     GcpAgentPlatformEngine, ResourceOutputs, ResourceRef, ResourceStatus, Sandbox, SandboxCode,
     SandboxLimits,
@@ -117,7 +117,7 @@ fn build_template_body(
             // out because every create this preview API has accepted carried it, and no request
             // omitting it has ever been shown to be accepted.
             ports: vec![ContainerPort {
-                port: i32::from(GCP_AGENT_PORT),
+                port: i32::from(GCP_AGENT_PLATFORM.port),
                 protocol: Some("TCP".to_string()),
             }],
             extra: Default::default(),
@@ -1239,7 +1239,7 @@ mod tests {
         let wire = serde_json::to_value(&body).expect("the template body serializes");
         assert_eq!(
             wire["customContainerEnvironment"]["ports"],
-            serde_json::json!([{ "port": GCP_AGENT_PORT, "protocol": "TCP" }]),
+            serde_json::json!([{ "port": GCP_AGENT_PLATFORM.port, "protocol": "TCP" }]),
             "the create body must carry the port and protocol the API has accepted"
         );
     }

@@ -272,11 +272,11 @@ jobs:
           cargo test -p alien-bindings --features platform-sdk --lib remote::
 
       - name: Sandbox agent image contract
-        # `sandbox-process` is not a default feature either, so these drift tests
-        # are cfg'd out of the workspace run and reach it only through whichever
-        # crate happens to enable the feature. Named here, they cannot go quiet.
+        # The committed GCP Dockerfile is generated from the contract, and this
+        # compares the two. Named here so a Dockerfile-only change still fails
+        # visibly rather than inside the workspace run.
         run: |
-          cargo test -p alien-core --features sandbox-process --lib sandbox_process::gcp_image_contract
+          cargo test -p alien-core --lib sandbox_image
 
   typescript:
     name: TypeScript packages and CLIs

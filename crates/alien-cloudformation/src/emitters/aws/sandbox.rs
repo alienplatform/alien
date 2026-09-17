@@ -26,7 +26,7 @@ use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, Bindi
 const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
-const AGENT_PORT: i64 = 8971;
+const AGENT_PORT: i64 = alien_core::sandbox_image::AGENT_PORT as i64;
 
 /// Unprivileged identity commands run as inside the sandbox, never the agent's own.
 const EXEC_UID: &str = "60000";
