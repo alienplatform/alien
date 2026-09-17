@@ -872,7 +872,8 @@ mod gcp_image_contract {
         let dockerfile = dockerfile();
 
         let copy = step_with(&dockerfile, "COPY ");
-        // The destination is a COPY's last argument, and the only argument every form shares.
+        // The destination is the last argument of a shell-form COPY. A JSON-array one would
+        // fail this comparison rather than pass it.
         let destination = copy
             .split_whitespace()
             .next_back()
