@@ -18,7 +18,9 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
-use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, NetworkSettings, Platform};
+use alien_core::{
+    ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
+};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
@@ -142,6 +144,7 @@ struct ResolvedDeployArgs {
     platform: String,
     platform_enum: Platform,
     network_settings: Option<NetworkSettings>,
+    compute_settings: Option<ComputeSettings>,
     input_values: HashMap<String, serde_json::Value>,
     public_subdomain: Option<String>,
 }
@@ -152,6 +155,7 @@ struct DeployConfigFile {
     name: Option<String>,
     platform: Option<String>,
     network: Option<DeployConfigNetwork>,
+    compute: Option<ComputeSettings>,
     inputs: Option<HashMap<String, String>>,
     secret_inputs: Option<HashMap<String, String>>,
 }
@@ -274,6 +278,8 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         })?;
 
     let network_settings = resolve_network_settings(args, config.as_ref(), &platform)?;
+    let compute_settings = config.as_ref().and_then(|config| config.compute.clone());
+    validate_compute_settings(compute_settings.as_ref())?;
     let input_values = collect_raw_input_values(
         config.as_ref(),
         &args.input_values,
@@ -293,9 +299,25 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         platform,
         platform_enum,
         network_settings,
+        compute_settings,
         input_values,
         public_subdomain: args.public_subdomain.clone(),
     })
+}
+
+fn validate_compute_settings(compute: Option<&ComputeSettings>) -> Result<()> {
+    let Some(compute) = compute else {
+        return Ok(());
+    };
+    for (pool, selection) in &compute.pools {
+        selection.validate().map_err(|message| {
+            AlienError::new(ErrorData::ValidationError {
+                field: format!("compute.pools.{pool}"),
+                message,
+            })
+        })?;
+    }
+    Ok(())
 }
 
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
@@ -859,6 +881,14 @@ fn deployment_stack_settings_json(
             })?;
     }
 
+    if let Some(compute_settings) = resolved_args.compute_settings.as_ref() {
+        settings["compute"] = serde_json::to_value(compute_settings)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize compute settings".to_string(),
+            })?;
+    }
+
     Ok(settings)
 }
 
@@ -1232,6 +1262,24 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             })
                             .transpose()?;
 
+                        let sdk_compute = resolved_args
+                            .compute_settings
+                            .clone()
+                            .map(|compute_settings| {
+                                let json = serde_json::to_value(&compute_settings)
+                                    .into_alien_error()
+                                    .context(ErrorData::ConfigurationError {
+                                        message: "Failed to serialize compute settings".to_string(),
+                                    })?;
+                                serde_json::from_value(json).into_alien_error().context(
+                                    ErrorData::ConfigurationError {
+                                        message: "Failed to convert compute settings to SDK type"
+                                            .to_string(),
+                                    },
+                                )
+                            })
+                            .transpose()?;
+
                         let deployment_model = if uses_push_deployment_model(
                             resolved_args.platform_enum,
                         ) {
@@ -1240,7 +1288,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
                         };
                         let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        compute: None,
+                        compute: sdk_compute,
                         deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
@@ -1569,6 +1617,15 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to deserialize stack_settings".to_string(),
         })?
         .unwrap_or_default();
+
+    if let Some(requested_compute) = resolved_args.compute_settings.as_ref() {
+        if stack_settings.compute.as_ref() != Some(requested_compute) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "compute".to_string(),
+                message: "Compute settings cannot be changed while resuming an existing deployment. Use the deployment setup flow to change compute, or retry with the deployment's current compute settings.".to_string(),
+            }));
+        }
+    }
 
     let mut config: alien_core::DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
@@ -2037,6 +2094,65 @@ mod tests {
 
         assert!(!uses_push_deployment_model(Platform::Kubernetes));
         assert!(!uses_push_deployment_model(Platform::Local));
+    }
+
+    #[test]
+    fn deploy_config_accepts_and_serializes_compute_selection() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+name = "production"
+platform = "aws"
+
+[compute.pools.preview]
+mode = "fixed"
+machines = 1
+machine = "m8i.2xlarge"
+"#,
+        )
+        .expect("compute selection should be part of the public deploy config");
+        validate_compute_settings(config.compute.as_ref()).expect("selection should be valid");
+
+        let resolved = ResolvedDeployArgs {
+            name: config.name.expect("name"),
+            platform: config.platform.expect("platform"),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            compute_settings: config.compute,
+            input_values: HashMap::new(),
+            public_subdomain: None,
+        };
+        let args =
+            DeployArgs::try_parse_from(["deploy", "--name", "production", "--platform", "aws"])
+                .expect("minimal deploy args should parse");
+        let settings = deployment_stack_settings_json(&resolved, &args)
+            .expect("compute settings should serialize");
+
+        assert_eq!(
+            settings["compute"]["pools"]["preview"],
+            serde_json::json!({
+                "mode": "fixed",
+                "machines": 1,
+                "machine": "m8i.2xlarge"
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_compute_bounds_fail_before_deployment_creation() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+[compute.pools.workers]
+mode = "autoscale"
+min = 3
+max = 1
+"#,
+        )
+        .expect("compute syntax should parse");
+
+        let error = validate_compute_settings(config.compute.as_ref())
+            .expect_err("invalid bounds must fail locally");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("minimum"));
     }
 
     #[test]
