@@ -141,16 +141,15 @@ pub async fn run_operator_with_cancel_and_loops(
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
 
-    if let Some(readiness_port) = config.readiness_server_port {
-        let readiness_cancel = cancel.clone();
-        tokio::spawn(async move {
-            if let Err(error) =
-                readiness_server::start_readiness_server(readiness_port, readiness_cancel).await
-            {
-                warn!(%error, "Operator readiness server failed");
-            }
-        });
-    }
+    let readiness_port = config.readiness_server_port;
+    let readiness_cancel = cancel.clone();
+    let readiness_server = async move {
+        if let Some(port) = readiness_port {
+            readiness_server::start_readiness_server(port, readiness_cancel).await
+        } else {
+            std::future::pending::<error::Result<()>>().await
+        }
+    };
 
     // Capture command-address support before moving the receiver into its
     // task. Readiness requires both version-aware execution and current
@@ -307,11 +306,11 @@ pub async fn run_operator_with_cancel_and_loops(
         _ => None,
     };
 
-    // Wait for cancellation or any loop to exit unexpectedly. `exited_loop`
-    // captures which loop (if any) fell out on its own; `None` means we were
-    // cancelled cleanly. A loop exiting is never expected — the operator has no
-    // useful work left once one is gone — so we surface it as an error below
-    // rather than reporting a clean exit to CLI/service callers.
+    // Wait for cancellation or any loop to exit unexpectedly. A loop exiting is
+    // never expected — the operator has no useful work left once one is gone —
+    // so we surface it as an error rather than reporting a clean exit to
+    // CLI/service callers. Readiness errors retain their original configuration
+    // context so a bind failure is immediately diagnosable.
     //
     // Distinguishing a genuine loop failure from a shutdown-driven loop return
     // is a race unless we resolve it atomically WITH the branch that wins. Two
@@ -325,56 +324,60 @@ pub async fn run_operator_with_cancel_and_loops(
     //     BECAUSE it observed the cancelled token classifies itself as clean.
     // A loop branch that wins with the token NOT yet cancelled is a real failure,
     // and nothing that happens afterward can flip that verdict.
-    let exited_loop: Option<&'static str> = tokio::select! {
+    let exit_result: error::Result<Option<&'static str>> = tokio::select! {
         biased;
 
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
-            None
+            Ok(None)
         },
-        _ = deployment_handle => loop_exit(&cancel, "deployment"),
+        result = readiness_server => match result {
+            Ok(()) => Ok(loop_exit(&cancel, "readiness")),
+            Err(error) => Err(error),
+        },
+        _ = deployment_handle => Ok(loop_exit(&cancel, "deployment")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "debug-session"),
+        } => Ok(loop_exit(&cancel, "debug-session")),
         _ = async {
             if let Some(h) = sync_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "sync"),
+        } => Ok(loop_exit(&cancel, "sync")),
         _ = async {
             if let Some(h) = telemetry_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "telemetry"),
+        } => Ok(loop_exit(&cancel, "telemetry")),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "commands-dispatch"),
+        } => Ok(loop_exit(&cancel, "commands-dispatch")),
         _ = async {
             if let Some(h) = access_request_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "access-request-sync"),
+        } => Ok(loop_exit(&cancel, "access-request-sync")),
         _ = async {
             if let Some(h) = operations_exec_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "operations-execution"),
+        } => Ok(loop_exit(&cancel, "operations-execution")),
     };
 
     // Signal all loops to stop (idempotent if already cancelled)
@@ -388,7 +391,7 @@ pub async fn run_operator_with_cancel_and_loops(
         local_bindings.shutdown().await;
     }
 
-    if let Some(loop_name) = exited_loop {
+    if let Some(loop_name) = exit_result? {
         // A core loop exited on its own — report a non-zero exit so CLI and
         // Windows-service callers don't mistake a failed loop for a clean stop.
         return Err(AlienError::new(error::ErrorData::LoopExited {
@@ -503,6 +506,37 @@ mod tests {
     use std::{collections::HashMap, path::Path, time::Duration};
 
     use alien_local::{DaemonLaunchOptions, LocalBindingsProvider};
+
+    #[tokio::test]
+    async fn readiness_bind_failure_stops_operator() {
+        let occupied = tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+            .await
+            .expect("reserve readiness port");
+        let readiness_port = occupied.local_addr().expect("read listener address").port();
+        let temp = tempfile::tempdir().expect("create test directory");
+        let config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .otlp_server_port(0)
+            .readiness_server_port(readiness_port)
+            .build();
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_operator_with_cancel(config, None, CancellationToken::new()),
+        )
+        .await
+        .expect("readiness bind failure should stop the operator")
+        .expect_err("occupied readiness port must fail startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to bind Operator readiness server"),
+            "unexpected readiness error: {error}"
+        );
+    }
 
     #[tokio::test]
     async fn cancellation_stops_local_daemon_processes() {
