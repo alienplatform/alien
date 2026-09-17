@@ -808,6 +808,7 @@ dependencies = [
  "alien-infra-aws",
  "alien-infra-azure",
  "alien-infra-core",
+ "alien-infra-gcp",
  "alien-infra-local",
  "alien-k8s-clients",
  "alien-local",
@@ -923,6 +924,31 @@ dependencies = [
  "pem",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "alien-infra-gcp"
+version = "3.3.22"
+dependencies = [
+ "alien-client-core",
+ "alien-core",
+ "alien-error",
+ "alien-gcp-clients",
+ "alien-infra",
+ "alien-infra-core",
+ "alien-macros",
+ "alien-permissions",
+ "async-trait",
+ "chrono",
+ "httpmock",
+ "mockall",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

@@ -461,6 +461,9 @@ struct AwsServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
 #[cfg(feature = "azure")]
 struct AzureServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
 
+#[cfg(feature = "gcp")]
+struct GcpServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
+
 #[cfg(feature = "aws")]
 macro_rules! impl_aws_service_provider {
     ($(($method:ident, $api:ty)),* $(,)?) => {
@@ -500,6 +503,37 @@ impl_aws_service_provider!(
     (get_aws_apigatewayv2_client, dyn ApiGatewayV2Api),
     (get_aws_eventbridge_client, dyn EventBridgeApi),
     (get_aws_kms_client, dyn KmsApi),
+);
+
+#[cfg(feature = "gcp")]
+macro_rules! impl_gcp_service_provider {
+    ($(($method:ident, $api:ty)),* $(,)?) => {
+        impl alien_infra_gcp::GcpServiceProvider for GcpServiceProviderAdapter {
+            $(
+                fn $method(&self, config: &GcpClientConfig) -> Result<Arc<$api>> {
+                    self.0.$method(config)
+                }
+            )*
+        }
+    };
+}
+
+#[cfg(feature = "gcp")]
+impl_gcp_service_provider!(
+    (get_gcp_iam_client, dyn GcpIamApi),
+    (get_gcp_cloudbuild_client, dyn CloudBuildApi),
+    (get_gcp_cloudrun_client, dyn CloudRunApi),
+    (get_gcp_resource_manager_client, dyn ResourceManagerApi),
+    (get_gcp_service_usage_client, dyn ServiceUsageApi),
+    (get_gcp_model_garden_client, dyn ModelGardenApi),
+    (get_gcp_gcs_client, dyn GcsApi),
+    (get_gcp_artifact_registry_client, dyn ArtifactRegistryApi),
+    (get_gcp_firestore_client, dyn FirestoreApi),
+    (get_gcp_pubsub_client, dyn PubSubApi),
+    (get_gcp_compute_client, dyn GcpComputeApi),
+    (get_gcp_cloud_scheduler_client, dyn CloudSchedulerApi),
+    (get_gcp_cloud_kms_client, dyn CloudKmsApi),
+    (get_gcp_agent_platform_client, dyn AgentPlatformApi),
 );
 
 #[cfg(feature = "azure")]
@@ -718,6 +752,11 @@ pub(crate) fn register_platform_services(
     #[cfg(feature = "local")]
     services.register::<dyn alien_infra_local::LocalServiceProvider>(Arc::new(
         LocalServiceProviderAdapter(service_provider.clone()),
+    ))?;
+
+    #[cfg(feature = "gcp")]
+    services.register::<dyn alien_infra_gcp::GcpServiceProvider>(Arc::new(
+        GcpServiceProviderAdapter(service_provider.clone()),
     ))?;
 
     #[cfg(feature = "azure")]

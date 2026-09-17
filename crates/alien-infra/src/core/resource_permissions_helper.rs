@@ -786,7 +786,7 @@ impl ResourcePermissionsHelper {
             .require_dependency::<crate::remote_bindings::GcpRemoteBindingsController>(
                 &(&identity_entry.config).into(),
             )?;
-        let email = controller.service_account_email.as_ref().ok_or_else(|| {
+        let email = controller.service_account_email().ok_or_else(|| {
             AlienError::new(ErrorData::DependencyNotReady {
                 resource_id: resource_id.to_string(),
                 dependency_id: "remote-bindings".to_string(),
@@ -1001,7 +1001,7 @@ impl ResourcePermissionsHelper {
                         &(&resource_entry.config).into(),
                     )?;
 
-                return Ok(controller.service_account_email.clone());
+                return Ok(controller.service_account_email().map(str::to_string));
             }
         }
 
