@@ -9,7 +9,7 @@ use tracing::{error, info};
 
 use opentelemetry::KeyValue;
 use opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge;
-use opentelemetry_otlp::{ExportConfig, LogExporter, Protocol, WithExportConfig};
+use opentelemetry_otlp::{LogExporter, Protocol, RetryPolicy, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::{
     logs::{BatchLogProcessor, SdkLoggerProvider},
     Resource,
@@ -207,18 +207,19 @@ impl OwnedOtlpLogger {
 #[cfg(feature = "otlp")]
 fn build_otlp_provider(config: &OtlpConfig) -> Result<SdkLoggerProvider> {
     // Build OTLP Log exporter over HTTP with protobuf.
-    // When endpoint is set programmatically via ExportConfig, the SDK uses it
-    // verbatim (no path appended). This matches OTEL_EXPORTER_OTLP_LOGS_ENDPOINT
-    // behaviour, so we pass the full URL directly.
-    let export_config = ExportConfig {
-        endpoint: Some(config.endpoint.clone()),
-        protocol: Protocol::HttpBinary,
-        ..Default::default()
-    };
-
+    // A programmatic endpoint is used verbatim (no path appended), matching
+    // OTEL_EXPORTER_OTLP_LOGS_ENDPOINT, so pass the full URL directly.
     let mut exporter_builder = LogExporter::builder()
         .with_http()
-        .with_export_config(export_config);
+        .with_retry_policy(RetryPolicy {
+            max_retries: 3,
+            initial_delay_ms: 200,
+            max_delay_ms: 500,
+            jitter_ms: 100,
+        })
+        .with_endpoint(config.endpoint.clone())
+        .with_protocol(Protocol::HttpBinary)
+        .with_timeout(std::time::Duration::from_millis(750));
 
     // Configure headers if any
     if !config.headers.is_empty() {
@@ -464,7 +465,7 @@ pub async fn shutdown_otlp_logs() -> Result<()> {
 
         let shutdown_result = tokio::task::spawn_blocking({
             let provider = provider.clone();
-            move || match provider.shutdown() {
+            move || match provider.shutdown_with_timeout(std::time::Duration::from_secs(65)) {
                 Ok(_) => {
                     info!("OTLP logs shut down successfully");
                     Ok(())
