@@ -26,6 +26,8 @@ fi
     --skip-versioning
 )
 
+node "$repo_root/client-sdks/platform/scripts/fix-generated-typescript-sdk.mjs"
+
 while IFS= read -r -d '' generated_file; do
   if [[ "$generated_file" == *.md && -f "$repo_root/$generated_file" ]]; then
     perl -0pi -e 's/[ \t]+(?=\n)//g; s/\n+\z/\n/' "$repo_root/$generated_file"

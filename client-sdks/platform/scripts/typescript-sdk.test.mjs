@@ -38,7 +38,7 @@ test("configured server query parameters survive operation globals", async () =>
     httpClient: new HTTPClient({
       fetcher: async request => {
         const url = new URL(request.url);
-        assert.equal(url.pathname, "/v1/events");
+        assert.equal(url.pathname, "/proxy/v1/events");
         assert.equal(url.searchParams.get("token"), "preserved");
         assert.equal(url.searchParams.get("workspace"), "test-workspace");
         return Response.json({ items: [], nextCursor: null });
