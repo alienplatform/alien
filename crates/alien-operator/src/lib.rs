@@ -139,6 +139,17 @@ pub async fn run_operator_with_cancel_and_loops(
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
 
+    // Capture command-address support before moving the receiver into its
+    // task. Readiness requires both version-aware execution and current
+    // catalog reporting; otherwise the manager could combine this capability
+    // with a stale operations report from a previous runtime composition.
+    let operations_command_address_v1 = operation_command_address_v1_ready(
+        operations_exec_loop
+            .as_ref()
+            .is_some_and(|loop_impl| loop_impl.supports_versioned_command_address()),
+        operations_sync_handler.is_some(),
+    );
+
     // Create shared state
     let state = Arc::new(OperatorState {
         config: config.clone(),
@@ -186,7 +197,11 @@ pub async fn run_operator_with_cancel_and_loops(
         Some(tokio::spawn({
             let state = state.clone();
             async move {
-                loops::sync::run_sync_loop(state).await;
+                loops::sync::run_sync_loop_with_command_address_support(
+                    state,
+                    operations_command_address_v1,
+                )
+                .await;
             }
         }))
     } else {
@@ -400,9 +415,16 @@ fn should_run_commands_loop(platform: Platform, airgapped: bool) -> bool {
         )
 }
 
+fn operation_command_address_v1_ready(
+    executor_supports_versioned_address: bool,
+    catalog_reporting_configured: bool,
+) -> bool {
+    executor_supports_versioned_address && catalog_reporting_configured
+}
+
 #[cfg(test)]
 mod command_loop_routing_tests {
-    use super::{loop_exit, should_run_commands_loop};
+    use super::{loop_exit, operation_command_address_v1_ready, should_run_commands_loop};
     use alien_core::Platform;
     use tokio_util::sync::CancellationToken;
 
@@ -436,6 +458,14 @@ mod command_loop_routing_tests {
         for platform in [Platform::Machines, Platform::Test] {
             assert!(!should_run_commands_loop(platform, false));
         }
+    }
+
+    #[test]
+    fn versioned_operation_commands_require_executor_and_catalog_reporting() {
+        assert!(operation_command_address_v1_ready(true, true));
+        assert!(!operation_command_address_v1_ready(true, false));
+        assert!(!operation_command_address_v1_ready(false, true));
+        assert!(!operation_command_address_v1_ready(false, false));
     }
 }
 

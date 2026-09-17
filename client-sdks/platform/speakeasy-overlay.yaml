@@ -3,6 +3,9 @@ info:
   title: Platform TypeScript SDK ergonomics
   version: 1.0.0
 actions:
+  - target: "$['paths']['/v1/resources/{area}/{resourceId}/deployments']['get']"
+    update:
+      description: List deployments where the selected resource is installed.
   - target: "$"
     update:
       x-speakeasy-globals:

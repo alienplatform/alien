@@ -240,6 +240,12 @@ pub fn delivery_mode_for(
 /// Implementations store command state, timestamps, and result information.
 #[async_trait]
 pub trait CommandRegistry: Send + Sync {
+    /// Whether this registry durably stores an operation result contract in
+    /// the same create transaction that makes a command visible.
+    fn persists_operation_result_contract(&self) -> bool {
+        false
+    }
+
     /// Resolve which command-capable resource a command is addressed to.
     ///
     /// - `requested = Some(id)`: the target must exist and be command-capable,
@@ -272,6 +278,7 @@ pub trait CommandRegistry: Send + Sync {
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
+        operation_result_contract: Option<serde_json::Value>,
     ) -> Result<CommandMetadata>;
 
     /// Get metadata needed to build an envelope during lease acquisition.
@@ -453,6 +460,7 @@ impl CommandRegistry for InMemoryCommandRegistry {
         initial_state: CommandState,
         deadline: Option<DateTime<Utc>>,
         request_size_bytes: Option<u64>,
+        _operation_result_contract: Option<serde_json::Value>,
     ) -> Result<CommandMetadata> {
         let command_id = format!("cmd_{}", Uuid::new_v4());
 
@@ -817,6 +825,7 @@ mod tests {
                 CommandState::Pending,
                 None,
                 None,
+                None,
             )
             .await
             .unwrap();
@@ -855,6 +864,7 @@ mod tests {
                 "run",
                 &target,
                 CommandState::Dispatched,
+                None,
                 None,
                 None,
             )
@@ -902,7 +912,15 @@ mod tests {
             .unwrap();
         let target = registry.resolve_target("dep-1", None).await.unwrap();
         let command = registry
-            .create_command("dep-1", "run", &target, CommandState::Pending, None, None)
+            .create_command(
+                "dep-1",
+                "run",
+                &target,
+                CommandState::Pending,
+                None,
+                None,
+                None,
+            )
             .await
             .unwrap();
 

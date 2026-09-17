@@ -95,11 +95,32 @@ async fn require_command_access(
 /// Authorize from the command record when it contains everything required by
 /// the caller's scope. Deployment-group tokens still load the deployment,
 /// because group ownership is not duplicated on command records.
+fn command_read_capability_decision(
+    subject: &crate::auth::Subject,
+    command_id: &str,
+    command: &alien_commands::server::CommandAccessContext,
+) -> Option<bool> {
+    if let Some(allowed) =
+        crate::auth::command_capability::status_context_decision(subject, command_id, command)
+    {
+        return Some(allowed);
+    }
+
+    // Operator command responses require an exact status-read capability.
+    // Broad user, API-key, and deployment credentials must not bypass the
+    // caller's result policy by reading the manager directly.
+    (command.target.resource_id == OPERATOR_COMMAND_TARGET_ID).then_some(false)
+}
+
 async fn require_command_read_access(
     state: &AppState,
     subject: &crate::auth::Subject,
     command: &alien_commands::server::CommandAccessContext,
 ) -> Result<(), Response> {
+    if command.target.resource_id == OPERATOR_COMMAND_TARGET_ID {
+        return Err(ErrorData::forbidden("Access denied").into_response());
+    }
+
     if !matches!(&subject.scope, crate::auth::Scope::DeploymentGroup { .. }) {
         return if state.authz.can_read_command_context(subject, command) {
             Ok(())
@@ -324,7 +345,11 @@ async fn get_command_status(
         Err(e) => return e.into_response(),
     };
 
-    if let Err(e) = require_command_read_access(&state, &subject, &command).await {
+    if let Some(allowed) = command_read_capability_decision(&subject, &command_id, &command) {
+        if !allowed {
+            return ErrorData::forbidden("Access denied").into_response();
+        }
+    } else if let Err(e) = require_command_read_access(&state, &subject, &command).await {
         return e;
     }
 
@@ -1017,6 +1042,54 @@ mod tests {
             assert_eq!(
                 require_direct_payload_access(&subject, Some(&command)),
                 Err("Access denied"),
+            );
+        }
+    }
+
+    #[test]
+    fn operator_status_is_available_only_to_the_exact_status_capability() {
+        let command = alien_commands::server::CommandAccessContext {
+            workspace_id: "workspace-1".to_string(),
+            project_id: "project-1".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            target: alien_core::CommandTarget::new(
+                OPERATOR_COMMAND_TARGET_ID,
+                alien_core::CommandTargetType::Daemon,
+            ),
+        };
+        let exact = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "command-status-proxy".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Status {
+                    command_id: "command-1".to_string(),
+                },
+            },
+            role: Role::CommandCapability,
+            bearer_token: String::new(),
+        };
+
+        assert_eq!(
+            command_read_capability_decision(&exact, "command-1", &command),
+            Some(true)
+        );
+        assert_eq!(
+            command_read_capability_decision(&exact, "command-2", &command),
+            Some(false)
+        );
+        for subject in [
+            workspace_admin_subject(),
+            commands_sender_subject(),
+            operations_subject("postgres/health"),
+        ] {
+            assert_eq!(
+                command_read_capability_decision(&subject, "command-1", &command),
+                Some(false),
+                "broad and dispatch credentials must not read operator results",
             );
         }
     }

@@ -148,6 +148,11 @@ pub enum CommandCapability {
     Send,
     /// Create one exact command addressed to the manager's reserved operations target.
     Operations { command: String },
+    /// Read the status and response for one exact command through an authorized proxy.
+    Status {
+        #[serde(rename = "commandId")]
+        command_id: String,
+    },
     /// Lease and complete commands for one exact app-owned receiver target.
     Receive { target: CommandTarget },
 }
@@ -161,8 +166,16 @@ impl<'de> Deserialize<'de> for CommandCapability {
         #[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
         enum WireCapability {
             Send {},
-            Operations { command: String },
-            Receive { target: WireTarget },
+            Operations {
+                command: String,
+            },
+            Status {
+                #[serde(rename = "commandId")]
+                command_id: String,
+            },
+            Receive {
+                target: WireTarget,
+            },
         }
 
         #[derive(Deserialize)]
@@ -181,6 +194,14 @@ impl<'de> Deserialize<'de> for CommandCapability {
                     ));
                 }
                 Self::Operations { command }
+            }
+            WireCapability::Status { command_id } => {
+                if command_id.is_empty() {
+                    return Err(serde::de::Error::custom(
+                        "status capability commandId must not be empty",
+                    ));
+                }
+                Self::Status { command_id }
             }
             WireCapability::Receive { target } => Self::Receive {
                 target: CommandTarget::new(target.resource_id, target.resource_type),
@@ -492,6 +513,31 @@ mod tests {
         }));
 
         assert!(result.is_err(), "operations command must be non-empty");
+    }
+
+    #[test]
+    fn status_command_capability_has_a_strict_stable_wire_shape() {
+        let capability = CommandCapability::Status {
+            command_id: "command-1".to_string(),
+        };
+        let json = serde_json::to_value(&capability).expect("serialize status capability");
+        assert_eq!(
+            json,
+            serde_json::json!({ "type": "status", "commandId": "command-1" })
+        );
+        assert_eq!(
+            serde_json::from_value::<CommandCapability>(json)
+                .expect("deserialize status capability"),
+            capability
+        );
+        assert!(
+            serde_json::from_value::<CommandCapability>(serde_json::json!({
+                "type": "status",
+                "commandId": "",
+            }))
+            .is_err(),
+            "status capabilities must name one command"
+        );
     }
 
     #[test]

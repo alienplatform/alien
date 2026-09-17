@@ -2,6 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { HTTPClient } from "../typescript/esm/lib/http.js";
 import { Alien } from "../typescript/esm/sdk/sdk.js";
+import {
+  KubernetesPermissions$outboundSchema,
+  Rule$outboundSchema,
+  Verb,
+  kubernetesPermissionsToJSON,
+  ruleToJSON,
+} from "../typescript/esm/models/publishoperationspluginrequest.js";
 
 // Run after pnpm -C client-sdks/platform/typescript build. Exercise the shipped
 // JavaScript, including request serialization and response validation.
@@ -29,6 +36,88 @@ function client(fetcher) {
     httpClient: new HTTPClient({ fetcher }),
   });
 }
+
+test("legacy publish-plugin deep imports preserve Kubernetes permission exports", () => {
+  const rule = {
+    apiGroup: "apps",
+    resource: "deployments",
+    verbs: [Verb.Get],
+    reason: "Read deployment state",
+  };
+  const permissions = { schemaVersion: 1, rules: [rule] };
+
+  assert.deepEqual(Rule$outboundSchema.parse(rule), rule);
+  assert.equal(ruleToJSON(rule), JSON.stringify(rule));
+  assert.deepEqual(KubernetesPermissions$outboundSchema.parse(permissions), permissions);
+  assert.equal(kubernetesPermissionsToJSON(permissions), JSON.stringify(permissions));
+});
+
+test("configured server query parameters survive operation globals", async () => {
+  const sdk = new Alien({
+    serverURL: "https://sdk-test.invalid/proxy?token=preserved&workspace=stale",
+    apiKey: "ax_ws_test",
+    workspace: "test-workspace",
+    httpClient: new HTTPClient({
+      fetcher: async request => {
+        const url = new URL(request.url);
+        assert.equal(url.pathname, "/proxy/v1/events");
+        assert.equal(url.searchParams.get("token"), "preserved");
+        assert.equal(url.searchParams.get("workspace"), "test-workspace");
+        return Response.json({ items: [], nextCursor: null });
+      },
+    }),
+  });
+
+  await sdk.events.list();
+});
+
+test("retry-after-ms and timeoutMs apply independently to each attempt", async () => {
+  const delays = [];
+  const signals = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (callback, delay, ...args) => {
+    delays.push(delay);
+    queueMicrotask(() => callback(...args));
+    return 0;
+  };
+  try {
+    let requests = 0;
+    const sdk = client(async request => {
+      requests++;
+      signals.push(request.signal);
+      if (requests === 1) {
+        return new Response("retry", {
+          status: 503,
+          headers: { "retry-after-ms": "17" },
+        });
+      }
+      return Response.json({ ...event, data: { type: "Finished" } });
+    });
+
+    await sdk.events.get(
+      { id: event.id },
+      {
+        timeoutMs: 1_000,
+        retries: {
+          strategy: "backoff",
+          backoff: {
+            initialInterval: 10_000,
+            maxInterval: 10_000,
+            exponent: 1,
+            maxElapsedTime: 30_000,
+          },
+        },
+      },
+    );
+
+    assert.equal(requests, 2);
+    assert.deepEqual(delays, [17]);
+    assert.notEqual(signals[0], signals[1]);
+    assert.equal(signals.every(signal => !signal.aborted), true);
+  } finally {
+    globalThis.setTimeout = originalSetTimeout;
+  }
+});
 
 for (const data of [
   { type: "Finished" },

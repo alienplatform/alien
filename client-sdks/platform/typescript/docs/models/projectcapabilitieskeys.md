@@ -6,7 +6,7 @@
 import { ProjectCapabilitiesKeys } from "@alienplatform/platform-api/models";
 
 let value: ProjectCapabilitiesKeys = {
-  enabled: true,
+  enabled: false,
   applicationEncryption: true,
 };
 ```
@@ -15,5 +15,5 @@ let value: ProjectCapabilitiesKeys = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `enabled`               | *true*                  | :heavy_check_mark:      | N/A                     |
-| `applicationEncryption` | *true*                  | :heavy_check_mark:      | N/A                     |
+| `enabled`               | *boolean*               | :heavy_check_mark:      | N/A                     |
+| `applicationEncryption` | *boolean*               | :heavy_check_mark:      | N/A                     |
