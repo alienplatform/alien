@@ -145,6 +145,82 @@ fn canonicalizes_nullable_copies_of_reachable_string_enums() {
 }
 
 #[test]
+fn gives_repeated_anonymous_objects_stable_component_identity() {
+    let repeated = json!({
+        "type": "object",
+        "properties": {
+            "message": { "type": "string" },
+            "details": {
+                "type": "object",
+                "properties": { "code": { "type": "string" } },
+                "required": ["code"]
+            }
+        },
+        "required": ["message"]
+    });
+    let document = json!({
+        "paths": {
+            "/a": {
+                "get": {
+                    "operationId": "kept",
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": { "schema": repeated.clone() }
+                            }
+                        }
+                    }
+                }
+            },
+            "/b": {
+                "get": {
+                    "operationId": "keptToo",
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Envelope" }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": {
+                "Envelope": {
+                    "type": "object",
+                    "properties": { "value": repeated }
+                }
+            }
+        }
+    });
+
+    let first = openapi_filter::filter_openapi(&document, &["kept", "keptToo"]).unwrap();
+    let second = openapi_filter::filter_openapi(&document, &["kept", "keptToo"]).unwrap();
+    assert_eq!(first, second);
+
+    let path_schema = first
+        .pointer("/paths/~1a/get/responses/200/content/application~1json/schema")
+        .unwrap();
+    let nested_schema = first
+        .pointer("/components/schemas/Envelope/properties/value")
+        .unwrap();
+    assert_eq!(path_schema, nested_schema);
+    let reference = path_schema["$ref"].as_str().unwrap();
+    assert!(reference.starts_with("#/components/schemas/AlienSharedObject"));
+
+    let component_name = reference.rsplit('/').next().unwrap();
+    let extracted = &first["components"]["schemas"][component_name];
+    assert_eq!(extracted["type"], "object");
+    assert_eq!(extracted["properties"]["message"]["type"], "string");
+    assert!(extracted.get("$ref").is_none());
+}
+
+#[test]
 fn rejects_missing_duplicate_and_unresolved_operations() {
     let duplicate = json!({
         "paths": {
@@ -190,6 +266,23 @@ fn real_spec_contains_every_required_operation_and_shrinks() {
     assert!(
         serde_json::to_vec(&filtered).unwrap().len() < serde_json::to_vec(&document).unwrap().len()
     );
+
+    for pointer in [
+        "/components/schemas/ConfigureModelsRequest/properties/requirements/items",
+        "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
+    ] {
+        let schema = filtered.pointer(pointer).unwrap();
+        assert_eq!(schema["type"], "object");
+        assert!(schema.get("$ref").is_none());
+    }
+
+    let shared_components = filtered["components"]["schemas"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|name| name.starts_with("AlienSharedObject"))
+        .count();
+    assert!(shared_components > 100);
 }
 
 fn operation_ids(document: &Value) -> Vec<&str> {

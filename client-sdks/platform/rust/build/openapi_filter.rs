@@ -6,6 +6,15 @@ const HTTP_METHODS: &[&str] = &[
     "delete", "get", "head", "options", "patch", "post", "put", "trace",
 ];
 
+// Handwritten Alien consumers import the path-derived Progenitor types below.
+// Keep these anonymous schema families inline so deduplication does not rename
+// their public Rust types. Missing pointers fail generation instead of silently
+// changing that compatibility boundary.
+const CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS: &[&str] = &[
+    "/components/schemas/ConfigureModelsRequest/properties/requirements/items",
+    "/paths/~1v1~1projects/post/requestBody/content/application~1json/schema/properties/gitRepository",
+];
+
 /// Platform operations used by Alien's production Rust consumers.
 ///
 /// Keep this list explicit: adding a Platform API call should require a review
@@ -142,9 +151,198 @@ pub fn filter_openapi(document: &Value, required_operation_ids: &[&str]) -> Resu
         "components".to_string(),
         reachable_components(document, &filtered)?,
     );
+    deduplicate_anonymous_object_schemas(
+        &mut filtered,
+        required_operation_ids == REQUIRED_OPERATION_IDS,
+    )?;
     canonicalize_nullable_enums(&mut filtered);
 
     Ok(Value::Object(filtered))
+}
+
+fn deduplicate_anonymous_object_schemas(
+    document: &mut Map<String, Value>,
+    protect_consumer_names: bool,
+) -> Result<(), String> {
+    let mut occurrences = BTreeMap::<String, (usize, Value)>::new();
+    let document_value = Value::Object(document.clone());
+    let mut protected_shapes = BTreeSet::new();
+    if protect_consumer_names {
+        for pointer in CONSUMER_NAMED_ANONYMOUS_SCHEMA_POINTERS {
+            let schema = document_value.pointer(pointer).ok_or_else(|| {
+                format!("consumer-named anonymous schema is missing at `{pointer}`")
+            })?;
+            collect_object_schema_keys(schema, &mut protected_shapes)?;
+        }
+    }
+    let schemas = document
+        .get("components")
+        .and_then(|components| components.get("schemas"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| "OpenAPI document is missing object-valued component schemas".to_string())?;
+    if let Some(paths) = document.get("paths") {
+        collect_anonymous_object_schemas(paths, &mut occurrences, true);
+    }
+    for schema in schemas.values() {
+        collect_anonymous_object_schemas(schema, &mut occurrences, false);
+    }
+    let existing_names = schemas.keys().cloned().collect::<BTreeSet<_>>();
+    let mut existing_shapes = BTreeMap::<String, Option<String>>::new();
+    for (name, schema) in schemas {
+        let key = canonical_schema_key(schema)?;
+        existing_shapes
+            .entry(key)
+            .and_modify(|name| *name = None)
+            .or_insert_with(|| Some(name.clone()));
+    }
+
+    let mut replacements = BTreeMap::<String, String>::new();
+    let mut extracted = Vec::<(String, String, Value)>::new();
+    let mut generated_names = BTreeMap::<String, String>::new();
+    for (key, (count, schema)) in occurrences {
+        if count < 2 || protected_shapes.contains(&key) {
+            continue;
+        }
+        if let Some(Some(name)) = existing_shapes.get(&key) {
+            replacements.insert(key, name.clone());
+            continue;
+        }
+
+        let name = format!(
+            "AlienSharedObject{:016x}",
+            stable_schema_hash(key.as_bytes())
+        );
+        if existing_names.contains(&name) {
+            return Err(format!(
+                "generated component name `{name}` collides with an existing schema"
+            ));
+        }
+        if let Some(previous_key) = generated_names.insert(name.clone(), key.clone()) {
+            if previous_key != key {
+                return Err(format!("generated component hash collision for `{name}`"));
+            }
+        }
+        replacements.insert(key.clone(), name.clone());
+        extracted.push((key, name, schema));
+    }
+
+    if let Some(paths) = document.get_mut("paths") {
+        replace_anonymous_object_schemas(paths, &replacements, true)?;
+    }
+    let schemas = document
+        .get_mut("components")
+        .and_then(|components| components.get_mut("schemas"))
+        .and_then(Value::as_object_mut)
+        .expect("component schemas were validated above");
+    for schema in schemas.values_mut() {
+        replace_anonymous_object_schemas(schema, &replacements, false)?;
+    }
+    for (_, name, mut schema) in extracted {
+        replace_anonymous_object_schemas(&mut schema, &replacements, false)?;
+        schemas.insert(name, schema);
+    }
+
+    Ok(())
+}
+
+fn collect_object_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_object_schema_keys(value, keys)?;
+            }
+        }
+        Value::Object(object) => {
+            if object.get("type").and_then(Value::as_str) == Some("object")
+                && !object.contains_key("$ref")
+            {
+                keys.insert(canonical_schema_key(value)?);
+            }
+            for value in object.values() {
+                collect_object_schema_keys(value, keys)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn collect_anonymous_object_schemas(
+    value: &Value,
+    occurrences: &mut BTreeMap<String, (usize, Value)>,
+    collect_current: bool,
+) {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                collect_anonymous_object_schemas(value, occurrences, true);
+            }
+        }
+        Value::Object(object) => {
+            if collect_current
+                && object.get("type").and_then(Value::as_str) == Some("object")
+                && !object.contains_key("$ref")
+            {
+                let schema = Value::Object(object.clone());
+                let key = serde_json::to_string(&schema).expect("JSON schema serializes");
+                occurrences
+                    .entry(key)
+                    .and_modify(|(count, _)| *count += 1)
+                    .or_insert((1, schema));
+            }
+            for value in object.values() {
+                collect_anonymous_object_schemas(value, occurrences, true);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn stable_schema_hash(bytes: &[u8]) -> u64 {
+    let mut hash = 0xcbf29ce484222325_u64;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+fn replace_anonymous_object_schemas(
+    value: &mut Value,
+    replacements: &BTreeMap<String, String>,
+    replace_current: bool,
+) -> Result<(), String> {
+    if replace_current
+        && value.get("type").and_then(Value::as_str) == Some("object")
+        && value.get("$ref").is_none()
+    {
+        let key = canonical_schema_key(value)?;
+        if let Some(name) = replacements.get(&key) {
+            *value = serde_json::json!({
+                "$ref": format!("#/components/schemas/{name}")
+            });
+            return Ok(());
+        }
+    }
+
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                replace_anonymous_object_schemas(value, replacements, true)?;
+            }
+        }
+        Value::Object(object) => {
+            for value in object.values_mut() {
+                replace_anonymous_object_schemas(value, replacements, true)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn canonical_schema_key(schema: &Value) -> Result<String, String> {
+    serde_json::to_string(schema).map_err(|error| format!("failed to serialize schema: {error}"))
 }
 
 pub fn normalize_openapi(document: &Value) -> Result<Value, String> {
