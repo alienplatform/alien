@@ -8,6 +8,10 @@ import { safeParse } from "../lib/schemas.js";
 import { ClosedEnum } from "../types/enums.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  OperationsCatalogKubernetesPermissions,
+  OperationsCatalogKubernetesPermissions$inboundSchema,
+} from "./operationscatalogkubernetespermissions.js";
 
 /**
  * Effective risk tier for this operation.
@@ -139,6 +143,13 @@ export type OperationsPluginOperation = {
    * Cloud permissions required to execute this operation.
    */
   permissions: OperationsPluginOperationPermissions;
+  /**
+   * Kubernetes RBAC required to execute this operation. Omitted by older servers and null when the operation declares none.
+   */
+  kubernetesPermissions?:
+    | OperationsCatalogKubernetesPermissions
+    | null
+    | undefined;
 };
 
 /** @internal */
@@ -405,6 +416,9 @@ export const OperationsPluginOperation$inboundSchema: z.ZodType<
   ]),
   requiredPermissions: z.array(z.string()),
   permissions: z.lazy(() => OperationsPluginOperationPermissions$inboundSchema),
+  kubernetesPermissions: z.nullable(
+    OperationsCatalogKubernetesPermissions$inboundSchema,
+  ).optional(),
 });
 
 export function operationsPluginOperationFromJSON(

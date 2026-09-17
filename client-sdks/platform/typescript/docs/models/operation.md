@@ -7,6 +7,9 @@ import { Operation } from "@alienplatform/platform-api/models";
 
 let value: Operation = {
   name: "<value>",
+  permissions: [
+    "<value>",
+  ],
 };
 ```
 
@@ -20,7 +23,7 @@ let value: Operation = {
 | `inputSchema`                                                                                                | Record<string, *any*>                                                                                        | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
 | `paramsSchema`                                                                                               | Record<string, *any*>                                                                                        | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
 | `outputSchema`                                                                                               | Record<string, *any*>                                                                                        | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
-| `permissions`                                                                                                | *models.Permission*[]                                                                                        | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
+| `permissions`                                                                                                | *models.Permission*[]                                                                                        | :heavy_check_mark:                                                                                           | N/A                                                                                                          |
 | `requiredPermissions`                                                                                        | *models.RequiredPermissionUnion*[]                                                                           | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
 | `timeoutSeconds`                                                                                             | *number*                                                                                                     | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |
 | `retries`                                                                                                    | [models.PublishOperationsPluginRequestRetries](../models/publishoperationspluginrequestretries.md)           | :heavy_minus_sign:                                                                                           | N/A                                                                                                          |

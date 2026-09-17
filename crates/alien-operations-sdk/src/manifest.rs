@@ -368,16 +368,14 @@ pub struct CanonicalOperationManifest {
     /// JSON Schema for a successful operation result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_schema: Option<RootSchema>,
-    /// Permission-set references required by this operation. Prefer stable
-    /// identifiers from `alien-permissions`; inline definitions remain
-    /// supported for existing bundles. Legacy `requiredPermissions` arrays
-    /// are accepted and normalized to the canonical `permissions` key.
-    #[serde(
-        default,
-        rename = "permissions",
-        alias = "requiredPermissions",
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    /// Permission-set references required by this operation. Generated
+    /// canonical manifests always serialize this field, including `[]` after
+    /// an explicit no-permissions review. Omitted legacy fields remain readable
+    /// and normalize to no grants. Prefer stable identifiers from
+    /// `alien-permissions`; inline definitions remain supported for existing
+    /// bundles. Legacy `requiredPermissions` arrays are accepted and normalized
+    /// to the canonical `permissions` key.
+    #[serde(default, rename = "permissions", alias = "requiredPermissions")]
     pub required_permissions: Vec<PermissionSetReference>,
     /// How long the runtime should wait for this operation to complete
     /// before treating it as failed.
@@ -1376,6 +1374,38 @@ mod tests {
             sensitive_output: SensitiveOutputPolicy::None,
         };
         assert_eq!(op.effective_tier(RiskTier::Mutating), RiskTier::Mutating);
+    }
+
+    #[test]
+    fn omitted_legacy_operation_permissions_remain_fail_closed() {
+        let manifest = CanonicalPluginManifest::parse_and_validate(
+            manifest_json(r#"{"name": "health", "tier": "read-only"}"#).as_bytes(),
+        )
+        .expect("legacy operation without permissions should remain readable");
+
+        assert!(manifest.operations[0].required_permissions.is_empty());
+    }
+
+    #[test]
+    fn explicit_no_permissions_serialize_as_an_empty_canonical_array() {
+        let operation = CanonicalOperationManifest {
+            kubernetes_permissions: None,
+            name: "health".into(),
+            tier: Some(RiskTier::ReadOnly),
+            description: None,
+            input_schema: None,
+            output_schema: None,
+            required_permissions: vec![],
+            timeout_seconds: None,
+            retries: None,
+            verification: None,
+            sensitive_output: SensitiveOutputPolicy::None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(operation).expect("operation should serialize")["permissions"],
+            serde_json::json!([])
+        );
     }
 
     #[test]
