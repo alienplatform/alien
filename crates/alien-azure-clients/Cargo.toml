@@ -56,7 +56,8 @@ pem = "3.0"
 workspace = true
 
 [features]
-default = []
+default = ["full-models"]
+full-models = []
 test-utils = ["dep:mockall"]
 
 [build-dependencies]

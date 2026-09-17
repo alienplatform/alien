@@ -1,4 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+
+#[path = "build/schema_filter.rs"]
+mod schema_filter;
 
 fn main() {
     generate_azure_models();
@@ -6,6 +9,11 @@ fn main() {
 
 fn generate_azure_models() {
     println!("cargo:rerun-if-changed=build.rs");
+    println!("cargo:rerun-if-changed=build/model_roots.json");
+
+    let model_roots: BTreeMap<String, Vec<String>> =
+        serde_json::from_str(include_str!("build/model_roots.json")).unwrap();
+    let mut total_generated_lines = 0;
 
     let specs = [
         (
@@ -85,6 +93,16 @@ fn generate_azure_models() {
         let file = std::fs::File::open(src).unwrap();
         let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
         remove_zero_min_length(&mut spec_json);
+        if !cfg!(feature = "full-models") {
+            let spec_name = std::path::Path::new(src)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .expect("Azure spec path must end in a UTF-8 filename");
+            let roots = model_roots
+                .get(spec_name)
+                .unwrap_or_else(|| panic!("missing model roots for {spec_name}"));
+            schema_filter::retain_reachable_schemas(&mut spec_json, roots).unwrap();
+        }
         let mut spec: openapiv3::OpenAPI = serde_json::from_value(spec_json).unwrap();
         spec.paths = Default::default();
 
@@ -298,6 +316,7 @@ fn generate_azure_models() {
         };
 
         let content = prettyplease::unparse(&new_file);
+        total_generated_lines += content.lines().count();
 
         let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
         let file_name = std::path::Path::new(output_file)
@@ -306,6 +325,13 @@ fn generate_azure_models() {
         let out_file = std::path::Path::new(&out_dir).join(file_name);
 
         std::fs::write(out_file, content).unwrap();
+    }
+
+    if !cfg!(feature = "full-models") {
+        assert!(
+            total_generated_lines <= 165_000,
+            "filtered Azure models expanded to {total_generated_lines} lines; update model roots intentionally or investigate newly reachable schemas"
+        );
     }
 }
 
