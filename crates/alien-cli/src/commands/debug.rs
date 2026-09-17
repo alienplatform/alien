@@ -227,6 +227,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
                 &ctx,
                 &deployment_id,
                 &tool,
+                &args.cmd,
                 &args.access_duration,
                 args.json,
             )
@@ -265,10 +266,14 @@ async fn request_debug_access_then_wait(
     ctx: &ExecutionMode,
     deployment_id: &str,
     tool: &str,
+    cmd: &[String],
     access_duration: &str,
     json: bool,
 ) -> Result<String> {
     let debug_tool = crate::commands::access_requests::parse_debug_tool(tool)?;
+    let debug_namespace = (debug_tool == alien_platform_api::types::DebugGrantTool::Kubectl)
+        .then(|| kubectl_namespace_from_args(cmd))
+        .flatten();
     let requested_expires_at = crate::commands::access_requests::requested_expiration(
         chrono::Utc::now(),
         Some(access_duration),
@@ -287,7 +292,7 @@ async fn request_debug_access_then_wait(
             operation_pattern: None,
             max_risk: None,
             debug_tool: Some(debug_tool),
-            debug_namespace: None,
+            debug_namespace,
             debug_cloud_scope: None,
             title: None,
             reason: None,
@@ -314,6 +319,27 @@ async fn request_debug_access_then_wait(
     );
 
     crate::commands::access_requests::wait_for_approval(&sdk_client, &workspace, &created.id).await
+}
+
+/// Extract a kubectl `-n`/`--namespace` value from the command being
+/// debugged, so `--request-access` requests a grant scoped to the namespace
+/// the caller is actually targeting instead of an unscoped one. Returns
+/// `None` when no namespace flag is present (the caller gets an unscoped
+/// grant, same as today) or when the value is missing/malformed.
+fn kubectl_namespace_from_args(cmd: &[String]) -> Option<String> {
+    let mut iter = cmd.iter();
+    while let Some(arg) = iter.next() {
+        if let Some(value) = arg.strip_prefix("--namespace=") {
+            return Some(value.to_string());
+        }
+        if let Some(value) = arg.strip_prefix("-n=") {
+            return Some(value.to_string());
+        }
+        if arg == "-n" || arg == "--namespace" {
+            return iter.next().cloned();
+        }
+    }
+    None
 }
 
 impl DebugArgs {
@@ -1733,5 +1759,53 @@ mod tests {
             .await
             .expect("stdin EOF must not cancel the remote command");
         server.await.expect("server task should finish");
+    }
+
+    fn args(words: &[&str]) -> Vec<String> {
+        words.iter().map(|w| w.to_string()).collect()
+    }
+
+    #[test]
+    fn kubectl_namespace_from_args_reads_short_flag_with_space() {
+        let cmd = args(&["kubectl", "get", "pods", "-n", "braintrust"]);
+        assert_eq!(
+            kubectl_namespace_from_args(&cmd),
+            Some("braintrust".to_string())
+        );
+    }
+
+    #[test]
+    fn kubectl_namespace_from_args_reads_long_flag_with_space() {
+        let cmd = args(&["kubectl", "get", "pods", "--namespace", "braintrust"]);
+        assert_eq!(
+            kubectl_namespace_from_args(&cmd),
+            Some("braintrust".to_string())
+        );
+    }
+
+    #[test]
+    fn kubectl_namespace_from_args_reads_equals_forms() {
+        let short = args(&["kubectl", "get", "pods", "-n=braintrust"]);
+        assert_eq!(
+            kubectl_namespace_from_args(&short),
+            Some("braintrust".to_string())
+        );
+        let long = args(&["kubectl", "get", "pods", "--namespace=braintrust"]);
+        assert_eq!(
+            kubectl_namespace_from_args(&long),
+            Some("braintrust".to_string())
+        );
+    }
+
+    #[test]
+    fn kubectl_namespace_from_args_none_when_absent() {
+        let cmd = args(&["kubectl", "get", "nodes"]);
+        assert_eq!(kubectl_namespace_from_args(&cmd), None);
+    }
+
+    #[test]
+    fn kubectl_namespace_from_args_none_when_flag_has_no_value() {
+        let cmd = args(&["kubectl", "get", "pods", "-n"]);
+        assert_eq!(kubectl_namespace_from_args(&cmd), None);
     }
 }
