@@ -83,7 +83,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
         format!(
-            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"httpd\", \"-f\", \"-p\", \"8081\", \"-h\", \"/www\"]\n"
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"sh\", \"-c\", \"touch /var/lib/operator/.alien-identity-initialization-started && exec httpd -f -p 8081 -h /www\"]\n"
         ),
     )
     .expect("write Operator readiness fixture Dockerfile");
@@ -225,11 +225,133 @@ rules:
         ],
         None,
     );
+
     run_fails(
         "kubectl",
         ["get", "crd", CRD_NAME],
         None,
         "disabled install must not create the cluster-scoped CRD",
+    );
+
+    let atomic_release = "alien-product-atomic";
+    let atomic_credentials = format!("{atomic_release}-remote");
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "secret",
+            "generic",
+            &atomic_credentials,
+            "--namespace",
+            &helm_namespace,
+            "--from-literal=sync-token=sync-atomic",
+            &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+        ],
+        None,
+    );
+    let failed_initial_install = helm_install_args(
+        atomic_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        "30s",
+    );
+    run_fails(
+        "helm",
+        failed_initial_install.iter().map(String::as_str),
+        None,
+        "an unrelated unready workload must trigger atomic initial-install cleanup",
+    );
+    run_fails(
+        "helm",
+        ["status", atomic_release, "--namespace", &helm_namespace],
+        None,
+        "atomic initial-install failure must remove the Helm release",
+    );
+    let retained_prepared = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            "--namespace",
+            &helm_namespace,
+            "--selector=alien.dev/remote-operator-identity-record=true",
+            "--output=name",
+        ],
+        None,
+    );
+    assert_eq!(
+        retained_prepared.stdout.lines().count(),
+        1,
+        "atomic cleanup must retain the prepared identity after initialization starts: {retained_prepared:?}"
+    );
+    let retained_identity = run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            "--namespace",
+            &helm_namespace,
+            "--selector=app.kubernetes.io/component=operator",
+            "--output=name",
+        ],
+        None,
+    );
+    assert_eq!(
+        retained_identity.stdout.lines().count(),
+        1,
+        "atomic cleanup must retain the initialized identity volume: {retained_identity:?}"
+    );
+
+    let retry_initial_install = helm_install_args(
+        atomic_release,
+        &helm_namespace,
+        &good_chart_dir,
+        false,
+        "2m",
+    );
+    run_ok(
+        "helm",
+        retry_initial_install.iter().map(String::as_str),
+        None,
+    );
+    assert_output_contains(
+        &run_ok(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                "--namespace",
+                &helm_namespace,
+                "--selector=alien.dev/remote-operator-identity-phase=complete",
+                "--output=name",
+            ],
+            None,
+        ),
+        "configmap/",
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            atomic_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "secret",
+            &atomic_credentials,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
     );
 
     let cleanup_render = run_ok(
@@ -495,6 +617,18 @@ spec:
             "uninstall must delete retained Remote Operator records: {retained:?}"
         );
     }
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=30s",
+        ],
+        None,
+    );
     let retained_pvc = run_ok(
         "kubectl",
         [
@@ -709,6 +843,35 @@ fn helm_upgrade_args(
         format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
         "--set=runtime.probes.liveness.enabled=false".to_string(),
         "--set=runtime.probes.readiness.enabled=false".to_string(),
+    ]
+}
+
+fn helm_install_args(
+    release: &str,
+    namespace: &str,
+    chart: &Path,
+    runtime_readiness_enabled: bool,
+    timeout: &str,
+) -> Vec<String> {
+    vec![
+        "install".to_string(),
+        release.to_string(),
+        path_str(chart).to_string(),
+        "--namespace".to_string(),
+        namespace.to_string(),
+        "--atomic".to_string(),
+        format!("--timeout={timeout}"),
+        "--set-string=management.url=https://management.example.test".to_string(),
+        "--set=remoteOperator.enabled=true".to_string(),
+        "--set=remoteOperator.bootstrapIdentity=true".to_string(),
+        format!("--set-string=remoteOperator.existingSecret.name={release}-remote"),
+        format!(
+            "--set-string=remoteOperator.existingSecret.encryptionKeySha256={ENCRYPTION_KEY_SHA256}"
+        ),
+        format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+        format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+        "--set=runtime.probes.liveness.enabled=false".to_string(),
+        format!("--set=runtime.probes.readiness.enabled={runtime_readiness_enabled}"),
     ]
 }
 

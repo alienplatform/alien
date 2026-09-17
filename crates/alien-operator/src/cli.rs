@@ -15,11 +15,14 @@ use alien_core::{
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
+use std::io::Write as _;
 use std::net::IpAddr;
 use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+const IDENTITY_INITIALIZATION_MARKER: &str = ".alien-identity-initialization-started";
 
 #[derive(Parser, Debug)]
 #[command(
@@ -350,6 +353,7 @@ async fn run(
                 &data_dir,
             )? {
                 StartupDeploymentId::Stored(stored_deployment_id) => {
+                    record_identity_initialization_started(&data_dir_path)?;
                     info!("   Using stored deployment ID: {}", stored_deployment_id);
                     if args.sync_token_revision > db.get_sync_token_revision().await? {
                         // Never consume a registration token as a rotation: initialize would
@@ -396,6 +400,7 @@ async fn run(
                     }
                     info!("   Using configured deployment ID: {}", deployment_id);
                     db.set_deployment_id(&deployment_id).await?;
+                    record_identity_initialization_started(&data_dir_path)?;
                 }
                 StartupDeploymentId::Initialize => {
                     if args.sync_token_revision > 0 {
@@ -405,6 +410,11 @@ async fn run(
                         }));
                     }
                     info!("   First startup, initializing with manager...");
+
+                    // Record the attempt before the one-time setup credential is sent. A Helm
+                    // atomic-install cleanup can then retain this volume even if another chart
+                    // workload fails after the manager has consumed the credential.
+                    record_identity_initialization_started(&data_dir_path)?;
 
                     let (initialized_deployment_id, deployment_token) = initialize_with_manager(
                         &sync_url,
@@ -575,6 +585,38 @@ async fn run(
 // Both manager token formats still require authenticated exact-deployment verification.
 fn has_deployment_token_prefix(token: &str) -> bool {
     token.starts_with("ax_dep_") || token.starts_with("ax_deploy_")
+}
+
+fn record_identity_initialization_started(data_dir: &std::path::Path) -> Result<()> {
+    let marker = data_dir.join(IDENTITY_INITIALIZATION_MARKER);
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&marker)
+    {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => return Ok(()),
+        Err(error) => {
+            return Err(error)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: format!(
+                        "Failed to record Operator identity initialization in '{}'",
+                        marker.display()
+                    ),
+                });
+        }
+    };
+
+    file.write_all(b"1\n")
+        .and_then(|_| file.sync_all())
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to persist Operator identity initialization in '{}'",
+                marker.display()
+            ),
+        })
 }
 
 fn select_startup_deployment_id(
@@ -1068,7 +1110,8 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, StartupDeploymentId,
+        record_identity_initialization_started, select_startup_deployment_id, Args,
+        InitialDesiredReleaseArg, StartupDeploymentId, IDENTITY_INITIALIZATION_MARKER,
     };
     use alien_core::{DeploymentStatus, Platform};
     use clap::Parser;
@@ -1094,6 +1137,20 @@ mod tests {
                 "non-deployment token must not reach initialize"
             );
         }
+    }
+
+    #[test]
+    fn identity_initialization_marker_is_durable_and_idempotent() {
+        let data_dir = tempfile::tempdir().expect("operator data directory");
+
+        record_identity_initialization_started(data_dir.path()).expect("write marker");
+        record_identity_initialization_started(data_dir.path()).expect("reuse marker");
+
+        assert_eq!(
+            std::fs::read_to_string(data_dir.path().join(IDENTITY_INITIALIZATION_MARKER))
+                .expect("read marker"),
+            "1\n"
+        );
     }
 
     #[test]

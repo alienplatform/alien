@@ -640,6 +640,12 @@ spec:
         - name: cleanup
           image: "{{ dig "image" "repository" "alpine/k8s" (dig "cleanup" "onUninstall" dict .Values.runtime) }}:{{ dig "image" "tag" "1.32.0" (dig "cleanup" "onUninstall" dict .Values.runtime) }}"
           imagePullPolicy: {{ dig "image" "pullPolicy" "IfNotPresent" (dig "cleanup" "onUninstall" dict .Values.runtime) }}
+          {{- if .Values.remoteOperator.enabled }}
+          volumeMounts:
+            - name: identity
+              mountPath: /var/lib/operator
+              readOnly: true
+          {{- end }}
           command:
             - /bin/sh
             - -ec
@@ -722,11 +728,22 @@ spec:
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
               fi
 
-              # Stop the exact release-owned workload first so its identity
-              # claim can finish deletion while this pre-delete hook waits.
+              if ! resource_exists configmap "$identity_completion" && [ -f /var/lib/operator/.alien-identity-initialization-started ]; then
+                echo "Retaining the prepared Remote Operator identity because initialization started before this incomplete install was deleted."
+                exit 0
+              fi
+
+              # Stop the exact release-owned workload first. PVC deletion must
+              # not wait for this cleanup pod, which is itself reading the claim.
               kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
               kubectl -n "$namespace" delete configmap "$identity_record" "$identity_completion" --ignore-not-found=true
-              kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true
+              kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true --wait=false
+      {{- if .Values.remoteOperator.enabled }}
+      volumes:
+        - name: identity
+          persistentVolumeClaim:
+            claimName: {{ printf "%s-identity" (include "deployment.remoteOperatorResourceName" .) | quote }}
+      {{- end }}
 "#
     .to_string()
 }
@@ -6061,6 +6078,9 @@ mod tests {
         ));
         assert!(cleanup.contains("require_field deployment"));
         assert!(cleanup.contains("require_field persistentvolumeclaim"));
+        assert!(cleanup.contains(".alien-identity-initialization-started"));
+        assert!(cleanup.contains("Retaining the prepared Remote Operator identity"));
+        assert!(cleanup.contains("claimName: {{ printf \"%s-identity\""));
         assert!(cleanup.contains("delete deployment \"$resource_name\""));
         assert!(cleanup.contains("$resource_name-complete"));
         assert!(cleanup.contains("$resource_name-identity"));
