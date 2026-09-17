@@ -26,11 +26,11 @@ use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, AuthorizeSecurityGroupIngressRequest,
     CreateInternetGatewayRequest, CreateNatGatewayRequest, CreateRouteRequest,
     CreateRouteTableRequest, CreateSecurityGroupRequest, CreateSubnetRequest, CreateVpcRequest,
-    DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest, DescribeRouteTablesRequest,
-    DescribeSecurityGroupsRequest, DescribeSubnetsRequest, DescribeVpcsRequest,
-    DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse, IpRange,
-    ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Subnet, Tag,
-    TagSpecification,
+    DescribeAddressesResponse, DescribeAvailabilityZonesRequest, DescribeNatGatewaysRequest,
+    DescribeRouteTablesRequest, DescribeSecurityGroupsRequest, DescribeSubnetsRequest,
+    DescribeVpcsRequest, DetachInternetGatewayRequest, Filter, IpPermission, IpPermissionResponse,
+    IpRange, ModifyVpcAttributeRequest, RouteTable, RouteTableAssociation, SecurityGroup, Subnet,
+    Tag, TagSpecification,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::aws::AwsFailureDomainSubnets;
@@ -177,6 +177,28 @@ fn assess_eip_quota(used: Option<usize>, limit: Option<f64>) -> EipQuotaPrefligh
     }
 }
 
+fn quota_consuming_eip_usage(response: DescribeAddressesResponse) -> Option<usize> {
+    let addresses = response
+        .addresses_set
+        .map(|set| set.items)
+        .unwrap_or_default();
+
+    // `domain` is required to distinguish the EC2-VPC quota from legacy EC2-Classic
+    // addresses. Do not turn incomplete provider data into a false quota failure.
+    if addresses.iter().any(|address| address.domain.is_none()) {
+        return None;
+    }
+
+    Some(
+        addresses
+            .into_iter()
+            .filter(|address| {
+                address.domain.as_deref() == Some("vpc") && address.public_ipv4_pool.is_none()
+            })
+            .count(),
+    )
+}
+
 async fn preflight_aws_eip_quota(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
@@ -196,17 +218,7 @@ async fn preflight_aws_eip_quota(
     };
 
     let used = match ec2.describe_addresses().await {
-        Ok(response) => Some(
-            response
-                .addresses_set
-                .map(|set| {
-                    set.items
-                        .into_iter()
-                        .filter(|address| address.domain.as_deref() == Some("vpc"))
-                        .count()
-                })
-                .unwrap_or_default(),
-        ),
+        Ok(response) => quota_consuming_eip_usage(response),
         Err(error) => {
             warn!(error = %error, "Could not verify current AWS Elastic IP usage; continuing because quota preflight is best-effort");
             None
@@ -249,9 +261,18 @@ async fn preflight_aws_eip_quota(
 
 #[cfg(test)]
 mod tests {
-    use alien_aws_clients::ec2::{IpPermissionSet, IpRangeResponse, IpRangeSet};
+    use std::sync::Arc;
+
+    use alien_aws_clients::ec2::{
+        Address, AddressSet, IpPermissionSet, IpRangeResponse, IpRangeSet, MockEc2Api,
+    };
+    use alien_aws_clients::service_quotas::{
+        GetServiceQuotaResponse, MockServiceQuotasApi, ServiceQuota,
+    };
+    use alien_core::{Network, Platform};
 
     use super::*;
+    use crate::core::{controller_test::SingleControllerExecutor, MockPlatformServiceProvider};
 
     #[test]
     fn detects_existing_all_protocol_ipv4_rule() {
@@ -441,6 +462,121 @@ mod tests {
             assess_eip_quota(Some(0), None),
             EipQuotaPreflight::Unknown(_)
         ));
+    }
+
+    #[test]
+    fn eip_usage_excludes_byoip_addresses_from_the_vpc_quota() {
+        let response = DescribeAddressesResponse {
+            addresses_set: Some(AddressSet {
+                items: vec![
+                    Address {
+                        allocation_id: Some("eipalloc-amazon".to_string()),
+                        public_ip: None,
+                        domain: Some("vpc".to_string()),
+                        public_ipv4_pool: None,
+                    },
+                    Address {
+                        allocation_id: Some("eipalloc-byoip".to_string()),
+                        public_ip: None,
+                        domain: Some("vpc".to_string()),
+                        public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                    },
+                ],
+            }),
+        };
+
+        assert_eq!(quota_consuming_eip_usage(response), Some(1));
+    }
+
+    #[test]
+    fn eip_usage_is_unknown_when_address_domain_is_missing() {
+        let response = DescribeAddressesResponse {
+            addresses_set: Some(AddressSet {
+                items: vec![Address {
+                    allocation_id: Some("eipalloc-unknown".to_string()),
+                    public_ip: None,
+                    domain: None,
+                    public_ipv4_pool: None,
+                }],
+            }),
+        };
+
+        assert_eq!(quota_consuming_eip_usage(response), None);
+    }
+
+    #[tokio::test]
+    async fn create_start_does_not_reject_byoip_addresses_as_quota_usage() {
+        let mut ec2 = MockEc2Api::new();
+        ec2.expect_describe_addresses().return_once(|| {
+            Ok(DescribeAddressesResponse {
+                addresses_set: Some(AddressSet {
+                    items: vec![
+                        Address {
+                            allocation_id: Some("eipalloc-amazon-1".to_string()),
+                            public_ip: None,
+                            domain: Some("vpc".to_string()),
+                            public_ipv4_pool: None,
+                        },
+                        Address {
+                            allocation_id: Some("eipalloc-byoip".to_string()),
+                            public_ip: None,
+                            domain: Some("vpc".to_string()),
+                            public_ipv4_pool: Some("ipv4pool-ec2-customer".to_string()),
+                        },
+                    ],
+                }),
+            })
+        });
+        let ec2 = Arc::new(ec2);
+
+        let mut quotas = MockServiceQuotasApi::new();
+        quotas.expect_get_service_quota().return_once(|_, _| {
+            Ok(GetServiceQuotaResponse {
+                quota: Some(ServiceQuota {
+                    quota_code: Some(EC2_VPC_EIP_QUOTA_CODE.to_string()),
+                    service_code: Some("ec2".to_string()),
+                    quota_name: None,
+                    value: Some(2.0),
+                }),
+            })
+        });
+        let quotas = Arc::new(quotas);
+
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_service_quotas_client()
+            .returning(move |_| Ok(quotas.clone()));
+
+        let network = Network::new("quota-test".to_string())
+            .settings(NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            })
+            .build();
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(network)
+            .controller(AwsNetworkController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_test_dependencies()
+            .build()
+            .await
+            .expect("executor should build");
+
+        executor
+            .step()
+            .await
+            .expect("BYOIP address must not produce a false quota failure");
+        assert_eq!(
+            executor
+                .internal_state::<AwsNetworkController>()
+                .expect("network controller state")
+                .state,
+            AwsNetworkState::CreatingVpc
+        );
     }
 }
 

@@ -2571,6 +2571,9 @@ pub struct Address {
     pub allocation_id: Option<String>,
     pub public_ip: Option<String>,
     pub domain: Option<String>,
+    /// Present for addresses allocated from a customer-owned public IPv4 pool
+    /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
+    pub public_ipv4_pool: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -3868,13 +3871,14 @@ mod volume_operation_tests {
                 <addressesSet>
                     <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain></item>
                     <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
                 </addressesSet>
             </DescribeAddressesResponse>"#,
         )
         .expect("DescribeAddresses response should deserialize");
 
         let addresses = response.addresses_set.expect("addressesSet is present");
-        assert_eq!(addresses.items.len(), 2);
+        assert_eq!(addresses.items.len(), 3);
         assert_eq!(
             addresses.items[0].allocation_id.as_deref(),
             Some("eipalloc-1")
@@ -3883,6 +3887,10 @@ mod volume_operation_tests {
             .items
             .iter()
             .all(|address| address.domain.as_deref() == Some("vpc")));
+        assert_eq!(
+            addresses.items[2].public_ipv4_pool.as_deref(),
+            Some("ipv4pool-ec2-1234567890abcdef0")
+        );
     }
 }
 
