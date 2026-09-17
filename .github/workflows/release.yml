@@ -1775,7 +1775,9 @@ jobs:
     needs: [prepare, build-addon, build-binaries-linux-x86_64, build-binaries-linux-aarch64, build-binaries-darwin, build-binaries-windows]
     if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification' }}
     runs-on: depot-ubuntu-24.04-arm-16
-    timeout-minutes: 30
+    # Wide enough that a hung probe hits the smoke script's own budget first: it
+    # names which probe hung, where a job timeout names only the job.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
         with:
