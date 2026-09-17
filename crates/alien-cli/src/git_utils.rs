@@ -193,25 +193,34 @@ fn is_git_repository<P: AsRef<Path>>(repo_path: P) -> bool {
 
 /// Get the configured remote URL without applying Git URL rewrite rules.
 fn get_remote_url<P: AsRef<Path>>(repo_path: P) -> Result<String> {
-    run_git_command(&repo_path, &["config", "--get", "remote.origin.url"])
-        .or_else(|_| {
-            run_git_command(&repo_path, &["remote"]).and_then(|remotes| {
-                let first_remote = remotes.lines().next().unwrap_or("").trim();
-                if first_remote.is_empty() {
-                    Err(alien_error::AlienError::new(
-                        ErrorData::ConfigurationError {
-                            message: "No git remotes found in repository".to_string(),
-                        },
-                    ))
-                } else {
-                    run_git_command(
-                        &repo_path,
-                        &["config", "--get", &format!("remote.{first_remote}.url")],
-                    )
-                }
+    get_first_configured_remote_url(&repo_path, "origin").or_else(|_| {
+        run_git_command(&repo_path, &["remote"]).and_then(|remotes| {
+            let first_remote = remotes.lines().next().unwrap_or("").trim();
+            if first_remote.is_empty() {
+                Err(alien_error::AlienError::new(
+                    ErrorData::ConfigurationError {
+                        message: "No git remotes found in repository".to_string(),
+                    },
+                ))
+            } else {
+                get_first_configured_remote_url(&repo_path, first_remote)
+            }
+        })
+    })
+}
+
+fn get_first_configured_remote_url<P: AsRef<Path>>(repo_path: P, remote: &str) -> Result<String> {
+    let key = format!("remote.{remote}.url");
+    let urls = run_git_command(repo_path, &["config", "--get-all", &key])?;
+    urls.lines()
+        .map(str::trim)
+        .find(|url| !url.is_empty())
+        .map(str::to_string)
+        .ok_or_else(|| {
+            alien_error::AlienError::new(ErrorData::ConfigurationError {
+                message: format!("Git remote {remote} has no configured URLs"),
             })
         })
-        .map(|url| url.trim().to_string())
 }
 
 /// Convert a Git remote into a repository URL that contains no credentials.
@@ -435,6 +444,13 @@ mod tests {
                 "https://github.com/",
             ],
             vec!["remote", "add", "origin", "https://github.com/acme/app.git"],
+            vec![
+                "remote",
+                "set-url",
+                "--add",
+                "origin",
+                "https://github.com/acme/mirror.git",
+            ],
         ] {
             let output = Command::new("git")
                 .args(args)
