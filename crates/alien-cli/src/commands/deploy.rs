@@ -26,6 +26,7 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::ClientConfigExt;
 use alien_platform_api::Client as SdkClient;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
@@ -1127,6 +1128,19 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
     let platform = resolved_args.platform_enum;
 
+    // Validate runner-local provider configuration before creating any durable
+    // deployment record or token. Machines does not use a local cloud client.
+    let client_config =
+        if platform == Platform::Machines {
+            None
+        } else {
+            Some(ClientConfig::from_std_env(platform).await.context(
+                ErrorData::ConfigurationError {
+                    message: format!("Failed to build client config for platform {:?}", platform),
+                },
+            )?)
+        };
+
     let base_url = ctx.base_url();
 
     // Step 1: Load or register the deployment (via platform API)
@@ -1461,14 +1475,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 message: format!("Unknown deployment status: {}", deployment.status),
             })?;
 
-    // Get cloud credentials from environment
-    use alien_infra::ClientConfigExt;
-    let client_config =
-        ClientConfig::from_std_env(platform)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to build client config for platform {:?}", platform),
-            })?;
+    let client_config = client_config.expect("non-Machines deploys validate client config");
 
     // Build deployment state
     let mut current = DeploymentState {
