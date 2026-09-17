@@ -4095,7 +4095,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4533,7 +4533,7 @@ dependencies = [
  "libc",
  "log",
  "rustversion",
- "windows-link 0.1.3",
+ "windows-link 0.2.1",
  "windows-result 0.4.1",
 ]
 
@@ -5229,7 +5229,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "system-configuration",
  "tokio",
  "tower-layer",
@@ -7561,9 +7561,9 @@ dependencies = [
 
 [[package]]
 name = "postgresql_archive"
-version = "0.20.4"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf41d656e8c357185ccab494989fad336a9eb16ebd689fcf4efce35a9a55726a"
+checksum = "274b4eeb875f1196cc577a69b17c3018a3b189d4017122648b1465066b8b08c1"
 dependencies = [
  "async-trait",
  "flate2",
@@ -7574,6 +7574,7 @@ dependencies = [
  "reqwest-middleware",
  "reqwest-retry",
  "reqwest-tracing",
+ "rustls 0.23.43",
  "semver",
  "serde",
  "serde_json",
@@ -7581,7 +7582,6 @@ dependencies = [
  "tar",
  "target-triple",
  "tempfile",
- "thiserror 2.0.20",
  "tracing",
  "url",
  "zip 8.6.0",
@@ -7589,20 +7589,19 @@ dependencies = [
 
 [[package]]
 name = "postgresql_commands"
-version = "0.20.4"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2af4eb3d074b22c7f07e35ab891093c48dc1f9514a52e54b250a1ae47f311df3"
+checksum = "66e1f10f6246287203d57775b1be7a9050c6d3f45c9021853eda3cfee3bf95e9"
 dependencies = [
- "thiserror 2.0.20",
  "tokio",
  "tracing",
 ]
 
 [[package]]
 name = "postgresql_embedded"
-version = "0.20.4"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2ec95242c7e52d7a286f35f10cf143f5fb02255bbdd41b5b2eba05dbbcd79334"
+checksum = "87673b35bc80ddcc8eb54072d90290c6d2e3777493fd2d0de46cf2e0d6677fe5"
 dependencies = [
  "anyhow",
  "postgresql_archive",
@@ -7612,7 +7611,6 @@ dependencies = [
  "sqlx",
  "target-triple",
  "tempfile",
- "thiserror 2.0.20",
  "tokio",
  "tracing",
  "url",
@@ -7620,9 +7618,9 @@ dependencies = [
 
 [[package]]
 name = "postgresql_extensions"
-version = "0.20.4"
+version = "0.21.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c956c69e6e37057bf6656df6023cdd576165f25a9dde4ea944d5f023ba7163d1"
+checksum = "c2c1a295428626fbc992311c4dbcf872a167817d710b5e141f4998f9b7311836"
 dependencies = [
  "async-trait",
  "postgresql_archive",
@@ -7634,7 +7632,6 @@ dependencies = [
  "serde_json",
  "target-triple",
  "tempfile",
- "thiserror 2.0.20",
  "tokio",
  "tracing",
  "url",
@@ -7996,7 +7993,7 @@ dependencies = [
  "quinn-udp",
  "rustc-hash 2.1.3",
  "rustls 0.23.43",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "thiserror 2.0.20",
  "tokio",
  "tracing",
@@ -8009,7 +8006,6 @@ version = "0.11.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f4bfc015262b9df63c8845072ce59068853ff5872180c2ce2f13038b970e560"
 dependencies = [
- "aws-lc-rs",
  "bytes",
  "getrandom 0.4.3",
  "lru-slab",
@@ -8035,9 +8031,9 @@ dependencies = [
  "cfg_aliases",
  "libc",
  "once_cell",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tracing",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8449,7 +8445,6 @@ dependencies = [
  "log",
  "percent-encoding",
  "pin-project-lite",
- "quinn",
  "rustls 0.23.43",
  "rustls-pki-types",
  "rustls-platform-verifier",
@@ -8721,7 +8716,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys 0.12.1",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -8835,7 +8830,7 @@ dependencies = [
  "security-framework 3.7.0",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -10178,7 +10173,7 @@ dependencies = [
  "getrandom 0.4.3",
  "once_cell",
  "rustix 1.1.4",
- "windows-sys 0.52.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -11699,7 +11694,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
