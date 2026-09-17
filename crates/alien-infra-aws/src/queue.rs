@@ -529,6 +529,7 @@ mod tests {
         controller_test::{SingleControllerExecutor, SingleControllerExecutorBuilder},
         MockPlatformServiceProvider, PlatformServiceProvider,
     };
+    use crate::AwsControllerTestBuilderExt as _;
     use alien_aws_clients::sqs::{
         CreateQueueResponse, CreateQueueResult, GetQueueAttributesResponse,
         GetQueueAttributesResult, MockSqsApi,
@@ -579,7 +580,7 @@ mod tests {
             .resource(queue)
             .controller(AwsQueueController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

@@ -1093,6 +1093,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AwsControllerTestBuilderExt as _;
+
     use std::sync::Arc;
 
     use alien_aws_clients::s3::{
@@ -1294,7 +1296,7 @@ mod tests {
             .resource(storage.clone())
             .controller(AwsStorageController::mock_ready(&storage.id))
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1322,7 +1324,7 @@ mod tests {
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1377,7 +1379,7 @@ mod tests {
             .resource(from_storage)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1414,7 +1416,7 @@ mod tests {
             .resource(storage)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1463,7 +1465,7 @@ mod tests {
             .resource(storage)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1519,7 +1521,7 @@ mod tests {
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1618,7 +1620,7 @@ mod tests {
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1716,7 +1718,7 @@ mod tests {
             .resource(storage)
             .controller(AwsStorageController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1745,7 +1747,7 @@ mod tests {
             .resource(storage)
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

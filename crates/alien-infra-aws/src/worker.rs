@@ -5010,6 +5010,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AwsControllerTestBuilderExt as _;
+
     use std::collections::HashMap;
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -5523,7 +5525,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies();
 
         if let Some(dm) = domain_metadata {
@@ -5593,7 +5595,7 @@ mod tests {
             .resource(from_function)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies();
 
         if let Some(dm) = domain_metadata {
@@ -5659,7 +5661,7 @@ mod tests {
             .resource(worker)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -5819,7 +5821,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .domain_metadata(domain_metadata)
             .with_test_dependencies()
             .build()
@@ -5878,7 +5880,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -5932,7 +5934,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6004,7 +6006,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6067,7 +6069,7 @@ mod tests {
             .resource(worker)
             .controller(AwsWorkerController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

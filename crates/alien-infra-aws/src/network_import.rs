@@ -78,6 +78,7 @@ impl ResourceImporter for AwsNetworkImporter {
 
 #[cfg(test)]
 mod tests {
+    use crate::AwsControllerTestBuilderExt as _;
     use alien_core::{
         import::{data::AwsNetworkImportData, ImportContext},
         AwsManagementConfig, ManagementConfig, Network, Platform, Resource, ResourceEntry,
@@ -336,7 +337,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .stack_settings(settings)
-            .service_provider(Arc::new(provider))
+            .aws_service_provider(Arc::new(provider))
             .build()
             .await
             .expect("executor should build");

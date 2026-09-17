@@ -631,6 +631,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AwsControllerTestBuilderExt as _;
+
     use std::sync::Arc;
 
     use alien_aws_clients::codebuild::{
@@ -740,7 +742,7 @@ mod tests {
             .resource(build)
             .controller(AwsBuildController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -792,7 +794,7 @@ mod tests {
             .resource(from_build)
             .controller(ready_controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

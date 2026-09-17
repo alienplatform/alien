@@ -631,9 +631,12 @@ pub struct SingleControllerExecutorBuilder {
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
+    service_registrars: Vec<ServiceRegistrar>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
 }
+
+type ServiceRegistrar = Box<dyn FnOnce(&mut ServiceRegistry) -> Result<()> + Send + Sync + 'static>;
 
 impl SingleControllerExecutorBuilder {
     fn new() -> Self {
@@ -655,6 +658,7 @@ impl SingleControllerExecutorBuilder {
             public_endpoints: None,
             dependencies: Vec::new(),
             service_provider: None,
+            service_registrars: Vec::new(),
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
         }
@@ -760,6 +764,20 @@ impl SingleControllerExecutorBuilder {
     /// Sets a custom cloud client provider.
     pub fn service_provider(mut self, provider: Arc<dyn PlatformServiceProvider>) -> Self {
         self.service_provider = Some(provider);
+        self
+    }
+
+    /// Registers an additional typed service in the controller context.
+    ///
+    /// Provider sibling crates use this in tests to register the trait object
+    /// from the crate instance under test. A dev-dependency cycle can otherwise
+    /// give the normal and test crate instances distinct `TypeId`s.
+    pub fn service<T>(mut self, service: Arc<T>) -> Self
+    where
+        T: ?Sized + Send + Sync + 'static,
+    {
+        self.service_registrars
+            .push(Box::new(move |services| services.register(service)));
         self
     }
 
@@ -1160,6 +1178,9 @@ impl SingleControllerExecutorBuilder {
             .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default()));
         let mut services = ServiceRegistry::new();
         register_platform_services(&mut services, service_provider)?;
+        for register_service in self.service_registrars {
+            register_service(&mut services)?;
+        }
 
         Ok(SingleControllerExecutor {
             controller,

@@ -1231,6 +1231,7 @@ mod tests {
         deserialize_controller, serialize_controller, MockPlatformServiceProvider,
         ResourceController,
     };
+    use crate::AwsControllerTestBuilderExt as _;
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
         UpdateMicrovmImageResponse,
@@ -1311,7 +1312,7 @@ mod tests {
             .resource(sandbox())
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(provider(client))
+            .aws_service_provider(provider(client))
             .build()
             .await
             .expect("executor should build")
@@ -1729,7 +1730,7 @@ mod tests {
             .resource(sandbox())
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(provider(client))
+            .aws_service_provider(provider(client))
             .build()
             .await
             .expect("executor should build");
@@ -1838,7 +1839,7 @@ mod tests {
             .resource(sandbox())
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(provider(client))
+            .aws_service_provider(provider(client))
             .build()
             .await
             .expect("executor should build");
@@ -1913,7 +1914,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .aws_service_provider(provider(MockLambdaMicrovmsApi::new()))
             .build()
             .await
             .expect("executor should build");
@@ -1958,7 +1959,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .aws_service_provider(provider(MockLambdaMicrovmsApi::new()))
             .build()
             .await
             .expect("executor should build");
@@ -2422,7 +2423,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .aws_service_provider(provider(MockLambdaMicrovmsApi::new()))
             .build()
             .await
             .expect("executor should build");

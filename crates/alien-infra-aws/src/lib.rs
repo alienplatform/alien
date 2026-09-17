@@ -130,3 +130,91 @@ pub trait AwsServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn EventBridgeApi>>;
     async fn get_aws_kms_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn KmsApi>>;
 }
+
+#[cfg(test)]
+macro_rules! impl_test_aws_service_provider {
+    ($(($method:ident, $api:ty)),* $(,)?) => {
+        #[async_trait::async_trait]
+        impl AwsServiceProvider for alien_infra::MockPlatformServiceProvider {
+            $(
+                async fn $method(&self, config: &AwsClientConfig) -> Result<Arc<$api>> {
+                    alien_infra::PlatformServiceProvider::$method(self, config).await
+                }
+            )*
+        }
+    };
+}
+
+#[cfg(test)]
+impl_test_aws_service_provider!(
+    (get_aws_iam_client, dyn IamApi),
+    (get_aws_bedrock_client, dyn BedrockApi),
+    (get_aws_lambda_client, dyn LambdaApi),
+    (get_aws_microvms_client, dyn LambdaMicrovmsApi),
+    (get_aws_s3_client, dyn S3Api),
+    (get_aws_ses_client, dyn SesApi),
+    (get_aws_cloudformation_client, dyn CloudFormationApi),
+    (get_aws_codebuild_client, dyn CodeBuildApi),
+    (get_aws_ecr_client, dyn EcrApi),
+    (get_aws_secrets_manager_client, dyn SecretsManagerApi),
+    (get_aws_rds_client, dyn RdsApi),
+    (get_aws_ssm_client, dyn SsmApi),
+    (get_aws_dynamodb_client, dyn DynamoDbApi),
+    (get_aws_sqs_client, dyn SqsApi),
+    (get_aws_ec2_client, dyn Ec2Api),
+    (get_aws_autoscaling_client, dyn AutoScalingApi),
+    (get_aws_elbv2_client, dyn Elbv2Api),
+    (get_aws_eks_client, dyn EksApi),
+    (get_aws_acm_client, dyn AcmApi),
+    (get_aws_apigateway_client, dyn ApiGatewayApi),
+    (get_aws_apigatewayv2_client, dyn ApiGatewayV2Api),
+    (get_aws_eventbridge_client, dyn EventBridgeApi),
+    (get_aws_kms_client, dyn KmsApi),
+);
+
+#[cfg(test)]
+struct TestAwsPermissionsService;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl AwsPermissionsService for TestAwsPermissionsService {
+    async fn apply_resource_scoped_permissions(
+        &self,
+        ctx: &alien_infra_core::ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_type: &str,
+    ) -> Result<()> {
+        alien_infra::ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_type,
+        )
+        .await
+    }
+
+    fn kubernetes_cluster_permission_context(
+        &self,
+        ctx: &alien_infra_core::ResourceControllerContext<'_>,
+        cluster: &alien_core::KubernetesCluster,
+    ) -> Result<alien_permissions::PermissionContext> {
+        alien_infra::ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
+            ctx, cluster,
+        )
+    }
+}
+
+#[cfg(test)]
+pub trait AwsControllerTestBuilderExt {
+    fn aws_service_provider(self, provider: Arc<alien_infra::MockPlatformServiceProvider>) -> Self;
+}
+
+#[cfg(test)]
+impl AwsControllerTestBuilderExt for alien_infra::controller_test::SingleControllerExecutorBuilder {
+    fn aws_service_provider(self, provider: Arc<alien_infra::MockPlatformServiceProvider>) -> Self {
+        self.service_provider(provider.clone())
+            .service::<dyn AwsServiceProvider>(provider)
+            .service::<dyn AwsPermissionsService>(Arc::new(TestAwsPermissionsService))
+    }
+}

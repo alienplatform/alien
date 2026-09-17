@@ -1421,6 +1421,7 @@ fn emit_aws_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::AwsControllerTestBuilderExt as _;
     use crate::MockPlatformServiceProvider;
     use alien_aws_clients::iam::{
         AttachedPolicies, CreateRoleResponse, CreateRoleResult, ListAttachedRolePoliciesResponse,
@@ -1562,7 +1563,7 @@ mod tests {
             .resource(registry)
             .controller(AwsArtifactRegistryController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1641,7 +1642,7 @@ mod tests {
             .resource(registry)
             .controller(controller)
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1666,7 +1667,7 @@ mod tests {
             .resource(registry.clone())
             .controller(AwsArtifactRegistryController::default())
             .platform(Platform::Aws)
-            .service_provider(mock_provider)
+            .aws_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
