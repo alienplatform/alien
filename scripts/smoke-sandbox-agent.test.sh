@@ -101,13 +101,17 @@ check inspect-unreadable fail "linux/amd64: the container state could not be rea
 check listener-then-exit fail "linux/amd64: the agent reported a listener and then exited"
 
 check happy pass ""
+# Every mode above asserts on linux/amd64, so this is the only thing that would
+# notice a probe which stopped running on the other architecture. A floor rather
+# than the exact count lets such a probe go missing with every mode still green.
 for platform in linux/amd64 linux/arm64; do
-  if [ "$(grep -c "^${platform}$" "$state/platforms")" -lt 2 ]; then
+  probes=$(grep -c "^${platform}$" "$state/platforms")
+  if [ "$probes" -ne 6 ]; then
     failed=$((failed + 1))
-    echo "FAIL happy: ${platform} was not probed"
+    echo "FAIL happy: ${platform} probed ${probes} times, expected 6"
   else
     passed=$((passed + 1))
-    echo "ok   happy: ${platform} probed $(grep -c "^${platform}$" "$state/platforms") times"
+    echo "ok   happy: ${platform} probed 6 times"
   fi
 done
 
