@@ -2,7 +2,6 @@ mod core;
 pub use core::*;
 
 mod error;
-pub use error::*;
 
 mod worker;
 pub use worker::*;

@@ -42,7 +42,8 @@ pub(super) async fn reconcile_command_service(
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
     let Some(mut service) = build_command_service(config, service_name, namespace) else {
@@ -114,7 +115,8 @@ pub(super) async fn delete_command_service(
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
 

@@ -119,7 +119,8 @@ impl AzureStorageController {
         // Execute container creation
         let azure_config = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_blob_container_client(azure_config)?;
 
         // Fail fast on any error - executor handles retries
@@ -246,10 +247,12 @@ impl AzureStorageController {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let storage_account_name = azure_utils::get_storage_account_name(ctx.state)?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_blob_container_client(azure_config)?;
             let storage_accounts_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_storage_accounts_client(azure_config)?;
 
             // Check if container still exists
@@ -339,7 +342,8 @@ impl AzureStorageController {
 
             let azure_config = ctx.get_azure_config()?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_blob_container_client(azure_config)?;
 
             client
@@ -377,7 +381,8 @@ impl AzureStorageController {
         // cannot leave missing or stale role assignments.
         let azure_config = ctx.get_azure_config()?;
         let authorization_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_config)?;
         for assignment_id in std::mem::take(&mut self.role_assignment_ids) {
             match authorization_client
@@ -441,7 +446,8 @@ impl AzureStorageController {
         if !self.role_assignment_ids.is_empty() {
             let azure_config = ctx.get_azure_config()?;
             let authorization_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_authorization_client(azure_config)?;
 
             for assignment_id in &self.role_assignment_ids {
@@ -510,7 +516,8 @@ impl AzureStorageController {
 
             let azure_config = ctx.get_azure_config()?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_blob_container_client(azure_config)?;
 
             match client

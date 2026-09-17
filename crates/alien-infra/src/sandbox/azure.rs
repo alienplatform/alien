@@ -116,7 +116,8 @@ impl AzureSandboxController {
             // status that would claim a read happened.
             match ctx.get_azure_config() {
                 Ok(azure_config) => match ctx
-                    .service_provider
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_azure_sandbox_groups_client(azure_config)
                 {
                     Ok(arm) => match arm.get_sandbox_group(&resource_group, &group).await {

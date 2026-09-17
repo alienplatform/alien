@@ -10,6 +10,9 @@ members = [
   "crates/alien-cli-common",
   "crates/alien-worker-runtime",
   "crates/alien-infra",
+  "crates/alien-infra-core",
+  "crates/alien-infra-aws",
+  "crates/alien-infra-local",
   "crates/alien-core",
   "crates/alien-build",
   "crates/alien-test-app",
@@ -83,6 +86,9 @@ alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "3.3.22
 dockdash = "0.2.0"
 alien-core = { path = "crates/alien-core", version = "3.3.22" }
 alien-infra = { path = "crates/alien-infra", version = "3.3.22" }
+alien-infra-core = { path = "crates/alien-infra-core", version = "3.3.22" }
+alien-infra-aws = { path = "crates/alien-infra-aws", version = "3.3.22" }
+alien-infra-local = { path = "crates/alien-infra-local", version = "3.3.22" }
 alien-build = { path = "crates/alien-build", version = "3.3.22" }
 alien-macros = { path = "crates/alien-macros", version = "3.3.22" }
 alien-client-core = { path = "crates/alien-client-core", version = "3.3.22" }

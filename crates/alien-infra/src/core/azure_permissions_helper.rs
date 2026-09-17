@@ -175,7 +175,8 @@ impl AzurePermissionsHelper {
     ) -> Result<()> {
         let azure_config = ctx.get_azure_config()?;
         let authorization_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_config)?;
 
         let generator = AzureRuntimePermissionsGenerator::new();
@@ -926,7 +927,8 @@ impl AzurePermissionsHelper {
 
         let azure_config = ctx.get_azure_config()?;
         let authorization_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_config)?;
         let role_definition_scope =
             Self::role_definition_scope_for_assignment_scope(resource_scope);

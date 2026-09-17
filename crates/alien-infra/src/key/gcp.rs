@@ -47,7 +47,8 @@ impl GcpKeyController {
             })
         })?;
         let key = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloud_kms_client(ctx.get_gcp_config()?)?
             .get_crypto_key(crypto_key_name)
             .await

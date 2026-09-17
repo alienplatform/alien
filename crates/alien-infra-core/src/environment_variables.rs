@@ -1,5 +1,4 @@
-use crate::core::{state_utils::StackResourceStateExt, ResourceControllerContext};
-use crate::error::{ErrorData, Result};
+use crate::{ErrorData, ResourceControllerContext, Result};
 use alien_core::{
     bindings::serialize_binding_as_env_var, container_runtime_environment_contract,
     daemon_runtime_environment_contract, kubernetes_base_platform_runtime_environment_plan,
@@ -32,7 +31,7 @@ fn matches_environment_target(resource_id: &str, target_resources: &Option<Vec<S
     }
 }
 
-pub(crate) fn applicable_secret_environment_variables<'a>(
+pub fn applicable_secret_environment_variables<'a>(
     resource_id: &str,
     variables: &'a [EnvironmentVariable],
 ) -> Vec<&'a EnvironmentVariable> {
@@ -477,12 +476,10 @@ impl EnvironmentVariableBuilder {
 
             // Synced binding coordinates only (Local Postgres strips its password here); the linked
             // workload's compute-target manager delivers any runtime-only secret at process start.
-            let binding_params =
-                if let Some(dependency_controller) = resource_state.get_internal_controller()? {
-                    dependency_controller.get_binding_params()?
-                } else {
-                    None
-                };
+            let binding_params = ctx
+                .services
+                .require::<dyn crate::ControllerStateResolver>()?
+                .get_binding_params(resource_state)?;
 
             // If no internal controller or no binding params, check external bindings
             let binding_params = match binding_params {

@@ -145,7 +145,8 @@ impl AzureAiController {
         );
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         let parameters = CognitiveServicesAccountCreateParameters {
@@ -225,7 +226,8 @@ impl AzureAiController {
         info!(account_name = %account_name, "Polling Azure AIServices account provisioning state");
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         match cognitive_client
@@ -369,7 +371,8 @@ impl AzureAiController {
         })?;
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         // PUT is idempotent, so re-entering this state (e.g. after a retry) re-issues
@@ -446,7 +449,8 @@ impl AzureAiController {
         })?;
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         for (deployment_name, _, _) in alien_core::ai_catalog::azure_deployments() {
@@ -559,7 +563,8 @@ impl AzureAiController {
         });
         if refresh {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_cognitive_services_client(ctx.get_azure_config()?)?;
             self.availability = Some(
                 match client
@@ -687,7 +692,8 @@ impl AzureAiController {
         );
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         match cognitive_client
@@ -752,7 +758,8 @@ impl AzureAiController {
         info!(account_name = %account_name, "Polling Azure AIServices account deletion");
 
         let cognitive_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_cognitive_services_client(azure_config)?;
 
         match cognitive_client

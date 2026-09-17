@@ -190,7 +190,8 @@ impl AzureServiceAccountController {
         };
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure_cfg)?;
         let created_identity = client
             .create_or_update_user_assigned_identity(
@@ -313,7 +314,8 @@ impl AzureServiceAccountController {
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         // Parallelize role definition creation — each uses a unique
@@ -432,7 +434,8 @@ impl AzureServiceAccountController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         let grant_plan = self.generate_stack_grant_plan(config, ctx)?;
@@ -606,7 +609,8 @@ impl AzureServiceAccountController {
             let identity_name = get_azure_managed_identity_name(ctx.resource_prefix, &config.id);
 
             let managed_identity_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_managed_identity_client(azure_cfg)?;
             let identity = managed_identity_client
                 .get_user_assigned_identity(&resource_group_name, &identity_name)
@@ -671,7 +675,8 @@ impl AzureServiceAccountController {
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
@@ -799,7 +804,8 @@ impl AzureServiceAccountController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         // Delete all role assignments
@@ -856,7 +862,8 @@ impl AzureServiceAccountController {
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         // Delete all role definitions
@@ -926,7 +933,8 @@ impl AzureServiceAccountController {
             crate::infra_requirements::azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure_cfg)?;
 
         match client

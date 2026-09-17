@@ -209,7 +209,8 @@ impl AzureRemoteStackManagementController {
         };
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure_cfg)?;
 
         let created = client
@@ -314,7 +315,8 @@ impl AzureRemoteStackManagementController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure_cfg)?;
 
         client
@@ -363,7 +365,8 @@ impl AzureRemoteStackManagementController {
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         let role_definition_uuid = Uuid::new_v5(
@@ -443,7 +446,8 @@ impl AzureRemoteStackManagementController {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         let uami_principal_id = self.uami_principal_id.clone().ok_or_else(|| {
@@ -585,7 +589,8 @@ impl AzureRemoteStackManagementController {
             let identity_name = get_management_identity_name(ctx.resource_prefix);
 
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_managed_identity_client(azure_cfg)?;
 
             let identity = client
@@ -633,7 +638,8 @@ impl AzureRemoteStackManagementController {
         let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
         let azure_cfg = ctx.get_azure_config()?;
         let auth_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
@@ -723,7 +729,8 @@ impl AzureRemoteStackManagementController {
         };
 
         let mi_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure_cfg)?;
 
         mi_client
@@ -763,7 +770,8 @@ impl AzureRemoteStackManagementController {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let azure_cfg = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_cfg)?;
 
         for assignment_id in &self.role_assignment_ids {
@@ -813,7 +821,8 @@ impl AzureRemoteStackManagementController {
             let resource_group_name = azure_utils::get_resource_group_name(ctx.state)?;
             let azure_cfg = ctx.get_azure_config()?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_authorization_client(azure_cfg)?;
 
             let scope = role_definition_scope_from_id(role_def_id, &resource_group_name);
@@ -868,7 +877,8 @@ impl AzureRemoteStackManagementController {
             let identity_name = get_management_identity_name(ctx.resource_prefix);
             let azure_cfg = ctx.get_azure_config()?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_managed_identity_client(azure_cfg)?;
 
             match client
@@ -919,7 +929,8 @@ impl AzureRemoteStackManagementController {
             let identity_name = get_management_identity_name(ctx.resource_prefix);
             let azure_cfg = ctx.get_azure_config()?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_managed_identity_client(azure_cfg)?;
 
             match client

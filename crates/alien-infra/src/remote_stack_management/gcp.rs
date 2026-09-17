@@ -57,7 +57,10 @@ impl GcpRemoteStackManagementController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteStackManagement>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
 
         let service_account_id = get_gcp_management_service_account_id(ctx.resource_prefix);
 
@@ -246,7 +249,8 @@ impl GcpRemoteStackManagementController {
 
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_resource_manager_client(gcp_config)?;
 
         let current_policy = rm_client
@@ -342,7 +346,10 @@ impl GcpRemoteStackManagementController {
             "Granting impersonation permissions to management service account"
         );
 
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
 
         // Get current service account IAM policy
         let current_policy = iam_client
@@ -476,7 +483,8 @@ impl GcpRemoteStackManagementController {
             let gcp_config = ctx.get_gcp_config()?;
             let project_id = &gcp_config.project_id;
             let rm_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_resource_manager_client(gcp_config)?;
 
             match rm_client
@@ -564,7 +572,10 @@ impl GcpRemoteStackManagementController {
 
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_iam_client(gcp_config)?;
 
             match client
                 .delete_service_account(service_account_email.clone())

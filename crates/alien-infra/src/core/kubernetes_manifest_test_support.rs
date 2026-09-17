@@ -8,8 +8,8 @@
 //! objects, without an executor or a live cluster.
 
 use crate::core::{
-    DefaultPlatformServiceProvider, HeartbeatCollector, PlatformServiceProvider,
-    ResourceControllerContext, ResourceRegistry,
+    register_platform_services, DefaultPlatformServiceProvider, HeartbeatCollector,
+    PlatformServiceProvider, ResourceControllerContext, ServiceRegistry,
 };
 use alien_core::{
     ClientConfig, DeploymentConfig, EnvironmentVariable, EnvironmentVariableType,
@@ -88,8 +88,7 @@ pub(crate) struct KubernetesManifestTestHarness {
     resource: Resource,
     stack: Stack,
     state: StackState,
-    registry: Arc<ResourceRegistry>,
-    service_provider: Arc<dyn PlatformServiceProvider>,
+    services: ServiceRegistry,
     deployment_config: DeploymentConfig,
 }
 
@@ -114,12 +113,18 @@ impl KubernetesManifestTestHarness {
             inputs: Vec::new(),
         };
 
+        let mut services = ServiceRegistry::new();
+        register_platform_services(
+            &mut services,
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .expect("default service provider should register");
+
         Self {
             resource,
             stack,
             state: StackState::new(Platform::Kubernetes),
-            registry: Arc::new(ResourceRegistry::new()),
-            service_provider: Arc::new(DefaultPlatformServiceProvider::default()),
+            services,
             deployment_config: DeploymentConfig::builder()
                 .stack_settings(StackSettings::default())
                 .environment_variables(snapshot)
@@ -138,7 +143,10 @@ impl KubernetesManifestTestHarness {
         mut self,
         service_provider: Arc<dyn PlatformServiceProvider>,
     ) -> Self {
-        self.service_provider = service_provider;
+        let mut services = ServiceRegistry::new();
+        register_platform_services(&mut services, service_provider)
+            .expect("service provider should register");
+        self.services = services;
         self
     }
 
@@ -160,9 +168,8 @@ impl KubernetesManifestTestHarness {
             })),
             state: &self.state,
             resource_prefix: "test",
-            registry: &self.registry,
             desired_stack: &self.stack,
-            service_provider: &self.service_provider,
+            services: &self.services,
             deployment_config: &self.deployment_config,
             initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
             heartbeat_collector: HeartbeatCollector::default(),

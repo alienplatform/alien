@@ -236,8 +236,9 @@
 //! ```
 
 use crate::core::{
-    DefaultPlatformServiceProvider, HeartbeatCollector, PlatformServiceProvider,
-    ResourceController, ResourceControllerContext, ResourceControllerStepResult, ResourceRegistry,
+    register_platform_services, DefaultPlatformServiceProvider, HeartbeatCollector,
+    PlatformServiceProvider, ResourceController, ResourceControllerContext,
+    ResourceControllerStepResult, ServiceRegistry,
 };
 use crate::error::{ErrorData, Result};
 use crate::worker::{AwsWorkerController, AzureWorkerController, GcpWorkerController};
@@ -328,10 +329,8 @@ pub struct SingleControllerExecutor {
     // Stack and state
     desired_stack: Stack,
     stack_state: StackState,
-    // Registry for environment providers
-    registry: Arc<ResourceRegistry>,
-    // Client provider
-    service_provider: Arc<dyn PlatformServiceProvider>,
+    // Provider services
+    services: ServiceRegistry,
     // Resource prefix
     resource_prefix: String,
     // Heartbeats emitted by the most recent step.
@@ -374,9 +373,8 @@ impl SingleControllerExecutor {
             client_config: self.client_config.clone(),
             state: &self.stack_state,
             resource_prefix: &self.resource_prefix,
-            registry: &self.registry,
             desired_stack: &self.desired_stack,
-            service_provider: &self.service_provider,
+            services: &self.services,
             deployment_config: &DeploymentConfig::builder()
                 .stack_settings(self.stack_settings.clone())
                 .maybe_management_config(self.management_config.clone())
@@ -1157,6 +1155,12 @@ impl SingleControllerExecutorBuilder {
             }
         }
 
+        let service_provider = self
+            .service_provider
+            .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default()));
+        let mut services = ServiceRegistry::new();
+        register_platform_services(&mut services, service_provider)?;
+
         Ok(SingleControllerExecutor {
             controller,
             resource_id,
@@ -1172,10 +1176,7 @@ impl SingleControllerExecutorBuilder {
             public_endpoints: self.public_endpoints,
             desired_stack: stack,
             stack_state,
-            registry: Arc::new(ResourceRegistry::with_built_ins()),
-            service_provider: self
-                .service_provider
-                .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
+            services,
             resource_prefix: "test".to_string(),
             last_heartbeats: Vec::new(),
         })

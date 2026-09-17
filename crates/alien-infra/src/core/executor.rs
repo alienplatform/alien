@@ -24,9 +24,9 @@ use tracing::{debug, error, info, warn};
 
 use crate::{
     core::{
-        state_utils::StackResourceStateExt, DefaultPlatformServiceProvider, HeartbeatCollector,
-        PlatformServiceProvider, ResourceControllerContext, ResourceControllerStepResult,
-        ResourceRegistry,
+        register_platform_services, state_utils::StackResourceStateExt,
+        DefaultPlatformServiceProvider, HeartbeatCollector, PlatformServiceProvider,
+        ResourceControllerContext, ResourceControllerStepResult, ResourceRegistry, ServiceRegistry,
     },
     error::{ErrorData, Result},
 };
@@ -137,7 +137,7 @@ pub struct StackExecutor {
     // --- Stored from config for use during step() ---
     client_config: ClientConfig,
     resource_registry: Arc<ResourceRegistry>,
-    service_provider: Arc<dyn PlatformServiceProvider>,
+    services: ServiceRegistry,
     deployment_config: alien_core::DeploymentConfig,
     initial_setup_authority: InitialSetupAuthority,
 }
@@ -358,6 +358,8 @@ impl StackExecutor {
         let client_config = config.client_config;
         let resource_registry = config.resource_registry;
         let service_provider = config.service_provider;
+        let mut services = ServiceRegistry::new();
+        register_platform_services(&mut services, service_provider)?;
         let deployment_config = config.deployment_config.clone();
         let lifecycle_filter = config.lifecycle_filter;
         let runtime_cleanup_filter = config.runtime_cleanup_filter;
@@ -505,7 +507,7 @@ impl StackExecutor {
             desired_stack: stack.clone(),
             client_config,
             resource_registry,
-            service_provider,
+            services,
             deployment_config,
             initial_setup_authority,
         })
@@ -1060,9 +1062,8 @@ impl StackExecutor {
                                 client_config: self.client_config.clone(),
                                 state,
                                 resource_prefix: &state.resource_prefix,
-                                registry: &self.resource_registry,
                                 desired_stack: &self.desired_stack,
-                                service_provider: &self.service_provider,
+                                services: &self.services,
                                 deployment_config: &self.deployment_config,
                                 initial_setup_authority: self.initial_setup_authority,
                                 heartbeat_collector: HeartbeatCollector::default(),
@@ -1913,9 +1914,8 @@ impl StackExecutor {
                 client_config: controller_client_config,
                 state: step_state,
                 resource_prefix: &step_state.resource_prefix,
-                registry: &self.resource_registry,
                 desired_stack: &self.desired_stack,
-                service_provider: &self.service_provider,
+                services: &self.services,
                 deployment_config: &self.deployment_config,
                 initial_setup_authority: self.initial_setup_authority,
                 heartbeat_collector: heartbeat_collector.clone(),

@@ -389,7 +389,10 @@ impl GcpWorkerController {
         };
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = if let Some(region) = &self.compute_operation_region {
             compute_client
@@ -473,7 +476,8 @@ impl GcpWorkerController {
 
         // Create the service
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .create_service(
                 gcp_config.region.clone(),
@@ -529,7 +533,8 @@ impl GcpWorkerController {
         debug!(operation=%operation_name, "Checking operation status");
 
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_operation(gcp_config.region.clone(), operation_id.to_string())
             .await
@@ -607,7 +612,8 @@ impl GcpWorkerController {
         let service = self.build_cloud_run_service(service_name, cfg, ctx).await?;
 
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .patch_service(
                 gcp_config.region.clone(),
@@ -658,7 +664,8 @@ impl GcpWorkerController {
 
         // Get the created service to extract the URL and verify readiness
         let service = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_service(gcp_config.region.clone(), service_name.clone())
             .await
@@ -854,7 +861,10 @@ impl GcpWorkerController {
 
         // For GCP, we use the full certificate chain
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let ssl_cert_name =
             get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "cert");
@@ -951,7 +961,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1053,7 +1066,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let neg_name = self.serverless_neg_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1159,7 +1175,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let backend_service_name = self.backend_service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1254,7 +1273,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let url_map_name = self.url_map_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1368,7 +1390,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let address_name =
             get_gcp_worker_resource_name(ctx.resource_prefix, &worker_config.id, "ip");
@@ -1457,7 +1482,10 @@ impl GcpWorkerController {
 
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let proxy_name = self.target_https_proxy_name.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -1687,7 +1715,8 @@ impl GcpWorkerController {
         }
 
         let scheduler_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloud_scheduler_client(gcp_config)?;
 
         let service_url = self.url.as_ref().ok_or_else(|| {
@@ -1795,7 +1824,10 @@ impl GcpWorkerController {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
 
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2057,7 +2089,10 @@ impl GcpWorkerController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_cloudrun_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
         let service_name = self.service_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceControllerConfigError {
@@ -2236,7 +2271,10 @@ impl GcpWorkerController {
             &format!("cert-{issued_suffix}"),
         );
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let ssl_certificate = SslCertificate::builder()
             .name(ssl_cert_name.clone())
@@ -2348,7 +2386,8 @@ impl GcpWorkerController {
 
         // Get current service to preserve etag
         let current_service = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_service(gcp_config.region.clone(), service_name.clone())
             .await
@@ -2366,7 +2405,8 @@ impl GcpWorkerController {
 
         // Patch the service
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .patch_service(
                 gcp_config.region.clone(),
@@ -2423,7 +2463,8 @@ impl GcpWorkerController {
         debug!(operation=%operation_name, "Checking update operation status");
 
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_operation(gcp_config.region.clone(), operation_id.to_string())
             .await
@@ -2480,7 +2521,8 @@ impl GcpWorkerController {
 
         // Get the updated service
         let service = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_service(gcp_config.region.clone(), service_name.clone())
             .await
@@ -3216,7 +3258,8 @@ impl GcpWorkerController {
             })?;
             let service_account_email = self.get_service_account_email(ctx, &current_config)?;
             let scheduler_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_cloud_scheduler_client(gcp_config)?;
 
             for (index, trigger) in current_config.triggers.iter().enumerate() {
@@ -3435,7 +3478,8 @@ impl GcpWorkerController {
                 info!(name=%forwarding_rule_name, "Deleting forwarding rule");
 
                 match ctx
-                    .service_provider
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_gcp_compute_client(gcp_config)?
                     .delete_global_forwarding_rule(forwarding_rule_name.clone())
                     .await
@@ -3492,7 +3536,8 @@ impl GcpWorkerController {
             info!(name=%proxy_name, "Deleting target HTTPS proxy");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_target_https_proxy(proxy_name.clone())
                 .await
@@ -3551,7 +3596,8 @@ impl GcpWorkerController {
             info!(name=%url_map_name, "Deleting URL map");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_url_map(url_map_name.clone())
                 .await
@@ -3599,7 +3645,8 @@ impl GcpWorkerController {
             info!(name=%backend_service_name, "Deleting backend service");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_backend_service(backend_service_name.clone())
                 .await
@@ -3650,7 +3697,8 @@ impl GcpWorkerController {
             info!(name=%neg_name, "Deleting serverless NEG");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_region_network_endpoint_group(gcp_config.region.clone(), neg_name.clone())
                 .await
@@ -3708,7 +3756,8 @@ impl GcpWorkerController {
             info!(name=%ssl_cert_name, "Deleting SSL certificate");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_ssl_certificate(ssl_cert_name.clone())
                 .await
@@ -3756,7 +3805,8 @@ impl GcpWorkerController {
             info!(name=%address_name, "Deleting global address");
 
             match ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_compute_client(gcp_config)?
                 .delete_global_address(address_name.clone())
                 .await
@@ -3852,7 +3902,8 @@ impl GcpWorkerController {
         info!(worker=%worker_config.id, jobs=?self.scheduler_job_names, "Deleting Cloud Scheduler jobs");
 
         let scheduler_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloud_scheduler_client(gcp_config)?;
 
         for job_name in &self.scheduler_job_names.clone() {
@@ -3906,7 +3957,10 @@ impl GcpWorkerController {
     ) -> Result<HandlerAction> {
         let cfg = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
         let derived_topic_name = cfg
             .commands_enabled
             .then(|| {
@@ -3992,7 +4046,8 @@ impl GcpWorkerController {
 
         // Try to delete the service, handling the case where it's already missing
         match ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .delete_service(gcp_config.region.clone(), service_name.clone(), None, None)
             .await
@@ -4068,7 +4123,8 @@ impl GcpWorkerController {
         debug!(operation=%operation_name, "Checking delete operation status");
 
         let operation = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_operation(gcp_config.region.clone(), operation_id.to_string())
             .await
@@ -4125,7 +4181,8 @@ impl GcpWorkerController {
 
         // Try to get the service - if it's gone, we're done
         match ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloudrun_client(gcp_config)?
             .get_service(gcp_config.region.clone(), service_name.clone())
             .await
@@ -4315,7 +4372,10 @@ impl GcpWorkerController {
         };
         let bindings_count = iam_policy.bindings.len();
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
         pubsub_client
             .set_topic_iam_policy(topic_name.to_string(), iam_policy)
             .await
@@ -4455,7 +4515,10 @@ impl GcpWorkerController {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
         let address = compute_client
             .get_global_address(address_name.to_string())
             .await
@@ -4717,7 +4780,10 @@ impl GcpWorkerController {
 
         let config = ctx.desired_resource_config::<Worker>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_cloudrun_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_cloudrun_client(gcp_config)?;
 
         // Get existing IAM policy to preserve any existing bindings
         let mut policy = client
@@ -5023,7 +5089,10 @@ impl GcpWorkerController {
         worker_config: &alien_core::Worker,
         queue_ref: &alien_core::ResourceRef,
     ) -> Result<()> {
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
 
         // Get queue controller to access the topic name
         let queue_controller =
@@ -5168,7 +5237,10 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for subscription_name in &self.push_subscriptions.clone() {
@@ -5246,8 +5318,14 @@ impl GcpWorkerController {
         storage_ref: &alien_core::ResourceRef,
         events: &[String],
     ) -> Result<()> {
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
-        let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
+        let gcs_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Get bucket name from the storage controller dependency
         let storage_controller =
@@ -5521,7 +5599,10 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let gcs_client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let gcs_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for tracker in &self.gcs_notification_ids.clone() {
@@ -5563,7 +5644,10 @@ impl GcpWorkerController {
             return Ok(());
         }
 
-        let pubsub_client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+        let pubsub_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         for topic_name in &self.storage_notification_topics.clone() {
@@ -5601,7 +5685,8 @@ impl GcpWorkerController {
         }
 
         let scheduler_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_cloud_scheduler_client(gcp_config)?;
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 

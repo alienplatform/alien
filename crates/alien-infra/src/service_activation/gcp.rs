@@ -37,7 +37,8 @@ impl GcpServiceActivationController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_service_usage_client(gcp_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -94,7 +95,8 @@ impl GcpServiceActivationController {
     ) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_service_usage_client(gcp_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -158,7 +160,8 @@ impl GcpServiceActivationController {
     ) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_service_usage_client(gcp_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -307,7 +310,8 @@ impl GcpServiceActivationController {
         // Heartbeat check: verify service is still enabled
         if let Some(service_name) = &self.service_name {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_service_usage_client(gcp_config)?;
 
             let service = client.get_service(service_name.clone()).await.context(

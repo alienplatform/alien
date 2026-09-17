@@ -49,7 +49,10 @@ impl GcpServiceAccountController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
 
         let service_account_id = get_gcp_service_account_id(ctx.resource_prefix, &config.id);
 
@@ -163,7 +166,10 @@ impl GcpServiceAccountController {
     #[handler(state = Ready, on_failure = RefreshFailed, status = ResourceStatus::Running)]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
         let config = ctx.desired_resource_config::<ServiceAccount>()?;
 
         // Heartbeat check: verify service account still exists
@@ -199,7 +205,8 @@ impl GcpServiceAccountController {
                 })?;
 
             let rm_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_resource_manager_client(gcp_config)?;
             let project_policy = rm_client
                 .get_project_iam_policy(
@@ -297,7 +304,10 @@ impl GcpServiceAccountController {
 
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_iam_client(gcp_config)?;
 
             match client
                 .delete_service_account(service_account_email.clone())
@@ -476,7 +486,8 @@ impl GcpServiceAccountController {
 
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_resource_manager_client(gcp_config)?;
 
         let current_policy = rm_client
@@ -622,7 +633,10 @@ impl GcpServiceAccountController {
         // not at the project level.
         if let Some(service_account_email) = &self.service_account_email {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+            let client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_iam_client(gcp_config)?;
             let sa_email_owned = service_account_email.clone();
             let config_id_owned = config.id.clone();
 
@@ -666,7 +680,8 @@ impl GcpServiceAccountController {
         let gcp_config = ctx.get_gcp_config()?;
         let project_id = &gcp_config.project_id;
         let rm_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_resource_manager_client(gcp_config)?;
 
         let mut current_policy = rm_client

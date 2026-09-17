@@ -332,7 +332,8 @@ impl GcpVaultController {
         };
 
         let rm_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_resource_manager_client(gcp_config)?;
         let current_policy = rm_client
             .get_project_iam_policy(

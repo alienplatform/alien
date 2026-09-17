@@ -43,7 +43,8 @@ impl AzureRemoteBindingsController {
             type_: None,
         };
         let created = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(azure)?
             .create_or_update_user_assigned_identity(
                 &azure_utils::get_resource_group_name(ctx.state)?,
@@ -140,7 +141,8 @@ impl AzureRemoteBindingsController {
         let resource_group = azure_utils::get_resource_group_name(ctx.state)?;
         let identity_name = identity_name(ctx.resource_prefix);
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_managed_identity_client(ctx.get_azure_config()?)?;
         if let Some(fic_name) = self.fic_name.as_ref() {
             ignore_not_found(
@@ -212,7 +214,8 @@ async fn reconcile_federated_credential(
             audiences: vec!["api://AzureADTokenExchange".to_string()],
         }),
     };
-    ctx.service_provider
+    ctx.services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_azure_managed_identity_client(ctx.get_azure_config()?)?
         .create_or_update_federated_credential(
             &azure_utils::get_resource_group_name(ctx.state)?,

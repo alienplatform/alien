@@ -76,7 +76,8 @@ impl KubernetesDaemonController {
             })?;
             let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
@@ -87,7 +88,8 @@ impl KubernetesDaemonController {
         };
 
         let workload_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -234,7 +236,8 @@ impl KubernetesDaemonController {
         let config = ctx.desired_resource_config::<Daemon>()?;
         if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
             let workload_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
             let daemonset = workload_client
@@ -305,7 +308,8 @@ impl KubernetesDaemonController {
         })?;
 
         let workload_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
         let existing = workload_client
@@ -331,7 +335,8 @@ impl KubernetesDaemonController {
             })?;
             let secret_name = format!("{}-registry", daemon_set_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
@@ -454,7 +459,8 @@ impl KubernetesDaemonController {
 
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
             match workload_client
@@ -518,7 +524,8 @@ impl KubernetesDaemonController {
 
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
             match workload_client
@@ -682,7 +689,8 @@ impl KubernetesDaemonController {
         })?;
 
         let workload_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
         match workload_client

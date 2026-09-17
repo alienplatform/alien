@@ -44,7 +44,8 @@ impl AzureResourceGroupController {
 
         let group_name = generate_azure_resource_group_name(&ctx.resource_prefix, &config.id);
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
 
         let resource_group = ResourceGroup {
@@ -108,7 +109,8 @@ impl AzureResourceGroupController {
         })?;
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
 
         match client.get_resource_group(group_name).await {
@@ -187,7 +189,8 @@ impl AzureResourceGroupController {
         // Heartbeat check: verify resource group provisioning state
         if let Some(group_name) = &self.resource_group_name {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_resources_client(azure_config)?;
 
             let rg = client.get_resource_group(group_name).await.context(
@@ -239,7 +242,8 @@ impl AzureResourceGroupController {
         info!(group_name=%group_name, "Initiating Azure Resource Group deletion");
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
 
         match client.delete_resource_group(group_name).await {
@@ -298,7 +302,8 @@ impl AzureResourceGroupController {
         })?;
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
 
         match client.get_resource_group(group_name).await {

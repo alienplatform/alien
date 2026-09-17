@@ -9,11 +9,11 @@ license-file.workspace = true
 [features]
 default = []  # Minimal default, let consumers choose
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["dep:alien-aws-clients", "dep:alien-preflights", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
+aws = ["dep:alien-aws-clients", "dep:alien-infra-aws", "dep:alien-preflights", "alien-client-config/aws"]  # TODO: Remove preflights from here, necessary because of CF
 gcp = ["dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["dep:alien-azure-clients", "alien-client-config/azure", "dep:base64"]
 kubernetes = ["dep:alien-k8s-clients", "dep:axum", "dep:base64", "dep:dirs", "dep:ed25519-compact", "alien-core/sandbox-capability", "alien-client-config/kubernetes"]
-local = ["dep:alien-local"]  # Local platform support
+local = ["dep:alien-local", "dep:alien-infra-local"]  # Local platform support
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa", "alien-core/openapi"]
 test-utils = [
@@ -23,7 +23,9 @@ test-utils = [
     "alien-azure-clients/test-utils",
     "alien-client-config/test-utils",
     "dep:alien-preflights",
-    "dep:mockall"
+    "dep:mockall",
+    "alien-infra-aws?/test-utils",
+    "alien-infra-local?/test-utils"
 ]
 
 [lib]
@@ -31,6 +33,9 @@ crate-type = ["rlib"]
 
 [dependencies]
 alien-core = { workspace = true }
+alien-infra-core = { workspace = true }
+alien-infra-aws = { workspace = true, optional = true }
+alien-infra-local = { workspace = true, optional = true }
 alien-error = { workspace = true }
 alien-client-core = { workspace = true }
 alien-client-config = { workspace = true }

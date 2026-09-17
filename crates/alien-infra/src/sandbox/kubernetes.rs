@@ -65,7 +65,8 @@ impl KubernetesSandboxController {
 
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_runtime_class_client(kubernetes_config)
             .await?;
 
@@ -198,7 +199,8 @@ impl KubernetesSandboxController {
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_pod_client(kubernetes_config)
             .await?;
 
@@ -247,7 +249,8 @@ impl KubernetesSandboxController {
         // still a signing key sitting in the cluster. Best effort: one already gone is the
         // desired end state, and it must not strand the rest of the teardown.
         let secrets = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
             .await?;
         let _ = secrets
@@ -348,7 +351,8 @@ async fn replenish_warm_pool(
 ) -> Result<WarmPool> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
 
@@ -428,7 +432,8 @@ async fn list_session_pods(
 ) -> Result<usize> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
 
@@ -548,7 +553,8 @@ async fn ensure_capability_keypair(
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_secrets_client(kubernetes_config)
         .await?;
 

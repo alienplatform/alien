@@ -80,7 +80,8 @@ impl KubernetesWorkerController {
             })?;
             let secret_name = format!("{}-registry", function_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
@@ -95,7 +96,8 @@ impl KubernetesWorkerController {
 
         // Create the Deployment
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
         let deployment = build_worker_deployment(
@@ -156,7 +158,8 @@ impl KubernetesWorkerController {
         })?;
 
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -273,7 +276,8 @@ impl KubernetesWorkerController {
             (self.deployment_name.clone(), self.namespace.clone())
         {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
@@ -388,7 +392,8 @@ impl KubernetesWorkerController {
         info!(deployment_name=%deployment_name, "Updating Kubernetes Worker deployment");
 
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -418,7 +423,8 @@ impl KubernetesWorkerController {
             })?;
             let secret_name = format!("{}-registry", deployment_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
@@ -487,7 +493,8 @@ impl KubernetesWorkerController {
         })?;
 
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -612,7 +619,8 @@ impl KubernetesWorkerController {
         // Delete Deployment
         if let Some(deployment_name) = &self.deployment_name {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
@@ -685,7 +693,8 @@ impl KubernetesWorkerController {
         // Check if deployment is deleted
         if let Some(deployment_name) = &self.deployment_name {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 

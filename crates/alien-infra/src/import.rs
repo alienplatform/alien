@@ -14,7 +14,6 @@ use alien_core::{
     import::ImportContext, ErrorData, Platform, ResourceType, Result, StackResourceState,
 };
 use alien_error::{AlienError, IntoAlienError};
-use serde::de::DeserializeOwned;
 use std::collections::HashMap;
 
 /// Generator-side typed payload \u2192 controller `StackResourceState` translator.
@@ -22,33 +21,7 @@ use std::collections::HashMap;
 /// One impl per `(resource_type, cloud)` pair. Lives at
 /// `alien-infra/src/<resource>/<cloud>_import.rs` next to the controller so
 /// `internal_state` stays in lock-step with the controller's state struct.
-pub trait ResourceImporter: Send + Sync {
-    /// Typed payload this importer accepts. Wire JSON is deserialized to
-    /// this type before [`Self::import`] runs, so no `serde_json::Value`
-    /// leaks into the importer body.
-    type ImportData: DeserializeOwned + Send + Sync;
-
-    /// Build the typed [`StackResourceState`] for this resource. The importer
-    /// owns the controller's `internal_state` shape; field-name mismatches
-    /// fail at compile time.
-    fn import(&self, data: Self::ImportData, ctx: &ImportContext<'_>)
-        -> Result<StackResourceState>;
-
-    /// Merge a fresh setup import into an existing runtime state.
-    ///
-    /// Most imported resources are wholly setup-owned, so replacement is the
-    /// safe default. Importers for resources whose lifecycle crosses the
-    /// setup/runtime boundary must override this and preserve controller-owned
-    /// progress while applying only the setup-owned facts from `imported`.
-    fn merge_reimport(
-        &self,
-        _existing: StackResourceState,
-        imported: StackResourceState,
-        _ctx: &ImportContext<'_>,
-    ) -> Result<StackResourceState> {
-        Ok(imported)
-    }
-}
+pub use alien_infra_core::ResourceImporter;
 
 /// Dyn-safe wrapper around [`ResourceImporter`] that takes
 /// `serde_json::Value` (the wire payload) and runs the typed importer

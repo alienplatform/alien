@@ -64,7 +64,8 @@ impl AzureContainerAppsEnvironmentController {
 
         // Create the managed environment via Azure client
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
         let managed_env = self.build_managed_environment(azure_config, ctx);
 
@@ -143,7 +144,8 @@ impl AzureContainerAppsEnvironmentController {
 
         let azure_config = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_config)?;
 
         let status_result = operation_client
@@ -202,7 +204,8 @@ impl AzureContainerAppsEnvironmentController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
 
         match client
@@ -324,7 +327,8 @@ impl AzureContainerAppsEnvironmentController {
         if let Some(environment_name) = &self.environment_name {
             let resource_group_name = get_resource_group_name(ctx.state)?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_container_apps_client(azure_config)?;
 
             let managed_env = client
@@ -416,7 +420,8 @@ impl AzureContainerAppsEnvironmentController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
 
         // Check if Container Apps still exist in this environment before
@@ -549,7 +554,8 @@ impl AzureContainerAppsEnvironmentController {
 
         let azure_config = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_config)?;
 
         let status_result = operation_client
@@ -609,7 +615,8 @@ impl AzureContainerAppsEnvironmentController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
 
         match client

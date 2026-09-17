@@ -301,7 +301,10 @@ impl ResourcePermissionsHelper {
         }
 
         let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
 
         let mut seen_role_names = HashSet::new();
         for custom_role in custom_roles {
@@ -421,7 +424,10 @@ impl ResourcePermissionsHelper {
         permission_context: &PermissionContext,
     ) -> Result<()> {
         let gcp_config = ctx.get_gcp_config()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_config)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_config)?;
         let role_name_prefix = format!(
             "projects/{}/roles/{}",
             gcp_config.project_id,
@@ -1260,12 +1266,15 @@ impl ResourcePermissionsHelper {
                 .require_dependency::<crate::remote_bindings::AwsRemoteBindingsController>(
                     &(&bindings_entry.config).into(),
                 )?;
-            controller.role_name.clone().ok_or_else(|| {
-                AlienError::new(ErrorData::DependencyNotReady {
-                    resource_id: resource_id.to_string(),
-                    dependency_id: "remote-bindings".to_string(),
-                })
-            })?
+            controller
+                .persisted_role_name()
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::DependencyNotReady {
+                        resource_id: resource_id.to_string(),
+                        dependency_id: "remote-bindings".to_string(),
+                    })
+                })?
         } else if let Some(role_name) = ctx
             .state
             .resources
@@ -1281,7 +1290,8 @@ impl ResourcePermissionsHelper {
         };
         let policy_name = format!("alien-{resource_id}-remote-access");
         let iam = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_aws_iam_client(ctx.get_aws_config()?)
             .await?;
 
@@ -1415,7 +1425,11 @@ impl ResourcePermissionsHelper {
                 permission_set.id.replace('/', "-")
             );
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+            let iam_client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_aws_iam_client(aws_config)
+                .await?;
             iam_client
                 .put_role_policy(&service_account_role_name, &policy_name, &policy_json)
                 .await
@@ -1529,7 +1543,11 @@ impl ResourcePermissionsHelper {
                 permission_set.id.replace('/', "-")
             );
 
-            let iam_client = ctx.service_provider.get_aws_iam_client(aws_config).await?;
+            let iam_client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_aws_iam_client(aws_config)
+                .await?;
             iam_client
                 .put_role_policy(&management_role_name, &policy_name, &policy_json)
                 .await
@@ -1619,12 +1637,15 @@ impl ResourcePermissionsHelper {
                 &(&service_account_resource.config).into(),
             )?;
 
-        service_account_controller.role_name.ok_or_else(|| {
-            AlienError::new(ErrorData::DependencyNotReady {
-                resource_id: "permissions_helper".to_string(),
-                dependency_id: profile_name.to_string(),
+        service_account_controller
+            .persisted_role_name()
+            .map(str::to_string)
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::DependencyNotReady {
+                    resource_id: "permissions_helper".to_string(),
+                    dependency_id: profile_name.to_string(),
+                })
             })
-        })
     }
 
     /// Get the AWS management IAM role name from the RemoteStackManagement controller
@@ -1636,7 +1657,7 @@ impl ResourcePermissionsHelper {
                         &(&resource_entry.config).into(),
                     )?;
 
-                return Ok(controller.role_name.clone());
+                return Ok(controller.persisted_role_name().map(str::to_string));
             }
         }
 

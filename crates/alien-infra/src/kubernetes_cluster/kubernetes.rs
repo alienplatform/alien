@@ -345,7 +345,8 @@ async fn verify_operator_runtime(
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let deployment_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_deployment_client(kubernetes_config)
         .await?;
     deployment_client

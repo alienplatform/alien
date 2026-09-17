@@ -56,7 +56,8 @@ impl AzureStorageAccountController {
 
         // Create the storage account via Azure client
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_storage_accounts_client(azure_config)?;
         let params = self.build_storage_account_params(azure_config, ctx);
 
@@ -99,7 +100,8 @@ impl AzureStorageAccountController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_storage_accounts_client(azure_config)?;
 
         match client
@@ -233,7 +235,8 @@ impl AzureStorageAccountController {
         if let Some(account_name) = &self.account_name {
             let resource_group_name = get_resource_group_name(ctx.state)?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_storage_accounts_client(azure_config)?;
 
             let storage_account = client
@@ -296,7 +299,8 @@ impl AzureStorageAccountController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_storage_accounts_client(azure_config)?;
 
         match client
@@ -355,7 +359,8 @@ impl AzureStorageAccountController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_storage_accounts_client(azure_config)?;
 
         match client

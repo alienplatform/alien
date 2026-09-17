@@ -109,7 +109,8 @@ impl GcpArtifactRegistryController {
         self.repository_name = Some(repository_name.clone());
 
         let ar_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_artifact_registry_client(gcp_cfg)?;
 
         // Check if the repository already exists
@@ -212,7 +213,8 @@ impl GcpArtifactRegistryController {
         })?;
 
         let ar_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_artifact_registry_client(gcp_cfg)?;
 
         let operation = ar_client
@@ -259,7 +261,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_cfg)?;
 
         let pull_account_id =
             get_gcp_artifact_registry_pull_service_account_id(ctx.resource_prefix, &config.id);
@@ -320,7 +325,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_cfg)?;
 
         let push_account_id =
             get_gcp_artifact_registry_push_service_account_id(ctx.resource_prefix, &config.id);
@@ -454,7 +462,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_cfg)?;
 
         if let Some(ref email) = self.pull_service_account_email {
             // Delete pull service account - treat NotFound as success for idempotent deletion
@@ -498,7 +509,10 @@ impl GcpArtifactRegistryController {
     ) -> Result<HandlerAction> {
         let gcp_cfg = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<ArtifactRegistry>()?;
-        let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+        let iam_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_iam_client(gcp_cfg)?;
 
         if let Some(ref email) = self.push_service_account_email {
             // Delete push service account - treat NotFound as success for idempotent deletion
@@ -546,7 +560,8 @@ impl GcpArtifactRegistryController {
             get_gcp_artifact_registry_repository_name(ctx.resource_prefix, &config.id);
 
         let ar_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_artifact_registry_client(gcp_cfg)?;
 
         match ar_client
@@ -626,7 +641,10 @@ impl GcpArtifactRegistryController {
             }
 
             // Verify service accounts still exist
-            let iam_client = ctx.service_provider.get_gcp_iam_client(gcp_cfg)?;
+            let iam_client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_iam_client(gcp_cfg)?;
 
             // Check pull service account
             if let Some(ref email) = self.pull_service_account_email {
@@ -670,7 +688,8 @@ impl GcpArtifactRegistryController {
                 get_gcp_artifact_registry_repository_name(ctx.resource_prefix, &config.id)
             });
             let ar_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_artifact_registry_client(gcp_cfg)?;
             let repository = ar_client
                 .get_repository(
@@ -819,7 +838,8 @@ impl GcpArtifactRegistryController {
         };
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_artifact_registry_client(gcp_config)?;
         client
             .set_repository_iam_policy(

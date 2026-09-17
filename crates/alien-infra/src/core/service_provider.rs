@@ -452,6 +452,173 @@ pub trait PlatformServiceProvider: Send + Sync {
     }
 }
 
+#[cfg(feature = "local")]
+struct LocalServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
+
+#[cfg(feature = "aws")]
+struct AwsServiceProviderAdapter(Arc<dyn PlatformServiceProvider>);
+
+#[cfg(feature = "aws")]
+macro_rules! impl_aws_service_provider {
+    ($(($method:ident, $api:ty)),* $(,)?) => {
+        #[async_trait::async_trait]
+        impl alien_infra_aws::AwsServiceProvider for AwsServiceProviderAdapter {
+            $(
+                async fn $method(&self, config: &AwsClientConfig) -> Result<Arc<$api>> {
+                    self.0.$method(config).await
+                }
+            )*
+        }
+    };
+}
+
+#[cfg(feature = "aws")]
+impl_aws_service_provider!(
+    (get_aws_iam_client, dyn IamApi),
+    (get_aws_bedrock_client, dyn BedrockApi),
+    (get_aws_lambda_client, dyn LambdaApi),
+    (get_aws_microvms_client, dyn LambdaMicrovmsApi),
+    (get_aws_s3_client, dyn S3Api),
+    (get_aws_ses_client, dyn SesApi),
+    (get_aws_cloudformation_client, dyn CloudFormationApi),
+    (get_aws_codebuild_client, dyn CodeBuildApi),
+    (get_aws_ecr_client, dyn EcrApi),
+    (get_aws_secrets_manager_client, dyn SecretsManagerApi),
+    (get_aws_rds_client, dyn RdsApi),
+    (get_aws_ssm_client, dyn SsmApi),
+    (get_aws_dynamodb_client, dyn DynamoDbApi),
+    (get_aws_sqs_client, dyn SqsApi),
+    (get_aws_ec2_client, dyn Ec2Api),
+    (get_aws_autoscaling_client, dyn AutoScalingApi),
+    (get_aws_elbv2_client, dyn Elbv2Api),
+    (get_aws_eks_client, dyn EksApi),
+    (get_aws_acm_client, dyn AcmApi),
+    (get_aws_apigateway_client, dyn ApiGatewayApi),
+    (get_aws_apigatewayv2_client, dyn ApiGatewayV2Api),
+    (get_aws_eventbridge_client, dyn EventBridgeApi),
+    (get_aws_kms_client, dyn KmsApi),
+);
+
+#[cfg(feature = "aws")]
+struct AwsPermissionsServiceAdapter;
+
+#[cfg(feature = "aws")]
+#[async_trait::async_trait]
+impl alien_infra_aws::AwsPermissionsService for AwsPermissionsServiceAdapter {
+    async fn apply_resource_scoped_permissions(
+        &self,
+        ctx: &crate::core::ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_type: &str,
+    ) -> Result<()> {
+        crate::core::ResourcePermissionsHelper::apply_aws_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_type,
+        )
+        .await
+    }
+
+    fn kubernetes_cluster_permission_context(
+        &self,
+        ctx: &crate::core::ResourceControllerContext<'_>,
+        cluster: &alien_core::KubernetesCluster,
+    ) -> Result<alien_permissions::PermissionContext> {
+        crate::core::ResourcePermissionsHelper::aws_kubernetes_cluster_permission_context(
+            ctx, cluster,
+        )
+    }
+}
+
+struct AggregateControllerStateResolver;
+
+impl alien_infra_core::ControllerStateResolver for AggregateControllerStateResolver {
+    fn get_binding_params(
+        &self,
+        resource_state: &alien_core::StackResourceState,
+    ) -> Result<Option<serde_json::Value>> {
+        use crate::core::state_utils::StackResourceStateExt;
+
+        match resource_state.get_internal_controller()? {
+            Some(controller) => controller.get_binding_params(),
+            None => Ok(None),
+        }
+    }
+}
+
+#[cfg(feature = "local")]
+impl alien_infra_local::LocalServiceProvider for LocalServiceProviderAdapter {
+    fn get_local_storage_manager(&self) -> Option<Arc<alien_local::LocalStorageManager>> {
+        self.0.get_local_storage_manager()
+    }
+
+    fn get_local_kv_manager(&self) -> Option<Arc<alien_local::LocalKvManager>> {
+        self.0.get_local_kv_manager()
+    }
+
+    fn get_local_postgres_manager(&self) -> Option<Arc<alien_local::LocalPostgresManager>> {
+        self.0.get_local_postgres_manager()
+    }
+
+    fn get_local_vault_manager(&self) -> Option<Arc<alien_local::LocalVaultManager>> {
+        self.0.get_local_vault_manager()
+    }
+
+    fn get_local_worker_manager(&self) -> Option<Arc<alien_local::LocalWorkerManager>> {
+        self.0.get_local_worker_manager()
+    }
+
+    fn get_local_artifact_registry_manager(
+        &self,
+    ) -> Option<Arc<alien_local::LocalArtifactRegistryManager>> {
+        self.0.get_local_artifact_registry_manager()
+    }
+
+    fn get_local_container_manager(&self) -> Option<Arc<alien_local::LocalContainerManager>> {
+        self.0.get_local_container_manager()
+    }
+
+    fn get_local_sandbox_manager(&self) -> Option<Arc<alien_local::LocalSandboxManager>> {
+        self.0.get_local_sandbox_manager()
+    }
+
+    fn get_local_queue_manager(&self) -> Option<Arc<alien_local::LocalQueueManager>> {
+        self.0.get_local_queue_manager()
+    }
+
+    fn get_local_bindings_provider(&self) -> Option<Arc<alien_local::LocalBindingsProvider>> {
+        self.0.get_local_bindings_provider()
+    }
+}
+
+pub(crate) fn register_platform_services(
+    services: &mut crate::core::ServiceRegistry,
+    service_provider: Arc<dyn PlatformServiceProvider>,
+) -> Result<()> {
+    services.register::<dyn alien_infra_core::ControllerStateResolver>(Arc::new(
+        AggregateControllerStateResolver,
+    ))?;
+
+    #[cfg(feature = "aws")]
+    {
+        services.register::<dyn alien_infra_aws::AwsServiceProvider>(Arc::new(
+            AwsServiceProviderAdapter(service_provider.clone()),
+        ))?;
+        services.register::<dyn alien_infra_aws::AwsPermissionsService>(Arc::new(
+            AwsPermissionsServiceAdapter,
+        ))?;
+    }
+
+    #[cfg(feature = "local")]
+    services.register::<dyn alien_infra_local::LocalServiceProvider>(Arc::new(
+        LocalServiceProviderAdapter(service_provider.clone()),
+    ))?;
+
+    services.register::<dyn PlatformServiceProvider>(service_provider)
+}
+
 /// Default implementation that creates real platform service clients.
 /// This is used in production and when no mock provider is specified.
 ///

@@ -33,7 +33,8 @@ impl AzureQueueController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_azure_config()?;
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(cfg)?;
         let q = ctx.desired_resource_config::<Queue>()?;
 
@@ -159,7 +160,8 @@ impl AzureQueueController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_azure_config()?;
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(cfg)?;
         let q = ctx.desired_resource_config::<Queue>()?;
         let namespace = self.namespace_name.as_ref().ok_or_else(|| {
@@ -219,7 +221,8 @@ impl AzureQueueController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_azure_config()?;
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(cfg)?;
         let _ = ctx.desired_resource_config::<Queue>()?;
         if let (Some(ns), Some(qn)) = (&self.namespace_name, &self.queue_name) {

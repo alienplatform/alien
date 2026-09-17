@@ -1,4 +1,5 @@
 mod controller;
+pub use alien_infra_core::*;
 pub use controller::*;
 
 mod registry;
@@ -9,14 +10,10 @@ pub use executor::{PlanResult, RunningResourcePolicy, StackExecutor, StepResult}
 mod service_provider;
 pub use service_provider::*;
 
-mod certificates;
-pub use certificates::*;
-
 pub mod state_utils;
 pub use state_utils::*;
 
-pub mod environment_variables;
-pub use environment_variables::*;
+pub use alien_infra_core::environment_variables;
 
 pub mod k8s_secret_bindings;
 pub use k8s_secret_bindings::*;

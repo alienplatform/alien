@@ -54,7 +54,8 @@ impl AzureServiceBusNamespaceController {
 
         // Create the Service Bus namespace
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
         let namespace_props = self.build_namespace_properties(azure_config, ctx);
 
@@ -102,7 +103,8 @@ impl AzureServiceBusNamespaceController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         match client
@@ -225,7 +227,8 @@ impl AzureServiceBusNamespaceController {
         if let Some(namespace_name) = &self.namespace_name {
             let resource_group_name = self.resource_group_name(ctx)?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_service_bus_management_client(azure_config)?;
 
             let namespace = client
@@ -291,7 +294,8 @@ impl AzureServiceBusNamespaceController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         match client
@@ -349,7 +353,8 @@ impl AzureServiceBusNamespaceController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = self.resource_group_name(ctx)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         match client

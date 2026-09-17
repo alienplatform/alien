@@ -56,7 +56,10 @@ impl GcpKvController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_firestore_client(gcp_config)?;
 
         let database_name = get_firestore_database_name(&ctx.resource_prefix, &config.id);
         let collection_name = get_collection_name(&ctx.resource_prefix, &config.id);
@@ -139,7 +142,10 @@ impl GcpKvController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_firestore_client(gcp_config)?;
 
         let database_name = self.database_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -223,7 +229,10 @@ impl GcpKvController {
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Kv>()?;
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_firestore_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_firestore_client(gcp_config)?;
 
         let database_name = self.database_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {

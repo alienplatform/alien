@@ -40,7 +40,10 @@ impl GcpQueueController {
     )]
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_pubsub_client(cfg)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(cfg)?;
         let q = ctx.desired_resource_config::<Queue>()?;
         let topic = get_topic_name(ctx.resource_prefix, &q.id);
 
@@ -71,7 +74,10 @@ impl GcpQueueController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let cfg = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_pubsub_client(cfg)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(cfg)?;
         let q = ctx.desired_resource_config::<Queue>()?;
         let topic = self.topic_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -131,7 +137,10 @@ impl GcpQueueController {
 
             // Apply IAM permissions to the topic
             {
-                let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+                let client = ctx
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
+                    .get_gcp_pubsub_client(gcp_config)?;
                 let topic_name_owned = topic_name.clone();
                 let iam_policy =
                     gcp_iam_policy_for_kind(&iam_bindings, GcpBindingResourceKind::PubsubTopic);
@@ -153,7 +162,10 @@ impl GcpQueueController {
 
             // Apply IAM permissions to the subscription
             if let Some(subscription_name) = &self.subscription_name {
-                let client = ctx.service_provider.get_gcp_pubsub_client(gcp_config)?;
+                let client = ctx
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
+                    .get_gcp_pubsub_client(gcp_config)?;
                 let sub_name_owned = subscription_name.clone();
                 let iam_policy = gcp_iam_policy_for_kind(
                     &iam_bindings,
@@ -191,7 +203,10 @@ impl GcpQueueController {
     )]
     async fn ready(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_pubsub_client(cfg)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(cfg)?;
         let q = ctx.desired_resource_config::<Queue>()?;
         let topic = self.topic_name.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -260,7 +275,10 @@ impl GcpQueueController {
     )]
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let cfg = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_pubsub_client(cfg)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_pubsub_client(cfg)?;
         let _ = ctx.desired_resource_config::<Queue>()?;
 
         if let Some(sub) = &self.subscription_name {

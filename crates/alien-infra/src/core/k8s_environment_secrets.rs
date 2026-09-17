@@ -159,7 +159,8 @@ pub async fn delete_environment_secret(
     let secret_name = format!("{workload_name}-env");
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let secrets_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_secrets_client(kubernetes_config)
         .await?;
 
@@ -254,7 +255,8 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let secrets_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_secrets_client(kubernetes_config)
         .await?;
 

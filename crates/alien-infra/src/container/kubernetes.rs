@@ -135,7 +135,8 @@ impl KubernetesContainerController {
             })?;
             let secret_name = format!("{}-registry", container_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
@@ -157,7 +158,8 @@ impl KubernetesContainerController {
         if config.stateful {
             // Create StatefulSet for stateful containers
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
             let statefulset = self
@@ -215,7 +217,8 @@ impl KubernetesContainerController {
         } else {
             // Create Deployment for stateless containers
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
             let deployment = self
@@ -305,7 +308,8 @@ impl KubernetesContainerController {
         })?;
 
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -459,7 +463,8 @@ impl KubernetesContainerController {
         // Heartbeat check: verify workload status
         if let (Some(workload_name), Some(namespace)) = (&self.workload_name, &self.namespace) {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
@@ -616,7 +621,8 @@ impl KubernetesContainerController {
             })?;
             let secret_name = format!("{}-registry", workload_name);
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
@@ -633,7 +639,8 @@ impl KubernetesContainerController {
         self.reconcile_internal_service(config, workload_name, namespace, ctx)
             .await?;
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -739,7 +746,8 @@ impl KubernetesContainerController {
         })?;
 
         let deployment_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_deployment_client(kubernetes_config)
             .await?;
 
@@ -895,7 +903,8 @@ impl KubernetesContainerController {
         // Delete Deployment or StatefulSet
         if let Some(workload_name) = &self.workload_name {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
@@ -980,7 +989,8 @@ impl KubernetesContainerController {
         // Check if workload is deleted
         if let Some(workload_name) = &self.workload_name {
             let deployment_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
 
@@ -1269,7 +1279,8 @@ impl KubernetesContainerController {
     ) -> Result<()> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let service_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_service_client(kubernetes_config)
             .await?;
 
@@ -1317,7 +1328,8 @@ impl KubernetesContainerController {
     ) -> Result<()> {
         let kubernetes_config = ctx.get_kubernetes_config()?;
         let service_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_service_client(kubernetes_config)
             .await?;
 

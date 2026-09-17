@@ -44,15 +44,18 @@ pub async fn emit_kubernetes_workload_heartbeat(
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let pod_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
     let event_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_event_client(kubernetes_config)
         .await?;
     let metrics_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_metrics_client(kubernetes_config)
         .await?;
 

@@ -88,7 +88,8 @@ impl AzureKvController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(&ctx.state)?;
         let management_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_table_management_client(azure_config)?;
 
         // Create the table using the management client
@@ -191,7 +192,8 @@ impl AzureKvController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(&ctx.state)?;
         let management_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_table_management_client(azure_config)?;
         let storage_outputs = self.storage_account_outputs.as_ref().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -211,7 +213,8 @@ impl AzureKvController {
         {
             Ok(signed_identifiers) => {
                 let storage_client = ctx
-                    .service_provider
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_azure_storage_accounts_client(azure_config)?;
                 let (storage_account, storage_account_issue) = match storage_client
                     .get_storage_account_properties(
@@ -308,7 +311,8 @@ impl AzureKvController {
         let azure_config = ctx.get_azure_config()?;
         let resource_group_name = get_resource_group_name(&ctx.state)?;
         let management_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_table_management_client(azure_config)?;
 
         match management_client

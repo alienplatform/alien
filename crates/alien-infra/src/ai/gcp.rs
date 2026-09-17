@@ -212,7 +212,8 @@ impl GcpAiController {
         let gcp_config = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<Ai>()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_service_usage_client(gcp_config)?;
 
         info!(
@@ -252,7 +253,8 @@ impl GcpAiController {
         let gcp_config = ctx.get_gcp_config()?;
         let config = ctx.desired_resource_config::<Ai>()?;
         let rm_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_resource_manager_client(gcp_config)?;
         let project_id = gcp_config.project_id.clone();
         let config_id = config.id.clone();
@@ -365,7 +367,8 @@ impl GcpAiController {
         });
         if refresh {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_model_garden_client(ctx.get_gcp_config()?)?;
             self.availability = Some(observe_vertex_availability(client, &location).await);
             self.availability_observed_at = Some(Utc::now());

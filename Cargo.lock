@@ -805,6 +805,9 @@ dependencies = [
  "alien-gcp-clients",
  "alien-helm",
  "alien-infra",
+ "alien-infra-aws",
+ "alien-infra-core",
+ "alien-infra-local",
  "alien-k8s-clients",
  "alien-local",
  "alien-macros",
@@ -851,6 +854,62 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "workspace_root",
+]
+
+[[package]]
+name = "alien-infra-aws"
+version = "3.3.22"
+dependencies = [
+ "alien-aws-clients",
+ "alien-client-core",
+ "alien-core",
+ "alien-error",
+ "alien-infra",
+ "alien-infra-core",
+ "alien-macros",
+ "alien-permissions",
+ "async-trait",
+ "chrono",
+ "futures",
+ "httpmock",
+ "mockall",
+ "reqwest 0.12.28",
+ "rstest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "alien-infra-core"
+version = "3.3.22"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "async-trait",
+ "pem",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "alien-infra-local"
+version = "3.3.22"
+dependencies = [
+ "alien-core",
+ "alien-error",
+ "alien-infra-core",
+ "alien-local",
+ "alien-macros",
+ "async-trait",
+ "chrono",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

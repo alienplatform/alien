@@ -208,7 +208,10 @@ impl GcpNetworkController {
             NetworkSettings::UseDefault => {
                 // Use the cloud provider's default network — no provisioning needed
                 let gcp_config = ctx.get_gcp_config()?;
-                let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+                let compute_client = ctx
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
+                    .get_gcp_compute_client(gcp_config)?;
                 let region = gcp_config.region.clone();
 
                 info!("Using GCP default network in region {}", region);
@@ -273,7 +276,10 @@ impl GcpNetworkController {
 
                 // Verify the network exists
                 let gcp_config = ctx.get_gcp_config()?;
-                let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+                let compute_client = ctx
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
+                    .get_gcp_compute_client(gcp_config)?;
 
                 let network = compute_client
                     .get_network(network_name.clone())
@@ -350,7 +356,10 @@ impl GcpNetworkController {
         info!(network_name = %network_name, "Creating GCP VPC network");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         // Create custom-mode VPC (we control subnets)
         let network_description = format!("Runtime-managed VPC for {}", ctx.resource_prefix);
@@ -429,7 +438,10 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_global_operation(operation_name.clone())
@@ -505,7 +517,10 @@ impl GcpNetworkController {
         );
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let subnetwork = Subnetwork::builder()
             .name(subnetwork_name.clone())
@@ -551,7 +566,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region.clone(), operation_name.clone())
@@ -623,7 +641,10 @@ impl GcpNetworkController {
         info!(router_name = %router_name, region = %region, "Creating Cloud Router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let router = Router::builder()
             .name(router_name.clone())
@@ -667,7 +688,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region.clone(), operation_name.clone())
@@ -727,7 +751,10 @@ impl GcpNetworkController {
         info!(cloud_nat_name = %cloud_nat_name, router_name = %router_name, "Creating Cloud NAT");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         // Get current router to add NAT config
         let mut router = compute_client
@@ -790,7 +817,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region.clone(), operation_name.clone())
@@ -849,7 +879,10 @@ impl GcpNetworkController {
         info!(firewall_name = %firewall_name, "Creating firewall rule for internal traffic");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         // Create firewall rule allowing internal traffic
         let firewall = Firewall::builder()
@@ -906,7 +939,10 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_global_operation(operation_name.clone())
@@ -974,7 +1010,10 @@ impl GcpNetworkController {
         // For created networks, verify network still exists
         if let Some(network_name) = &self.network_name {
             let gcp_config = ctx.get_gcp_config()?;
-            let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+            let compute_client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_compute_client(gcp_config)?;
 
             let _ = compute_client
                 .get_network(network_name.clone())
@@ -1095,7 +1134,10 @@ impl GcpNetworkController {
         info!(firewall_name = %firewall_name, "Deleting firewall rule");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .delete_firewall(firewall_name.clone())
@@ -1127,7 +1169,10 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_global_operation(operation_name.clone())
@@ -1192,7 +1237,10 @@ impl GcpNetworkController {
         info!(router_name = %router_name, "Removing Cloud NAT from router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         // Get router and remove NAT config
         let mut router = compute_client
@@ -1238,7 +1286,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region, operation_name.clone())
@@ -1282,7 +1333,10 @@ impl GcpNetworkController {
         info!(router_name = %router_name, "Deleting Cloud Router");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .delete_router(region.clone(), router_name.clone())
@@ -1316,7 +1370,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region, operation_name.clone())
@@ -1360,7 +1417,10 @@ impl GcpNetworkController {
         info!(subnetwork_name = %subnetwork_name, "Deleting subnetwork");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .delete_subnetwork(region.clone(), subnetwork_name.clone())
@@ -1394,7 +1454,10 @@ impl GcpNetworkController {
         let region = self.pending_operation_region.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_region_operation(region, operation_name.clone())
@@ -1438,7 +1501,10 @@ impl GcpNetworkController {
         info!(network_name = %network_name, "Deleting VPC network");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .delete_network(network_name.clone())
@@ -1470,7 +1536,10 @@ impl GcpNetworkController {
         let operation_name = self.pending_operation_name.clone().unwrap();
 
         let gcp_config = ctx.get_gcp_config()?;
-        let compute_client = ctx.service_provider.get_gcp_compute_client(gcp_config)?;
+        let compute_client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_compute_client(gcp_config)?;
 
         let operation = compute_client
             .get_global_operation(operation_name.clone())

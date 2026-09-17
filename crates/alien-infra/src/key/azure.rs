@@ -58,7 +58,8 @@ impl AzureKeyController {
                 })
             })?;
         let key = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_key_vault_keys_client(ctx.get_azure_config()?)?
             .get_key(current_key_id)
             .await

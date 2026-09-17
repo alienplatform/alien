@@ -402,7 +402,8 @@ impl AzureNetworkController {
 
                 let azure_config = ctx.get_azure_config()?;
                 let network_client = ctx
-                    .service_provider
+                    .services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_azure_network_client(azure_config)?;
 
                 let vnet = match network_client
@@ -488,7 +489,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let vnet = VirtualNetwork {
@@ -545,7 +547,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let vnet = network_client
@@ -586,7 +589,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -636,7 +640,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let _ = network_client
@@ -676,7 +681,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -726,7 +732,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let _ = network_client
@@ -766,7 +773,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -819,7 +827,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let _ = network_client
@@ -859,7 +868,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -909,7 +919,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let _ = network_client
@@ -947,7 +958,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let public_ip = PublicIpAddress {
@@ -1007,7 +1019,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let public_ip = network_client
@@ -1047,7 +1060,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let nat_gateway = NatGateway {
@@ -1109,7 +1123,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let nat_gateway = network_client
@@ -1150,7 +1165,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -1204,7 +1220,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = network_client
@@ -1249,7 +1266,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let nsg = NetworkSecurityGroup {
@@ -1327,7 +1345,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let nsg = network_client
@@ -1372,7 +1391,8 @@ impl AzureNetworkController {
         if let (Some(resource_group), Some(vnet_name)) = (&self.resource_group, &self.vnet_name) {
             let azure_config = ctx.get_azure_config()?;
             let network_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_network_client(azure_config)?;
 
             let _ = network_client
@@ -1481,7 +1501,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let result = network_client
@@ -1530,7 +1551,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         match network_client
@@ -1581,7 +1603,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = Subnet {
@@ -1633,7 +1656,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let subnet = network_client
@@ -1678,7 +1702,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let result = network_client
@@ -1720,7 +1745,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         match network_client
@@ -1770,7 +1796,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let result = network_client
@@ -1812,7 +1839,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         match network_client
@@ -1854,7 +1882,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         let result = network_client
@@ -1895,7 +1924,8 @@ impl AzureNetworkController {
 
         let azure_config = ctx.get_azure_config()?;
         let network_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_network_client(azure_config)?;
 
         match network_client

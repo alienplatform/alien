@@ -54,7 +54,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Creating GCS bucket with basic configuration");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Build bucket configuration with basic settings only
         let mut bucket = Bucket::default();
@@ -132,7 +135,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Checking bucket status");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Check if bucket exists and is ready
         match client.get_bucket(bucket_name.clone()).await {
@@ -171,7 +177,10 @@ impl GcpStorageController {
         })?;
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Step 1: Apply resource-scoped permissions from the stack
         self.apply_resource_scoped_permissions(ctx, bucket_name, &client)
@@ -270,7 +279,10 @@ impl GcpStorageController {
 
         if let Some(bucket_name) = &self.bucket_name {
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+            let client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_gcs_client(gcp_config)?;
 
             // Fetch bucket metadata without listing objects or reading object ACLs.
             let bucket = client.get_bucket(bucket_name.clone()).await.context(
@@ -312,7 +324,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Starting bucket configuration update");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Build patch object with changed fields (always check all fields, no early optimization)
         let mut bucket_patch = Bucket::default();
@@ -400,7 +415,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Checking bucket status after update");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Check if bucket is ready after update
         match client.get_bucket(bucket_name.clone()).await {
@@ -444,7 +462,10 @@ impl GcpStorageController {
             info!(bucket = %bucket_name, current = %config.public_read, previous = %prev_config.public_read, "Updating public access");
 
             let gcp_config = ctx.get_gcp_config()?;
-            let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+            let client = ctx
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
+                .get_gcp_gcs_client(gcp_config)?;
 
             if config.public_read {
                 // Enable public read access
@@ -588,7 +609,10 @@ impl GcpStorageController {
         })?;
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         info!(bucket = %bucket_name, "Re-applying resource-scoped permissions after update");
         self.apply_resource_scoped_permissions(ctx, bucket_name, &client)
@@ -630,7 +654,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Starting bucket deletion by emptying contents");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Best effort: try to empty the bucket first
         match client.empty_bucket(bucket_name.clone()).await {
@@ -677,7 +704,10 @@ impl GcpStorageController {
         info!(bucket = %bucket_name, "Deleting GCS bucket");
 
         let gcp_config = ctx.get_gcp_config()?;
-        let client = ctx.service_provider.get_gcp_gcs_client(gcp_config)?;
+        let client = ctx
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
+            .get_gcp_gcs_client(gcp_config)?;
 
         // Best effort: try to delete the bucket
         match client.delete_bucket(bucket_name.clone()).await {

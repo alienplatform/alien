@@ -152,7 +152,8 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         // The engine id is server-assigned; read it from the engine dependency's state, keyed by
@@ -202,7 +203,8 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         let op_name = self.pending_operation.clone().ok_or_else(|| {
@@ -281,7 +283,8 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
         let (engine, pending) = self.engine_and_pending(&config.id)?;
 
@@ -322,7 +325,8 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
         let (engine, serving) = self.engine_and_template(&config.id)?;
 
@@ -372,7 +376,8 @@ impl GcpAgentPlatformTemplateController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
         let (engine, template_id) = self.engine_and_template(&config.id)?;
 
@@ -446,7 +451,8 @@ impl GcpAgentPlatformTemplateController {
 
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
         let engine = self.engine.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
@@ -499,7 +505,8 @@ impl GcpAgentPlatformTemplateController {
         };
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         // Best-effort and idempotent: delete_template treats a not-found as success, and both the

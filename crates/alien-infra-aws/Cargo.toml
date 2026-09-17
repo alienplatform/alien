@@ -1,0 +1,36 @@
+[package]
+name = "alien-infra-aws"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+description.workspace = true
+license-file.workspace = true
+
+[features]
+test-utils = []
+
+[dependencies]
+alien-aws-clients = { workspace = true }
+alien-client-core = { workspace = true }
+alien-core = { workspace = true }
+alien-error = { workspace = true }
+alien-infra-core = { workspace = true }
+alien-macros = { workspace = true }
+alien-permissions = { workspace = true }
+
+async-trait = { workspace = true }
+chrono = { workspace = true }
+futures = { workspace = true }
+reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+tokio = { workspace = true, features = ["net", "time"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+alien-aws-clients = { workspace = true, features = ["test-utils"] }
+alien-infra = { path = "../alien-infra", features = ["all-platforms", "test-utils"] }
+httpmock = "0.7"
+mockall = { workspace = true }
+rstest = { workspace = true }

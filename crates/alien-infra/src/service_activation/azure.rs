@@ -34,7 +34,8 @@ impl AzureServiceActivationController {
     async fn create_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         let azure_config = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -94,7 +95,8 @@ impl AzureServiceActivationController {
     ) -> Result<HandlerAction> {
         let azure_config = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -156,7 +158,8 @@ impl AzureServiceActivationController {
     ) -> Result<HandlerAction> {
         let azure_config = ctx.get_azure_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_resources_client(azure_config)?;
         let config = ctx.desired_resource_config::<ServiceActivation>()?;
 
@@ -242,7 +245,8 @@ impl AzureServiceActivationController {
         // Heartbeat check: verify provider is still registered
         if let Some(service_name) = &self.service_name {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_resources_client(azure_config)?;
 
             let provider =

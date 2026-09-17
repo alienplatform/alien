@@ -69,7 +69,8 @@ impl AzureArtifactRegistryController {
 
         // Create the registry
         let acr_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_registry_client(azure_cfg)?;
 
         let registry = Registry {
@@ -188,7 +189,8 @@ impl AzureArtifactRegistryController {
         );
 
         let acr_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_registry_client(azure_cfg)?;
 
         match acr_client
@@ -365,7 +367,8 @@ impl AzureArtifactRegistryController {
         );
 
         let acr_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_registry_client(azure_cfg)?;
 
         // Delete registry - treat NotFound as success for idempotent deletion
@@ -422,7 +425,8 @@ impl AzureArtifactRegistryController {
             (&self.registry_name, &self.resource_group_name)
         {
             let acr_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_container_registry_client(azure_cfg)?;
 
             // Verify the registry still exists and is accessible

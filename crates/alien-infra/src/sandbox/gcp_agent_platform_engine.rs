@@ -88,7 +88,8 @@ impl GcpAgentPlatformEngineController {
 
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         let display_name = format!("{}-{}", ctx.resource_prefix, config.id);
@@ -121,7 +122,8 @@ impl GcpAgentPlatformEngineController {
         let config = ctx.desired_resource_config::<GcpAgentPlatformEngine>()?;
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         let op_name = self.pending_operation.clone().ok_or_else(|| {
@@ -234,7 +236,8 @@ impl GcpAgentPlatformEngineController {
 
         let gcp_config = ctx.get_gcp_config()?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_gcp_agent_platform_client(gcp_config)?;
 
         // An orphaned engine bills, so a genuine delete failure surfaces rather than being

@@ -67,7 +67,8 @@ impl AzureVaultController {
 
         // Initialize the Key Vault management client
         self.vault_client = Some(
-            ctx.service_provider
+            ctx.services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_key_vault_management_client(azure_config)?,
         );
 
@@ -200,7 +201,8 @@ impl AzureVaultController {
         // Initialize client if not already done
         if self.vault_client.is_none() {
             self.vault_client = Some(
-                ctx.service_provider
+                ctx.services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_azure_key_vault_management_client(azure_config)?,
             );
         }
@@ -249,7 +251,8 @@ impl AzureVaultController {
 
         if self.vault_client.is_none() {
             self.vault_client = Some(
-                ctx.service_provider
+                ctx.services
+                    .require::<dyn crate::core::PlatformServiceProvider>()?
                     .get_azure_key_vault_management_client(azure_config)?,
             );
         }

@@ -62,7 +62,8 @@ impl KubernetesBuildController {
 
         // Create the Job
         let job_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_job_client(kubernetes_config)
             .await?;
         let job = self
@@ -114,7 +115,8 @@ impl KubernetesBuildController {
         })?;
 
         let job_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_job_client(kubernetes_config)
             .await?;
 
@@ -187,7 +189,8 @@ impl KubernetesBuildController {
         // Heartbeat check: verify job still exists and completed successfully
         if let (Some(job_name), Some(namespace)) = (&self.job_name, &self.namespace) {
             let job_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 
@@ -247,7 +250,8 @@ impl KubernetesBuildController {
 
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 
@@ -305,7 +309,8 @@ impl KubernetesBuildController {
 
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 
@@ -376,7 +381,8 @@ impl KubernetesBuildController {
         info!(job_name=%job_name, namespace=%namespace, "Recreating Build Job with updated config");
 
         let job_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_job_client(kubernetes_config)
             .await?;
         let job = self
@@ -428,7 +434,8 @@ impl KubernetesBuildController {
         })?;
 
         let job_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_kubernetes_job_client(kubernetes_config)
             .await?;
 
@@ -506,7 +513,8 @@ impl KubernetesBuildController {
         // Delete Job
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 
@@ -568,7 +576,8 @@ impl KubernetesBuildController {
         // Check if job is deleted
         if let Some(job_name) = &self.job_name {
             let job_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 

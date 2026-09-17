@@ -149,11 +149,13 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
     let route_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_route_client(kubernetes_config)
         .await?;
 
@@ -180,7 +182,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             private_key,
         } => {
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             upsert_tls_secret(
@@ -205,7 +208,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         }
         EndpointCertificate::TlsSecretRef(secret_ref) => {
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             let secret_namespace = resolve_tls_secret_namespace(
@@ -436,15 +440,18 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
     let route_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_route_client(kubernetes_config)
         .await?;
     let secrets_client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_kubernetes_secrets_client(kubernetes_config)
         .await?;
 
@@ -582,7 +589,8 @@ async fn cleanup_stale_endpoint_objects(
         if Some(secret_name.as_str()) != active.managed_tls_secret_name.as_deref() {
             let kubernetes_config = ctx.get_kubernetes_config()?;
             let secrets_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
             delete_not_found_ok(
@@ -622,7 +630,11 @@ async fn publish_managed_acm_certificate(
         aws_config.region = region.clone();
     }
 
-    let acm_client = ctx.service_provider.get_aws_acm_client(&aws_config).await?;
+    let acm_client = ctx
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
+        .get_aws_acm_client(&aws_config)
+        .await?;
     let tags = acm_tags(ctx.resource_prefix, target.resource_id, input.tags);
     let (leaf, chain) = split_certificate_chain(&input.certificate_chain);
 
@@ -694,7 +706,11 @@ async fn delete_managed_acm_certificate(
     };
 
     let aws_config = ctx.get_aws_config()?;
-    let acm_client = ctx.service_provider.get_aws_acm_client(aws_config).await?;
+    let acm_client = ctx
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
+        .get_aws_acm_client(aws_config)
+        .await?;
     match acm_client.delete_certificate(&certificate_arn).await {
         Ok(()) => {
             info!(certificate_arn=%certificate_arn, "Deleted Kubernetes public endpoint ACM certificate");

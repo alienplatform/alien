@@ -27,7 +27,7 @@ impl GcpRemoteBindingsController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<RemoteBindings>()?;
         let account_id = service_account_id(ctx.resource_prefix);
-        let created = ctx.service_provider.get_gcp_iam_client(ctx.get_gcp_config()?)?
+        let created = ctx.services.require::<dyn crate::core::PlatformServiceProvider>()?.get_gcp_iam_client(ctx.get_gcp_config()?)?
             .create_service_account(account_id, CreateServiceAccountRequest::builder()
                 .service_account(ServiceAccount::builder()
                     .display_name("Application access service account".to_string())
@@ -88,7 +88,8 @@ impl GcpRemoteBindingsController {
     async fn delete_start(&mut self, ctx: &ResourceControllerContext<'_>) -> Result<HandlerAction> {
         if let Some(email) = self.service_account_email.as_ref() {
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_gcp_iam_client(ctx.get_gcp_config()?)?;
             match client.delete_service_account(email.clone()).await {
                 Ok(_) => {}
@@ -153,7 +154,8 @@ async fn reconcile_impersonation(
         })
     })?;
     let client = ctx
-        .service_provider
+        .services
+        .require::<dyn crate::core::PlatformServiceProvider>()?
         .get_gcp_iam_client(ctx.get_gcp_config()?)?;
     let current = client
         .get_service_account_iam_policy(email.clone())

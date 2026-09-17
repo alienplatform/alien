@@ -788,7 +788,8 @@ impl AzureWorkerController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
         let lro = LongRunningOperation {
             url: operation_url,
@@ -883,7 +884,8 @@ impl AzureWorkerController {
 
         // Build ARM request body.
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
         let container_app = self
             .build_container_app(
@@ -956,7 +958,8 @@ impl AzureWorkerController {
         let container_app_name = self.container_app_name.as_ref().unwrap();
 
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
 
         let lro = LongRunningOperation {
@@ -1008,7 +1011,8 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         match client
@@ -1209,7 +1213,8 @@ impl AzureWorkerController {
         };
 
         let container_apps_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
         let response = container_apps_client
             .create_or_update_managed_environment_certificate(
@@ -1275,7 +1280,8 @@ impl AzureWorkerController {
 
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         let environment_name = get_container_apps_environment_name(ctx.state)?;
@@ -1662,7 +1668,8 @@ impl AzureWorkerController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
         let lro = LongRunningOperation {
             url: operation_url,
@@ -1770,7 +1777,8 @@ impl AzureWorkerController {
         // Create commands queue in the Service Bus namespace
         let queue_name = format!("{}-rq", container_app_name);
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         info!(
@@ -1892,7 +1900,8 @@ impl AzureWorkerController {
         );
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
 
         match client
@@ -1991,7 +2000,8 @@ impl AzureWorkerController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
         let lro = LongRunningOperation {
             url: operation_url,
@@ -2192,7 +2202,8 @@ impl AzureWorkerController {
 
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         // Heartbeat check: verify Container App still exists and is in correct state
@@ -2333,7 +2344,8 @@ impl AzureWorkerController {
         };
 
         let container_apps_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
         let response = container_apps_client
             .create_or_update_managed_environment_certificate(
@@ -2424,7 +2436,8 @@ impl AzureWorkerController {
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let environment_name = get_container_apps_environment_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
         self.update_rbac_wait_required = true;
 
@@ -2497,7 +2510,8 @@ impl AzureWorkerController {
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().unwrap();
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
 
         let lro = LongRunningOperation {
@@ -2545,7 +2559,8 @@ impl AzureWorkerController {
         let container_app_name = self.container_app_name.as_ref().unwrap();
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         let app = client
@@ -2849,7 +2864,8 @@ impl AzureWorkerController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
         let lro = LongRunningOperation {
             url: operation_url,
@@ -3038,7 +3054,8 @@ impl AzureWorkerController {
         if let Some(component_name) = self.commands_dapr_component.take() {
             let env_outputs = get_container_apps_environment_outputs(ctx.state)?;
             let client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_container_apps_client(azure_config)?;
 
             match client
@@ -3072,7 +3089,8 @@ impl AzureWorkerController {
 
         // Delete commands role assignments (best-effort)
         let authorization_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_config)?;
 
         if let Some(assignment_id) = self.commands_sender_role_assignment_id.take() {
@@ -3129,7 +3147,8 @@ impl AzureWorkerController {
             };
             info!(namespace=%namespace_name, queue=%queue_name, "Deleting commands Service Bus queue");
             let mgmt = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_service_bus_management_client(azure_config)?;
             match mgmt
                 .delete_queue(
@@ -3174,7 +3193,8 @@ impl AzureWorkerController {
 
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         match client
@@ -3242,7 +3262,8 @@ impl AzureWorkerController {
         let azure_cfg = ctx.get_azure_config()?;
         let container_app_name = self.container_app_name.as_ref().unwrap();
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
 
         let lro = LongRunningOperation {
@@ -3299,7 +3320,8 @@ impl AzureWorkerController {
         };
         let resource_group_name = get_resource_group_name(ctx.state)?;
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         match client
@@ -3356,7 +3378,8 @@ impl AzureWorkerController {
         let certificate_name =
             get_container_apps_certificate_name(ctx.resource_prefix, &worker_config.id);
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_cfg)?;
 
         match client
@@ -3423,7 +3446,8 @@ impl AzureWorkerController {
 
         let azure_cfg = ctx.get_azure_config()?;
         let operation_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_long_running_operation_client(azure_cfg)?;
         let lro = LongRunningOperation {
             url: operation_url,
@@ -3633,7 +3657,8 @@ impl AzureWorkerController {
         // Create commands queue
         let queue_name = format!("{}-rq", container_app_name);
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         info!(
@@ -3735,7 +3760,8 @@ impl AzureWorkerController {
         );
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(azure_config)?;
 
         match client
@@ -3814,10 +3840,12 @@ impl AzureWorkerController {
                 })
             })?;
             let authorization_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_authorization_client(azure_config)?;
             let principal_id = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_caller_principal_id(azure_config)
                 .await
                 .context(ErrorData::CloudPlatformError {
@@ -4481,7 +4509,8 @@ impl AzureWorkerController {
         );
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(&azure_config)?;
 
         match client
@@ -4630,7 +4659,8 @@ impl AzureWorkerController {
         );
 
         let mgmt = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
         mgmt.create_or_update_queue(
             service_bus_resource_group.clone(),
@@ -4695,7 +4725,8 @@ impl AzureWorkerController {
             )
             .to_string();
             let authorization_client = ctx
-                .service_provider
+                .services
+                .require::<dyn crate::core::PlatformServiceProvider>()?
                 .get_azure_authorization_client(azure_config)?;
             let full_assignment_id = authorization_client
                 .build_role_assignment_id(&queue_scope, role_assignment_id.clone());
@@ -4764,7 +4795,8 @@ impl AzureWorkerController {
         };
 
         let container_apps_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(&azure_config)?;
 
         match container_apps_client
@@ -4797,7 +4829,8 @@ impl AzureWorkerController {
         }
 
         let event_grid_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_event_grid_client(azure_config)?;
         let event_subscription = match event_grid_client
             .get_event_subscription(source_resource_id.clone(), event_subscription_name.clone())
@@ -4929,7 +4962,8 @@ impl AzureWorkerController {
         };
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(&azure_config)?;
 
         match client
@@ -4981,13 +5015,16 @@ impl AzureWorkerController {
 
         let azure_config = ctx.get_azure_config()?;
         let event_grid_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_event_grid_client(azure_config)?;
         let authorization_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_authorization_client(azure_config)?;
         let service_bus_client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_service_bus_management_client(azure_config)?;
 
         for infrastructure in self.storage_trigger_infrastructure.clone() {
@@ -5102,7 +5139,8 @@ impl AzureWorkerController {
         let worker_config = ctx.desired_resource_config::<Worker>()?;
 
         let client = ctx
-            .service_provider
+            .services
+            .require::<dyn crate::core::PlatformServiceProvider>()?
             .get_azure_container_apps_client(&azure_config)?;
 
         for component_name in &self.dapr_components.clone() {
