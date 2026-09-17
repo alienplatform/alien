@@ -503,6 +503,7 @@ pub struct CreateCommandResponse {
     pub command_id: String,
     /// Whether this request created the returned command. False means an
     /// idempotent replay returned a command created by another request.
+    #[serde(default)]
     pub created: bool,
     /// Current command state
     pub state: CommandState,
@@ -948,6 +949,19 @@ mod tests {
 
         let round_tripped: CreateCommandRequest = serde_json::from_value(value).unwrap();
         assert_eq!(round_tripped, request);
+    }
+
+    #[test]
+    fn test_create_command_response_defaults_created_for_older_managers() {
+        let response: CreateCommandResponse = serde_json::from_value(serde_json::json!({
+            "commandId": "cmd_123",
+            "state": "PENDING",
+            "inlineAllowedUpTo": 1024,
+            "next": "poll",
+        }))
+        .unwrap();
+
+        assert!(!response.created);
     }
 
     #[test]
