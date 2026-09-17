@@ -283,16 +283,14 @@ mod tests {
         );
     }
 
-    /// Agent Platform refuses an image that requires root, so the GCP image has no second uid to
-    /// drop to and its agent shares the uid it supervises. Nothing but the isolation mode carries
-    /// that, and reading it back off `AWS_MICROVM` is how a copied constant announces itself.
+    /// The ending an image declares and the isolation it claims come off one value, so they
+    /// cannot disagree. The AWS half is rendered at run time and reaches no committed file, which
+    /// is why the whole-file comparison above covers only the GCP side of it.
     #[test]
-    fn the_two_images_isolate_the_way_their_runtimes_allow() {
-        assert_eq!(AWS_MICROVM.isolation, Isolation::UidSplit);
-        assert_eq!(GCP_AGENT_PLATFORM.isolation, Isolation::Platform);
-        assert!(entrypoint(&AWS_MICROVM)
-            .lines()
-            .all(|line| !line.starts_with("USER ")));
+    fn the_ending_an_image_declares_follows_its_isolation() {
+        assert!(!entrypoint(&AWS_MICROVM).contains("USER "));
+        assert!(contract_env(&AWS_MICROVM).contains("ALIEN_SANDBOX_ISOLATION=uid-split"));
         assert!(entrypoint(&GCP_AGENT_PLATFORM).contains("\nUSER 1000:1000\n"));
+        assert!(contract_env(&GCP_AGENT_PLATFORM).contains("ALIEN_SANDBOX_ISOLATION=platform"));
     }
 }
