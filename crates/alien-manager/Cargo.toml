@@ -33,11 +33,11 @@ openapi = [
 # Core Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true, features = ["axum"] }
-alien-commands = { workspace = true, features = ["server", "test-utils"] }
+alien-commands = { workspace = true, features = ["server"] }
 alien-bindings = { workspace = true, features = ["aws", "gcp", "azure", "test", "local"] }
 alien-deployment = { workspace = true }
 alien-preflights = { workspace = true }
-alien-infra = { workspace = true, features = ["test-utils", "aws", "gcp", "azure", "kubernetes"] }
+alien-infra = { workspace = true, features = ["aws", "gcp", "azure", "kubernetes"] }
 alien-permissions = { workspace = true }
 alien-local = { workspace = true }
 
@@ -111,6 +111,8 @@ toml = { workspace = true }
 futures = { workspace = true }
 
 [dev-dependencies]
+alien-commands = { workspace = true, features = ["test-utils"] }
+alien-infra = { workspace = true, features = ["test-utils"] }
 mockall = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 tempfile = { workspace = true }
