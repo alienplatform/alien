@@ -653,12 +653,12 @@ mod gcp_image_contract {
 
     const DOCKERFILE: &str = "docker/Dockerfile.alien-sandbox-agent";
 
-    /// Uid and gid the agent and the commands it supervises share on GCP Agent Platform.
+    /// Uid and gid the image's `ENV` pair, `USER` and `chown` must all carry.
     ///
-    /// Agent Platform refuses an image that requires root, so the agent runs unprivileged and has
-    /// no second uid to drop to. `platform` isolation is what permits an exec identity equal to
-    /// the agent's own. 1000 is the conventional first non-root uid, chosen over the 60000 the
-    /// bundle renderer uses because that value was never tried against Agent Platform.
+    /// 1000 is the conventional first non-root uid, chosen over the 60000 the bundle renderer
+    /// uses because that value was never tried against Agent Platform. One value covers the agent
+    /// and the commands it supervises: Agent Platform refuses an image that requires root, so
+    /// there is no second uid to drop to.
     const GCP_EXEC_UID: u32 = 1000;
 
     fn dockerfile() -> String {
