@@ -25,9 +25,10 @@ use tracing::{debug, info, warn};
 fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     let mut members = Vec::new();
     for service_type in &access.allowed_service_types {
-        // A live sandbox was proven to pull a private Artifact Registry image as the sandbox
-        // service agent holding `roles/artifactregistry.reader`. Three adjacent Vertex agents
-        // exist (`gcp-sa-aiplatform`, `-re`, `gcp-sa-vertex-agent`); naming one is a 403 on pull.
+        // Google grants the sandbox agent `roles/aiplatform.agentSandboxServiceAgent` on its own
+        // project, which already carries `artifactregistry.repositories.downloadArtifacts`. That
+        // covers a same-project pull; this binding is what reaches a repository Alien owns in
+        // another project. Three adjacent Vertex agents exist, and naming one is a 403 on pull.
         let agent_domain = match service_type {
             ComputeServiceType::Worker => "serverless-robot-prod",
             ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
