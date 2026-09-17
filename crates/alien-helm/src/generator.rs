@@ -333,7 +333,7 @@ fn add_remote_operator_files(
             message: "the product chart is missing Chart.yaml".to_string(),
         })
     })?;
-    chart.push_str("annotations:\n  alien.dev/remote-operator-lifecycle: \"v1\"\n");
+    chart.push_str("annotations:\n  alien.dev/remote-operator-lifecycle: \"v2\"\n");
 
     let requires_collector_token = options.manifest.log_collector.is_some();
     let identity_record = remote_operator_identity_record_tpl(
@@ -525,7 +525,7 @@ fn remote_operator_identity_record_tpl(
 {{{{ printf "%s-initialized" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
-{{{{ printf "%s-lifecycle-v1" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{ printf "%s-lifecycle-v2" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
 {{{{- if .Values.remoteOperator.enabled -}}}}
 {{{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}}}
@@ -577,11 +577,12 @@ metadata:
   labels:
     app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
     app.kubernetes.io/instance: {{ .Release.Name | quote }}
-    alien.dev/remote-operator-lifecycle-capability: "v1"
+    alien.dev/remote-operator-lifecycle-capability: "v2"
     alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
 immutable: true
 data:
-  version: "1"
+  version: "2"
+  firstGuardRevision: {{ .Release.Revision | quote }}
 {{- end }}
 "#
     .to_string()
@@ -764,10 +765,10 @@ spec:
                   require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
                   require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
                   require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
-                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v1 lifecycle-capability
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v2 lifecycle-capability
                   require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
                   require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
-                  require_field configmap "$lifecycle_capability" '{.data.version}' 1 version
+                  require_field configmap "$lifecycle_capability" '{.data.version}' 2 version
                   kubectl -n "$namespace" delete configmap "$lifecycle_capability"
                 fi
                 echo "No Remote Operator identity record exists for this release; nothing to clean up."
@@ -814,10 +815,10 @@ spec:
                 require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
                 require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
                 require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
-                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v1 lifecycle-capability
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v2 lifecycle-capability
                 require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
                 require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
-                require_field configmap "$lifecycle_capability" '{.data.version}' 1 version
+                require_field configmap "$lifecycle_capability" '{.data.version}' 2 version
               fi
 
               if resource_exists deployment "$resource_name"; then
@@ -1043,8 +1044,26 @@ __COLLECTOR_CHECK__{{- end -}}
   {{- $capabilityAnnotations := default dict $lifecycleCapability.metadata.annotations -}}
   {{- $capabilityLabels := default dict $lifecycleCapability.metadata.labels -}}
   {{- $capabilityData := default dict $lifecycleCapability.data -}}
-  {{- if or (ne (index $capabilityAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $capabilityAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $capabilityAnnotations "helm.sh/resource-policy") "keep") (ne (index $capabilityLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $capabilityLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $capabilityLabels "alien.dev/remote-operator-lifecycle-capability") "v1") (ne (index $capabilityLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $lifecycleCapability.immutable)) (ne (len $capabilityData) 1) (ne (index $capabilityData "version") "1") -}}
+  {{- if or (ne (index $capabilityAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $capabilityAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $capabilityAnnotations "helm.sh/resource-policy") "keep") (ne (index $capabilityLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $capabilityLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $capabilityLabels "alien.dev/remote-operator-lifecycle-capability") "v2") (ne (index $capabilityLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $lifecycleCapability.immutable)) (ne (len $capabilityData) 2) (ne (index $capabilityData "version") "2") (not (hasKey $capabilityData "firstGuardRevision")) -}}
     {{- fail (printf "ConfigMap %s/%s does not match the immutable lifecycle-capability contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $lifecycleCapabilityName) -}}
+  {{- end -}}
+  {{- $firstGuardRevision := int (index $capabilityData "firstGuardRevision") -}}
+  {{- if or (lt $firstGuardRevision 1) (gt $firstGuardRevision (int .Release.Revision)) -}}
+    {{- fail (printf "ConfigMap %s/%s records invalid first guard revision %d. Refusing adoption." .Release.Namespace $lifecycleCapabilityName $firstGuardRevision) -}}
+  {{- end -}}
+  {{- if .Values.remoteOperator.enabled -}}
+    {{- $historyStores := list (lookup "v1" "Secret" .Release.Namespace "") (lookup "v1" "ConfigMap" .Release.Namespace "") -}}
+    {{- range $historyStore := $historyStores -}}
+      {{- range $historyRecord := default (list) (get $historyStore "items") -}}
+        {{- $historyLabels := default dict $historyRecord.metadata.labels -}}
+        {{- if and (eq (default "" (index $historyLabels "owner")) "helm") (eq (default "" (index $historyLabels "name")) $.Release.Name) -}}
+          {{- $historyRevision := int (default "0" (index $historyLabels "version")) -}}
+          {{- if lt $historyRevision $firstGuardRevision -}}
+            {{- fail (printf "Helm revision %d predates the Remote Operator rollback guard introduced at revision %d. Remove every older stored revision (for example, perform a disabled bridge upgrade with --history-max 1) before enabling Remote Operator." $historyRevision $firstGuardRevision) -}}
+          {{- end -}}
+        {{- end -}}
+      {{- end -}}
+    {{- end -}}
   {{- end -}}
 {{- end -}}
 {{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (not $lifecycleCapability) -}}
@@ -6190,7 +6209,7 @@ mod tests {
         assert!(chart.files["README.md"].contains("retains that CRD on rollback and uninstall"));
         assert!(chart.files["README.md"].contains("deleting its exact retained identity records"));
         let remote_template = &chart.files["templates/remote-operator.yaml"];
-        assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v1\""));
+        assert!(chart.files["Chart.yaml"].contains("alien.dev/remote-operator-lifecycle: \"v2\""));
         assert!(remote_template.contains(".Values.remoteOperator.enabled"));
         assert!(remote_template.contains("deployment.remoteOperatorResourceName"));
         assert!(!remote_template.contains("deployment.fullname"));
@@ -6200,11 +6219,18 @@ mod tests {
         assert!(checks.contains("Refusing adoption"));
         assert!(checks.contains("managedResourceExists"));
         assert!(checks.contains("predates the Remote Operator rollback guard"));
+        assert!(
+            checks.contains("predates the Remote Operator rollback guard introduced at revision")
+        );
+        assert!(checks.contains("perform a disabled bridge upgrade with --history-max 1"));
         let lifecycle_capability =
             &chart.files["templates/remote-operator-lifecycle-capability.yaml"];
-        assert!(lifecycle_capability.contains("remote-operator-lifecycle-capability: \"v1\""));
+        assert!(lifecycle_capability.contains("remote-operator-lifecycle-capability: \"v2\""));
         assert!(lifecycle_capability.contains("helm.sh/resource-policy: keep"));
         assert!(lifecycle_capability.contains("immutable: true"));
+        assert!(
+            lifecycle_capability.contains("firstGuardRevision: {{ .Release.Revision | quote }}")
+        );
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
         assert!(cleanup.contains("No Remote Operator identity record exists"));

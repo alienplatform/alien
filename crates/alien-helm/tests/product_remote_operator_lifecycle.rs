@@ -322,6 +322,69 @@ rules:
         ],
         None,
     );
+    let rejected_unpruned_enable = helm_upgrade_args(
+        bridge_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        0,
+        "30s",
+    );
+    let rejected_unpruned_enable = run_fails(
+        "helm",
+        rejected_unpruned_enable.iter().map(String::as_str),
+        None,
+        "first enable must reject retained pre-guard Helm history",
+    );
+    assert!(
+        rejected_unpruned_enable
+            .diagnostic
+            .contains("predates the Remote Operator rollback guard introduced at revision"),
+        "{}",
+        rejected_unpruned_enable.diagnostic
+    );
+    run_ok(
+        "helm",
+        [
+            "upgrade",
+            bridge_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--history-max=1",
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    let pruned_history = run_ok(
+        "helm",
+        [
+            "history",
+            bridge_release,
+            "--namespace",
+            &helm_namespace,
+            "--output=json",
+        ],
+        None,
+    );
+    let pruned_history: serde_json::Value =
+        serde_json::from_str(&pruned_history.stdout).expect("parse pruned Helm history");
+    let pruned_history = pruned_history.as_array().expect("Helm history array");
+    assert!(
+        !pruned_history.is_empty()
+            && pruned_history.iter().all(|entry| {
+                entry["revision"]
+                    .as_i64()
+                    .is_some_and(|revision| revision >= 2)
+            }),
+        "the bridge upgrade must remove every pre-guard rollback target: {pruned_history:?}"
+    );
     let bridged_enable = helm_upgrade_args(
         bridge_release,
         &helm_namespace,
@@ -331,6 +394,20 @@ rules:
         "2m",
     );
     run_ok("helm", bridged_enable.iter().map(String::as_str), None);
+    run_fails(
+        "helm",
+        [
+            "rollback",
+            bridge_release,
+            "1",
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=30s",
+        ],
+        None,
+        "a pruned pre-guard revision must not remain a rollback target",
+    );
     run_ok(
         "helm",
         [

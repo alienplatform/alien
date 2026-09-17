@@ -906,6 +906,10 @@ fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_afte
         .expect("Helm release resource");
     let helm_resource = &compact[helm_position..];
     assert!(
+        helm_resource.contains("max_history = 1"),
+        "Terraform must prune pre-guard rollback targets before first enable"
+    );
+    assert!(
         secret_position < helm_position,
         "generated lifecycle should be reviewable in creation order"
     );
