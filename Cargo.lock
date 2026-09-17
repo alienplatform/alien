@@ -741,6 +741,7 @@ dependencies = [
  "alien-client-core",
  "alien-core",
  "alien-error",
+ "alien-gcp-compute-types",
  "anyhow",
  "async-trait",
  "base64 0.22.1",
@@ -766,6 +767,14 @@ dependencies = [
  "utoipa",
  "uuid",
  "workspace_root",
+]
+
+[[package]]
+name = "alien-gcp-compute-types"
+version = "3.3.22"
+dependencies = [
+ "bon",
+ "serde",
 ]
 
 [[package]]
