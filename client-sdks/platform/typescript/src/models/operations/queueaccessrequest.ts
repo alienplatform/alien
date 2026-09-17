@@ -56,6 +56,8 @@ export type QueueAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: QueueAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -157,6 +159,8 @@ export const QueueAccessRequestCommand$inboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: QueueAccessRequestTier$inboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function queueAccessRequestCommandFromJSON(

@@ -49,6 +49,57 @@ test("configured server query parameters survive operation globals", async () =>
   await sdk.events.list();
 });
 
+test("plan-backed access request preserves command contract identity", async () => {
+  const command = {
+    command: "postgres/explain-query",
+    summary: "Explain the slow query",
+    params: { sql: "select 1" },
+    tier: "read-only",
+    pluginVersion: "1.2.3",
+    operationContractHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  };
+  const sdk = client(async request => {
+    assert.equal(request.method, "POST");
+    const url = new URL(request.url);
+    assert.equal(url.pathname, "/v1/access-requests");
+    assert.equal(url.searchParams.get("workspace"), "test-workspace");
+    assert.deepEqual(await request.json(), {
+      deploymentId,
+      remediationPlanId: "plan_test",
+      title: "Investigate a slow query",
+      commands: [command],
+    });
+    return Response.json({
+      id: "accessRequest_test",
+      requesterKind: "serviceAccount",
+      requesterId: "apiKey_test",
+      requestedExpiresAt: null,
+      deploymentId,
+      remediationPlanId: "plan_test",
+      title: "Investigate a slow query",
+      reason: null,
+      commands: [command],
+      operationPattern: null,
+      maxRisk: null,
+      status: "pending-approval",
+      approvedUntil: null,
+    }, { status: 201 });
+  });
+
+  const result = await sdk.operations.createAccessRequest({
+    deploymentId,
+    remediationPlanId: "plan_test",
+    title: "Investigate a slow query",
+    commands: [command],
+  });
+
+  assert.equal(result.commands[0].pluginVersion, command.pluginVersion);
+  assert.equal(
+    result.commands[0].operationContractHash,
+    command.operationContractHash,
+  );
+});
+
 test("retry-after-ms and timeoutMs apply independently to each attempt", async () => {
   const delays = [];
   const signals = [];

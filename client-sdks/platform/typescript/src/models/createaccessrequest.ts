@@ -29,6 +29,8 @@ export type CreateAccessRequestCommand = {
    * How risky an operation is (declared by the plugin metadata).
    */
   tier?: CreateAccessRequestTier | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /**
@@ -98,6 +100,8 @@ export type CreateAccessRequestCommand$Outbound = {
   summary: string;
   params?: any | null | undefined;
   tier?: string | undefined;
+  pluginVersion?: string | undefined;
+  operationContractHash?: string | undefined;
 };
 
 /** @internal */
@@ -109,6 +113,8 @@ export const CreateAccessRequestCommand$outboundSchema: z.ZodType<
   summary: z.string(),
   params: z.nullable(z.any()).optional(),
   tier: CreateAccessRequestTier$outboundSchema.optional(),
+  pluginVersion: z.string().optional(),
+  operationContractHash: z.string().optional(),
 });
 
 export function createAccessRequestCommandToJSON(
