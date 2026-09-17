@@ -1703,6 +1703,10 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         None,
     )
     .await;
+    let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
+        (result.loop_result.outcome == LoopOutcome::Failure)
+            .then(|| result.loop_result.final_status.clone())
+    });
 
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
@@ -1716,6 +1720,13 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         )
         .await,
     );
+
+    // Semantic failures are checkpointed as a successful runner return. Mark
+    // the visible step failed after finalization, but before converting that
+    // outcome back into the detailed operation error returned to the caller.
+    if let Some(status) = semantic_failure_status {
+        steps.fail(2, Some(format!("{status:?}")));
+    }
 
     let RunnerResult {
         loop_result,

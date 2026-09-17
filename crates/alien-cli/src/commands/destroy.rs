@@ -329,6 +329,10 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         }
         other => other,
     };
+    let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
+        (result.loop_result.outcome == LoopOutcome::Failure)
+            .then(|| result.loop_result.final_status.clone())
+    });
 
     // Always reconcile + release
     let runner_result = combine_operation_and_finalization(
@@ -342,6 +346,10 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         )
         .await,
     );
+
+    if let Some(status) = semantic_failure_status {
+        steps.fail(2, Some(format!("{status:?}")));
+    }
 
     let RunnerResult {
         loop_result,
