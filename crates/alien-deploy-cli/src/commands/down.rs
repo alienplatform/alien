@@ -63,12 +63,19 @@ pub struct DownArgs {
 }
 
 pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
-    let mut tracker = DeploymentTracker::new()?;
-    let tracked = args
+    // ID-only recovery must not depend on the fresh runner having a usable
+    // config directory or deployments.json file.
+    let mut tracker = args
         .name
-        .as_deref()
-        .and_then(|name| tracker.get(name))
-        .cloned();
+        .as_ref()
+        .map(|_| DeploymentTracker::new())
+        .transpose()?;
+    let tracked = args.name.as_deref().and_then(|name| {
+        tracker
+            .as_ref()
+            .and_then(|tracker| tracker.get(name))
+            .cloned()
+    });
 
     let (token, manager_url, tracked_platform, deployment_id, tracked_local) = match tracked {
         Some(tracked) => {
@@ -172,16 +179,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 operation: "read deployment platform".to_string(),
             })
         })?;
-    if let Some(tracked_platform) = tracked_platform.as_deref() {
-        if tracked_platform != remote_platform {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "platform".to_string(),
-                message: format!(
-                    "Tracked platform '{tracked_platform}' does not match manager platform '{remote_platform}'."
-                ),
-            }));
-        }
-    }
+    let platform = validate_remote_platform(tracked_platform.as_deref(), remote_platform)?;
 
     if let Some(source) = &import_source {
         if !args.force_delete_record {
@@ -212,7 +210,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
             })?;
 
         output::step(2, 2, "Done!");
-        remove_tracked_deployment(&mut tracker, args.name.as_deref())?;
+        remove_tracked_deployment(tracker.as_mut(), args.name.as_deref())?;
         if import_source.is_some() {
             output::success(
                 "Imported deployment record removed. No resource teardown was performed.",
@@ -223,12 +221,6 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         return Ok(());
     }
 
-    let platform = Platform::from_str(remote_platform).map_err(|e| {
-        AlienError::new(ErrorData::ValidationError {
-            field: "platform".to_string(),
-            message: e,
-        })
-    })?;
     if args.deployment_id.is_some() && matches!(platform, Platform::Local | Platform::Machines) {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "deployment_id".to_string(),
@@ -264,7 +256,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
                 })?;
         }
 
-        remove_tracked_deployment(&mut tracker, args.name.as_deref())?;
+        remove_tracked_deployment(tracker.as_mut(), args.name.as_deref())?;
 
         output::step(total_steps, total_steps, "Done!");
         output::success("Deployment deletion requested.");
@@ -332,7 +324,7 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
         )?;
     }
 
-    remove_tracked_deployment(&mut tracker, args.name.as_deref())?;
+    remove_tracked_deployment(tracker.as_mut(), args.name.as_deref())?;
 
     output::step(total_steps, total_steps, "Done!");
     output::success("Deployment destroyed successfully.");
@@ -341,13 +333,42 @@ pub async fn down_command(args: DownArgs, embedded_config: Option<&DeployCliConf
 }
 
 fn remove_tracked_deployment(
-    tracker: &mut DeploymentTracker,
+    tracker: Option<&mut DeploymentTracker>,
     tracked_name: Option<&str>,
 ) -> Result<()> {
-    if let Some(name) = tracked_name {
+    if let (Some(tracker), Some(name)) = (tracker, tracked_name) {
         tracker.remove(name)?;
     }
     Ok(())
+}
+
+fn validate_remote_platform(
+    tracked_platform: Option<&str>,
+    remote_platform: &str,
+) -> Result<Platform> {
+    let platform = Platform::from_str(remote_platform).map_err(|e| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message: e,
+        })
+    })?;
+    if let Some(tracked_platform) = tracked_platform {
+        let parsed_tracked_platform = Platform::from_str(tracked_platform).map_err(|e| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: e,
+            })
+        })?;
+        if parsed_tracked_platform != platform {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: format!(
+                    "Tracked platform '{tracked_platform}' does not match manager platform '{remote_platform}'."
+                ),
+            }));
+        }
+    }
+    Ok(platform)
 }
 
 async fn destroy_client_config(
@@ -458,6 +479,16 @@ mod tests {
             "dep_recovery",
         ])
         .expect_err("name and deployment ID must be mutually exclusive");
+    }
+
+    #[test]
+    fn tracked_platform_comparison_is_case_insensitive() {
+        assert_eq!(
+            validate_remote_platform(Some("AWS"), "aws").expect("same platform"),
+            Platform::Aws
+        );
+        validate_remote_platform(Some("gcp"), "aws")
+            .expect_err("different platforms must still be rejected");
     }
 
     #[tokio::test]
