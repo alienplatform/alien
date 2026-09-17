@@ -1993,6 +1993,10 @@ jobs:
         env:
           SANDBOX_AGENT: ghcr.io/alienplatform/alien-sandbox-agent@${{ steps.publish_sandbox_agent.outputs.digest }}
         run: |
+          # Without it a pipeline reports its last stage, so a pull that never produced an image
+          # is read as an agent whose e_machine is empty.
+          set -o pipefail
+
           for platform in linux/amd64 linux/arm64; do
             # Once binfmt is registered an ELF of either architecture executes whatever the
             # container declares, so running the agent cannot tell the two apart. The ELF header
@@ -2002,7 +2006,7 @@ jobs:
               linux/arm64) expected=b700 ;;
               *) echo "::error::no expected e_machine for ${platform}"; exit 1 ;;
             esac
-            machine=$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+            machine=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
               -c 'od -An -tx1 -j18 -N2 /usr/local/bin/alien-sandbox-agent' | tr -d ' \n')
             if [ "$machine" != "$expected" ]; then
               echo "::error::${platform}: the agent is e_machine '${machine}', not '${expected}'"
@@ -2011,7 +2015,9 @@ jobs:
 
             # The failing run below never reaches the port parse and overrides the authorization
             # mode, so both of those are read off the image here instead.
-            if ! identity=$(docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" -c '
+            # The probe's expansions belong to the container's shell, not this one.
+            # shellcheck disable=SC2016
+            if ! identity=$(timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" -c '
                   id | grep -q "uid=1000(sandbox) gid=1000(sandbox)" ||
                     { echo "runs as $(id), not uid=1000(sandbox) gid=1000(sandbox)"; exit 1; }
                   test "$ALIEN_SANDBOX_AUTHORIZATION" = transport ||
@@ -2019,24 +2025,24 @@ jobs:
                   test "$ALIEN_SANDBOX_PORT" = 8080 ||
                     { echo "ALIEN_SANDBOX_PORT is ${ALIEN_SANDBOX_PORT:-unset}, not 8080"; exit 1; }
                 ' 2>&1); then
-              echo "::error::${platform}: ${identity}"
+              echo "::error::${platform}: ${identity:-the identity probe did not complete}"
               exit 1
             fi
             # The unlink rather than the file mode: only the directory permission stops the
             # supervised command removing its own supervisor. Removing a file it may remove first,
             # so a denial is what fails the rm and not an rm that is missing or broken.
-            docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
+            timeout -k 5 60 docker run --rm --platform "$platform" --entrypoint /bin/sh "$SANDBOX_AGENT" \
               -c 'touch /sandbox/probe && rm /sandbox/probe &&
                   ! rm -f /usr/local/bin/alien-sandbox-agent &&
                   test -x /usr/local/bin/alien-sandbox-agent'
             # test -x reads a mode bit, which a binary that cannot start still carries. Matching
             # identifiers only the agent emits is what proves the entrypoint is a working agent.
-            # timeout SIGTERMs the docker client, which ignores it, so -k is what ends a wedged
-            # run: 124 when TERM took, 137 when the follow-up SIGKILL did. Not reachable today,
-            # since load_state fails before any bind; it guards a bind moved ahead of validation.
             status=0
             out=$(timeout -k 5 60 docker run --rm --platform "$platform" \
               -e ALIEN_SANDBOX_AUTHORIZATION=nonsense "$SANDBOX_AGENT" 2>&1) || status=$?
+            # timeout SIGTERMs the docker client, which ignores it, so -k is what ends a wedged
+            # run: 124 when TERM took, 137 when the follow-up SIGKILL did. Not reachable today,
+            # since load_state fails before any bind; it guards a bind moved ahead of validation.
             case "$status" in
               0)
                 echo "::error::${platform}: the agent started with an invalid authorization mode"
@@ -2055,20 +2061,26 @@ jobs:
               esac
             done
 
-            # Every run above is built to fail, so nothing else proves the image serves. Started
-            # as it ships, the listening line means attribution_works() returned true under
-            # USER 1000:1000 and the agent took its port.
+            # Every run above is built to fail. Started as it ships, the listening line means
+            # attribution_works() returned true under USER 1000:1000 and the bind took. A dead
+            # container's log reads the same, so the inspect is what makes the line mean it still.
             container=$(timeout -k 5 60 docker run -d --platform "$platform" "$SANDBOX_AGENT")
             listening=0
             if timeout -k 5 60 sh -c \
                 "until docker logs ${container} 2>&1 | grep -q 'sandbox agent listening on'; do sleep 1; done"; then
               listening=1
             fi
+            running=$(docker inspect -f '{{.State.Running}}' "$container" || true)
             logs=$(docker logs "$container" 2>&1 || true)
             docker rm -f "$container" >/dev/null || true
             if [ "$listening" -ne 1 ]; then
               echo "$logs"
               echo "::error::${platform}: the agent never reported a listener within 60s"
+              exit 1
+            fi
+            if [ "$running" != true ]; then
+              echo "$logs"
+              echo "::error::${platform}: the agent reported a listener and then exited"
               exit 1
             fi
           done

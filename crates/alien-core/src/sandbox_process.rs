@@ -732,17 +732,18 @@ mod gcp_image_contract {
         only(arguments.into_iter(), name).trim().to_string()
     }
 
-    /// The one `&&`-delimited step carrying `needle`.
+    /// The one step carrying `needle`, where steps are split on `&`, `;` and `|`.
     ///
-    /// A whole `RUN` is too coarse a unit: the passwd record it opens with satisfies a needle
-    /// meant for the group record two steps later.
+    /// A whole `RUN` is too coarse: the passwd record it opens with satisfies a needle meant for
+    /// the group record two steps later. Splitting on every separator is what keeps `only()` a
+    /// single-command guard, at the cost of `printf … | tee -a /etc/passwd` reading red.
     fn step_with(dockerfile: &str, needle: &str) -> String {
         let instructions = code_lines(dockerfile);
         let steps: Vec<&str> = instructions
             .iter()
-            .flat_map(|instruction| instruction.split("&&"))
+            .flat_map(|instruction| instruction.split(|c| c == '&' || c == ';' || c == '|'))
             .map(str::trim)
-            .filter(|step| step.contains(needle))
+            .filter(|step| !step.is_empty() && step.contains(needle))
             .collect();
         only(steps.into_iter(), &format!("'{needle}' step")).to_string()
     }
@@ -791,8 +792,8 @@ mod gcp_image_contract {
         );
 
         // Both needles carry the opening quote, and the group needle its `\n` terminator too.
-        // Without them the group record is a prefix of the passwd record, so any folding or
-        // separator that puts the two in one step lets passwd answer for group.
+        // The group record is a prefix of the passwd record, so without them a step holding both
+        // would let passwd answer for group.
         let passwd = step_with(&dockerfile, "/etc/passwd");
         assert!(
             passwd.contains(&format!("'sandbox:x:{uid}:{uid}::{root}:"))
