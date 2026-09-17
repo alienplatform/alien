@@ -82,7 +82,7 @@ alien-client-core = { path = "crates/alien-client-core", version = "3.3.22" }
 alien-client-config = { path = "crates/alien-client-config", version = "3.3.22" }
 alien-aws-clients = { path = "crates/alien-aws-clients", version = "3.3.22" }
 alien-gcp-clients = { path = "crates/alien-gcp-clients", version = "3.3.22" }
-alien-azure-clients = { path = "crates/alien-azure-clients", version = "3.3.22" }
+alien-azure-clients = { path = "crates/alien-azure-clients", version = "3.3.22", default-features = false }
 alien-k8s-clients = { path = "crates/alien-k8s-clients", version = "3.3.22" }
 alien-error = { path = "crates/alien-error", version = "3.3.22", features = ["anyhow"] }
 alien-error-derive = { path = "crates/alien-error-derive", version = "3.3.22" }
