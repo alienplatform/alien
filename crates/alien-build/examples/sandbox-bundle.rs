@@ -8,13 +8,18 @@
 //! `--agent-image` is the shipping path: the bundle carries only a Dockerfile that copies the
 //! agent out of the published image. `--agent-binary` embeds a local build for CI/dev instead,
 //! and must be aarch64 Linux — MicroVM images accept no other architecture.
+//!
+//! Validates that the base image ends as root before creating the bundle, preventing a runtime
+//! failure where the image builds successfully but every command fails because the agent lacks
+//! privilege to drop to the exec uid.
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use alien_build::sandbox_bundle::{write_bundle, AgentSource};
+use alien_build::sandbox_bundle::{validate_base_image_for_uid_split, write_bundle, AgentSource};
 
-fn main() -> ExitCode {
+#[tokio::main]
+async fn main() -> ExitCode {
     let arguments: Vec<String> = std::env::args().skip(1).collect();
     let usage = || {
         eprintln!(
@@ -32,6 +37,12 @@ fn main() -> ExitCode {
         "--agent-image" => AgentSource::Image(agent.clone()),
         _ => return usage(),
     };
+
+    // Validate that the base image ends as root before creating the bundle
+    if let Err(error) = validate_base_image_for_uid_split(base_image).await {
+        eprintln!("{error}");
+        return ExitCode::FAILURE;
+    }
 
     match write_bundle(Path::new(destination), base_image, &agent) {
         Ok(()) => {

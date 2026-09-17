@@ -14,6 +14,9 @@ use std::path::Path;
 use crate::error::{ErrorData, Result};
 use alien_error::AlienError;
 use alien_error::{Context, IntoAlienError};
+use oci_client::client::{Client as OciClient, ClientConfig as OciClientConfig};
+use oci_client::manifest::OciManifest;
+use oci_client::Reference;
 
 use zip::write::SimpleFileOptions;
 use zip::ZipWriter;
@@ -52,6 +55,101 @@ fn checked_reference<'a>(reference: &'a str, what: &str) -> Result<&'a str> {
         }));
     }
     Ok(reference)
+}
+
+/// Validates that a base image ends as root, which `Isolation::UidSplit` requires.
+///
+/// The agent must start as root to drop to the exec uid before every spawn. A hardened base
+/// image (chainguard, distroless) that ends `USER nonroot` leaves the agent without the
+/// privilege to drop, and every exec fails at runtime after the image reports healthy.
+///
+/// Returns an error naming the base image and its ending user if validation fails.
+pub async fn validate_base_image_for_uid_split(base_image: &str) -> Result<()> {
+    // Parse the image reference
+    let reference = Reference::try_from(base_image)
+        .into_alien_error()
+        .context(ErrorData::BuildConfigInvalid {
+            message: format!("Invalid base image reference '{base_image}'"),
+        })?;
+
+    // Create OCI client to pull the image manifest and config
+    let client = OciClient::new(OciClientConfig {
+        protocol: dockdash::ClientProtocol::HttpsExcept(vec!["localhost".to_string()]),
+        ..Default::default()
+    });
+
+    // Pull the manifest
+    let (manifest, _digest) = client
+        .pull_manifest(&reference, &dockdash::RegistryAuth::Anonymous)
+        .await
+        .into_alien_error()
+        .context(ErrorData::BuildConfigInvalid {
+            message: format!(
+                "Failed to pull manifest for base image '{base_image}'. Ensure the image exists \
+                 and is accessible."
+            ),
+        })?;
+
+    // Extract config descriptor from manifest
+    let config_descriptor = match manifest {
+        OciManifest::Image(img_manifest) => img_manifest.config,
+        OciManifest::ImageIndex(_) => {
+            return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+                message: format!(
+                    "Base image '{base_image}' is a multi-arch image index. Specify a \
+                     platform-specific image instead (e.g., add @sha256:... or specify an \
+                     architecture-specific tag)."
+                ),
+            }));
+        }
+    };
+
+    // Pull the config blob
+    let mut config_bytes = Vec::new();
+    client
+        .pull_blob(&reference, &config_descriptor, &mut config_bytes)
+        .await
+        .into_alien_error()
+        .context(ErrorData::BuildConfigInvalid {
+            message: format!("Failed to pull config blob for base image '{base_image}'"),
+        })?;
+
+    // Parse the config JSON
+    let config: serde_json::Value = serde_json::from_slice(&config_bytes)
+        .into_alien_error()
+        .context(ErrorData::BuildConfigInvalid {
+            message: format!("Failed to parse config for base image '{base_image}'"),
+        })?;
+
+    // Check Config.User field
+    let user = config
+        .get("config")
+        .and_then(|c| c.get("User"))
+        .and_then(|u| u.as_str())
+        .unwrap_or("");
+
+    // Root is: empty string, "0", or "0:0"
+    let is_root = user.is_empty() || user == "0" || user == "0:0" || user == "root";
+
+    if !is_root {
+        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+            message: format!(
+                "Base image '{base_image}' ends with USER '{user}', but AWS MicroVM sandboxes \
+                 require a base image that ends as root. The agent must start as root to drop to \
+                 uid {exec_uid} before each spawn. Use a base image that does not set a USER \
+                 directive, or one that sets USER 0 or USER root.\n\n\
+                 Common root-ending base images:\n  \
+                 - public.ecr.aws/lambda/microvms:al2023-minimal\n  \
+                 - ubuntu:24.04\n  \
+                 - python:3.13-slim\n\n\
+                 If you need a hardened base, layer your tooling on top of a root-ending base \
+                 instead of using a distroless or nonroot image directly.",
+                exec_uid = AWS_MICROVM.exec_uid
+            ),
+        }));
+    }
+
+    Ok(())
 }
 
 /// Renders the Dockerfile for a sandbox image built on `base_image`.
@@ -101,6 +199,10 @@ pub fn dockerfile(base_image: &str, agent: &AgentSource) -> Result<String> {
 ///
 /// The archive is flat on purpose — `CreateMicrovmImage` looks for the Dockerfile at the root,
 /// and a nested directory produces a build failure minutes in rather than a rejected request.
+///
+/// Call [`validate_base_image_for_uid_split`] before this function to ensure the base image ends
+/// as root, preventing a runtime failure where the image builds successfully but every command
+/// fails because the agent lacks privilege to drop to the exec uid.
 pub fn write_bundle(destination: &Path, base_image: &str, agent: &AgentSource) -> Result<()> {
     let failed = |operation: &str, path: &Path| ErrorData::FileOperationFailed {
         operation: operation.to_string(),
@@ -376,6 +478,57 @@ mod tests {
             entry.unix_mode().map(|mode| mode & 0o777),
             Some(0o755),
             "the agent entry must be executable in the archive"
+        );
+    }
+
+    /// Validate that a root-ending base image (ubuntu:24.04) passes validation.
+    ///
+    /// Requires network access to pull the image manifest. Verifies the regression prevention:
+    /// a customer using a standard root-ending base is not blocked.
+    #[tokio::test]
+    #[ignore = "requires network access to docker.io"]
+    async fn a_root_ending_base_image_passes_validation() {
+        super::validate_base_image_for_uid_split("ubuntu:24.04")
+            .await
+            .expect("ubuntu:24.04 ends as root and should pass validation");
+    }
+
+    /// Validate that a non-root base image (chainguard/wolfi-base) fails with a clear message.
+    ///
+    /// Requires network access to pull the image manifest. Verifies the core issue: a hardened
+    /// base that ends USER nonroot is caught at build time with a message naming the base image
+    /// and explaining how to fix it.
+    #[tokio::test]
+    #[ignore = "requires network access to docker.io"]
+    async fn a_nonroot_base_image_fails_validation() {
+        let result = super::validate_base_image_for_uid_split("cgr.dev/chainguard/wolfi-base")
+            .await;
+
+        let error = result.expect_err("chainguard/wolfi-base ends as nonroot and must be rejected");
+        let message = format!("{error}");
+
+        // The error must name the base image
+        assert!(
+            message.contains("cgr.dev/chainguard/wolfi-base"),
+            "error should name the base image that failed: {message}"
+        );
+
+        // The error must explain that the image ends as non-root
+        assert!(
+            message.contains("USER") || message.contains("nonroot") || message.contains("65532"),
+            "error should mention the USER issue: {message}"
+        );
+
+        // The error must explain that root is required
+        assert!(
+            message.contains("root") && message.contains("uid"),
+            "error should explain that root is required: {message}"
+        );
+
+        // The error should suggest alternatives
+        assert!(
+            message.contains("Use a base") || message.contains("base image"),
+            "error should suggest using a different base: {message}"
         );
     }
 }

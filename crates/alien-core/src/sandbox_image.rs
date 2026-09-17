@@ -305,6 +305,11 @@ mod tests {
     }
 
     /// is why the whole-file comparison above covers only the GCP side of it.
+    ///
+    /// `UidSplit` emits no USER line because the agent must start as root to drop to the exec uid.
+    /// The base image's ending user is validated at build time by
+    /// `alien_build::sandbox_bundle::validate_base_image_for_uid_split`, which refuses a hardened
+    /// base that ends USER nonroot before the bundle is created.
     #[test]
     fn the_ending_an_image_declares_follows_its_isolation() {
         assert!(!entrypoint(&AWS_MICROVM).contains("USER "));
