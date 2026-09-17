@@ -1092,6 +1092,15 @@ async fn parse_empty_api_response(response: reqwest::Response, message: &str) ->
 
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    let environment = std::env::vars().collect();
+    deploy_task_with_environment(args, ctx, &environment).await
+}
+
+async fn deploy_task_with_environment(
+    args: DeployArgs,
+    ctx: ExecutionMode,
+    environment: &HashMap<String, String>,
+) -> Result<()> {
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1134,7 +1143,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         if platform == Platform::Machines {
             None
         } else {
-            Some(ClientConfig::from_std_env(platform).await.context(
+            Some(ClientConfig::from_env(platform, environment).await.context(
                 ErrorData::ConfigurationError {
                     message: format!("Failed to build client config for platform {:?}", platform),
                 },
@@ -1969,6 +1978,8 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -2000,6 +2011,50 @@ mod tests {
             "aws",
         ])
         .expect_err("deployment-group selector and scoped token must conflict");
+    }
+
+    #[tokio::test]
+    async fn invalid_provider_config_fails_before_any_deployment_api_request() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test API listener");
+        let server_url = format!(
+            "http://{}",
+            listener.local_addr().expect("read listener address")
+        );
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "must-not-be-created",
+            "--platform",
+            "azure",
+            "--token",
+            "deployment-token-must-not-be-sent",
+        ])
+        .expect("valid deploy arguments");
+
+        let error = deploy_task_with_environment(
+            args,
+            ExecutionMode::Standalone {
+                server_url,
+                api_key: "deployment-token-must-not-be-sent".to_string(),
+            },
+            &HashMap::new(),
+        )
+        .await
+        .expect_err("unsupported provider configuration must fail preflight");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(
+            error.message.contains("Azure"),
+            "unexpected provider error: {error:?}"
+        );
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "provider preflight failure must not contact the deployment API"
+        );
     }
 
     #[test]
