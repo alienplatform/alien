@@ -5,6 +5,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CRATES_DIR="$SCRIPT_DIR/../.."
 SHARDS_FILE="$CRATES_DIR/alien-azure-model-generator/model_shards.json"
 
+if ! jq -e '[.[] | .[]] as $specs | ($specs | length) == ($specs | unique | length)' \
+  "$SHARDS_FILE" >/dev/null; then
+  echo "Azure model shard manifest assigns a specification more than once" >&2
+  exit 1
+fi
+
 # Create temporary directory for bundling
 TEMP_DIR=$(mktemp -d)
 trap "rm -rf $TEMP_DIR" EXIT
@@ -43,12 +49,14 @@ npx --yes @redocly/cli bundle -o "$TEMP_DIR" \
 for file in "$TEMP_DIR"/*.json; do
   if [ -f "$file" ]; then
     filename=$(basename "$file")
-    group=$(jq -r --arg filename "$filename" \
+    groups=$(jq -r --arg filename "$filename" \
       'to_entries[] | select(.value | index($filename)) | .key' "$SHARDS_FILE")
-    if [ -z "$group" ]; then
-      echo "Unassigned Azure specification: $filename" >&2
+    group_count=$(printf '%s\n' "$groups" | awk 'NF { count++ } END { print count + 0 }')
+    if [ "$group_count" -ne 1 ]; then
+      echo "Azure specification must belong to exactly one shard: $filename" >&2
       exit 1
     fi
+    group=$groups
     output_dir="$CRATES_DIR/alien-azure-models-$group/openapi"
     mkdir -p "$output_dir"
     npx --yes swagger2openapi "$file" | jq '.paths = {} | walk(if type == "object" and has("format") and .format == "date-time" then del(.format) else . end)' > "$output_dir/$filename"
