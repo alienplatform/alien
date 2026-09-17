@@ -10,7 +10,9 @@
 #[cfg(feature = "aws")]
 pub mod lambda;
 
+#[cfg(feature = "gcp")]
 pub mod cloudrun;
+#[cfg(feature = "azure")]
 pub mod containerapp;
 pub mod local;
 pub mod shared;
