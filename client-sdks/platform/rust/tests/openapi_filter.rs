@@ -221,6 +221,82 @@ fn gives_repeated_anonymous_objects_stable_component_identity() {
 }
 
 #[test]
+fn deduplication_never_rewrites_object_valued_contract_data() {
+    let repeated_schema = json!({
+        "type": "object",
+        "properties": { "value": { "type": "string" } }
+    });
+    let literal_object = json!({
+        "type": "object",
+        "properties": { "looks": "like schema data" },
+        "schema": repeated_schema.clone()
+    });
+    let document = json!({
+        "paths": {
+            "/a": {
+                "post": {
+                    "operationId": "kept",
+                    "requestBody": {
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "first": repeated_schema.clone(),
+                                        "second": repeated_schema
+                                    },
+                                    "example": literal_object.clone(),
+                                    "default": literal_object.clone()
+                                },
+                                "example": literal_object.clone()
+                            }
+                        }
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "ok",
+                            "content": {
+                                "application/json": {
+                                    "schema": { "$ref": "#/components/schemas/Anchor" },
+                                    "example": literal_object.clone()
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "components": {
+            "schemas": { "Anchor": { "type": "string" } }
+        }
+    });
+
+    let filtered = openapi_filter::filter_openapi(&document, &["kept"]).unwrap();
+    let request_schema = filtered
+        .pointer("/paths/~1a/post/requestBody/content/application~1json/schema")
+        .unwrap();
+    assert_eq!(
+        request_schema["properties"]["first"],
+        request_schema["properties"]["second"]
+    );
+    assert!(request_schema["properties"]["first"].get("$ref").is_some());
+    assert_eq!(request_schema["example"], literal_object);
+    assert_eq!(request_schema["default"], literal_object);
+    assert_eq!(
+        filtered
+            .pointer("/paths/~1a/post/requestBody/content/application~1json/example")
+            .unwrap(),
+        &literal_object
+    );
+    assert_eq!(
+        filtered
+            .pointer("/paths/~1a/post/responses/200/content/application~1json/example")
+            .unwrap(),
+        &literal_object
+    );
+}
+
+#[test]
 fn rejects_missing_duplicate_and_unresolved_operations() {
     let duplicate = json!({
         "paths": {

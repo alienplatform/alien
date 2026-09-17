@@ -181,10 +181,10 @@ fn deduplicate_anonymous_object_schemas(
         .and_then(Value::as_object)
         .ok_or_else(|| "OpenAPI document is missing object-valued component schemas".to_string())?;
     if let Some(paths) = document.get("paths") {
-        collect_anonymous_object_schemas(paths, &mut occurrences, true);
+        collect_openapi_schema_occurrences(paths, &mut occurrences);
     }
     for schema in schemas.values() {
-        collect_anonymous_object_schemas(schema, &mut occurrences, false);
+        collect_schema_occurrences(schema, &mut occurrences, false);
     }
     let existing_names = schemas.keys().cloned().collect::<BTreeSet<_>>();
     let mut existing_shapes = BTreeMap::<String, Option<String>>::new();
@@ -227,7 +227,7 @@ fn deduplicate_anonymous_object_schemas(
     }
 
     if let Some(paths) = document.get_mut("paths") {
-        replace_anonymous_object_schemas(paths, &replacements, true)?;
+        replace_openapi_schema_occurrences(paths, &replacements)?;
     }
     let schemas = document
         .get_mut("components")
@@ -235,10 +235,10 @@ fn deduplicate_anonymous_object_schemas(
         .and_then(Value::as_object_mut)
         .expect("component schemas were validated above");
     for schema in schemas.values_mut() {
-        replace_anonymous_object_schemas(schema, &replacements, false)?;
+        replace_schema_occurrences(schema, &replacements, false)?;
     }
     for (_, name, mut schema) in extracted {
-        replace_anonymous_object_schemas(&mut schema, &replacements, false)?;
+        replace_schema_occurrences(&mut schema, &replacements, false)?;
         schemas.insert(name, schema);
     }
 
@@ -246,56 +246,63 @@ fn deduplicate_anonymous_object_schemas(
 }
 
 fn collect_object_schema_keys(value: &Value, keys: &mut BTreeSet<String>) -> Result<(), String> {
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                collect_object_schema_keys(value, keys)?;
-            }
-        }
-        Value::Object(object) => {
-            if object.get("type").and_then(Value::as_str) == Some("object")
-                && !object.contains_key("$ref")
-            {
-                keys.insert(canonical_schema_key(value)?);
-            }
-            for value in object.values() {
-                collect_object_schema_keys(value, keys)?;
-            }
-        }
-        _ => {}
+    if value.get("type").and_then(Value::as_str) == Some("object") && value.get("$ref").is_none() {
+        keys.insert(canonical_schema_key(value)?);
     }
+    for_schema_children(value, |child| collect_object_schema_keys(child, keys))?;
     Ok(())
 }
 
-fn collect_anonymous_object_schemas(
+fn collect_openapi_schema_occurrences(
     value: &Value,
     occurrences: &mut BTreeMap<String, (usize, Value)>,
-    collect_current: bool,
 ) {
     match value {
         Value::Array(values) => {
             for value in values {
-                collect_anonymous_object_schemas(value, occurrences, true);
+                collect_openapi_schema_occurrences(value, occurrences);
             }
         }
         Value::Object(object) => {
-            if collect_current
-                && object.get("type").and_then(Value::as_str) == Some("object")
-                && !object.contains_key("$ref")
-            {
-                let schema = Value::Object(object.clone());
-                let key = serde_json::to_string(&schema).expect("JSON schema serializes");
-                occurrences
-                    .entry(key)
-                    .and_modify(|(count, _)| *count += 1)
-                    .or_insert((1, schema));
-            }
-            for value in object.values() {
-                collect_anonymous_object_schemas(value, occurrences, true);
+            for (key, value) in object {
+                if key == "schema" {
+                    collect_schema_occurrences(value, occurrences, true);
+                } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                    || key.starts_with("x-")
+                {
+                    // These fields contain literal contract or extension data. A payload may
+                    // itself contain a key named `schema`; it is not an OpenAPI Schema Object.
+                    continue;
+                } else {
+                    collect_openapi_schema_occurrences(value, occurrences);
+                }
             }
         }
         _ => {}
     }
+}
+
+fn collect_schema_occurrences(
+    value: &Value,
+    occurrences: &mut BTreeMap<String, (usize, Value)>,
+    collect_current: bool,
+) {
+    if collect_current
+        && value.get("type").and_then(Value::as_str) == Some("object")
+        && value.get("$ref").is_none()
+    {
+        let schema = value.clone();
+        let key = serde_json::to_string(&schema).expect("JSON schema serializes");
+        occurrences
+            .entry(key)
+            .and_modify(|(count, _)| *count += 1)
+            .or_insert((1, schema));
+    }
+    for_schema_children(value, |child| {
+        collect_schema_occurrences(child, occurrences, true);
+        Ok::<(), ()>(())
+    })
+    .expect("schema occurrence collection is infallible");
 }
 
 fn stable_schema_hash(bytes: &[u8]) -> u64 {
@@ -307,7 +314,35 @@ fn stable_schema_hash(bytes: &[u8]) -> u64 {
     hash
 }
 
-fn replace_anonymous_object_schemas(
+fn replace_openapi_schema_occurrences(
+    value: &mut Value,
+    replacements: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    match value {
+        Value::Array(values) => {
+            for value in values {
+                replace_openapi_schema_occurrences(value, replacements)?;
+            }
+        }
+        Value::Object(object) => {
+            for (key, value) in object {
+                if key == "schema" {
+                    replace_schema_occurrences(value, replacements, true)?;
+                } else if matches!(key.as_str(), "example" | "examples" | "default" | "enum")
+                    || key.starts_with("x-")
+                {
+                    continue;
+                } else {
+                    replace_openapi_schema_occurrences(value, replacements)?;
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn replace_schema_occurrences(
     value: &mut Value,
     replacements: &BTreeMap<String, String>,
     replace_current: bool,
@@ -325,18 +360,86 @@ fn replace_anonymous_object_schemas(
         }
     }
 
-    match value {
-        Value::Array(values) => {
-            for value in values {
-                replace_anonymous_object_schemas(value, replacements, true)?;
+    for_schema_children_mut(value, |child| {
+        replace_schema_occurrences(child, replacements, true)
+    })?;
+    Ok(())
+}
+
+fn for_schema_children<E>(
+    schema: &Value,
+    mut visit: impl FnMut(&Value) -> Result<(), E>,
+) -> Result<(), E> {
+    let Some(object) = schema.as_object() else {
+        return Ok(());
+    };
+    for key in ["properties", "patternProperties", "dependentSchemas"] {
+        if let Some(children) = object.get(key).and_then(Value::as_object) {
+            for child in children.values() {
+                visit(child)?;
             }
         }
-        Value::Object(object) => {
-            for value in object.values_mut() {
-                replace_anonymous_object_schemas(value, replacements, true)?;
+    }
+    for key in [
+        "items",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "propertyNames",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+    ] {
+        if let Some(child) = object.get(key).filter(|value| value.is_object()) {
+            visit(child)?;
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(children) = object.get(key).and_then(Value::as_array) {
+            for child in children {
+                visit(child)?;
             }
         }
-        _ => {}
+    }
+    Ok(())
+}
+
+fn for_schema_children_mut<E>(
+    schema: &mut Value,
+    mut visit: impl FnMut(&mut Value) -> Result<(), E>,
+) -> Result<(), E> {
+    let Some(object) = schema.as_object_mut() else {
+        return Ok(());
+    };
+    for key in ["properties", "patternProperties", "dependentSchemas"] {
+        if let Some(children) = object.get_mut(key).and_then(Value::as_object_mut) {
+            for child in children.values_mut() {
+                visit(child)?;
+            }
+        }
+    }
+    for key in [
+        "items",
+        "additionalProperties",
+        "unevaluatedProperties",
+        "propertyNames",
+        "contains",
+        "not",
+        "if",
+        "then",
+        "else",
+    ] {
+        if let Some(child) = object.get_mut(key).filter(|value| value.is_object()) {
+            visit(child)?;
+        }
+    }
+    for key in ["allOf", "anyOf", "oneOf", "prefixItems"] {
+        if let Some(children) = object.get_mut(key).and_then(Value::as_array_mut) {
+            for child in children {
+                visit(child)?;
+            }
+        }
     }
     Ok(())
 }
