@@ -376,6 +376,7 @@ mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
+    use crate::AzureControllerTestBuilderExt as _;
     use alien_azure_clients::authorization::MockAuthorizationApi;
     use alien_azure_clients::service_bus::MockServiceBusManagementApi;
     use alien_core::{Platform, Queue, ResourceStatus};
@@ -431,7 +432,7 @@ mod tests {
             .resource(queue)
             .controller(AzureQueueController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

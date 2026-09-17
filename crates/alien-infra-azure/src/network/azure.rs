@@ -1957,6 +1957,7 @@ mod tests {
     use super::AzureNetworkController;
     use crate::core::controller_test::SingleControllerExecutor;
     use crate::core::MockPlatformServiceProvider;
+    use crate::AzureControllerTestBuilderExt as _;
     use alien_azure_clients::azure::models::{
         nat_gateway::NatGateway,
         network_security_group::NetworkSecurityGroup,
@@ -2092,7 +2093,7 @@ mod tests {
             .controller(AzureNetworkController::default())
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
-            .service_provider(Arc::new(mock_provider))
+            .azure_service_provider(Arc::new(mock_provider))
             .with_dependency(
                 Postgres::new("db".to_string()).build(),
                 AzureNetworkController::mock_ready("db"),
@@ -2176,7 +2177,7 @@ mod tests {
             .controller(AzureNetworkController::default())
             .platform(Platform::Azure)
             .stack_settings(StackSettings::default())
-            .service_provider(Arc::new(mock_provider))
+            .azure_service_provider(Arc::new(mock_provider))
             // The managed create path resolves its resource group from the stack state.
             .with_test_dependencies()
             .build()

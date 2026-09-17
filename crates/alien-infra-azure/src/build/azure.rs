@@ -469,6 +469,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AzureControllerTestBuilderExt as _;
+
     use std::sync::Arc;
 
     use alien_core::{Build, BuildOutputs, Platform, ResourceStatus};
@@ -503,7 +505,7 @@ mod tests {
             .resource(build)
             .controller(AzureBuildController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -550,7 +552,7 @@ mod tests {
             .resource(from_build)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -591,7 +593,7 @@ mod tests {
             .resource(basic_build())
             .controller(imported)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

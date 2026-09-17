@@ -761,6 +761,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AzureControllerTestBuilderExt as _;
+
     use std::sync::Arc;
 
     use alien_azure_clients::models::blob::{
@@ -900,7 +902,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -948,7 +950,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1017,7 +1019,7 @@ mod tests {
             .resource(from_storage)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1057,7 +1059,7 @@ mod tests {
             .resource(storage)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1105,7 +1107,7 @@ mod tests {
             .resource(storage)
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1152,7 +1154,7 @@ mod tests {
             .resource(storage)
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1185,7 +1187,7 @@ mod tests {
             .resource(storage)
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1229,7 +1231,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1274,7 +1276,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1315,7 +1317,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1365,7 +1367,7 @@ mod tests {
             .resource(initial_storage)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1402,7 +1404,7 @@ mod tests {
             .resource(storage)
             .controller(AzureStorageController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1462,7 +1464,7 @@ mod tests {
             .resource(initial_storage)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -1503,7 +1505,7 @@ mod tests {
             .resource(initial_storage)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

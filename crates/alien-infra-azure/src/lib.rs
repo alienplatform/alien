@@ -199,6 +199,63 @@ pub trait AzureServiceProvider: Send + Sync {
     async fn get_azure_caller_principal_id(&self, config: &AzureClientConfig) -> Result<String>;
 }
 
+#[cfg(test)]
+macro_rules! impl_test_azure_service_provider {
+    ($(($method:ident, $api:ty)),* $(,)?) => {
+        #[async_trait::async_trait]
+        impl AzureServiceProvider for alien_infra::MockPlatformServiceProvider {
+            $(
+                fn $method(&self, config: &AzureClientConfig) -> Result<Arc<$api>> {
+                    alien_infra::PlatformServiceProvider::$method(self, config)
+                }
+            )*
+
+            async fn get_azure_caller_principal_id(
+                &self,
+                config: &AzureClientConfig,
+            ) -> Result<String> {
+                alien_infra::PlatformServiceProvider::get_azure_caller_principal_id(self, config)
+                    .await
+            }
+        }
+    };
+}
+
+#[cfg(test)]
+impl_test_azure_service_provider!(
+    (get_azure_authorization_client, dyn AuthorizationApi),
+    (get_azure_blob_container_client, dyn BlobContainerApi),
+    (
+        get_azure_cognitive_services_client,
+        dyn CognitiveServicesAccountsApi
+    ),
+    (get_azure_container_apps_client, dyn ContainerAppsApi),
+    (
+        get_azure_container_registry_client,
+        dyn ContainerRegistryApi
+    ),
+    (get_azure_event_grid_client, dyn EventGridApi),
+    (get_azure_key_vault_keys_client, dyn KeyVaultKeysApi),
+    (
+        get_azure_key_vault_management_client,
+        dyn KeyVaultManagementApi
+    ),
+    (
+        get_azure_long_running_operation_client,
+        dyn LongRunningOperationApi
+    ),
+    (get_azure_managed_identity_client, dyn ManagedIdentityApi),
+    (get_azure_network_client, dyn NetworkApi),
+    (get_azure_resources_client, dyn ResourcesApi),
+    (get_azure_sandbox_groups_client, dyn SandboxGroupsApi),
+    (
+        get_azure_service_bus_management_client,
+        dyn ServiceBusManagementApi
+    ),
+    (get_azure_storage_accounts_client, dyn StorageAccountsApi),
+    (get_azure_table_management_client, dyn TableManagementApi),
+);
+
 #[async_trait::async_trait]
 pub trait AzureResourcePermissionsService: Send + Sync {
     fn azure_kubernetes_cluster_permission_context(
@@ -222,6 +279,75 @@ pub trait AzureResourcePermissionsService: Send + Sync {
         ctx: &ResourceControllerContext<'_>,
         resource_name: &str,
     ) -> Result<PermissionContext>;
+}
+
+#[cfg(test)]
+struct TestAzureResourcePermissionsService;
+
+#[cfg(test)]
+#[async_trait::async_trait]
+impl AzureResourcePermissionsService for TestAzureResourcePermissionsService {
+    fn azure_kubernetes_cluster_permission_context(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        cluster: &KubernetesCluster,
+    ) -> Result<PermissionContext> {
+        alien_infra::ResourcePermissionsHelper::azure_kubernetes_cluster_permission_context(
+            ctx, cluster,
+        )
+    }
+
+    async fn apply_azure_resource_scoped_permissions(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_id: &str,
+        resource_name: &str,
+        resource_scope: Scope,
+        resource_type: &str,
+        permission_type: &str,
+    ) -> Result<()> {
+        alien_infra::ResourcePermissionsHelper::apply_azure_resource_scoped_permissions(
+            ctx,
+            resource_id,
+            resource_name,
+            resource_scope,
+            resource_type,
+            permission_type,
+        )
+        .await
+    }
+
+    fn build_azure_permission_context(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        resource_name: &str,
+    ) -> Result<PermissionContext> {
+        alien_infra::ResourcePermissionsHelper::build_azure_permission_context(ctx, resource_name)
+    }
+}
+
+#[cfg(test)]
+pub trait AzureControllerTestBuilderExt {
+    fn azure_service_provider(
+        self,
+        provider: Arc<alien_infra::MockPlatformServiceProvider>,
+    ) -> Self;
+}
+
+#[cfg(test)]
+impl AzureControllerTestBuilderExt
+    for alien_infra::controller_test::SingleControllerExecutorBuilder
+{
+    fn azure_service_provider(
+        self,
+        provider: Arc<alien_infra::MockPlatformServiceProvider>,
+    ) -> Self {
+        self.service_provider(provider.clone())
+            .service::<dyn AzureServiceProvider>(provider)
+            .service::<dyn AzureResourcePermissionsService>(Arc::new(
+                TestAzureResourcePermissionsService,
+            ))
+    }
 }
 
 pub struct ResourcePermissionsHelper;

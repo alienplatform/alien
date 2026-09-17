@@ -5227,6 +5227,8 @@ mod tests {
     //!
     //! See `crate::core::controller_test` for a comprehensive guide on testing infrastructure controllers.
 
+    use crate::AzureControllerTestBuilderExt as _;
+
     use std::sync::Arc;
     use std::time::Duration;
 
@@ -5539,7 +5541,7 @@ mod tests {
             .resource(basic_function())
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6118,7 +6120,7 @@ mod tests {
             .resource(basic_function())
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .azure_service_provider(Arc::new(MockPlatformServiceProvider::new()))
             .with_test_dependencies()
             .build()
             .await
@@ -6269,7 +6271,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6335,7 +6337,7 @@ mod tests {
             .resource(from_function)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6378,7 +6380,7 @@ mod tests {
             .resource(worker)
             .controller(ready_controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6412,7 +6414,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6468,7 +6470,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6525,7 +6527,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6603,7 +6605,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6683,7 +6685,7 @@ mod tests {
             .resource(worker)
             .controller(AzureWorkerController::default())
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await
@@ -6737,7 +6739,7 @@ mod tests {
             .resource(worker)
             .controller(controller)
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .with_test_dependencies()
             .build()
             .await

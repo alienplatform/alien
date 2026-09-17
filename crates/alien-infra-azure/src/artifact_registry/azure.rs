@@ -730,6 +730,7 @@ fn emit_azure_artifact_registry_heartbeat(
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::AzureControllerTestBuilderExt as _;
     use crate::MockPlatformServiceProvider;
     use alien_azure_clients::containerregistry::MockContainerRegistryApi;
     use alien_core::Platform;
@@ -774,7 +775,7 @@ mod tests {
                 login_server,
             ))
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .build()
             .await
             .unwrap();

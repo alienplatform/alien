@@ -370,6 +370,7 @@ mod tests {
         deserialize_controller, serialize_controller, MockPlatformServiceProvider,
         ResourceController, ResourceRegistry,
     };
+    use crate::AzureControllerTestBuilderExt as _;
     use alien_core::{
         Platform, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy, ToolchainConfig,
     };
@@ -440,7 +441,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Azure)
             .resource_lifecycle(ResourceLifecycle::Frozen)
-            .service_provider(Arc::new(MockPlatformServiceProvider::new()))
+            .azure_service_provider(Arc::new(MockPlatformServiceProvider::new()))
             .build()
             .await
             .expect("executor should build");

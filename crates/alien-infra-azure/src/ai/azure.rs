@@ -893,6 +893,7 @@ impl AzureAiController {
 mod tests {
     use super::*;
     use crate::core::controller_test::SingleControllerExecutor;
+    use crate::AzureControllerTestBuilderExt as _;
     use crate::MockPlatformServiceProvider;
     use alien_azure_clients::azure::cognitive_services::{
         CognitiveServicesDeployment, CognitiveServicesDeploymentProperties,
@@ -1013,7 +1014,7 @@ mod tests {
                 "https://my-ai.cognitiveservices.azure.com/",
             ))
             .platform(Platform::Azure)
-            .service_provider(Arc::new(mock_provider))
+            .azure_service_provider(Arc::new(mock_provider))
             .build()
             .await
             .unwrap();
@@ -1070,7 +1071,7 @@ mod tests {
                 "https://my-ai.cognitiveservices.azure.com/",
             ))
             .platform(Platform::Azure)
-            .service_provider(Arc::new(mock_provider))
+            .azure_service_provider(Arc::new(mock_provider))
             .build()
             .await
             .unwrap();
@@ -1102,7 +1103,7 @@ mod tests {
             .resource(basic_ai())
             .controller(AzureAiController::mock_ready(account_name, endpoint))
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .build()
             .await
             .unwrap();
@@ -1126,7 +1127,7 @@ mod tests {
             .resource(basic_ai())
             .controller(AzureAiController::mock_ready(account_name, endpoint))
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .build()
             .await
             .unwrap();
@@ -1149,7 +1150,7 @@ mod tests {
             .resource(basic_ai())
             .controller(AzureAiController::mock_ready(account_name, endpoint))
             .platform(Platform::Azure)
-            .service_provider(mock_provider)
+            .azure_service_provider(mock_provider)
             .build()
             .await
             .unwrap();
