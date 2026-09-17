@@ -82,7 +82,7 @@ export class Operations extends ClientSDK {
   }
 
   /**
-   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
+   * Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked.
    */
   async setPluginEnabled(
     request: operations.SetOperationsPluginEnabledRequest,

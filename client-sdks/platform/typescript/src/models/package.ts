@@ -53,6 +53,16 @@ export type ConfigTerraform = {
    */
   displayName?: string | null | undefined;
   /**
+   * Exact Helm package used to compose managed Kubernetes modules.
+   *
+   * @remarks
+   *
+   * This is derived by the platform and persisted with the build request. It is separate
+   * from the generic package dependency because a mixed AWS and Kubernetes release can also
+   * depend on a sandbox bundle.
+   */
+  helmPackageId?: string | null | undefined;
+  /**
    * AWS regions supported by the environment that built this package.
    */
   supportedAwsRegions?: Array<string> | undefined;
@@ -121,6 +131,81 @@ export type ConfigOperatorImage = {
 };
 
 /**
+ * One Kubernetes API requirement declared by an enabled operation.
+ */
+export type PackageRule = {
+  /**
+   * Kubernetes API group. An empty string denotes the core API.
+   */
+  apiGroup: string;
+  /**
+   * Human-readable reason the operation requires this rule.
+   */
+  reason: string;
+  /**
+   * Plural Kubernetes resource, optionally with a supported subresource.
+   */
+  resource: string;
+  /**
+   * Optional concrete resource names. Empty means all names in the installation scope.
+   */
+  resourceNames?: Array<string> | undefined;
+  /**
+   * Concrete Kubernetes API verbs required by the operation.
+   */
+  verbs: Array<string>;
+};
+
+/**
+ * Versioned Kubernetes API requirements declared by an enabled operation.
+ */
+export type PackagePermissions = {
+  /**
+   * Explicit Kubernetes API requirements.
+   */
+  rules: Array<PackageRule>;
+  /**
+   * Schema version of the validated permission declaration.
+   */
+  schemaVersion: number;
+};
+
+/**
+ * Effective risk tier of an enabled operation in a Helm build snapshot.
+ */
+export const PackageTier = {
+  ReadOnly: "read-only",
+  Mutating: "mutating",
+  Destructive: "destructive",
+} as const;
+/**
+ * Effective risk tier of an enabled operation in a Helm build snapshot.
+ */
+export type PackageTier = ClosedEnum<typeof PackageTier>;
+
+/**
+ * Canonical Kubernetes permission snapshot for one enabled operation.
+ */
+export type OperationPermission = {
+  /**
+   * Operation name within the plugin.
+   */
+  operation: string;
+  /**
+   * Versioned Kubernetes API requirements declared by an enabled operation.
+   */
+  permissions: PackagePermissions;
+  /**
+   * Operations plugin name.
+   */
+  plugin: string;
+  /**
+   * Effective risk tier of an enabled operation in a Helm build snapshot.
+   */
+  tier: PackageTier;
+};
+
+/**
  * Configuration for the Helm chart package
  */
 export type ConfigHelm = {
@@ -132,6 +217,16 @@ export type ConfigHelm = {
    * Human-friendly description of the chart
    */
   description: string;
+  /**
+   * Canonical Kubernetes permissions for the operations enabled when this build was queued.
+   *
+   * @remarks
+   *
+   * This is derived by the platform and persisted with the build request. It is not part of
+   * the user-authored project package configuration. `None` identifies an older package row
+   * that must be re-enqueued; an empty `Some` is a reviewed snapshot with no extra grants.
+   */
+  operationPermissions?: Array<OperationPermission> | null | undefined;
   type: "helm";
 };
 
@@ -143,6 +238,15 @@ export type ConfigCloudformation = {
    * Human-friendly application name shown in generated install artifacts.
    */
   displayName?: string | null | undefined;
+  /**
+   * Exact Helm package paired with managed Kubernetes setup artifacts.
+   *
+   * @remarks
+   *
+   * This is derived by the platform and is independent from the generic dependency, which
+   * can point at a sandbox bundle for a mixed AWS and Kubernetes release.
+   */
+  helmPackageId?: string | null | undefined;
   /**
    * AWS regions supported by the environment that built this package.
    */
@@ -653,6 +757,7 @@ export const ConfigTerraform$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   displayName: z.nullable(z.string()).optional(),
+  helmPackageId: z.nullable(z.string()).optional(),
   supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("terraform"),
 });
@@ -713,10 +818,78 @@ export function configOperatorImageFromJSON(
 }
 
 /** @internal */
+export const PackageRule$inboundSchema: z.ZodType<PackageRule, unknown> = z
+  .object({
+    apiGroup: z.string(),
+    reason: z.string(),
+    resource: z.string(),
+    resourceNames: z.array(z.string()).optional(),
+    verbs: z.array(z.string()),
+  });
+
+export function packageRuleFromJSON(
+  jsonString: string,
+): SafeParseResult<PackageRule, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackageRule$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackageRule' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackagePermissions$inboundSchema: z.ZodType<
+  PackagePermissions,
+  unknown
+> = z.object({
+  rules: z.array(z.lazy(() => PackageRule$inboundSchema)),
+  schemaVersion: z.int(),
+});
+
+export function packagePermissionsFromJSON(
+  jsonString: string,
+): SafeParseResult<PackagePermissions, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => PackagePermissions$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'PackagePermissions' from JSON`,
+  );
+}
+
+/** @internal */
+export const PackageTier$inboundSchema: z.ZodEnum<typeof PackageTier> = z.enum(
+  PackageTier,
+);
+
+/** @internal */
+export const OperationPermission$inboundSchema: z.ZodType<
+  OperationPermission,
+  unknown
+> = z.object({
+  operation: z.string(),
+  permissions: z.lazy(() => PackagePermissions$inboundSchema),
+  plugin: z.string(),
+  tier: PackageTier$inboundSchema,
+});
+
+export function operationPermissionFromJSON(
+  jsonString: string,
+): SafeParseResult<OperationPermission, SDKValidationError> {
+  return safeParse(
+    jsonString,
+    (x) => OperationPermission$inboundSchema.parse(JSON.parse(x)),
+    `Failed to parse 'OperationPermission' from JSON`,
+  );
+}
+
+/** @internal */
 export const ConfigHelm$inboundSchema: z.ZodType<ConfigHelm, unknown> = z
   .object({
     chartName: z.string(),
     description: z.string(),
+    operationPermissions: z.nullable(
+      z.array(z.lazy(() => OperationPermission$inboundSchema)),
+    ).optional(),
     type: z.literal("helm"),
   });
 
@@ -736,6 +909,7 @@ export const ConfigCloudformation$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   displayName: z.nullable(z.string()).optional(),
+  helmPackageId: z.nullable(z.string()).optional(),
   supportedAwsRegions: z.array(z.string()).optional(),
   type: z.literal("cloudformation"),
 });
