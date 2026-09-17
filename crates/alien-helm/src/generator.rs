@@ -614,6 +614,13 @@ spec:
               field() {
                 kubectl -n "$namespace" get "$1" "$2" -o "jsonpath=$3"
               }
+              resource_exists() {
+                resource_ref="$(kubectl -n "$namespace" get "$1" "$2" --ignore-not-found -o name)" || {
+                  echo "Refusing cleanup: cannot determine whether $1 $namespace/$2 exists." >&2
+                  exit 1
+                }
+                [ -n "$resource_ref" ]
+              }
               require_field() {
                 kind="$1"
                 name="$2"
@@ -630,8 +637,8 @@ spec:
                 fi
               }
 
-              if ! kubectl -n "$namespace" get configmap "$identity_record" >/dev/null 2>&1; then
-                if kubectl -n "$namespace" get configmap "$identity_completion" >/dev/null 2>&1; then
+              if ! resource_exists configmap "$identity_record"; then
+                if resource_exists configmap "$identity_completion"; then
                   echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
                   exit 1
                 fi
@@ -648,7 +655,7 @@ spec:
               require_field configmap "$identity_record" '{.immutable}' true immutability
               require_field configmap "$identity_record" '{.data.version}' 3 version
 
-              if kubectl -n "$namespace" get configmap "$identity_completion" >/dev/null 2>&1; then
+              if resource_exists configmap "$identity_completion"; then
                 require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
                 require_field configmap "$identity_completion" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
                 require_field configmap "$identity_completion" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
@@ -660,13 +667,13 @@ spec:
                 require_field configmap "$identity_completion" '{.data.identityRecordName}' "$identity_record" identity-record-reference
               fi
 
-              if kubectl -n "$namespace" get deployment "$resource_name" >/dev/null 2>&1; then
+              if resource_exists deployment "$resource_name"; then
                 require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
                 require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
                 require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
                 require_field deployment "$resource_name" '{.metadata.labels.app\.kubernetes\.io/instance}' "$resource_name" instance
               fi
-              if kubectl -n "$namespace" get persistentvolumeclaim "$identity_pvc" >/dev/null 2>&1; then
+              if resource_exists persistentvolumeclaim "$identity_pvc"; then
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
                 require_field persistentvolumeclaim "$identity_pvc" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
@@ -1132,6 +1139,7 @@ fn generate_operator_manifest_inner(
             credentials_secret_name,
             log_collector.image,
             &collector_labels,
+            options.format == OperatorOutputFormat::HelmTemplate,
         ));
     }
 
@@ -2155,6 +2163,7 @@ fn operator_log_collector_daemonset_doc(
     credentials_secret_name: &str,
     image: &str,
     labels: &BTreeMap<String, String>,
+    include_credential_revision: bool,
 ) -> String {
     let name = format!("{operator_name}-whitelabeled-log-collector");
     let mut yaml = operator_metadata_doc("apps/v1", "DaemonSet", namespace, &name, labels);
@@ -2187,6 +2196,12 @@ fn operator_log_collector_daemonset_doc(
         yaml_string(credentials_secret_name)
     ));
     yaml.push_str("                  key: collector-token\n");
+    if include_credential_revision {
+        yaml.push_str("            - name: SYNC_TOKEN_REVISION\n");
+        yaml.push_str(
+            "              value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}\n",
+        );
+    }
     yaml.push_str("          volumeMounts:\n");
     yaml.push_str("            - name: config\n");
     yaml.push_str("              mountPath: /collector/etc\n");
@@ -5556,6 +5571,24 @@ mod tests {
     }
 
     #[test]
+    fn helm_collector_rolls_when_external_credentials_change() {
+        let labels =
+            BTreeMap::from([("app.kubernetes.io/name".to_string(), "operator".to_string())]);
+        let daemonset = operator_log_collector_daemonset_doc(
+            "{{ .Release.Namespace }}",
+            "operator",
+            "{{ .Values.remoteOperator.existingSecret.name }}",
+            "fluent/fluent-bit:3.2",
+            &labels,
+            true,
+        );
+
+        assert!(daemonset.contains("- name: SYNC_TOKEN_REVISION"));
+        assert!(daemonset
+            .contains("value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}"));
+    }
+
+    #[test]
     fn operator_manifest_serializes_stack_settings_without_log_collector() {
         let manifest = operator_test_manifest_with_stack_settings();
         let docs = parse_manifest_docs(&manifest);
@@ -5906,6 +5939,8 @@ mod tests {
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
         assert!(cleanup.contains("No Remote Operator identity record exists"));
+        assert!(cleanup.contains("--ignore-not-found -o name"));
+        assert!(cleanup.contains("cannot determine whether $1 $namespace/$2 exists"));
         assert!(cleanup.contains(
             "completion record $namespace/$identity_completion exists without its identity record"
         ));
