@@ -183,10 +183,17 @@ async fn preflight_aws_eip_quota(
 ) -> Result<()> {
     let aws_config = ctx.get_aws_config()?;
     let ec2 = ctx.service_provider.get_aws_ec2_client(aws_config).await?;
-    let quotas = ctx
+    let quotas = match ctx
         .service_provider
         .get_aws_service_quotas_client(aws_config)
-        .await?;
+        .await
+    {
+        Ok(client) => Some(client),
+        Err(error) => {
+            warn!(error = %error, "Could not initialize the optional AWS Service Quotas client; continuing because quota preflight is best-effort");
+            None
+        }
+    };
 
     let used = match ec2.describe_addresses().await {
         Ok(response) => Some(
@@ -205,15 +212,18 @@ async fn preflight_aws_eip_quota(
             None
         }
     };
-    let limit = match quotas
-        .get_service_quota("ec2", EC2_VPC_EIP_QUOTA_CODE)
-        .await
-    {
-        Ok(response) => response.quota.and_then(|quota| quota.value),
-        Err(error) => {
-            warn!(error = %error, "Could not read the applied AWS Elastic IP quota; continuing because quota preflight is best-effort");
-            None
-        }
+    let limit = match quotas {
+        Some(quotas) => match quotas
+            .get_service_quota("ec2", EC2_VPC_EIP_QUOTA_CODE)
+            .await
+        {
+            Ok(response) => response.quota.and_then(|quota| quota.value),
+            Err(error) => {
+                warn!(error = %error, "Could not read the applied AWS Elastic IP quota; continuing because quota preflight is best-effort");
+                None
+            }
+        },
+        None => None,
     };
 
     match assess_eip_quota(used, limit) {
