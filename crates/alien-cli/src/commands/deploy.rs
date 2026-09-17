@@ -1706,7 +1706,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
 
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
         final_reconcile(
             &manager_client,
             &tracked_deployment.deployment_id,

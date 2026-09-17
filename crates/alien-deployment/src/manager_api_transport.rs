@@ -283,13 +283,19 @@ where
         (Ok(value), Ok(())) => Ok(value),
         (Ok(_), Err(finalization_error)) => Err(finalization_error),
         (Err(operation_error), Ok(())) => Err(operation_error.into_generic()),
-        (Err(operation_error), Err(finalization_error)) => Err(operation_error
-            .into_generic()
-            .context(alien_error::GenericError {
-                message: format!(
-                    "Operation failed and deployment finalization also failed: {finalization_error}"
-                ),
-            })),
+        (Err(operation_error), Err(finalization_error)) => {
+            let mut primary = operation_error.into_generic();
+            let finalization = serde_json::to_value(finalization_error)
+                .unwrap_or_else(|_| serde_json::Value::String("serialization failed".to_string()));
+            let mut context = primary
+                .context
+                .take()
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            context.insert("finalizationError".to_string(), finalization);
+            primary.context = Some(serde_json::Value::Object(context));
+            Err(primary)
+        }
     }
 }
 
@@ -669,13 +675,15 @@ mod tests {
         )
         .expect_err("both failures must be reported");
 
-        assert!(error.message.contains("reconcile failed"));
+        assert_eq!(error.message, "runner failed");
         assert_eq!(
             error
-                .source
-                .as_deref()
-                .map(|source| source.message.as_str()),
-            Some("runner failed")
+                .context
+                .as_ref()
+                .and_then(|context| context.get("finalizationError"))
+                .and_then(|error| error.get("message"))
+                .and_then(serde_json::Value::as_str),
+            Some("reconcile failed")
         );
     }
 
