@@ -1,9 +1,7 @@
 //! Turning a child process into sandbox output frames.
 //!
-//! Two backends need this and neither can be the other's dependency: the in-sandbox agent runs a
-//! command in its own guest, and the GCP binding runs one through a launcher CLI on the Cloud
-//! Run container. The framing rules are the same on both sides and subtle enough that a second
-//! implementation would drift, so they live here once.
+//! The framing rules are subtle enough that a second implementation would drift, so they live
+//! here once rather than beside their caller. `alien-sandbox-agent` is the only consumer.
 //!
 //! The rules, all of which cost something to learn:
 //!
