@@ -638,10 +638,9 @@ mod tests {
 ///
 /// - `GCP_AGENT_PORT` is declared again by the Agent Platform template, so a literal left behind
 ///   here is a template that routes to a port the image does not serve. Nothing else compares them.
-/// - `GCP_EXEC_UID` has no consumer outside these tests, so editing it and the Dockerfile together
-///   is a no-op. What the uid assertions pin is the Dockerfile against itself: `ENV` uid, `ENV`
-///   gid, `USER`, the passwd and group records and the `chown` are all one value or the agent
-///   cannot exec.
+/// - `GCP_EXEC_UID` is test-only, so the uid assertions pin the Dockerfile against itself. `ENV`
+///   uid, `ENV` gid, `USER` and the `chown` must agree or no command can exec; the passwd and
+///   group records must carry that same id or in-sandbox tooling reads a uid with no name.
 /// - `AGENT_PATH` does have a consumer, but it renders the AWS bundle's Dockerfile rather than
 ///   this one, so a mismatch is divergence between two images and not a break in either. What it
 ///   pins here is that the `COPY` lands the binary where the `ENTRYPOINT` execs it.
