@@ -1801,6 +1801,24 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     Ok(())
 }
 
+/// Validate a deployment file without constructing an authenticated execution context.
+///
+/// This is deliberately separate from [`deploy_task`]: callers of `--validate-only`
+/// must not need manager credentials, a platform session, or network access merely to
+/// parse and validate a local file.
+pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
+    #[cfg(not(feature = "platform"))]
+    if args.channel != "production" {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Named release channels require platform mode.".to_string(),
+        }));
+    }
+
+    resolve_deploy_args(args)?;
+    println!("Deployment config is valid.");
+    Ok(())
+}
+
 fn describe_failed_status(status: &alien_deployment::DeploymentStatus) -> &'static str {
     match status {
         alien_deployment::DeploymentStatus::PreflightsFailed => "preflights",

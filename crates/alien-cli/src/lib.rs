@@ -41,10 +41,10 @@ use crate::commands::{
     ensure_server_running_for_dev_session, ensure_server_running_with_env,
     fetch_all_dev_deployment_live_states, init_task, local_operations_task, logs_task,
     onboard_task, operations_task, prepare_dev_session_deployment, release_command, releases_task,
-    render_task, status_task, upgrade_task, vault_remote_task, vault_task, whoami_task,
-    write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs, DeployArgs,
-    DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs, ReleaseArgs,
-    ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
+    render_task, status_task, upgrade_task, validate_deploy_config, vault_remote_task, vault_task,
+    whoami_task, write_dev_status, BuildArgs, BuildSubcommand, CliEnvVar, CommandsArgs, DebugArgs,
+    DeployArgs, DeploymentsArgs, DestroyArgs, InitArgs, LogsArgs, OnboardArgs, OperationsArgs,
+    ReleaseArgs, ReleasesArgs, RenderArgs, StatusArgs, UpgradeArgs, WhoamiArgs,
 };
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -1580,6 +1580,15 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
     // Handle dev command early — it creates its own execution context.
     if let Some(Commands::Dev(dev_cmd)) = cli.command {
         return handle_dev_command(dev_cmd).await;
+    }
+
+    // Config validation is an offline operation. Route it before execution-context
+    // resolution so inherited manager settings, missing credentials, and builds
+    // without the platform feature cannot turn local validation into an auth error.
+    if let Some(Commands::Deploy(args)) = &cli.command {
+        if args.validate_only {
+            return validate_deploy_config(args);
+        }
     }
 
     let ctx = if let Ok(server_url) = env::var("ALIEN_MANAGER_URL") {
