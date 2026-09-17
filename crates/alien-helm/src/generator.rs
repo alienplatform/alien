@@ -785,6 +785,9 @@ remoteOperator:
   # existing product release, then immediately persist false.
   bootstrapIdentity: false
   syncTokenRevision: 0
+  # Rollout marker for the independently rotatable collector token. Setup
+  # tooling should set this to a digest or revision that changes with the token.
+  collectorTokenRevision: ""
   serviceAccountAnnotations: {}
   podLabels: {}
 "#
@@ -799,6 +802,7 @@ fn remote_operator_values_schema() -> serde_json::Value {
             "existingSecret",
             "bootstrapIdentity",
             "syncTokenRevision",
+            "collectorTokenRevision",
             "serviceAccountAnnotations",
             "podLabels"
         ],
@@ -821,6 +825,11 @@ fn remote_operator_values_schema() -> serde_json::Value {
                 }
             },
             "syncTokenRevision": { "type": "integer", "minimum": 0 },
+            "collectorTokenRevision": {
+                "type": "string",
+                "maxLength": 64,
+                "pattern": "^$|^[0-9a-f]{64}$"
+            },
             "serviceAccountAnnotations": {
                 "type": "object",
                 "additionalProperties": { "type": "string" }
@@ -2262,9 +2271,9 @@ fn operator_log_collector_daemonset_doc(
     ));
     yaml.push_str("                  key: collector-token\n");
     if include_credential_revision {
-        yaml.push_str("            - name: SYNC_TOKEN_REVISION\n");
+        yaml.push_str("            - name: COLLECTOR_TOKEN_REVISION\n");
         yaml.push_str(
-            "              value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}\n",
+            "              value: {{ default \"\" .Values.remoteOperator.collectorTokenRevision | quote }}\n",
         );
     }
     yaml.push_str("          volumeMounts:\n");
@@ -5652,15 +5661,44 @@ mod tests {
         let daemonset = operator_log_collector_daemonset_doc(
             "{{ .Release.Namespace }}",
             "operator",
-            "{{ .Values.remoteOperator.existingSecret.name }}",
+            "operator-credentials",
             "fluent/fluent-bit:3.2",
             &labels,
             true,
         );
 
-        assert!(daemonset.contains("- name: SYNC_TOKEN_REVISION"));
-        assert!(daemonset
-            .contains("value: {{ default 0 .Values.remoteOperator.syncTokenRevision | quote }}"));
+        let files = indexmap::IndexMap::from([
+            (
+                "Chart.yaml".to_string(),
+                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+            ),
+            (
+                "values.yaml".to_string(),
+                "remoteOperator:\n  collectorTokenRevision: \"\"\n".to_string(),
+            ),
+            ("templates/collector.yaml".to_string(), daemonset),
+        ]);
+
+        let revisions = ["a".repeat(64), "b".repeat(64)];
+        let rendered = revisions.map(|revision| {
+            let values = format!("remoteOperator:\n  collectorTokenRevision: {revision}\n");
+            let output = crate::test_utils::helm_template(&files, Some(&values));
+            output.assert_ok("collector token rotation");
+            let docs = parse_manifest_docs(&output.stdout);
+            let daemonset = docs_by_kind(&docs, "DaemonSet")
+                .into_iter()
+                .next()
+                .expect("rendered collector DaemonSet");
+            assert_eq!(
+                operator_env_value(&daemonset, "COLLECTOR_TOKEN_REVISION"),
+                Some(revision.as_str())
+            );
+            daemonset["spec"]["template"].clone()
+        });
+        assert_ne!(
+            rendered[0], rendered[1],
+            "rotating only the collector token marker must change the pod template"
+        );
     }
 
     #[test]

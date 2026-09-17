@@ -748,6 +748,9 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(helm.contains("bootstrapIdentity = var.remote_operator_bootstrap_identity"));
     assert!(helm.contains("syncTokenRevision = var.remote_operator_sync_token_revision"));
     assert!(helm.contains(
+        "collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\""
+    ));
+    assert!(helm.contains(
         "podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {}"
     ));
     assert!(!helm.contains("yamldecode(acme_app_deployment.this.helm_values).management.token"));
