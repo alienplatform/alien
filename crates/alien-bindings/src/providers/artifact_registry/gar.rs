@@ -20,11 +20,14 @@ use tracing::{debug, info, warn};
 /// The IAM members a cross-account grant names, for both the add and the remove path.
 ///
 /// Each compute service pulls as its own Google-managed service agent, so the project number alone
-/// does not say who may pull. Granting and revoking read the same list, since a member the revoke
+/// does not say who may pull. Granting and revoking read this one list, since a member the revoke
 /// misses stays on the repository policy with nothing left to remove it.
 fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     let mut members = Vec::new();
     for service_type in &access.allowed_service_types {
+        // Observed on a live project that had run a sandbox, alongside `gcp-sa-aiplatform`,
+        // `gcp-sa-aiplatform-re` and `gcp-sa-vertex-agent`; the sandbox agent is the one holding
+        // `roles/aiplatform.agentSandboxServiceAgent`. Naming an adjacent one is a 403 on first pull.
         let agent_domain = match service_type {
             ComputeServiceType::Worker => "serverless-robot-prod",
             ComputeServiceType::Sandbox => "gcp-sa-vertex-sandbox",
@@ -625,8 +628,9 @@ impl ArtifactRegistry for GarArtifactRegistry {
 mod tests {
     use super::*;
 
-    /// Each compute service pulls as a different Google-managed service agent, and three adjacent
-    /// Vertex agents exist that would 403 here, so the accounts are pinned rather than described.
+    /// Pins the member spelling, not the agent domains themselves: both sides of this assertion
+    /// come from the same constants, so a wrong domain fails against GCP rather than here. What it
+    /// does catch is a member built for the wrong project, in the wrong order, or silently dropped.
     #[test]
     fn each_service_type_resolves_to_its_own_service_agent() {
         let members = cross_account_members(&GcpCrossAccountAccess {

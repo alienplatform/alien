@@ -231,8 +231,9 @@ pub enum ComputeServiceType {
     Worker,
     /// Sandbox sessions.
     ///
-    /// A separate variant rather than a wider `Worker` because each compute service pulls as its
-    /// own Google-managed service agent, so a grant made for one reaches neither the other.
+    /// Separate from `Worker` because a cloud may pull each compute service as a different
+    /// principal, as GCP does with its per-service agents; where one principal covers both, the
+    /// provider is free to grant nothing further for this variant.
     Sandbox,
     // In the future, we could add Container, VirtualMachine, Kubernetes, etc.
 }

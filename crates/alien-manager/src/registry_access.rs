@@ -142,9 +142,8 @@ async fn revoke_registry_access(
             environment_info,
             CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                // Every service type, whatever this deployment granted. Removal is a `retain`, so
-                // naming one that was never added is a no-op, while missing one leaves a member on
-                // the policy with nothing left to revoke it.
+                // Every service type, whatever this deployment granted: removal is a `retain`, so
+                // naming one never added is a no-op.
                 allowed_service_types: vec![
                     ComputeServiceType::Worker,
                     ComputeServiceType::Sandbox,
@@ -382,7 +381,7 @@ fn repository_ids_for_access(
         .environment_info
         .as_ref()
         .map(EnvironmentInfo::platform);
-    let include_sandbox = platform.is_some_and(sandbox_pulls_from_our_registry);
+    let include_sandbox = platform.is_some_and(sandbox_pulls_from_alien_registry);
 
     if matches!(platform, Some(Platform::Aws)) {
         let mut repo_ids = HashSet::new();
@@ -404,10 +403,10 @@ fn repository_ids_for_access(
 
 /// Whether this platform's sandbox takes its root filesystem from an image Alien hosts.
 ///
-/// AWS builds a MicroVM image from a bundle we publish, and a GCP sandbox runs a container it pulls
-/// from our registry, so both earn a grant. Azure names an image from its own catalog and reaches
-/// our registry for nothing, so counting one there would claim a grant it never needs.
-fn sandbox_pulls_from_our_registry(platform: Platform) -> bool {
+/// AWS builds a MicroVM image from a published sandbox bundle and a GCP sandbox pulls its container
+/// from Alien's registry, so both earn a grant. Azure names an image from its own catalog and reads
+/// nothing from Alien's registry, so counting one there would claim a grant it never needs.
+fn sandbox_pulls_from_alien_registry(platform: Platform) -> bool {
     matches!(platform, Platform::Aws | Platform::Gcp)
 }
 
@@ -493,7 +492,7 @@ fn has_image_in_repository_prefix(
 /// loads, so answering `true` too often costs a lookup, while answering `false` too often leaves
 /// a live cross-account grant on Alien's registry with nothing left to revoke it.
 fn has_registry_backed_image(state: &DeploymentState, platform: &Platform) -> bool {
-    let include_sandbox = sandbox_pulls_from_our_registry(*platform);
+    let include_sandbox = sandbox_pulls_from_alien_registry(*platform);
 
     state
         .current_release
@@ -603,6 +602,9 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
+                // Both types whatever this deployment declares. The grant runs once per deployment
+                // and never re-runs, so gating on today's stack would leave a deployment that adds
+                // a sandbox later with no member and a 403 at its first session.
                 allowed_service_types: vec![
                     ComputeServiceType::Worker,
                     ComputeServiceType::Sandbox,
