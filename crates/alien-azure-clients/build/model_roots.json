@@ -136,12 +136,7 @@
     "Resource",
     "UserAssignedIdentityProperties"
   ],
-  "Queue.json": [
-    "ErrorResponse",
-    "SBQueue",
-    "SBQueueListResult",
-    "SBQueueProperties"
-  ],
+  "Queue.json": ["ErrorResponse", "SBQueue", "SBQueueListResult", "SBQueueProperties"],
   "authorization-RoleAssignmentsCalls.json": [
     "ErrorResponse",
     "RoleAssignment",
