@@ -390,6 +390,10 @@ fn add_remote_operator_files(
         identity_record,
     );
     files.insert(
+        "templates/remote-operator-lifecycle-capability.yaml".to_string(),
+        remote_operator_lifecycle_capability_tpl(),
+    );
+    files.insert(
         "templates/remote-operator-identity-initialized.yaml".to_string(),
         remote_operator_identity_initialized_tpl(),
     );
@@ -520,6 +524,9 @@ fn remote_operator_identity_record_tpl(
 {{{{- define "deployment.remoteOperatorIdentityInitializedName" -}}}}
 {{{{ printf "%s-initialized" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
 {{{{- end -}}}}
+{{{{- define "deployment.remoteOperatorLifecycleCapabilityName" -}}}}
+{{{{ printf "%s-lifecycle-v1" (include "deployment.remoteOperatorIdentityRecordName" .) | trunc 253 | trimSuffix "-" }}}}
+{{{{- end -}}}}
 {{{{- if .Values.remoteOperator.enabled -}}}}
 {{{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}}}
 {{{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}}}
@@ -552,6 +559,32 @@ data:
         credentials_secret_name = credentials_secret_name,
         credentials_encryption_key_sha256 = credentials_encryption_key_sha256,
     )
+}
+
+fn remote_operator_lifecycle_capability_tpl() -> String {
+    r#"{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+{{- $lifecycleCapability := lookup "v1" "ConfigMap" .Release.Namespace $lifecycleCapabilityName -}}
+{{- if not $lifecycleCapability }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $lifecycleCapabilityName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+    helm.sh/resource-policy: keep
+  labels:
+    app.kubernetes.io/managed-by: {{ .Release.Service | quote }}
+    app.kubernetes.io/instance: {{ .Release.Name | quote }}
+    alien.dev/remote-operator-lifecycle-capability: "v1"
+    alien.dev/remote-operator-release-id: {{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
+immutable: true
+data:
+  version: "1"
+{{- end }}
+"#
+    .to_string()
 }
 
 fn remote_operator_identity_initialized_tpl() -> String {
@@ -688,6 +721,7 @@ spec:
               identity_record="$resource_name"
               identity_initialized={{ include "deployment.remoteOperatorIdentityInitializedName" . | quote }}
               identity_completion="$resource_name-complete"
+              lifecycle_capability={{ include "deployment.remoteOperatorLifecycleCapabilityName" . | quote }}
               identity_pvc="$resource_name-identity"
 
               field() {
@@ -723,6 +757,18 @@ spec:
                 if resource_exists configmap "$identity_initialized"; then
                   echo "Refusing cleanup: initialization record $namespace/$identity_initialized exists without its identity record." >&2
                   exit 1
+                fi
+                if resource_exists configmap "$lifecycle_capability"; then
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                  require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v1 lifecycle-capability
+                  require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                  require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
+                  require_field configmap "$lifecycle_capability" '{.data.version}' 1 version
+                  kubectl -n "$namespace" delete configmap "$lifecycle_capability"
                 fi
                 echo "No Remote Operator identity record exists for this release; nothing to clean up."
                 exit 0
@@ -762,6 +808,18 @@ spec:
                 require_field configmap "$identity_completion" '{.data.identityRecordName}' "$identity_record" identity-record-reference
               fi
 
+              if resource_exists configmap "$lifecycle_capability"; then
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
+                require_field configmap "$lifecycle_capability" '{.metadata.annotations.helm\.sh/resource-policy}' keep resource-policy
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/managed-by}' "$release_service" managed-by
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.app\.kubernetes\.io/instance}' "$release_name" instance
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-lifecycle-capability}' v1 lifecycle-capability
+                require_field configmap "$lifecycle_capability" '{.metadata.labels.alien\.dev/remote-operator-release-id}' "$release_id" release-id
+                require_field configmap "$lifecycle_capability" '{.immutable}' true immutability
+                require_field configmap "$lifecycle_capability" '{.data.version}' 1 version
+              fi
+
               if resource_exists deployment "$resource_name"; then
                 require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-name}' "$release_name" release-name
                 require_field deployment "$resource_name" '{.metadata.annotations.meta\.helm\.sh/release-namespace}' "$namespace" release-namespace
@@ -782,7 +840,7 @@ spec:
 
               # Stop the exact release-owned workload first.
               kubectl -n "$namespace" delete deployment "$resource_name" --ignore-not-found=true
-              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_initialized" "$identity_completion" --ignore-not-found=true
+              kubectl -n "$namespace" delete configmap "$identity_record" "$identity_initialized" "$identity_completion" "$lifecycle_capability" --ignore-not-found=true
               kubectl -n "$namespace" delete persistentvolumeclaim "$identity_pvc" --ignore-not-found=true --wait=false
 "#
     .to_string()
@@ -818,7 +876,8 @@ spec:
             - -ec
             - |
               identity_completion={{ include "deployment.remoteOperatorIdentityCompletionName" . | quote }}
-              if kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" >/dev/null 2>&1; then
+              identity_completion_resource="$(kubectl -n {{ .Release.Namespace | quote }} get configmap "$identity_completion" --ignore-not-found=true --output=name)"
+              if [ -n "$identity_completion_resource" ]; then
                 echo "Refusing rollback: the Remote Operator identity is complete, and this revision would disable it. Use the explicit uninstall lifecycle instead." >&2
                 exit 1
               fi
@@ -975,9 +1034,22 @@ __COLLECTOR_CHECK__{{- end -}}
 {{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
 {{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
 {{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
 {{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}
 {{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
 {{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
+{{- $lifecycleCapability := lookup "v1" "ConfigMap" .Release.Namespace $lifecycleCapabilityName -}}
+{{- if $lifecycleCapability -}}
+  {{- $capabilityAnnotations := default dict $lifecycleCapability.metadata.annotations -}}
+  {{- $capabilityLabels := default dict $lifecycleCapability.metadata.labels -}}
+  {{- $capabilityData := default dict $lifecycleCapability.data -}}
+  {{- if or (ne (index $capabilityAnnotations "meta.helm.sh/release-name") .Release.Name) (ne (index $capabilityAnnotations "meta.helm.sh/release-namespace") .Release.Namespace) (ne (index $capabilityAnnotations "helm.sh/resource-policy") "keep") (ne (index $capabilityLabels "app.kubernetes.io/managed-by") .Release.Service) (ne (index $capabilityLabels "app.kubernetes.io/instance") .Release.Name) (ne (index $capabilityLabels "alien.dev/remote-operator-lifecycle-capability") "v1") (ne (index $capabilityLabels "alien.dev/remote-operator-release-id") (include "deployment.remoteOperatorReleaseIdentity" .)) (not (default false $lifecycleCapability.immutable)) (ne (len $capabilityData) 1) (ne (index $capabilityData "version") "1") -}}
+    {{- fail (printf "ConfigMap %s/%s does not match the immutable lifecycle-capability contract owned by this exact Helm release. Refusing adoption." .Release.Namespace $lifecycleCapabilityName) -}}
+  {{- end -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled (not $lifecycleCapability) -}}
+  {{- fail "This release predates the Remote Operator rollback guard. Upgrade once with remoteOperator.enabled=false before first enable so the previous revision can reject an unsafe rollback." -}}
+{{- end -}}
 {{- if $identityRecord -}}
   {{- $recordAnnotations := default dict $identityRecord.metadata.annotations -}}
   {{- $recordLabels := default dict $identityRecord.metadata.labels -}}
@@ -6127,6 +6199,12 @@ mod tests {
         let checks = &chart.files["templates/remote-operator-checks.yaml"];
         assert!(checks.contains("Refusing adoption"));
         assert!(checks.contains("managedResourceExists"));
+        assert!(checks.contains("predates the Remote Operator rollback guard"));
+        let lifecycle_capability =
+            &chart.files["templates/remote-operator-lifecycle-capability.yaml"];
+        assert!(lifecycle_capability.contains("remote-operator-lifecycle-capability: \"v1\""));
+        assert!(lifecycle_capability.contains("helm.sh/resource-policy: keep"));
+        assert!(lifecycle_capability.contains("immutable: true"));
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
         assert!(cleanup.contains("No Remote Operator identity record exists"));
@@ -6146,10 +6224,12 @@ mod tests {
         assert!(cleanup.contains("delete deployment \"$resource_name\""));
         assert!(cleanup.contains("$resource_name-complete"));
         assert!(cleanup.contains("$resource_name-identity"));
+        assert!(cleanup.contains("$lifecycle_capability"));
         let rollback_guard = &chart.files["templates/remote-operator-rollback-guard.yaml"];
         assert!(rollback_guard.contains("if not .Values.remoteOperator.enabled"));
         assert!(rollback_guard.contains("helm.sh/hook\": pre-rollback"));
-        assert!(rollback_guard.contains("get configmap \"$identity_completion\""));
+        assert!(rollback_guard.contains("--ignore-not-found=true --output=name"));
+        assert!(rollback_guard.contains("if [ -n \"$identity_completion_resource\" ]"));
         assert!(rollback_guard.contains("Use the explicit uninstall lifecycle instead"));
         assert!(checks.contains("missing from a partial installation"));
         assert!(checks.contains("Disabling Remote Operator"));

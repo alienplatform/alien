@@ -17,6 +17,8 @@ use std::{
 const CLUSTER_CONTEXT: &str = "kind-alien-product-lifecycle";
 const CRD_NAME: &str = "alienaccessrequests.accessrequests.alien";
 const ENCRYPTION_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const ENCRYPTION_KEY_BASE64: &str =
+    "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==";
 const ENCRYPTION_KEY_SHA256: &str =
     "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e";
 const GOOD_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator:local";
@@ -73,6 +75,7 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
 
     let temp = tempfile::tempdir().expect("lifecycle temp directory");
     let good_chart_dir = temp.path().join("good-chart");
+    let legacy_chart_dir = temp.path().join("legacy-chart");
     let cluster_chart_dir = temp.path().join("cluster-chart");
     let bad_chart_dir = temp.path().join("bad-chart");
     let operator_fixture_dir = temp.path().join("operator-fixture");
@@ -136,6 +139,19 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         None,
     );
     write_chart(&good_chart_dir, &product_chart(GOOD_OPERATOR_IMAGE));
+    let mut legacy_chart = product_chart(GOOD_OPERATOR_IMAGE);
+    legacy_chart
+        .files
+        .shift_remove("templates/remote-operator-lifecycle-capability.yaml");
+    legacy_chart
+        .files
+        .shift_remove("templates/remote-operator-rollback-guard.yaml");
+    legacy_chart
+        .files
+        .get_mut("templates/remote-operator-checks.yaml")
+        .expect("legacy checks template")
+        .replace_range(.., "");
+    write_chart(&legacy_chart_dir, &legacy_chart);
     write_chart(
         &cluster_chart_dir,
         &product_chart_with_scope(GOOD_OPERATOR_IMAGE, OperatorScope::Cluster),
@@ -231,6 +247,112 @@ rules:
         ["get", "crd", CRD_NAME],
         None,
         "disabled install must not create the cluster-scoped CRD",
+    );
+
+    let bridge_release = "alien-product-legacy-bridge";
+    run_ok(
+        "helm",
+        [
+            "install",
+            bridge_release,
+            path_str(&legacy_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    let bridge_credentials = format!("{bridge_release}-remote");
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "secret",
+            "generic",
+            &bridge_credentials,
+            "--namespace",
+            &helm_namespace,
+            "--from-literal=sync-token=sync-bridge",
+            &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+        ],
+        None,
+    );
+    let rejected_unbridged_enable = helm_upgrade_args(
+        bridge_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        0,
+        "30s",
+    );
+    let rejected_unbridged_enable = run_fails(
+        "helm",
+        rejected_unbridged_enable.iter().map(String::as_str),
+        None,
+        "an existing release must record a guard-capable disabled revision before first enable",
+    );
+    assert!(
+        rejected_unbridged_enable
+            .diagnostic
+            .contains("predates the Remote Operator rollback guard"),
+        "{}",
+        rejected_unbridged_enable.diagnostic
+    );
+    run_ok(
+        "helm",
+        [
+            "upgrade",
+            bridge_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    let bridged_enable = helm_upgrade_args(
+        bridge_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        0,
+        "2m",
+    );
+    run_ok("helm", bridged_enable.iter().map(String::as_str), None);
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            bridge_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "secret",
+            &bridge_credentials,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
     );
 
     let atomic_release = "alien-product-atomic";
@@ -717,10 +839,24 @@ spec:
         ],
         Some(&terraform_dir),
     );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "secret",
+            "terraform-product-remote",
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+        "a disabled first apply must not create empty Remote Operator credentials",
+    );
     write_terraform_lifecycle_variables(
         &terraform_dir,
         &good_chart_dir,
         terraform_namespace,
+        true,
+        true,
         true,
         true,
     );
@@ -740,18 +876,68 @@ spec:
         ],
         Some(&terraform_dir),
     );
+    let installed_encryption_key = run_ok(
+        "kubectl",
+        [
+            "get",
+            "secret",
+            "terraform-product-remote",
+            "--namespace",
+            terraform_namespace,
+            "--output=jsonpath={.data.encryption-key}",
+        ],
+        None,
+    );
+    assert_eq!(installed_encryption_key.stdout, ENCRYPTION_KEY_BASE64);
     write_terraform_lifecycle_variables(
         &terraform_dir,
         &good_chart_dir,
         terraform_namespace,
         true,
+        true,
         false,
+        true,
     );
     run_ok(
         "terraform",
         ["apply", "-input=false", "-no-color", "-auto-approve"],
         Some(&terraform_dir),
     );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "secret",
+            "terraform-product-remote",
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+    );
+
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        false,
+        false,
+        false,
+        false,
+    );
+    let rejected_disable = run_fails(
+        "terraform",
+        ["plan", "-input=false", "-no-color"],
+        Some(&terraform_dir),
+        "an in-place Helm disable must not retire a retained Remote Operator identity",
+    );
+    assert!(
+        rejected_disable
+            .diagnostic
+            .contains("Disabling the product Helm release or Remote Operator in place"),
+        "{}",
+        rejected_disable.diagnostic
+    );
+    run_ok("kubectl", ["get", "namespace", terraform_namespace], None);
     run_ok(
         "kubectl",
         [
@@ -1045,20 +1231,32 @@ variable "remote_operator_collector_token" {{
         ),
     )
     .expect("write Terraform lifecycle provider configuration");
-    write_terraform_lifecycle_variables(directory, chart, namespace, false, false);
+    write_terraform_lifecycle_variables(directory, chart, namespace, true, false, false, false);
 }
 
 fn write_terraform_lifecycle_variables(
     directory: &Path,
     chart: &Path,
     namespace: &str,
+    helm_install_enabled: bool,
     remote_operator_enabled: bool,
     remote_operator_bootstrap_identity: bool,
+    include_credentials: bool,
 ) {
+    let sync_token = if include_credentials {
+        "\"sync-terraform\"".to_string()
+    } else {
+        "null".to_string()
+    };
+    let encryption_key = if include_credentials {
+        format!("{ENCRYPTION_KEY:?}")
+    } else {
+        "null".to_string()
+    };
     fs::write(
         directory.join("terraform.tfvars"),
         format!(
-            r#"helm_install_enabled                = true
+            r#"helm_install_enabled                = {helm_install_enabled}
 helm_release_name                   = "terraform-product"
 helm_chart                          = {chart:?}
 kubernetes_namespace                = {namespace:?}
@@ -1066,8 +1264,8 @@ kubernetes_namespace_create         = true
 remote_operator_enabled             = {remote_operator_enabled}
 remote_operator_bootstrap_identity  = {remote_operator_bootstrap_identity}
 remote_operator_sync_token_revision = 0
-remote_operator_sync_token          = "sync-terraform"
-remote_operator_encryption_key      = {ENCRYPTION_KEY:?}
+remote_operator_sync_token          = {sync_token}
+remote_operator_encryption_key      = {encryption_key}
 "#,
             chart = path_str(chart),
         ),
@@ -1099,13 +1297,19 @@ where
     output
 }
 
-fn run_fails<I, S>(program: &str, args: I, current_dir: Option<&Path>, reason: &str)
+fn run_fails<I, S>(
+    program: &str,
+    args: I,
+    current_dir: Option<&Path>,
+    reason: &str,
+) -> CommandOutput
 where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
     let output = run(program, args, current_dir);
     assert!(!output.status.success(), "{reason}: {}", output.diagnostic);
+    output
 }
 
 fn assert_output_contains(output: &CommandOutput, expected: &str) {

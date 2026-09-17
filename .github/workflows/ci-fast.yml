@@ -68,6 +68,7 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+              - '.github/workflows/ci-fast.yml'
             product_lifecycle:
               - 'crates/alien-helm/**'
               - 'crates/alien-terraform/**'
