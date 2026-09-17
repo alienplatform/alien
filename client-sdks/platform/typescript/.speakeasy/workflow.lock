@@ -2,8 +2,8 @@ speakeasyVersion: 1.680.11
 sources:
     platform-api:
         sourceNamespace: platform-api
-        sourceRevisionDigest: sha256:d4e91997b8761c1a5424cd262166a72208f25266e189ef9dfd470656bbb09770
-        sourceBlobDigest: sha256:faffeb71f365bc70e292f113cb1af3b9750c215760bc9ffc3c24b5f9776073eb
+        sourceRevisionDigest: sha256:5042a7b4d702bfd8060fd4b7b21a5cdd2eae98f3cb9cbfe70eba5f1a2152542a
+        sourceBlobDigest: sha256:fac3da606f6d43abcf45a3aeff0ba4799ad3328b0b12f9a90d4ddecdef9bb0f5
         tags:
             - latest
             - 1.0.0
@@ -11,8 +11,8 @@ targets:
     platform-typescript:
         source: platform-api
         sourceNamespace: platform-api
-        sourceRevisionDigest: sha256:d4e91997b8761c1a5424cd262166a72208f25266e189ef9dfd470656bbb09770
-        sourceBlobDigest: sha256:faffeb71f365bc70e292f113cb1af3b9750c215760bc9ffc3c24b5f9776073eb
+        sourceRevisionDigest: sha256:5042a7b4d702bfd8060fd4b7b21a5cdd2eae98f3cb9cbfe70eba5f1a2152542a
+        sourceBlobDigest: sha256:fac3da606f6d43abcf45a3aeff0ba4799ad3328b0b12f9a90d4ddecdef9bb0f5
 workflow:
     workflowVersion: 1.0.0
     speakeasyVersion: 1.680.11

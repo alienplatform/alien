@@ -317,6 +317,8 @@ export type { ObservedInventoryBatch } from "./observed-inventory-batch-schema.j
 export type { ObservedResourceSample } from "./observed-resource-sample-schema.js";
 export type { OperationsBundleDownload } from "./operations-bundle-download-schema.js";
 export type { OperationsReport } from "./operations-report-schema.js";
+export type { OperatorImageReport } from "./operator-image-report-schema.js";
+export type { OperatorImageSource } from "./operator-image-source-schema.js";
 export type { PermissionGrant } from "./permission-grant-schema.js";
 export type { PermissionProfile } from "./permission-profile-schema.js";
 export type { PermissionSetReference } from "./permission-set-reference-schema.js";
@@ -746,6 +748,8 @@ export { ObservedInventoryBatchSchema } from "./observed-inventory-batch-schema.
 export { ObservedResourceSampleSchema } from "./observed-resource-sample-schema.js";
 export { OperationsBundleDownloadSchema } from "./operations-bundle-download-schema.js";
 export { OperationsReportSchema } from "./operations-report-schema.js";
+export { OperatorImageReportSchema } from "./operator-image-report-schema.js";
+export { OperatorImageSourceSchema } from "./operator-image-source-schema.js";
 export { PermissionGrantSchema } from "./permission-grant-schema.js";
 export { PermissionProfileSchema } from "./permission-profile-schema.js";
 export { PermissionSetReferenceSchema } from "./permission-set-reference-schema.js";

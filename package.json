@@ -16,7 +16,7 @@
     "generate:platform-api": "./client-sdks/platform/scripts/generate-typescript-sdk.sh",
     "generate:manager-api": "bash ./client-sdks/manager/scripts/generate-typescript-sdk.sh",
     "generate:manager-openapi": "cargo run --bin alien-manager-schema-exporter --features openapi -p alien-manager -- --output crates/alien-manager/openapi.json && cp crates/alien-manager/openapi.json client-sdks/manager/openapi.json",
-    "generate:manager-rust-sdk": "pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/rust/openapi-3.0.json && cd client-sdks/manager/rust && node ../scripts/fix-openapi.mjs",
+    "generate:manager-rust-sdk": "node --test client-sdks/manager/scripts/fix-openapi.test.mjs && pnpm run generate:manager-openapi && openapi-down-convert -i crates/alien-manager/openapi.json -o client-sdks/manager/openapi-3.0.json && node client-sdks/manager/scripts/fix-openapi.mjs client-sdks/manager/openapi-3.0.json && cp client-sdks/manager/openapi-3.0.json client-sdks/manager/rust/openapi-3.0.json",
     "test": "turbo test",
     "test:examples": "./scripts/test-examples-local.sh",
     "changeset": "changeset",

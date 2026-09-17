@@ -394,6 +394,7 @@ run();
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
 * [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
+* [getRemoteOperatorSummary](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 * [getAiUsage](docs/sdks/projects/README.md#getaiusage)
 * [getEncryptionUsage](docs/sdks/projects/README.md#getencryptionusage)
 * [getSandboxMetrics](docs/sdks/projects/README.md#getsandboxmetrics)
@@ -666,6 +667,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
+- [`projectsGetRemoteOperatorSummary`](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 - [`projectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.

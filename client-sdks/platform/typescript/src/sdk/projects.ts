@@ -23,6 +23,7 @@ import { projectsGetDeploymentLinkSetup } from "../funcs/projectsGetDeploymentLi
 import { projectsGetDeploymentPortalDomain } from "../funcs/projectsGetDeploymentPortalDomain.js";
 import { projectsGetEncryptionUsage } from "../funcs/projectsGetEncryptionUsage.js";
 import { projectsGetGcpOAuthProvider } from "../funcs/projectsGetGcpOAuthProvider.js";
+import { projectsGetRemoteOperatorSummary } from "../funcs/projectsGetRemoteOperatorSummary.js";
 import { projectsGetSandboxMetrics } from "../funcs/projectsGetSandboxMetrics.js";
 import { projectsGetTemplateUrls } from "../funcs/projectsGetTemplateUrls.js";
 import { projectsList } from "../funcs/projectsList.js";
@@ -366,6 +367,20 @@ export class Projects extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.ProjectCapabilityOverview> {
     return unwrapAsync(projectsGetCapabilityOverview(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  /**
+   * Get the authoritative Remote Operator project summary
+   */
+  async getRemoteOperatorSummary(
+    request: operations.GetRemoteOperatorProjectSummaryRequest,
+    options?: RequestOptions,
+  ): Promise<operations.GetRemoteOperatorProjectSummaryResponse> {
+    return unwrapAsync(projectsGetRemoteOperatorSummary(
       this,
       request,
       options,

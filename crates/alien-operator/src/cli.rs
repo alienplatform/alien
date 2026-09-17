@@ -7,9 +7,10 @@ use crate::error::{ErrorData, Result};
 use crate::loops::access_requests::AccessRequestSyncLoop;
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::operations_exec::{OperationsExecLoop, OperationsSyncHandler};
-use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
+use crate::{run_operator_with_cancel_and_loops_with_image_report, InstanceLock, OperatorConfig};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
+    sync::{OperatorImageReport, OperatorImageSource},
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
     DEPLOYMENT_PROTOCOL_VERSION,
 };
@@ -93,6 +94,26 @@ pub struct Args {
 
     #[arg(long, env = "OPERATOR_SETUP_METHOD")]
     pub operator_setup_method: Option<String>,
+
+    /// Origin of the immutable image receipt: `package` or `configured`.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_SOURCE")]
+    pub operator_image_source: Option<String>,
+
+    /// Exact running image in `repository@sha256:digest` form.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_RECEIPT")]
+    pub operator_image: Option<String>,
+
+    /// Exact lowercase OCI image digest.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_DIGEST")]
+    pub operator_image_digest: Option<String>,
+
+    /// Package ID for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_ID")]
+    pub operator_image_package_id: Option<String>,
+
+    /// Package version for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION")]
+    pub operator_image_package_version: Option<String>,
 
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
@@ -292,6 +313,8 @@ async fn run(
         .or_else(|| env_path("COLLECTOR_TOKEN_FILE"));
 
     setup_tracing(args.verbose);
+
+    let operator_image = parse_operator_image_report(&args)?;
 
     // Run the extension hook before any operator state is touched. Idempotent.
     init_hook();
@@ -557,8 +580,9 @@ async fn run(
         };
 
     let operations_sync_handler = operations_sync_handler_hook(&operator_config.data_dir);
-    run_operator_with_cancel_and_loops(
+    run_operator_with_cancel_and_loops_with_image_report(
         operator_config,
+        operator_image,
         service_provider,
         debug_loop_hook(),
         access_request_loop_hook(),
@@ -1044,6 +1068,74 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env_string(name).map(PathBuf::from)
 }
 
+fn parse_operator_image_report(args: &Args) -> Result<Option<OperatorImageReport>> {
+    let optional_value = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let source = optional_value(&args.operator_image_source);
+    let image = optional_value(&args.operator_image);
+    let digest = optional_value(&args.operator_image_digest);
+    let package_id = optional_value(&args.operator_image_package_id);
+    let package_version = optional_value(&args.operator_image_package_version);
+
+    if source.is_none()
+        && image.is_none()
+        && digest.is_none()
+        && package_id.is_none()
+        && package_version.is_none()
+    {
+        return Ok(None);
+    }
+
+    let source = match source.as_deref() {
+        Some("package") => OperatorImageSource::Package,
+        Some("configured") => OperatorImageSource::Configured,
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "ALIEN_OPERATOR_IMAGE_SOURCE must be package or configured".to_string(),
+            }));
+        }
+        None => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_SOURCE is required when image identity is configured"
+                        .to_string(),
+            }));
+        }
+    };
+    let report = OperatorImageReport {
+        source,
+        package_id,
+        package_version,
+        image: image.ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_RECEIPT is required when image identity is configured"
+                        .to_string(),
+            })
+        })?,
+        digest: digest.ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_DIGEST is required when image identity is configured"
+                        .to_string(),
+            })
+        })?,
+    };
+    report
+        .validate()
+        .map_err(|message| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: message.to_string(),
+            })
+        })
+        .map(|()| Some(report))
+}
+
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {
     if let Some(path) = file {
         return Ok(Some(read_secret_file(path, "sync token").await?));
@@ -1068,9 +1160,10 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, StartupDeploymentId,
+        parse_operator_image_report, select_startup_deployment_id, Args, InitialDesiredReleaseArg,
+        StartupDeploymentId,
     };
-    use alien_core::{DeploymentStatus, Platform};
+    use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
 
     #[test]
@@ -1184,5 +1277,64 @@ mod tests {
             InitialDesiredReleaseArg::Active
         );
         assert_eq!(args.operator_permission.as_deref(), Some("observe"));
+    }
+
+    #[test]
+    fn package_operator_image_identity_is_strict_and_complete() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let args = Args::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--operator-image-source",
+            "package",
+            "--operator-image",
+            &format!("registry.example.com/operator@{digest}"),
+            "--operator-image-digest",
+            &digest,
+            "--operator-image-package-id",
+            "pkg_operator",
+            "--operator-image-package-version",
+            "1.2.3",
+        ])
+        .expect("operator image arguments should parse");
+
+        let report = parse_operator_image_report(&args)
+            .expect("package identity should validate")
+            .expect("identity should be present");
+        assert_eq!(report.source, OperatorImageSource::Package);
+        assert_eq!(report.package_id.as_deref(), Some("pkg_operator"));
+        assert_eq!(report.package_version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn configured_operator_image_identity_rejects_package_fields() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let args = Args::try_parse_from([
+            "operator",
+            "--platform",
+            "aws",
+            "--operator-image-source",
+            "configured",
+            "--operator-image",
+            &format!("registry.example.com/operator@{digest}"),
+            "--operator-image-digest",
+            &digest,
+            "--operator-image-package-id",
+            "pkg_operator",
+        ])
+        .expect("operator image arguments should parse");
+
+        let error = parse_operator_image_report(&args)
+            .expect_err("configured image must not carry package fields");
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("must not include package identity"));
+    }
+
+    #[test]
+    fn operator_image_identity_is_optional_for_older_installations() {
+        let args = Args::try_parse_from(["operator", "--platform", "kubernetes"])
+            .expect("operator arguments should parse");
+        assert!(parse_operator_image_report(&args).unwrap().is_none());
     }
 }

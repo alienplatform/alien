@@ -682,6 +682,10 @@ export type Package = {
    */
   sourceReleaseId?: string | null | undefined;
   /**
+   * Exact package dependency used as build input. Helm packages use this to identify the Operator image embedded in the chart.
+   */
+  dependsOnPackageId?: string | null | undefined;
+  /**
    * Per-target setup compatibility fingerprints copied from the source release
    */
   setupFingerprints: { [k: string]: SetupFingerprintInfo };
@@ -1300,6 +1304,7 @@ export const Package$inboundSchema: z.ZodType<Package, unknown> = z.object({
   status: PackageStatus$inboundSchema,
   version: z.string(),
   sourceReleaseId: z.nullable(z.string()).optional(),
+  dependsOnPackageId: z.nullable(z.string()).optional(),
   setupFingerprints: z.record(z.string(), SetupFingerprintInfo$inboundSchema),
   packageBuildInputHash: z.string(),
   config: z.union([
