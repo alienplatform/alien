@@ -22,6 +22,7 @@ pub use runtime::{
 pub use config::{AppLogLine, Cli, LambdaMode, LogExporter, RuntimeConfig, TransportType};
 
 // Re-export event parsing modules
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub use events::*;
 
 // Re-export OTLP functionality

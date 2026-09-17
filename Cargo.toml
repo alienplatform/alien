@@ -72,7 +72,7 @@ alien-bindings = { path = "crates/alien-bindings", version = "3.3.22", default-f
 alien-ai-gateway = { path = "crates/alien-ai-gateway", version = "3.3.22" }
 alien-worker-protocol = { path = "crates/alien-worker-protocol", version = "3.3.22" }
 alien-sdk = { path = "crates/alien-sdk", version = "3.3.22", default-features = false }
-alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "3.3.22" }
+alien-worker-runtime = { path = "crates/alien-worker-runtime", version = "3.3.22", default-features = false }
 dockdash = "0.2.0"
 alien-core = { path = "crates/alien-core", version = "3.3.22" }
 alien-infra = { path = "crates/alien-infra", version = "3.3.22" }
