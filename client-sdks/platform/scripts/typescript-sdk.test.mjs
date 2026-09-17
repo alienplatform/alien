@@ -56,7 +56,7 @@ test("plan-backed access request preserves command contract identity", async () 
     params: { sql: "select 1" },
     tier: "read-only",
     pluginVersion: "1.2.3",
-    operationContractHash: "sha256:contract-test",
+    operationContractHash: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   };
   const sdk = client(async request => {
     assert.equal(request.method, "POST");
