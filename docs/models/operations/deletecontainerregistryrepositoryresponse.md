@@ -1,0 +1,27 @@
+# DeleteContainerRegistryRepositoryResponse
+
+Repository deletion requested
+
+## Example Usage
+
+```typescript
+import { DeleteContainerRegistryRepositoryResponse } from "@alienplatform/platform-api/models/operations";
+
+let value: DeleteContainerRegistryRepositoryResponse = {
+  id: "crrepo_625temdq3bnu25jw9rcux",
+  logicalName: "<value>",
+  desiredState: "deleteRequested",
+  status: "deleting",
+  verifiedAt: new Date("2025-07-20T12:44:02.603Z"),
+};
+```
+
+## Fields
+
+| Field                                                                                                                                | Type                                                                                                                                 | Required                                                                                                                             | Description                                                                                                                          | Example                                                                                                                              |
+| ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ |
+| `id`                                                                                                                                 | *string*                                                                                                                             | :heavy_check_mark:                                                                                                                   | Unique identifier for the container registry repository.                                                                             | crrepo_625temdq3bnu25jw9rcux                                                                                                         |
+| `logicalName`                                                                                                                        | *string*                                                                                                                             | :heavy_check_mark:                                                                                                                   | N/A                                                                                                                                  |                                                                                                                                      |
+| `desiredState`                                                                                                                       | [operations.DeleteContainerRegistryRepositoryDesiredState](../../models/operations/deletecontainerregistryrepositorydesiredstate.md) | :heavy_check_mark:                                                                                                                   | N/A                                                                                                                                  |                                                                                                                                      |
+| `status`                                                                                                                             | [operations.DeleteContainerRegistryRepositoryStatus](../../models/operations/deletecontainerregistryrepositorystatus.md)             | :heavy_check_mark:                                                                                                                   | N/A                                                                                                                                  |                                                                                                                                      |
+| `verifiedAt`                                                                                                                         | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date)                                        | :heavy_check_mark:                                                                                                                   | N/A                                                                                                                                  |                                                                                                                                      |

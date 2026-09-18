@@ -1,0 +1,19 @@
+# CurrentReleaseProfileAzureStack
+
+Azure-specific binding specification
+
+## Example Usage
+
+```typescript
+import { CurrentReleaseProfileAzureStack } from "@alienplatform/platform-api/models";
+
+let value: CurrentReleaseProfileAzureStack = {
+  scope: "<value>",
+};
+```
+
+## Fields
+
+| Field                                              | Type                                               | Required                                           | Description                                        |
+| -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `scope`                                            | *string*                                           | :heavy_check_mark:                                 | Scope (subscription/resource group/resource level) |

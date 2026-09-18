@@ -1,0 +1,102 @@
+# DeploymentInfo
+
+## Example Usage
+
+```typescript
+import { DeploymentInfo } from "@alienplatform/platform-api/models";
+
+let value: DeploymentInfo = {
+  tokenType: "deployment-group",
+  deploymentGroup: {
+    id: "dg_r27ict8c7vcgsumpj90ackf7b",
+    name: "<value>",
+    pinnedSubdomain: "<value>",
+  },
+  workspace: {
+    id: "<id>",
+    name: "<value>",
+  },
+  project: {
+    name: "<value>",
+    portal: {
+      appearance: {},
+    },
+  },
+  packages: {
+    ready: false,
+  },
+  installContext: {
+    targets: {},
+  },
+  supportedRegions: {
+    aws: [],
+    gcp: [
+      "<value 1>",
+    ],
+    azure: [
+      "<value 1>",
+      "<value 2>",
+    ],
+  },
+  modelAvailabilitySources: [],
+  setupItems: [
+    {
+      item: "sandbox",
+      source: {
+        type: "built-in",
+        definitionId: "customer-sandbox",
+        version: "<value>",
+        sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+      },
+      required: true,
+      status: "not-started",
+      deploymentIds: [
+        "<value 1>",
+        "<value 2>",
+        "<value 3>",
+      ],
+    },
+  ],
+  setupConfig: {
+    metadata: {
+      "key": "<value>",
+      "key1": "<value>",
+    },
+    policy: {
+      allowedPlatforms: [],
+      allowedSetupMethods: [],
+    },
+    environmentVariables: [],
+    items: [
+      {
+        item: "deployment",
+        source: {
+          type: "built-in",
+          definitionId: "customer-ai",
+          version: "<value>",
+          sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
+        },
+        required: false,
+      },
+    ],
+  },
+};
+```
+
+## Fields
+
+| Field                                                                              | Type                                                                               | Required                                                                           | Description                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| `setupUpdate`                                                                      | [models.SetupUpdate](../models/setupupdate.md)                                     | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `tokenType`                                                                        | [models.DeploymentInfoTokenType](../models/deploymentinfotokentype.md)             | :heavy_check_mark:                                                                 | Type of token used to authenticate this request                                    |
+| `deployment`                                                                       | [models.DeploymentInfoDeployment](../models/deploymentinfodeployment.md)           | :heavy_minus_sign:                                                                 | Deployment details (present when using a deployment-scoped token)                  |
+| `deploymentGroup`                                                                  | [models.DeploymentInfoDeploymentGroup](../models/deploymentinfodeploymentgroup.md) | :heavy_minus_sign:                                                                 | Deployment group details (present when using a deployment-group token)             |
+| `workspace`                                                                        | [models.DeploymentInfoWorkspace](../models/deploymentinfoworkspace.md)             | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `project`                                                                          | [models.DeploymentInfoProject](../models/deploymentinfoproject.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `packages`                                                                         | [models.Packages](../models/packages.md)                                           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `installContext`                                                                   | [models.DeploymentInfoInstallContext](../models/deploymentinfoinstallcontext.md)   | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `supportedRegions`                                                                 | [models.SupportedCloudRegions](../models/supportedcloudregions.md)                 | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `modelAvailabilitySources`                                                         | [models.ModelAvailabilitySource](../models/modelavailabilitysource.md)[]           | :heavy_check_mark:                                                                 | N/A                                                                                |
+| `setupItems`                                                                       | [models.SetupItemStatus](../models/setupitemstatus.md)[]                           | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `setupConfig`                                                                      | [models.DeploymentInfoSetupConfig](../models/deploymentinfosetupconfig.md)         | :heavy_minus_sign:                                                                 | N/A                                                                                |
+| `readiness`                                                                        | [models.Readiness](../models/readiness.md)                                         | :heavy_minus_sign:                                                                 | N/A                                                                                |

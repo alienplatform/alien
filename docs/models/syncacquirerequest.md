@@ -1,0 +1,35 @@
+# SyncAcquireRequest
+
+Request to acquire deployments for processing
+
+## Example Usage
+
+```typescript
+import { SyncAcquireRequest } from "@alienplatform/platform-api/models";
+
+let value: SyncAcquireRequest = {
+  managerId: "mgr_enxscjrqiiu2lrc672hwwuc5",
+  session: "<value>",
+  requestId: "<id>",
+  deploymentIds: [
+    "dep_0c29fq4a2yjb7kx3smwdgxlc",
+  ],
+  deploymentModel: "pull",
+};
+```
+
+## Fields
+
+| Field                                                                                      | Type                                                                                       | Required                                                                                   | Description                                                                                | Example                                                                                    |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------ |
+| `managerId`                                                                                | *string*                                                                                   | :heavy_minus_sign:                                                                         | N/A                                                                                        | mgr_enxscjrqiiu2lrc672hwwuc5                                                               |
+| `session`                                                                                  | *string*                                                                                   | :heavy_check_mark:                                                                         | Unique session identifier for lock tracking                                                |                                                                                            |
+| `requestId`                                                                                | *string*                                                                                   | :heavy_check_mark:                                                                         | Idempotency key for one logical acquire request                                            |                                                                                            |
+| `deploymentIds`                                                                            | *string*[]                                                                                 | :heavy_minus_sign:                                                                         | Specific deployment IDs to lock (for Pull model sync)                                      |                                                                                            |
+| `statuses`                                                                                 | [models.SyncAcquireRequestStatus](../models/syncacquirerequeststatus.md)[]                 | :heavy_minus_sign:                                                                         | Filter by deployment statuses (default: all deployment statuses)                           |                                                                                            |
+| `platforms`                                                                                | [models.SyncAcquireRequestPlatform](../models/syncacquirerequestplatform.md)[]             | :heavy_minus_sign:                                                                         | Filter by platforms (default: all platforms the Manager supports)                          |                                                                                            |
+| `setupMethod`                                                                              | [models.DeploymentSetupMethod](../models/deploymentsetupmethod.md)                         | :heavy_minus_sign:                                                                         | N/A                                                                                        |                                                                                            |
+| `acquireMode`                                                                              | [models.AcquireMode](../models/acquiremode.md)                                             | :heavy_minus_sign:                                                                         | Phase ownership mode for deployment acquisition                                            |                                                                                            |
+| `deploymentModel`                                                                          | [models.SyncAcquireRequestDeploymentModel](../models/syncacquirerequestdeploymentmodel.md) | :heavy_check_mark:                                                                         | Filter by deployment model from stackSettings.deploymentModel.                             |                                                                                            |
+| `supportsExecutionClaims`                                                                  | *boolean*                                                                                  | :heavy_minus_sign:                                                                         | Signals support for echoing executionClaim on renew, reconcile, and release.               |                                                                                            |
+| `limit`                                                                                    | *number*                                                                                   | :heavy_minus_sign:                                                                         | Maximum number of deployments to acquire (default: 10)                                     |                                                                                            |

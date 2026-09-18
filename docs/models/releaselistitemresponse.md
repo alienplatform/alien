@@ -1,0 +1,60 @@
+# ReleaseListItemResponse
+
+## Example Usage
+
+```typescript
+import { ReleaseListItemResponse } from "@alienplatform/platform-api/models";
+
+let value: ReleaseListItemResponse = {
+  id: "rel_WbhQgksrawSKIpEN0NAssHX9",
+  projectId: "<id>",
+  version: "<value>",
+  gitMetadata: {
+    commitSha: "dc36199b2234c6586ebe05ec94078a895c707e29",
+    commitMessage:
+      "add method to measure Interaction to Next Paint (INP) (#36490)",
+    commitRef: "main",
+    commitDate: new Date("2026-03-16T12:00:00Z"),
+    dirty: true,
+    remoteUrl: "https://github.com/alienplatform/alien",
+    commitAuthorName: "John Doe",
+    commitAuthorEmail: "john@example.com",
+    commitAuthorLogin: "johndoe",
+    commitAuthorAvatarUrl: "https://github.com/johndoe.png",
+  },
+  createdAt: new Date("2026-01-02T08:27:46.228Z"),
+  setupFingerprints: {
+    "key": {
+      target: "<value>",
+      fingerprint: "<value>",
+      version: 76165,
+    },
+  },
+  workspaceId: "<id>",
+  currentChannels: [
+    "<value 1>",
+    "<value 2>",
+  ],
+  commitUrl: "https://glossy-marksman.biz",
+};
+```
+
+## Fields
+
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the release.                                                            | rel_WbhQgksrawSKIpEN0NAssHX9                                                                  |
+| `projectId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `version`                                                                                     | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `gitMetadata`                                                                                 | [models.GitMetadata](../models/gitmetadata.md)                                                | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
+| `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `stack`                                                                                       | [models.ReleaseListItemResponseStack](../models/releaselistitemresponsestack.md)              | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
+| `setupFingerprints`                                                                           | Record<string, [models.SetupFingerprintInfo](../models/setupfingerprintinfo.md)>              | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `rootDirectory`                                                                               | *string*                                                                                      | :heavy_minus_sign:                                                                            | N/A                                                                                           |                                                                                               |
+| `createdByUserId`                                                                             | *string*                                                                                      | :heavy_minus_sign:                                                                            | ID of the platform user who created the release, if known                                     |                                                                                               |
+| `workspaceId`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `currentChannels`                                                                             | *string*[]                                                                                    | :heavy_check_mark:                                                                            | Channels for which this release is currently selected                                         |                                                                                               |
+| `commitUrl`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | Validated canonical provider URL for the exact commit                                         |                                                                                               |
+| `project`                                                                                     | [models.ReleaseListItemResponseProject](../models/releaselistitemresponseproject.md)          | :heavy_minus_sign:                                                                            | Project info, included when ?include=project is used                                          |                                                                                               |
+| `rollout`                                                                                     | [models.Rollout](../models/rollout.md)                                                        | :heavy_minus_sign:                                                                            | Rollout stats, included when ?include=rollout is used                                         |                                                                                               |
+| `createdBy`                                                                                   | [models.CreatedBy](../models/createdby.md)                                                    | :heavy_minus_sign:                                                                            | Platform user who created the release, included when ?include=createdBy is used               |                                                                                               |

@@ -1,0 +1,19 @@
+# TargetDeploymentProfilePlatforms
+
+Platform-specific permission configurations
+
+## Example Usage
+
+```typescript
+import { TargetDeploymentProfilePlatforms } from "@alienplatform/platform-api/models";
+
+let value: TargetDeploymentProfilePlatforms = {};
+```
+
+## Fields
+
+| Field                                                                        | Type                                                                         | Required                                                                     | Description                                                                  |
+| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `aws`                                                                        | [models.TargetDeploymentProfileAw](../models/targetdeploymentprofileaw.md)[] | :heavy_minus_sign:                                                           | AWS permission configurations                                                |
+| `azure`                                                                      | [models.ProfileReleaseInfoAzure](../models/profilereleaseinfoazure.md)[]     | :heavy_minus_sign:                                                           | Azure permission configurations                                              |
+| `gcp`                                                                        | [models.ProfileReleaseInfoGcp](../models/profilereleaseinfogcp.md)[]         | :heavy_minus_sign:                                                           | GCP permission configurations                                                |

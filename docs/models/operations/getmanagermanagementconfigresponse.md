@@ -1,0 +1,47 @@
+# GetManagerManagementConfigResponse
+
+Management configuration for different cloud platforms.
+
+Platform-derived configuration for cross-account/cross-tenant access.
+This is NOT user-specified - it's derived from the Manager's ServiceAccount.
+
+
+## Supported Types
+
+### `operations.GetManagerManagementConfigAws`
+
+```typescript
+const value: operations.GetManagerManagementConfigAws = {
+  managingRoleArn: "<value>",
+  platform: "aws",
+};
+```
+
+### `operations.GetManagerManagementConfigGcp`
+
+```typescript
+const value: operations.GetManagerManagementConfigGcp = {
+  serviceAccountEmail: "<value>",
+  platform: "gcp",
+};
+```
+
+### `operations.GetManagerManagementConfigAzure`
+
+```typescript
+const value: operations.GetManagerManagementConfigAzure = {
+  managingTenantId: "<id>",
+  oidcIssuer: "<value>",
+  oidcSubject: "<value>",
+  platform: "azure",
+};
+```
+
+### `operations.GetManagerManagementConfigKubernetes`
+
+```typescript
+const value: operations.GetManagerManagementConfigKubernetes = {
+  platform: "kubernetes",
+};
+```
+

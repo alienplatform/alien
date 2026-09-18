@@ -1,0 +1,53 @@
+# GetAwsVirtualKeyResponse
+
+AWS Virtual Key
+
+## Example Usage
+
+```typescript
+import { GetAwsVirtualKeyResponse } from "@alienplatform/platform-api/models/operations";
+
+let value: GetAwsVirtualKeyResponse = {
+  id: "vkey_0p9nwqgtftugsoey99lqyqq",
+  projectId: "<id>",
+  status: "deleted",
+  externalKeyId: "<id>",
+  awsAccountId: "<id>",
+  awsRegion: "<value>",
+  customKeyStoreId: "<id>",
+  kmsKeyArn: "<value>",
+  alias: "<value>",
+  description: "clear rigid as cleverly ugh rebuild scoff",
+  deletionWindowDays: 960477,
+  tags: {},
+  observedAt: new Date("2026-09-11T15:13:42.020Z"),
+  canaryPassedAt: new Date("2026-06-10T18:36:35.435Z"),
+  deletionScheduledAt: new Date("2026-11-05T23:14:28.617Z"),
+  finalDeletionObservedAt: new Date("2024-10-20T09:43:23.045Z"),
+  createdAt: new Date("2026-02-01T04:27:26.899Z"),
+  updatedAt: new Date("2025-09-28T19:19:48.966Z"),
+};
+```
+
+## Fields
+
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   | Example                                                                                       |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `id`                                                                                          | *string*                                                                                      | :heavy_check_mark:                                                                            | Unique identifier for the aws virtual key.                                                    | vkey_0p9nwqgtftugsoey99lqyqq                                                                  |
+| `projectId`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `status`                                                                                      | [operations.GetAwsVirtualKeyStatus](../../models/operations/getawsvirtualkeystatus.md)        | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `externalKeyId`                                                                               | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `awsAccountId`                                                                                | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `awsRegion`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `customKeyStoreId`                                                                            | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `kmsKeyArn`                                                                                   | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `alias`                                                                                       | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `description`                                                                                 | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deletionWindowDays`                                                                          | *number*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `tags`                                                                                        | Record<string, *string*>                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `observedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `canaryPassedAt`                                                                              | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `deletionScheduledAt`                                                                         | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `finalDeletionObservedAt`                                                                     | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `createdAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |
+| `updatedAt`                                                                                   | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_check_mark:                                                                            | N/A                                                                                           |                                                                                               |

@@ -1,0 +1,41 @@
+# DataLocal9
+
+## Example Usage
+
+```typescript
+import { DataLocal9 } from "@alienplatform/platform-api/models";
+
+let value: DataLocal9 = {
+  path: "/usr/include",
+  pathExists: false,
+  secretMetadataListed: false,
+  status: {
+    collectionIssues: [
+      {
+        message: "<value>",
+        reason: "timed-out",
+        severity: "info",
+        source: "<value>",
+      },
+    ],
+    health: "unknown",
+    lifecycle: "creating",
+    partial: true,
+    stale: false,
+  },
+  backend: "local",
+};
+```
+
+## Fields
+
+| Field                                                                                         | Type                                                                                          | Required                                                                                      | Description                                                                                   |
+| --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `isDirectory`                                                                                 | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `modifiedAt`                                                                                  | [Date](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Date) | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `path`                                                                                        | *string*                                                                                      | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `pathExists`                                                                                  | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `readonly`                                                                                    | *boolean*                                                                                     | :heavy_minus_sign:                                                                            | N/A                                                                                           |
+| `secretMetadataListed`                                                                        | *boolean*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `status`                                                                                      | [models.SyncReconcileRequestStatus41](../models/syncreconcilerequeststatus41.md)              | :heavy_check_mark:                                                                            | N/A                                                                                           |
+| `backend`                                                                                     | *"local"*                                                                                     | :heavy_check_mark:                                                                            | N/A                                                                                           |

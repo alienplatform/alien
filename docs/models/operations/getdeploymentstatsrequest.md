@@ -1,0 +1,21 @@
+# GetDeploymentStatsRequest
+
+## Example Usage
+
+```typescript
+import { GetDeploymentStatsRequest } from "@alienplatform/platform-api/models/operations";
+
+let value: GetDeploymentStatsRequest = {};
+```
+
+## Fields
+
+| Field                                                                                                  | Type                                                                                                   | Required                                                                                               | Description                                                                                            |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `project`                                                                                              | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Filter by project ID or name.                                                                          |
+| `deploymentGroup`                                                                                      | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Filter by deployment group ID or name                                                                  |
+| `managerId`                                                                                            | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Filter by manager ID                                                                                   |
+| `purpose`                                                                                              | [models.DeploymentPurpose](../../models/deploymentpurpose.md)                                          | :heavy_minus_sign:                                                                                     | Filter by deployment purpose                                                                           |
+| `environment`                                                                                          | [operations.GetDeploymentStatsEnvironment](../../models/operations/getdeploymentstatsenvironment.md)[] | :heavy_minus_sign:                                                                                     | Filter deployments by effective environment                                                            |
+| `status`                                                                                               | [operations.GetDeploymentStatsStatus](../../models/operations/getdeploymentstatsstatus.md)[]           | :heavy_minus_sign:                                                                                     | Filter deployments by status                                                                           |
+| `search`                                                                                               | *string*                                                                                               | :heavy_minus_sign:                                                                                     | Search deployments by name or deployment group name                                                    |

@@ -1,0 +1,19 @@
+# TargetDeploymentOverrideAzureResource
+
+Azure-specific binding specification
+
+## Example Usage
+
+```typescript
+import { TargetDeploymentOverrideAzureResource } from "@alienplatform/platform-api/models";
+
+let value: TargetDeploymentOverrideAzureResource = {
+  scope: "<value>",
+};
+```
+
+## Fields
+
+| Field                                              | Type                                               | Required                                           | Description                                        |
+| -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- | -------------------------------------------------- |
+| `scope`                                            | *string*                                           | :heavy_check_mark:                                 | Scope (subscription/resource group/resource level) |
