@@ -40,7 +40,10 @@ pub use resource_permissions_helper::*;
 
 use std::collections::BTreeMap;
 
-use alien_core::{branded_standard_resource_tags, branded_tag_key, Platform, ALIEN_STACK_TAG_KEY};
+use alien_core::{
+    branded_standard_resource_tags, branded_tag_key, Platform, ALIEN_STACK_TAG_KEY,
+    DEFAULT_ALIEN_LABEL_DOMAIN,
+};
 
 const LEGACY_LABEL_DOMAIN_MARKER_PREFIX: &str = "alien.dev/legacy-label-domain-";
 const CURRENT_LABEL_DOMAIN_MARKER: &str = "alien.dev/label-domain";
