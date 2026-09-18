@@ -311,6 +311,8 @@ rules:
     );
     // Helm 4 `--rollback-on-failure` cannot roll a first install back to a
     // previous revision, so a failed install can still occupy the release name.
+    // Skip hooks and waiting: a failed first install can leave a cleanup Job
+    // that Helm 4 `--wait` treats as uninstall failure.
     run_ok(
         "helm",
         [
@@ -319,8 +321,7 @@ rules:
             "--namespace",
             &helm_namespace,
             "--ignore-not-found",
-            "--wait",
-            "--timeout=2m",
+            "--no-hooks",
         ],
         None,
     );
