@@ -301,6 +301,10 @@ jobs:
             examples:
               - 'examples/**'
               - 'packages/**'
+              # Changes to the generated Platform client can break the ordinary
+              # filtered CLI graph while the workspace's all-features Rust job
+              # still succeeds with the full API enabled.
+              - 'client-sdks/platform/rust/**'
               - 'crates/alien-cli/**'
               - 'crates/alien-deploy-cli/**'
               - 'crates/alien-operator/**'
