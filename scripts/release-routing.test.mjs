@@ -32,7 +32,7 @@ function jobBlock(name) {
   const start = workflow.indexOf(`  ${name}:\n`)
   assert.notEqual(start, -1, `release workflow has ${name}`)
   const remainder = workflow.slice(start + 1)
-  const next = remainder.search(/^  [a-z0-9_-]+:$/m)
+  const next = remainder.search(/^ {2}[a-z0-9_-]+:$/m)
   return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
 }
 
@@ -73,10 +73,7 @@ test("dev mode can reach only the reusable npm dev workflow", () => {
 })
 
 test("stable binary releases publish the pinned Platform composition as alien", () => {
-  assert.match(
-    workflow,
-    /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/,
-  )
+  assert.match(workflow, /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/)
   const targets = new Map([
     ["build-binaries-linux-x86_64", ["x86_64-unknown-linux-musl", "alien"]],
     ["build-binaries-linux-aarch64", ["aarch64-unknown-linux-musl", "alien"]],
@@ -88,7 +85,10 @@ test("stable binary releases publish the pinned Platform composition as alien", 
     const block = jobBlock(job)
     assert.match(block, /repository: alienplatform\/platform/)
     assert.match(block, /ref: \$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/)
-    assert.match(block, /key: .*\$\{\{ needs\.prepare\.outputs\.source_ref \}\}.*\$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/)
+    assert.match(
+      block,
+      /key: .*\$\{\{ needs\.prepare\.outputs\.source_ref \}\}.*\$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/,
+    )
     assert.match(
       block,
       new RegExp(
