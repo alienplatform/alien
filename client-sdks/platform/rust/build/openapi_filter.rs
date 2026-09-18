@@ -47,6 +47,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "getAPIKey",
     "getAccessRequest",
     "getAccessRequestCoordinates",
+    "getCommand",
     "getDeployment",
     "getDeploymentGroup",
     "getDeploymentGroupByExternalId",
