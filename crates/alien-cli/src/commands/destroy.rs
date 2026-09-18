@@ -16,7 +16,7 @@ use alien_deployment::manager_api_transport::{
     acquire_setup_delete_deployment, combine_operation_and_finalization, final_reconcile,
     ManagerApiTransport, SetupDeleteAcquireOutcome,
 };
-use alien_deployment::runner::{RunnerPolicy, RunnerResult};
+use alien_deployment::runner::{preserve_semantic_failure, RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_infra::ClientConfigExt;
 use clap::Parser;
@@ -329,10 +329,14 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         }
         other => other,
     };
+    let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
+        (result.loop_result.outcome == LoopOutcome::Failure)
+            .then(|| result.loop_result.final_status.clone())
+    });
 
     // Always reconcile + release
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        preserve_semantic_failure(runner_result, &current),
         final_reconcile(
             &manager_client,
             &tracked_deployment.deployment_id,
@@ -342,6 +346,10 @@ pub async fn destroy_task(args: DestroyArgs, ctx: ExecutionMode) -> Result<()> {
         )
         .await,
     );
+
+    if let Some(status) = semantic_failure_status {
+        steps.fail(2, Some(format!("{status:?}")));
+    }
 
     let RunnerResult {
         loop_result,
