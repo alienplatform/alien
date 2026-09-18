@@ -714,10 +714,10 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
                 release_name: "acme-operator".to_string(),
-                requires_remote_operator_collector_token: false,
             }),
             supported_aws_regions: Vec::new(),
         },
+        false,
     )
     .expect("module should render");
 
@@ -787,7 +787,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(helm.contains("terraform apply -replace=terraform_data.remote_operator_ownership"));
     assert!(helm.contains("kubernetes_secret_v1.remote_operator_credentials"));
     assert!(compact_helm.contains("atomic = true"));
-    assert!(compact_helm.contains("cleanup_on_fail = true"));
+    assert!(!compact_helm.contains("cleanup_on_fail"));
     assert!(compact_helm.contains("wait = true"));
     assert!(compact_helm.contains("timeout = 300"));
     let variables = module
@@ -875,10 +875,10 @@ fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_afte
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
                 release_name: "acme-operator".to_string(),
-                requires_remote_operator_collector_token: true,
             }),
             supported_aws_regions: Vec::new(),
         },
+        true,
     )
     .expect("module should render");
     let helm = module.get("helm.tf").expect("helm.tf should render");
@@ -905,7 +905,7 @@ fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_afte
         "field_selector = local.remote_operator_namespace_exists ? \"metadata.name=${local.remote_operator_identity_record_name}\" : \"metadata.name=${local.remote_operator_lifecycle_namespace}\""
     ));
     assert!(compact.contains(
-        "remote_operator_release_prefix = trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(30, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")"
+        "remote_operator_release_prefix = trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(21, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")"
     ));
     assert!(compact.contains(
         r#"remote_operator_identity_record_name = "${local.remote_operator_release_prefix}-remote-operator-${substr(sha256("${local.remote_operator_lifecycle_namespace}/${local.remote_operator_lifecycle_release}"), 0, 16)}""#
@@ -983,10 +983,10 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             helm_install: Some(TerraformHelmInstall {
                 chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
                 release_name: "acme-operator".to_string(),
-                requires_remote_operator_collector_token: false,
             }),
             supported_aws_regions: Vec::new(),
         },
+        false,
     )
     .expect("module should render");
 

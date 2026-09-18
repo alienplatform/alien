@@ -163,8 +163,7 @@ fn chart_role_rbac_allows_every_cleanup_route_resource() {
     assert!(role.contains("networking.gke.io"));
     assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
     assert!(role.contains("alb.networking.azure.io"));
-    assert!(role.contains("resources: [\"healthcheckpolicy\"]"));
-    assert!(role.contains("eq $routeApi \"gateway\""));
+    assert!(role.contains("resources: [\"healthcheckpolicies\"]"));
 
     let rendered = test_utils::helm_template(&chart.files, None);
     match &rendered.status {
@@ -189,7 +188,7 @@ fn chart_role_rbac_allows_every_cleanup_route_resource() {
                 .contains(r#"apiGroups: ["alb.networking.azure.io"]"#));
             assert!(rendered
                 .stdout
-                .contains(r#"resources: ["healthcheckpolicy"]"#));
+                .contains(r#"resources: ["healthcheckpolicies"]"#));
         }
         LinterStatus::Skipped(_) | LinterStatus::Failed(_) => {
             rendered.assert_ok("rendered route RBAC")
@@ -407,15 +406,9 @@ fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
     let stack = Stack::new("cleanup-hook".to_string()).build();
     let chart = render(&stack, StackSettings::default());
     let files = chart.files.clone();
-    let cleanup_rbac = files
-        .get("templates/cleanup-rbac.yaml")
-        .expect("cleanup RBAC");
-    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-13""#));
-    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-12""#));
-    assert!(cleanup_rbac.contains(r#""helm.sh/hook-weight": "-11""#));
-    assert!(cleanup_rbac.contains(r#"resources: ["jobs"]"#));
-    assert!(cleanup_rbac.contains(r#"resources: ["serviceaccounts"]"#));
-    assert!(cleanup_rbac.contains(r#"resources: ["roles", "rolebindings"]"#));
+    assert!(!files.contains_key("templates/cleanup-rbac.yaml"));
+    assert!(files["templates/cleanup-job.yaml"]
+        .contains(r#"serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}"#));
 
     let rendered = test_utils::helm_template(&files, None);
     match &rendered.status {
@@ -425,11 +418,15 @@ fn uninstall_cleanup_hook_preserves_pvcs_by_default() {
             assert!(rendered.stdout.contains("pre-delete"));
             assert!(rendered
                 .stdout
-                .contains("serviceAccountName: test-release-cleanup"));
+                .contains("serviceAccountName: test-release-manager-sa"));
+            assert!(!rendered.stdout.contains("adopt_cleanup_resource"));
+            assert!(rendered.stdout.contains(
+                "selector=\"managed-by=runtime,$deployment_label_key=$deployment_label_value\""
+            ));
             assert!(rendered
                 .stdout
-                .contains("adopt_cleanup_resource serviceaccount"));
-            assert!(rendered.stdout.contains("selector='managed-by=runtime'"));
+                .contains("labelKey: \"alien.dev/deployment\""));
+            assert!(rendered.stdout.contains("labelValue: \"test-release\""));
             assert!(rendered
                 .stdout
                 .contains("delete deployments.apps,statefulsets.apps"));

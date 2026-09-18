@@ -113,10 +113,6 @@ impl TerraformRegistration {
 pub struct TerraformHelmInstall {
     pub chart_ref: String,
     pub release_name: String,
-    /// Whether the paired chart requires `collector-token` while its embedded
-    /// Remote Operator is enabled. The generated Secret validates this before
-    /// Terraform can mutate an existing credential to an empty value.
-    pub requires_remote_operator_collector_token: bool,
 }
 
 /// Per-network-resource extra variables (e.g. existing VPC ids for AWS).
@@ -179,7 +175,7 @@ pub fn generate_terraform_module(
     target: TerraformTarget,
     options: TerraformOptions<'_>,
 ) -> Result<ModuleFiles> {
-    generate_terraform_module_internal(stack, target, options, false)
+    generate_terraform_module_internal(stack, target, options, false, false)
 }
 
 /// Generate a product module that can enable the embedded Remote Operator.
@@ -187,8 +183,15 @@ pub fn generate_product_terraform_module(
     stack: &Stack,
     target: TerraformTarget,
     options: TerraformOptions<'_>,
+    requires_remote_operator_collector_token: bool,
 ) -> Result<ModuleFiles> {
-    generate_terraform_module_internal(stack, target, options, true)
+    generate_terraform_module_internal(
+        stack,
+        target,
+        options,
+        true,
+        requires_remote_operator_collector_token,
+    )
 }
 
 fn generate_terraform_module_internal(
@@ -196,6 +199,7 @@ fn generate_terraform_module_internal(
     target: TerraformTarget,
     options: TerraformOptions<'_>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> Result<ModuleFiles> {
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
@@ -495,17 +499,18 @@ fn generate_terraform_module_internal(
             terraform_input_values_expression(&stack_inputs),
         ))?,
     );
-    if let Some(helm_install) = options
+    if options
         .helm_install
         .as_ref()
         .filter(|_| target.is_kubernetes() && options.registration.is_some())
+        .is_some()
     {
         files.insert(
             "helm.tf".to_string(),
             render_body(helm_install_body(
                 options.registration.as_ref().expect("checked above"),
-                helm_install,
                 product_remote_operator,
+                requires_remote_operator_collector_token,
             ))?,
         );
     }
@@ -534,6 +539,7 @@ fn generate_terraform_module_internal(
             &stack_settings,
             options.helm_install.as_ref(),
             product_remote_operator,
+            requires_remote_operator_collector_token,
             &stack_inputs,
             retained_key_detach.is_some(),
             emits_azapi_resource,
@@ -1771,7 +1777,7 @@ fn variables_body(
             )));
             blocks.push(nested(bool_variable_block(
                 "remote_operator_bootstrap_identity",
-                "One-time acknowledgement for first enabling Remote Operator in an existing product release. Set true for the first apply only, then immediately persist false.",
+                "One-time acknowledgement for first enabling Remote Operator after the required disabled install. Set true for the first apply only, then immediately persist false.",
                 Some(false),
             )));
             blocks.push(nested(non_negative_integer_variable_block(
@@ -3208,8 +3214,8 @@ fn expression_is_empty_object(expression: &Expression) -> bool {
 
 fn helm_install_body(
     registration: &TerraformRegistration,
-    helm_install: &TerraformHelmInstall,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> Body {
     let provider_resource = registration.provider_resource_type();
     let mut resources = Vec::new();
@@ -3299,7 +3305,7 @@ fn helm_install_body(
                 attr(
                     "remote_operator_release_prefix",
                     expr::raw(
-                        "trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(30, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")",
+                        "trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(21, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")",
                     ),
                 ),
                 attr(
@@ -3438,30 +3444,24 @@ fn helm_install_body(
                         )),
                     ]
                     .into_iter()
-                    .chain(
-                        helm_install
-                            .requires_remote_operator_collector_token
-                            .then(|| {
-                                nested(block(
-                                    "precondition",
-                                    [
-                                        attr(
-                                            "condition",
-                                            expr::raw(
-                                                "var.remote_operator_collector_token != null",
-                                            ),
-                                        ),
-                                        attr(
-                                            "error_message",
-                                            Expression::String(
-                                                "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled."
-                                                    .to_string(),
-                                            ),
-                                        ),
-                                    ],
-                                ))
-                            }),
-                    ),
+                    .chain(requires_remote_operator_collector_token.then(|| {
+                        nested(block(
+                            "precondition",
+                            [
+                                attr(
+                                    "condition",
+                                    expr::raw("var.remote_operator_collector_token != null"),
+                                ),
+                                attr(
+                                    "error_message",
+                                    Expression::String(
+                                        "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled."
+                                            .to_string(),
+                                    ),
+                                ),
+                            ],
+                        ))
+                    })),
                 )),
                 attr(
                     "depends_on",
@@ -3506,7 +3506,9 @@ fn helm_install_body(
     if product_remote_operator {
         helm_body.extend([
             attr("atomic", Expression::Bool(true)),
-            attr("cleanup_on_fail", Expression::Bool(true)),
+            // Do not enable cleanup_on_fail: an enabled upgrade can create
+            // durable identity proof that must survive the atomic rollback
+            // for the disabled release's uninstall hook to retire safely.
             // A disabled bridge must prune every older, pre-guard revision
             // before first enable. Once enabled, retain the guarded previous
             // revision for Helm's atomic rollback.
@@ -3708,6 +3710,7 @@ fn readme_md(
     stack_settings: &StackSettings,
     helm_install: Option<&TerraformHelmInstall>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
     stack_inputs: &[StackInputDefinition],
     has_retained_keys: bool,
     emits_azapi_resource: bool,
@@ -3800,6 +3803,7 @@ fn readme_md(
             registration.is_some(),
             helm_install,
             product_remote_operator,
+            requires_remote_operator_collector_token,
         ));
     }
     if !stack_inputs.is_empty() {
@@ -3930,6 +3934,7 @@ fn readme_kubernetes_inputs(
     has_registration: bool,
     helm_install: Option<&TerraformHelmInstall>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> String {
     let cluster_name = match target {
         TerraformTarget::Eks => "\n- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = \"existing\"`.",
@@ -3939,15 +3944,13 @@ fn readme_kubernetes_inputs(
     };
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
-            let collector_token_requirement = if helm_install
-                .is_some_and(|install| install.requires_remote_operator_collector_token)
-            {
+            let collector_token_requirement = if requires_remote_operator_collector_token {
                 "`remote_operator_collector_token` is required before Terraform can create or update the enabled Remote Operator credentials Secret because this chart includes log collection."
             } else {
                 "Supply `remote_operator_collector_token` only when the product chart includes log collection."
             };
             format!(
-                "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. A separately managed Helm release can keep its Remote Operator identity without blocking later infrastructure-only applies. Once Terraform has enabled the embedded Remote Operator, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform pins the namespace and release name in its state when it first manages Remote Operator, preventing an in-place move from abandoning the retained identity. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. {collector_token_requirement} Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them. If this module was first applied with Remote Operator disabled, arm the state latch on first enable with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Never replace that state resource after it is armed.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: when first enabling Remote Operator in an existing product release, first apply the new chart once with `remote_operator_enabled = false`; this records a guard-capable disabled revision and prunes older rollback targets. Then set this to `true`, arm the state latch as described above, and enable the Operator for one apply before setting it back to `false`. Leave it `false` for a new release. The Helm resource is atomic, and an Operator that never opens its durable identity cannot mark initialization complete. A failed attempt may leave its exact pending record and identity PVC for the explicit cleanup lifecycle; a same-name install will not adopt them.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and PVC, then Terraform removes the release, credentials Secret, state latch, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
+                "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. A separately managed Helm release can keep its Remote Operator identity without blocking later infrastructure-only applies. Once Terraform has enabled the embedded Remote Operator, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform pins the namespace and release name in its state when it first manages Remote Operator, preventing an in-place move from abandoning the retained identity. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. {collector_token_requirement} Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them. First apply the module once with Remote Operator disabled. On first enable, arm the state latch with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Never replace that state resource after it is armed.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: every release must first apply the chart with `remote_operator_enabled = false`; this records a guard-capable Kubernetes history revision and prunes older rollback targets. Then set this to `true`, arm the state latch as described above, and enable the Operator for one apply before setting it back to `false`. The Helm resource is atomic, and an Operator that never opens its durable identity cannot mark initialization complete. If an enabled upgrade fails after identity initialization, atomic rollback preserves the disabled release so `terraform destroy` can run its exact cleanup hook.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and identity PVC, then Terraform removes the release, credentials Secret, state latch, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
             )
         } else {
             "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration.".to_string()

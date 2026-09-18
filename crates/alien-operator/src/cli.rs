@@ -7,7 +7,10 @@ use crate::error::{ErrorData, Result};
 use crate::loops::access_requests::AccessRequestSyncLoop;
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::operations_exec::{OperationsExecLoop, OperationsSyncHandler};
-use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
+use crate::{
+    run_operator_with_cancel_and_loops_and_runtime, InstanceLock, OperatorConfig,
+    OperatorRuntimeOptions,
+};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
@@ -135,12 +138,6 @@ pub struct Args {
 
     #[arg(long, env = "OTLP_HOST", default_value = "127.0.0.1")]
     pub otlp_host: IpAddr,
-
-    #[arg(long, env = "OPERATOR_READINESS_PORT")]
-    pub readiness_port: Option<u16>,
-
-    #[arg(long, env = "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP")]
-    pub identity_initialized_config_map: Option<String>,
 
     #[arg(short, long)]
     pub verbose: bool,
@@ -277,6 +274,26 @@ pub fn cli_main() {
 }
 
 async fn run(
+    args: Args,
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
+    operations_exec_loop_hook: OperationsExecLoopHook,
+    operations_sync_handler_hook: OperationsSyncHandlerHook,
+) -> Result<()> {
+    run_operator_cli(
+        args,
+        init_hook,
+        debug_loop_hook,
+        access_request_loop_hook,
+        operations_exec_loop_hook,
+        operations_sync_handler_hook,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_operator_cli(
     mut args: Args,
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
@@ -335,6 +352,20 @@ async fn run(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let pinned_legacy_label_domain = env_string("ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY")
+        .map(|key| {
+            key.strip_suffix("/deployment")
+                .filter(|domain| !domain.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message:
+                            "ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY must end with /deployment"
+                                .to_string(),
+                    })
+                })
+        })
+        .transpose()?;
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -421,17 +452,15 @@ async fn run(
                     )
                     .await?;
 
-                    db.set_deployment_id(&initialized_deployment_id).await?;
-                    if args.initial_desired_release == InitialDesiredReleaseArg::None {
-                        db.set_deployment_state(&observe_only_initial_state(args.platform))
-                            .await?;
-                    }
-
-                    if let Some(ref dt) = deployment_token {
-                        info!("   Received deployment-scoped token from manager");
-                        db.set_sync_token(dt).await?;
-                        sync_token = dt.clone();
-                    }
+                    sync_token = persist_initialized_manager_identity(
+                        &db,
+                        &initialized_deployment_id,
+                        deployment_token,
+                        &sync_token,
+                        args.platform,
+                        args.initial_desired_release,
+                    )
+                    .await?;
 
                     info!(
                         "   Initialized successfully, deployment ID: {}",
@@ -512,22 +541,14 @@ async fn run(
         .sync_interval_seconds(args.sync_interval)
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
-        .maybe_readiness_server_port(args.readiness_port)
-        .maybe_identity_initialized_config_map(args.identity_initialized_config_map)
         .maybe_namespace(args.namespace)
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
         .maybe_app_version(args.operator_release_version)
-        .maybe_label_domain(embedded_config.as_ref().and_then(|config| {
-            // `brand` is the already-slugged identity `access_request_crd_names`
-            // expects (see alien-core::access_request_crd) — packages-builder
-            // computes it once and embeds both fields, but `label_domain` is
-            // the raw, pre-slug config value (e.g. a placeholder like
-            // "acme.local"), which can disagree with what the manifest
-            // generator derived the CRD/RBAC from. Prefer `brand`; fall back
-            // to `label_domain` only for older embedded binaries that
-            // predate the `brand` field.
-            config.brand.clone().or_else(|| config.label_domain.clone())
+        .maybe_label_domain(pinned_legacy_label_domain.or_else(|| {
+            embedded_config
+                .as_ref()
+                .and_then(|config| config.brand.clone().or_else(|| config.label_domain.clone()))
         }))
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
@@ -561,7 +582,12 @@ async fn run(
         };
 
     let operations_sync_handler = operations_sync_handler_hook(&operator_config.data_dir);
-    run_operator_with_cancel_and_loops(
+    let runtime_options = OperatorRuntimeOptions {
+        readiness_server_port: crate::readiness_server_port_from_env()?,
+        identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
+        runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
+    };
+    run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
         service_provider,
         debug_loop_hook(),
@@ -569,6 +595,7 @@ async fn run(
         operations_exec_loop_hook(),
         operations_sync_handler,
         cancel,
+        runtime_options,
     )
     .await?;
 
@@ -599,6 +626,28 @@ fn select_startup_deployment_id(
         (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
         (None, None) => Ok(StartupDeploymentId::Initialize),
     }
+}
+
+async fn persist_initialized_manager_identity(
+    db: &crate::db::OperatorDb,
+    deployment_id: &str,
+    replacement_token: Option<String>,
+    configured_sync_token: &str,
+    platform: Platform,
+    initial_desired_release: InitialDesiredReleaseArg,
+) -> Result<String> {
+    if replacement_token.is_some() {
+        info!("   Received deployment-scoped token from manager");
+    }
+    let initial_state = (initial_desired_release == InitialDesiredReleaseArg::None)
+        .then(|| observe_only_initial_state(platform));
+    db.persist_initialized_identity(
+        deployment_id,
+        initial_state.as_ref(),
+        replacement_token.as_deref(),
+    )
+    .await?;
+    Ok(replacement_token.unwrap_or_else(|| configured_sync_token.to_string()))
 }
 
 fn observe_only_initial_state(platform: Platform) -> DeploymentState {
@@ -1072,10 +1121,14 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, StartupDeploymentId,
+        persist_initialized_manager_identity, run_operator_cli, select_startup_deployment_id, Args,
+        InitialDesiredReleaseArg, StartupDeploymentId, NOOP_ACCESS_REQUEST_LOOP_HOOK,
+        NOOP_DEBUG_LOOP_HOOK, NOOP_INIT, NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+        NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
     use alien_core::{DeploymentStatus, Platform};
     use clap::Parser;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn rotation_accepts_both_deployment_token_formats_but_excludes_setup_and_admin_tokens() {
@@ -1160,6 +1213,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn admin_initialization_persists_identity_without_requiring_a_replacement_token() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is UTF-8");
+        let db = crate::db::OperatorDb::new(
+            data_dir,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("open encrypted operator database");
+
+        let effective_token = persist_initialized_manager_identity(
+            &db,
+            "dep_admin",
+            None,
+            "ax_admin_existing",
+            Platform::Kubernetes,
+            InitialDesiredReleaseArg::Active,
+        )
+        .await
+        .expect("persist admin-token initialization");
+
+        assert_eq!(effective_token, "ax_admin_existing");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment ID"),
+            Some("dep_admin".to_string())
+        );
+        assert_eq!(
+            db.get_sync_token().await.expect("read replacement token"),
+            None,
+            "an absent manager replacement must preserve the configured admin-token workflow"
+        );
+    }
+
     #[test]
     fn no_desired_release_initializes_running_observed_state() {
         let state = observe_only_initial_state(Platform::Kubernetes);
@@ -1188,5 +1275,61 @@ mod tests {
             InitialDesiredReleaseArg::Active
         );
         assert_eq!(args.operator_permission.as_deref(), Some("observe"));
+    }
+
+    #[tokio::test]
+    async fn cli_persists_identity_before_later_runtime_config_errors() {
+        let temp = tempfile::tempdir().expect("create temporary operator directory");
+        let data_dir = temp.path().join("data");
+        let encryption_key_file = temp.path().join("encryption-key");
+        let sync_token_file = temp.path().join("sync-token");
+        std::fs::write(&encryption_key_file, "a".repeat(64)).expect("write test encryption key");
+        std::fs::write(&sync_token_file, "ax_setup_test").expect("write test setup credential");
+        std::fs::set_permissions(&encryption_key_file, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict test encryption key");
+        std::fs::set_permissions(&sync_token_file, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict test setup credential");
+
+        let args = Args::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--sync-url",
+            "http://127.0.0.1:1",
+            "--sync-token-file",
+            sync_token_file.to_str().expect("UTF-8 sync token path"),
+            "--deployment-id",
+            "dep_configured",
+            "--data-dir",
+            data_dir.to_str().expect("UTF-8 data directory"),
+            "--encryption-key-file",
+            encryption_key_file
+                .to_str()
+                .expect("UTF-8 encryption key path"),
+            "--namespace",
+            "product",
+            "--external-bindings",
+            "{",
+        ])
+        .expect("parse operator test arguments");
+        let error = run_operator_cli(
+            args,
+            NOOP_INIT,
+            NOOP_DEBUG_LOOP_HOOK,
+            NOOP_ACCESS_REQUEST_LOOP_HOOK,
+            NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+            NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
+        )
+        .await
+        .expect_err("invalid later runtime configuration must stop startup");
+
+        assert!(error.message.contains("Invalid external bindings JSON"));
+        let db = crate::db::OperatorDb::new(&data_dir.to_string_lossy(), &"a".repeat(64))
+            .await
+            .expect("reopen operator database");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment ID"),
+            Some("dep_configured".to_string())
+        );
     }
 }

@@ -82,7 +82,7 @@ pub fn access_request_crd_names(brand_name: Option<&str>) -> AccessRequestCrdNam
 /// The lowercase alphanumeric brand slug from a name's first dot-separated
 /// label (so a real domain's first label still works as input), with any
 /// remaining non-alphanumerics (spaces, punctuation) stripped out.
-fn brand_slug(name: &str) -> String {
+pub fn brand_slug(name: &str) -> String {
     let first_label = name.split('.').next().unwrap_or(name);
     let slug: String = first_label
         .chars()

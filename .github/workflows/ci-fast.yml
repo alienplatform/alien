@@ -80,6 +80,8 @@ jobs:
             product_lifecycle:
               - 'crates/alien-core/**'
               - 'crates/alien-helm/**'
+              - 'crates/alien-infra/**'
+              - 'crates/alien-operator/**'
               - 'crates/alien-terraform/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
