@@ -56,7 +56,9 @@ pem = "3.0"
 workspace = true
 
 [features]
-default = ["full-models"]
+default = []
+# Retains every generated Azure model for explicit compatibility checks. Alien's
+# production graph uses the smaller deterministic reachable-model set.
 full-models = []
 test-utils = ["dep:mockall"]
 
