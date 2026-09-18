@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.Cpu5`
+### `models.SyncReconcileRequestCpu5`
 
 ```typescript
-const value: models.Cpu5 = {
-  unit: "count",
-  value: 2235.79,
+const value: models.SyncReconcileRequestCpu5 = {
+  unit: "cores",
+  value: 9126.99,
 };
 ```
 

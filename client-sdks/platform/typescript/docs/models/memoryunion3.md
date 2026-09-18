@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.Memory3`
+### `models.SyncReconcileRequestMemory3`
 
 ```typescript
-const value: models.Memory3 = {
-  unit: "bytes",
-  value: 3372.39,
+const value: models.SyncReconcileRequestMemory3 = {
+  unit: "percent",
+  value: 372.72,
 };
 ```
 
