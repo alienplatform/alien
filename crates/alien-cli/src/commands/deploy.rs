@@ -612,6 +612,7 @@ async fn create_self_deployment(
             &session.token,
             &resolved_args.platform,
             &resolved_args.input_values,
+            &args.channel,
         )
         .await?;
     }
@@ -777,15 +778,17 @@ async fn set_first_party_deployment_inputs(
     session_token: &str,
     platform: &str,
     input_values: &HashMap<String, serde_json::Value>,
+    release_channel: &str,
 ) -> Result<()> {
     let http_client = create_platform_http_client(session_token)?;
     let url = api_url(base_url, "/v1/deployments/first-party-inputs", None)?;
     let response = http_client
         .put(url)
-        .json(&serde_json::json!({
-            "platform": platform,
-            "inputValues": input_values,
-        }))
+        .json(&first_party_inputs_request_body(
+            platform,
+            input_values,
+            release_channel,
+        ))
         .send()
         .await
         .into_alien_error()
@@ -793,6 +796,18 @@ async fn set_first_party_deployment_inputs(
             message: "Failed to set first-party deployment inputs".to_string(),
         })?;
     parse_empty_api_response(response, "Failed to set first-party deployment inputs").await
+}
+
+fn first_party_inputs_request_body(
+    platform: &str,
+    input_values: &HashMap<String, serde_json::Value>,
+    release_channel: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "platform": platform,
+        "inputValues": input_values,
+        "releaseChannel": release_channel,
+    })
 }
 
 async fn create_deployment_with_group_session(
@@ -803,22 +818,7 @@ async fn create_deployment_with_group_session(
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
     let http_client = create_platform_http_client(session_token)?;
-    let stack_settings = deployment_stack_settings_json(resolved_args, args)?;
-    let mut body = serde_json::json!({
-        "name": resolved_args.name,
-        "project": project_id,
-        "platform": resolved_args.platform,
-        "stackSettings": stack_settings,
-        "inputValues": {},
-        "setupMethod": "cli",
-    });
-
-    if let Some(resource_prefix) = args.resource_prefix.as_ref() {
-        body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
-    }
-    if let Some(public_subdomain) = resolved_args.public_subdomain.as_ref() {
-        body["publicSubdomain"] = serde_json::Value::String(public_subdomain.clone());
-    }
+    let body = deployment_create_request_body(resolved_args, args, project_id)?;
 
     let url = api_url(base_url, "/v1/deployments", None)?;
     let response = http_client
@@ -831,6 +831,42 @@ async fn create_deployment_with_group_session(
             message: "Failed to create deployment".to_string(),
         })?;
     parse_api_response(response, "Failed to create deployment").await
+}
+
+fn deployment_manager_http_client(
+    deployment_token: &str,
+    workspace: Option<&str>,
+) -> Result<reqwest::Client> {
+    let deployment_auth = format!("Bearer {deployment_token}");
+    match workspace {
+        Some(workspace) => crate::auth::client_with_auth_and_workspace(&deployment_auth, workspace),
+        None => crate::auth::client_with_header(&deployment_auth),
+    }
+}
+
+fn deployment_create_request_body(
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<serde_json::Value> {
+    let stack_settings = deployment_stack_settings_json(resolved_args, args)?;
+    let mut body = serde_json::json!({
+        "name": resolved_args.name,
+        "project": project_id,
+        "platform": resolved_args.platform,
+        "stackSettings": stack_settings,
+        "inputValues": {},
+        "releaseChannel": args.channel,
+        "setupMethod": "cli",
+    });
+
+    if let Some(resource_prefix) = args.resource_prefix.as_ref() {
+        body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
+    }
+    if let Some(public_subdomain) = resolved_args.public_subdomain.as_ref() {
+        body["publicSubdomain"] = serde_json::Value::String(public_subdomain.clone());
+    }
+    Ok(body)
 }
 
 fn deployment_stack_settings_json(
@@ -1421,18 +1457,14 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         .resolve_manager(&tracked_deployment.project_id, &resolved_args.platform)
         .await?;
     // Provisioning calls the manager's sync endpoints, which require
-    // `managers.sync` — held by the deployment's own token, not the install
-    // token that resolved the manager. In platform mode (workspace is set),
-    // re-authenticate as the deployment for these calls.
-    let manager_client = if let Some(workspace) = manager_ctx.workspace.clone() {
-        let http_client = crate::auth::client_with_auth_and_workspace(
-            &format!("Bearer {}", tracked_deployment.api_key),
-            &workspace,
-        )?;
-        alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, http_client)
-    } else {
-        manager_ctx.client
-    };
+    // deployment-scoped authorization. Manager discovery may use a user or
+    // project credential, but that credential must never leak into setup.
+    let manager_http_client = deployment_manager_http_client(
+        &tracked_deployment.api_key,
+        manager_ctx.workspace.as_deref(),
+    )?;
+    let manager_client =
+        alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, manager_http_client);
 
     steps.complete(1, Some(format!("Manager: {}", manager_ctx.manager_url)));
 
@@ -1962,6 +1994,8 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -2094,5 +2128,100 @@ mod tests {
         let error = to_sdk_stack_input_values(&invalid)
             .expect_err("object-valued stack inputs should be rejected");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn first_party_creation_preserves_requested_release_channel() {
+        let resolved_args = ResolvedDeployArgs {
+            name: "preview".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            input_values: HashMap::new(),
+            public_subdomain: None,
+        };
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "preview",
+            "--platform",
+            "aws",
+            "--channel",
+            "staging",
+        ])
+        .expect("deployment arguments should parse");
+
+        let body = deployment_create_request_body(&resolved_args, &args, "proj_test")
+            .expect("deployment request should serialize");
+        assert_eq!(body["releaseChannel"], "staging");
+
+        let input_body = first_party_inputs_request_body(
+            "aws",
+            &HashMap::from([("endpoint".to_string(), serde_json::json!("staging.example"))]),
+            "staging",
+        );
+        assert_eq!(input_body["releaseChannel"], "staging");
+    }
+
+    #[tokio::test]
+    async fn provisioning_always_uses_deployment_bearer_with_optional_workspace_routing() {
+        for workspace in [None, Some("acme")] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind manager test server");
+            let address = listener.local_addr().expect("read manager test address");
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept manager request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = stream
+                        .read(&mut buffer)
+                        .await
+                        .expect("read manager request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let body = r#"{"id":"dep_test","name":"test","platform":"aws","status":"pending","deploymentGroupId":"dg_test","deploymentProtocolVersion":1,"projectId":"proj_test","workspaceId":"ws_test","retryRequested":false,"createdAt":"2026-09-17T00:00:00Z"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write manager response");
+                String::from_utf8(request).expect("manager request is HTTP text")
+            });
+
+            let http_client = deployment_manager_http_client("deployment-secret", workspace)
+                .expect("manager client should build");
+            let client = alien_manager_api::Client::new_with_client(
+                &format!("http://{address}"),
+                http_client,
+            );
+            client
+                .get_deployment()
+                .id("dep_test")
+                .send()
+                .await
+                .expect("manager request should succeed");
+            let request = server.await.expect("manager test server task");
+            let request_lower = request.to_ascii_lowercase();
+
+            assert!(request_lower.contains("authorization: bearer deployment-secret\r\n"));
+            match workspace {
+                Some(workspace) => {
+                    assert!(request_lower.contains(&format!("x-alien-workspace: {workspace}\r\n")))
+                }
+                None => assert!(!request_lower.contains("x-alien-workspace:")),
+            }
+        }
     }
 }
