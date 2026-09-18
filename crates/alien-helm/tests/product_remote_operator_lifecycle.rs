@@ -309,6 +309,21 @@ rules:
         None,
         "atomic disabled-install cleanup must delete its retained lifecycle capability",
     );
+    // Helm 4 `--rollback-on-failure` cannot roll a first install back to a
+    // previous revision, so a failed install can still occupy the release name.
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            disabled_failure_release,
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found",
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
     run_ok(
         "helm",
         [
