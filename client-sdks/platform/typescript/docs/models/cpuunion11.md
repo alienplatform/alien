@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.Cpu11`
+### `models.SyncReconcileRequestCpu11`
 
 ```typescript
-const value: models.Cpu11 = {
+const value: models.SyncReconcileRequestCpu11 = {
   unit: "percent",
-  value: 7671.54,
+  value: 3165.05,
 };
 ```
 

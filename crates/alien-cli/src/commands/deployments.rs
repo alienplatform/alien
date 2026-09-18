@@ -666,7 +666,7 @@ async fn machines_inventory_task(
     json: bool,
 ) -> Result<()> {
     let mut response = client
-        .list_machines_inventory()
+        .list_deployment_machines()
         .id(deployment_id)
         .workspace(workspace)
         .send()
@@ -685,6 +685,7 @@ async fn machines_inventory_task(
     response.machines.sort_by(|left, right| {
         machine_network_rank(right)
             .cmp(&machine_network_rank(left))
+            .then_with(|| left.cluster_resource_id.cmp(&right.cluster_resource_id))
             .then_with(|| left.machine_id.cmp(&right.machine_id))
     });
     if response.machines.is_empty() {
@@ -693,6 +694,7 @@ async fn machines_inventory_task(
     }
 
     let mut table = make_table(&[
+        "Cluster",
         "Machine",
         "Status",
         "Heartbeat",
@@ -707,13 +709,12 @@ async fn machines_inventory_task(
             .unwrap_or_else(|| "unknown".to_string());
         let peers = if matches!(
             machine.network_health,
-            Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy)
-                | Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded)
+            Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Healthy)
+                | Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Degraded)
         ) {
             machine
                 .wireguard_mesh
                 .as_ref()
-                .and_then(|observation| observation.0.as_ref())
                 .map(|observation| {
                     format!(
                         "{}/{}",
@@ -730,6 +731,7 @@ async fn machines_inventory_task(
             .cloned()
             .unwrap_or_else(|| "unknown".to_string());
         table.add_row(vec![
+            machine.cluster_resource_id.clone().into(),
             machine.machine_id.clone().into(),
             status_cell(&machine.status),
             machine.last_heartbeat.clone().into(),
@@ -745,14 +747,10 @@ async fn machines_inventory_task(
         .iter()
         .filter(|machine| machine_network_rank(machine) > 0)
     {
-        if let Some(observation) = machine
-            .wireguard_mesh
-            .as_ref()
-            .and_then(|observation| observation.0.as_ref())
-        {
+        if let Some(observation) = machine.wireguard_mesh.as_ref() {
             if matches!(
                 machine.network_health,
-                Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded)
+                Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Degraded)
             ) && !observation.missing_peer_machine_ids.is_empty()
             {
                 println!(
@@ -767,17 +765,17 @@ async fn machines_inventory_task(
     Ok(())
 }
 
-fn machine_network_rank(machine: &alien_platform_api::types::MachinesInventoryItem) -> u8 {
+fn machine_network_rank(machine: &alien_platform_api::types::DeploymentMachine) -> u8 {
     network_health_rank(machine.network_health)
 }
 
 fn network_health_rank(
-    health: Option<alien_platform_api::types::MachinesInventoryItemNetworkHealth>,
+    health: Option<alien_platform_api::types::DeploymentMachineNetworkHealth>,
 ) -> u8 {
     match health {
-        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Degraded) => 2,
-        Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Unknown)
-        | Some(alien_platform_api::types::MachinesInventoryItemNetworkHealth::Healthy)
+        Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Degraded) => 2,
+        Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Unknown)
+        | Some(alien_platform_api::types::DeploymentMachineNetworkHealth::Healthy)
         | None => 0,
     }
 }
@@ -785,17 +783,17 @@ fn network_health_rank(
 #[cfg(test)]
 mod machines_inventory_tests {
     use super::*;
-    use alien_platform_api::types::MachinesInventoryItemNetworkHealth;
+    use alien_platform_api::types::DeploymentMachineNetworkHealth;
 
     #[test]
     fn machine_inventory_sorts_network_divergence_first() {
         assert_eq!(
-            network_health_rank(Some(MachinesInventoryItemNetworkHealth::Degraded)),
+            network_health_rank(Some(DeploymentMachineNetworkHealth::Degraded)),
             2
         );
         assert_eq!(network_health_rank(None), 0);
         assert_eq!(
-            network_health_rank(Some(MachinesInventoryItemNetworkHealth::Healthy)),
+            network_health_rank(Some(DeploymentMachineNetworkHealth::Healthy)),
             0
         );
     }

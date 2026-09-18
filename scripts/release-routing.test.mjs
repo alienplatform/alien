@@ -63,3 +63,27 @@ test("dev mode can reach only the reusable npm dev workflow", () => {
     assert.match(job.if, /inputs\.mode == 'stable'/, `${name} must be unreachable in dev mode`)
   }
 })
+
+test("stable binary releases publish the pinned Platform composition as alien", () => {
+  assert.match(
+    workflow,
+    /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/,
+  )
+  assert.match(workflow, /repository: alienplatform\/platform/)
+
+  for (const target of [
+    "x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+  ]) {
+    assert.match(
+      workflow,
+      new RegExp(
+        `manifest-path platform/crates/alien-clix/Cargo\\.toml[\\s\\S]{0,160}--bin alien --target ${target}`,
+      ),
+    )
+  }
+
+  assert.doesNotMatch(workflow, /-p alien-cli -p alien-deploy-cli/)
+})

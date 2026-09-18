@@ -124,12 +124,12 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      # Bound the build/test memory peak: this job's recurring failure mode
-      # is the runner agent being starved for memory mid Rust-tests (GitHub
-      # reports "runner lost communication" with no logs). Full-width
-      # parallelism (16 rustc jobs, then 16 concurrent test binaries — many
-      # of which spawn servers and embedded databases) is what spikes it.
-      CARGO_BUILD_JOBS: "8"
+      # Leave 25% of the 16-core runner available for large rustc processes.
+      # Full-width parallelism previously starved the runner, but the generated
+      # client graph is now smaller and Azure models compile in five shards.
+      CARGO_BUILD_JOBS: "12"
+      # Keep runtime test concurrency unchanged so this experiment measures
+      # compiler parallelism without increasing database/server test pressure.
       NEXTEST_TEST_THREADS: "8"
 
     steps:

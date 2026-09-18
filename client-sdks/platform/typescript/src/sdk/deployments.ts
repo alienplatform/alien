@@ -16,6 +16,7 @@ import { deploymentsImport } from "../funcs/deploymentsImport.js";
 import { deploymentsList } from "../funcs/deploymentsList.js";
 import { deploymentsListFilterDeploymentGroups } from "../funcs/deploymentsListFilterDeploymentGroups.js";
 import { deploymentsListFilterEnvironments } from "../funcs/deploymentsListFilterEnvironments.js";
+import { deploymentsListMachines } from "../funcs/deploymentsListMachines.js";
 import { deploymentsPinRelease } from "../funcs/deploymentsPinRelease.js";
 import { deploymentsRedeploy } from "../funcs/deploymentsRedeploy.js";
 import { deploymentsRetry } from "../funcs/deploymentsRetry.js";
@@ -317,6 +318,17 @@ export class Deployments extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.CreateDeploymentTokenResponse> {
     return unwrapAsync(deploymentsCreateToken(
+      this,
+      request,
+      options,
+    ));
+  }
+
+  async listMachines(
+    request: operations.ListDeploymentMachinesRequest,
+    options?: RequestOptions,
+  ): Promise<models.ListDeploymentMachinesResponse> {
+    return unwrapAsync(deploymentsListMachines(
       this,
       request,
       options,
