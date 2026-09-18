@@ -4648,12 +4648,12 @@ export const CpuUnit11 = {
 } as const;
 export type CpuUnit11 = ClosedEnum<typeof CpuUnit11>;
 
-export type Cpu11 = {
+export type SyncReconcileRequestCpu11 = {
   unit: CpuUnit11;
   value: number;
 };
 
-export type CpuUnion11 = Cpu11 | any;
+export type CpuUnion11 = SyncReconcileRequestCpu11 | any;
 
 export type InvolvedObject9 = {
   apiVersion?: string | null | undefined;
@@ -4697,12 +4697,12 @@ export const MemoryUnit11 = {
 } as const;
 export type MemoryUnit11 = ClosedEnum<typeof MemoryUnit11>;
 
-export type Memory11 = {
+export type SyncReconcileRequestMemory11 = {
   unit: MemoryUnit11;
   value: number;
 };
 
-export type MemoryUnion11 = Memory11 | any;
+export type MemoryUnion11 = SyncReconcileRequestMemory11 | any;
 
 export type NodeCounts = {
   current?: number | null | undefined;
@@ -4919,9 +4919,9 @@ export type SyncReconcileRequestStatus24 = {
 };
 
 export type SyncReconcileRequestData1 = {
-  cpu?: Cpu11 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu11 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent12>;
-  memory?: Memory11 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory11 | any | null | undefined;
   name: string;
   namespace?: string | null | undefined;
   nodeCounts: NodeCounts;
@@ -5115,14 +5115,14 @@ export const CpuUnit10 = {
 } as const;
 export type CpuUnit10 = ClosedEnum<typeof CpuUnit10>;
 
-export type Cpu10 = {
+export type SyncReconcileRequestCpu10 = {
   unit: CpuUnit10;
   value: number;
 };
 
-export type CpuUnion10 = Cpu10 | any;
+export type CpuUnion10 = SyncReconcileRequestCpu10 | any;
 
-export type DrainBlocker = {
+export type SyncReconcileRequestDrainBlocker = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -5133,7 +5133,7 @@ export type DrainBlocker = {
 export type SyncReconcileRequestMachine = {
   capacityGroup: string;
   cpuCores?: number | null | undefined;
-  drainBlockers?: Array<DrainBlocker> | undefined;
+  drainBlockers?: Array<SyncReconcileRequestDrainBlocker> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainForce: boolean;
   drainRequestedAt?: string | null | undefined;
@@ -5159,12 +5159,12 @@ export const MemoryUnit10 = {
 } as const;
 export type MemoryUnit10 = ClosedEnum<typeof MemoryUnit10>;
 
-export type Memory10 = {
+export type SyncReconcileRequestMemory10 = {
   unit: MemoryUnit10;
   value: number;
 };
 
-export type MemoryUnion10 = Memory10 | any;
+export type MemoryUnion10 = SyncReconcileRequestMemory10 | any;
 
 export type Nodes4 = {
   current?: number | null | undefined;
@@ -5235,9 +5235,9 @@ export type SyncReconcileRequestStatus22 = {
 export type DataMachines2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup4>;
-  cpu?: Cpu10 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu10 | any | null | undefined;
   machines: Array<SyncReconcileRequestMachine>;
-  memory?: Memory10 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory10 | any | null | undefined;
   name: string;
   nodes: Nodes4;
   status: SyncReconcileRequestStatus22;
@@ -5339,12 +5339,12 @@ export const CpuUnit9 = {
 } as const;
 export type CpuUnit9 = ClosedEnum<typeof CpuUnit9>;
 
-export type Cpu9 = {
+export type SyncReconcileRequestCpu9 = {
   unit: CpuUnit9;
   value: number;
 };
 
-export type CpuUnion9 = Cpu9 | any;
+export type CpuUnion9 = SyncReconcileRequestCpu9 | any;
 
 export const MemoryUnit9 = {
   Count: "count",
@@ -5356,12 +5356,12 @@ export const MemoryUnit9 = {
 } as const;
 export type MemoryUnit9 = ClosedEnum<typeof MemoryUnit9>;
 
-export type Memory9 = {
+export type SyncReconcileRequestMemory9 = {
   unit: MemoryUnit9;
   value: number;
 };
 
-export type MemoryUnion9 = Memory9 | any;
+export type MemoryUnion9 = SyncReconcileRequestMemory9 | any;
 
 export type Nodes3 = {
   current?: number | null | undefined;
@@ -5440,8 +5440,8 @@ export type SyncReconcileRequestStatus21 = {
 export type DataAzure2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3>;
-  cpu?: Cpu9 | any | null | undefined;
-  memory?: Memory9 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu9 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory9 | any | null | undefined;
   name: string;
   nodes: Nodes3;
   providerFleets: Array<ProviderFleet3>;
@@ -5545,12 +5545,12 @@ export const CpuUnit8 = {
 } as const;
 export type CpuUnit8 = ClosedEnum<typeof CpuUnit8>;
 
-export type Cpu8 = {
+export type SyncReconcileRequestCpu8 = {
   unit: CpuUnit8;
   value: number;
 };
 
-export type CpuUnion8 = Cpu8 | any;
+export type CpuUnion8 = SyncReconcileRequestCpu8 | any;
 
 export const MemoryUnit8 = {
   Count: "count",
@@ -5562,12 +5562,12 @@ export const MemoryUnit8 = {
 } as const;
 export type MemoryUnit8 = ClosedEnum<typeof MemoryUnit8>;
 
-export type Memory8 = {
+export type SyncReconcileRequestMemory8 = {
   unit: MemoryUnit8;
   value: number;
 };
 
-export type MemoryUnion8 = Memory8 | any;
+export type MemoryUnion8 = SyncReconcileRequestMemory8 | any;
 
 export type Nodes2 = {
   current?: number | null | undefined;
@@ -5646,8 +5646,8 @@ export type SyncReconcileRequestStatus20 = {
 export type DataGcp2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2>;
-  cpu?: Cpu8 | any | null | undefined;
-  memory?: Memory8 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu8 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory8 | any | null | undefined;
   name: string;
   nodes: Nodes2;
   providerFleets: Array<ProviderFleet2>;
@@ -5751,12 +5751,12 @@ export const CpuUnit7 = {
 } as const;
 export type CpuUnit7 = ClosedEnum<typeof CpuUnit7>;
 
-export type Cpu7 = {
+export type SyncReconcileRequestCpu7 = {
   unit: CpuUnit7;
   value: number;
 };
 
-export type CpuUnion7 = Cpu7 | any;
+export type CpuUnion7 = SyncReconcileRequestCpu7 | any;
 
 export const MemoryUnit7 = {
   Count: "count",
@@ -5768,12 +5768,12 @@ export const MemoryUnit7 = {
 } as const;
 export type MemoryUnit7 = ClosedEnum<typeof MemoryUnit7>;
 
-export type Memory7 = {
+export type SyncReconcileRequestMemory7 = {
   unit: MemoryUnit7;
   value: number;
 };
 
-export type MemoryUnion7 = Memory7 | any;
+export type MemoryUnion7 = SyncReconcileRequestMemory7 | any;
 
 export type Nodes1 = {
   current?: number | null | undefined;
@@ -5852,8 +5852,8 @@ export type SyncReconcileRequestStatus19 = {
 export type DataAws2 = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup1>;
-  cpu?: Cpu7 | any | null | undefined;
-  memory?: Memory7 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu7 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory7 | any | null | undefined;
   name: string;
   nodes: Nodes1;
   providerFleets: Array<ProviderFleet1>;
@@ -6041,12 +6041,12 @@ export const CpuUnit6 = {
 } as const;
 export type CpuUnit6 = ClosedEnum<typeof CpuUnit6>;
 
-export type Cpu6 = {
+export type SyncReconcileRequestCpu6 = {
   unit: CpuUnit6;
   value: number;
 };
 
-export type CpuUnion6 = Cpu6 | any;
+export type CpuUnion6 = SyncReconcileRequestCpu6 | any;
 
 export type InvolvedObject8 = {
   apiVersion?: string | null | undefined;
@@ -6090,12 +6090,12 @@ export const MemoryUnit6 = {
 } as const;
 export type MemoryUnit6 = ClosedEnum<typeof MemoryUnit6>;
 
-export type Memory6 = {
+export type SyncReconcileRequestMemory6 = {
   unit: MemoryUnit6;
   value: number;
 };
 
-export type MemoryUnion6 = Memory6 | any;
+export type MemoryUnion6 = SyncReconcileRequestMemory6 | any;
 
 export const CpuPodUnit3 = {
   Count: "count",
@@ -6245,9 +6245,9 @@ export type WorkloadUnion3 = Workload3 | any;
 
 export type DataKubernetes3 = {
   commandSupported: boolean;
-  cpu?: Cpu6 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu6 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent10>;
-  memory?: Memory6 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory6 | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod3>;
@@ -7024,12 +7024,12 @@ export const CpuUnit5 = {
 } as const;
 export type CpuUnit5 = ClosedEnum<typeof CpuUnit5>;
 
-export type Cpu5 = {
+export type SyncReconcileRequestCpu5 = {
   unit: CpuUnit5;
   value: number;
 };
 
-export type CpuUnion5 = Cpu5 | any;
+export type CpuUnion5 = SyncReconcileRequestCpu5 | any;
 
 export const EventSeverity2 = {
   Info: "info",
@@ -7067,12 +7067,12 @@ export const MemoryUnit5 = {
 } as const;
 export type MemoryUnit5 = ClosedEnum<typeof MemoryUnit5>;
 
-export type Memory5 = {
+export type SyncReconcileRequestMemory5 = {
   unit: MemoryUnit5;
   value: number;
 };
 
-export type MemoryUnion5 = Memory5 | any;
+export type MemoryUnion5 = SyncReconcileRequestMemory5 | any;
 
 export const SyncReconcileRequestReason12 = {
   Forbidden: "forbidden",
@@ -7138,11 +7138,11 @@ export type DataLocal3 = {
   bindMountCount: number;
   containerId?: string | null | undefined;
   containerUnit?: ContainerUnit | any | null | undefined;
-  cpu?: Cpu5 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu5 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent5>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
-  memory?: Memory5 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory5 | any | null | undefined;
   name?: string | null | undefined;
   portCount: number;
   restartCount?: number | null | undefined;
@@ -7162,12 +7162,12 @@ export const CpuUnit4 = {
 } as const;
 export type CpuUnit4 = ClosedEnum<typeof CpuUnit4>;
 
-export type Cpu4 = {
+export type SyncReconcileRequestCpu4 = {
   unit: CpuUnit4;
   value: number;
 };
 
-export type CpuUnion4 = Cpu4 | any;
+export type CpuUnion4 = SyncReconcileRequestCpu4 | any;
 
 export type InvolvedObject3 = {
   apiVersion?: string | null | undefined;
@@ -7211,12 +7211,12 @@ export const MemoryUnit4 = {
 } as const;
 export type MemoryUnit4 = ClosedEnum<typeof MemoryUnit4>;
 
-export type Memory4 = {
+export type SyncReconcileRequestMemory4 = {
   unit: MemoryUnit4;
   value: number;
 };
 
-export type MemoryUnion4 = Memory4 | any;
+export type MemoryUnion4 = SyncReconcileRequestMemory4 | any;
 
 export const CpuPodUnit2 = {
   Count: "count",
@@ -7374,9 +7374,9 @@ export const WorkloadKind2 = {
 export type WorkloadKind2 = ClosedEnum<typeof WorkloadKind2>;
 
 export type DataKubernetes2 = {
-  cpu?: Cpu4 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu4 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent4>;
-  memory?: Memory4 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory4 | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod2>;
@@ -7398,12 +7398,12 @@ export const CpuUnit3 = {
 } as const;
 export type CpuUnit3 = ClosedEnum<typeof CpuUnit3>;
 
-export type Cpu3 = {
+export type SyncReconcileRequestCpu3 = {
   unit: CpuUnit3;
   value: number;
 };
 
-export type CpuUnion3 = Cpu3 | any;
+export type CpuUnion3 = SyncReconcileRequestCpu3 | any;
 
 export type InvolvedObject2 = {
   details?: any | null | undefined;
@@ -7448,12 +7448,12 @@ export const MemoryUnit3 = {
 } as const;
 export type MemoryUnit3 = ClosedEnum<typeof MemoryUnit3>;
 
-export type Memory3 = {
+export type SyncReconcileRequestMemory3 = {
   unit: MemoryUnit3;
   value: number;
 };
 
-export type MemoryUnion3 = Memory3 | any;
+export type MemoryUnion3 = SyncReconcileRequestMemory3 | any;
 
 export const CpuReplicaUnitUnit = {
   Count: "count",
@@ -7589,11 +7589,11 @@ export type SyncReconcileRequestStatus10 = {
 export type DataHorizonPlatform = {
   attentionCount: number;
   containerId: string;
-  cpu?: Cpu3 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu3 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3>;
   image?: string | null | undefined;
   latestUpdateTimestamp?: string | null | undefined;
-  memory?: Memory3 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory3 | any | null | undefined;
   observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit>;
   replicas: Replicas2;
@@ -7622,12 +7622,12 @@ export const CpuUnit2 = {
 } as const;
 export type CpuUnit2 = ClosedEnum<typeof CpuUnit2>;
 
-export type Cpu2 = {
+export type SyncReconcileRequestCpu2 = {
   unit: CpuUnit2;
   value: number;
 };
 
-export type CpuUnion2 = Cpu2 | any;
+export type CpuUnion2 = SyncReconcileRequestCpu2 | any;
 
 export const EventSeverity1 = {
   Info: "info",
@@ -7665,12 +7665,12 @@ export const MemoryUnit2 = {
 } as const;
 export type MemoryUnit2 = ClosedEnum<typeof MemoryUnit2>;
 
-export type Memory2 = {
+export type SyncReconcileRequestMemory2 = {
   unit: MemoryUnit2;
   value: number;
 };
 
-export type MemoryUnion2 = Memory2 | any;
+export type MemoryUnion2 = SyncReconcileRequestMemory2 | any;
 
 export const ProcessCpuUnit = {
   Count: "count",
@@ -7789,10 +7789,10 @@ export type SyncReconcileRequestStatus9 = {
 
 export type DataLocal2 = {
   commandSupported: boolean;
-  cpu?: Cpu2 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu2 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent2>;
   imagePathPresent: boolean;
-  memory?: Memory2 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory2 | any | null | undefined;
   pid?: number | null | undefined;
   process?: Process | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
@@ -7811,12 +7811,12 @@ export const CpuUnit1 = {
 } as const;
 export type CpuUnit1 = ClosedEnum<typeof CpuUnit1>;
 
-export type Cpu1 = {
+export type SyncReconcileRequestCpu1 = {
   unit: CpuUnit1;
   value: number;
 };
 
-export type CpuUnion1 = Cpu1 | any;
+export type CpuUnion1 = SyncReconcileRequestCpu1 | any;
 
 export type InvolvedObject1 = {
   apiVersion?: string | null | undefined;
@@ -7860,12 +7860,12 @@ export const MemoryUnit1 = {
 } as const;
 export type MemoryUnit1 = ClosedEnum<typeof MemoryUnit1>;
 
-export type Memory1 = {
+export type SyncReconcileRequestMemory1 = {
   unit: MemoryUnit1;
   value: number;
 };
 
-export type MemoryUnion1 = Memory1 | any;
+export type MemoryUnion1 = SyncReconcileRequestMemory1 | any;
 
 export const CpuPodUnit1 = {
   Count: "count",
@@ -8023,9 +8023,9 @@ export const WorkloadKind1 = {
 export type WorkloadKind1 = ClosedEnum<typeof WorkloadKind1>;
 
 export type DataKubernetes1 = {
-  cpu?: Cpu1 | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu1 | any | null | undefined;
   events: Array<SyncReconcileRequestEvent1>;
-  memory?: Memory1 | any | null | undefined;
+  memory?: SyncReconcileRequestMemory1 | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod1>;
@@ -16764,29 +16764,36 @@ export const CpuUnit11$outboundSchema: z.ZodEnum<typeof CpuUnit11> = z.enum(
 );
 
 /** @internal */
-export type Cpu11$Outbound = {
+export type SyncReconcileRequestCpu11$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu11$outboundSchema: z.ZodType<Cpu11$Outbound, Cpu11> = z.object({
+export const SyncReconcileRequestCpu11$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu11$Outbound,
+  SyncReconcileRequestCpu11
+> = z.object({
   unit: CpuUnit11$outboundSchema,
   value: z.number(),
 });
 
-export function cpu11ToJSON(cpu11: Cpu11): string {
-  return JSON.stringify(Cpu11$outboundSchema.parse(cpu11));
+export function syncReconcileRequestCpu11ToJSON(
+  syncReconcileRequestCpu11: SyncReconcileRequestCpu11,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu11$outboundSchema.parse(syncReconcileRequestCpu11),
+  );
 }
 
 /** @internal */
-export type CpuUnion11$Outbound = Cpu11$Outbound | any;
+export type CpuUnion11$Outbound = SyncReconcileRequestCpu11$Outbound | any;
 
 /** @internal */
 export const CpuUnion11$outboundSchema: z.ZodType<
   CpuUnion11$Outbound,
   CpuUnion11
-> = z.union([z.lazy(() => Cpu11$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu11$outboundSchema), z.any()]);
 
 export function cpuUnion11ToJSON(cpuUnion11: CpuUnion11): string {
   return JSON.stringify(CpuUnion11$outboundSchema.parse(cpuUnion11));
@@ -16928,30 +16935,43 @@ export const MemoryUnit11$outboundSchema: z.ZodEnum<typeof MemoryUnit11> = z
   .enum(MemoryUnit11);
 
 /** @internal */
-export type Memory11$Outbound = {
+export type SyncReconcileRequestMemory11$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory11$outboundSchema: z.ZodType<Memory11$Outbound, Memory11> = z
-  .object({
-    unit: MemoryUnit11$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory11$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory11$Outbound,
+  SyncReconcileRequestMemory11
+> = z.object({
+  unit: MemoryUnit11$outboundSchema,
+  value: z.number(),
+});
 
-export function memory11ToJSON(memory11: Memory11): string {
-  return JSON.stringify(Memory11$outboundSchema.parse(memory11));
+export function syncReconcileRequestMemory11ToJSON(
+  syncReconcileRequestMemory11: SyncReconcileRequestMemory11,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory11$outboundSchema.parse(
+      syncReconcileRequestMemory11,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion11$Outbound = Memory11$Outbound | any;
+export type MemoryUnion11$Outbound =
+  | SyncReconcileRequestMemory11$Outbound
+  | any;
 
 /** @internal */
 export const MemoryUnion11$outboundSchema: z.ZodType<
   MemoryUnion11$Outbound,
   MemoryUnion11
-> = z.union([z.lazy(() => Memory11$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory11$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion11ToJSON(memoryUnion11: MemoryUnion11): string {
   return JSON.stringify(MemoryUnion11$outboundSchema.parse(memoryUnion11));
@@ -17480,9 +17500,9 @@ export function syncReconcileRequestStatus24ToJSON(
 
 /** @internal */
 export type SyncReconcileRequestData1$Outbound = {
-  cpu?: Cpu11$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu11$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent12$Outbound>;
-  memory?: Memory11$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory11$Outbound | any | null | undefined;
   name: string;
   namespace?: string | null | undefined;
   nodeCounts: NodeCounts$Outbound;
@@ -17498,11 +17518,16 @@ export const SyncReconcileRequestData1$outboundSchema: z.ZodType<
   SyncReconcileRequestData1$Outbound,
   SyncReconcileRequestData1
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu11$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu11$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent12$outboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory11$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory11$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   namespace: z.nullable(z.string()).optional(),
   nodeCounts: z.lazy(() => NodeCounts$outboundSchema),
@@ -17956,36 +17981,43 @@ export const CpuUnit10$outboundSchema: z.ZodEnum<typeof CpuUnit10> = z.enum(
 );
 
 /** @internal */
-export type Cpu10$Outbound = {
+export type SyncReconcileRequestCpu10$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu10$outboundSchema: z.ZodType<Cpu10$Outbound, Cpu10> = z.object({
+export const SyncReconcileRequestCpu10$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu10$Outbound,
+  SyncReconcileRequestCpu10
+> = z.object({
   unit: CpuUnit10$outboundSchema,
   value: z.number(),
 });
 
-export function cpu10ToJSON(cpu10: Cpu10): string {
-  return JSON.stringify(Cpu10$outboundSchema.parse(cpu10));
+export function syncReconcileRequestCpu10ToJSON(
+  syncReconcileRequestCpu10: SyncReconcileRequestCpu10,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu10$outboundSchema.parse(syncReconcileRequestCpu10),
+  );
 }
 
 /** @internal */
-export type CpuUnion10$Outbound = Cpu10$Outbound | any;
+export type CpuUnion10$Outbound = SyncReconcileRequestCpu10$Outbound | any;
 
 /** @internal */
 export const CpuUnion10$outboundSchema: z.ZodType<
   CpuUnion10$Outbound,
   CpuUnion10
-> = z.union([z.lazy(() => Cpu10$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu10$outboundSchema), z.any()]);
 
 export function cpuUnion10ToJSON(cpuUnion10: CpuUnion10): string {
   return JSON.stringify(CpuUnion10$outboundSchema.parse(cpuUnion10));
 }
 
 /** @internal */
-export type DrainBlocker$Outbound = {
+export type SyncReconcileRequestDrainBlocker$Outbound = {
   reason: string;
   replicaId: string;
   schedulingMode: string;
@@ -17994,9 +18026,9 @@ export type DrainBlocker$Outbound = {
 };
 
 /** @internal */
-export const DrainBlocker$outboundSchema: z.ZodType<
-  DrainBlocker$Outbound,
-  DrainBlocker
+export const SyncReconcileRequestDrainBlocker$outboundSchema: z.ZodType<
+  SyncReconcileRequestDrainBlocker$Outbound,
+  SyncReconcileRequestDrainBlocker
 > = z.object({
   reason: z.string(),
   replicaId: z.string(),
@@ -18005,15 +18037,21 @@ export const DrainBlocker$outboundSchema: z.ZodType<
   workloadName: z.string(),
 });
 
-export function drainBlockerToJSON(drainBlocker: DrainBlocker): string {
-  return JSON.stringify(DrainBlocker$outboundSchema.parse(drainBlocker));
+export function syncReconcileRequestDrainBlockerToJSON(
+  syncReconcileRequestDrainBlocker: SyncReconcileRequestDrainBlocker,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestDrainBlocker$outboundSchema.parse(
+      syncReconcileRequestDrainBlocker,
+    ),
+  );
 }
 
 /** @internal */
 export type SyncReconcileRequestMachine$Outbound = {
   capacityGroup: string;
   cpuCores?: number | null | undefined;
-  drainBlockers?: Array<DrainBlocker$Outbound> | undefined;
+  drainBlockers?: Array<SyncReconcileRequestDrainBlocker$Outbound> | undefined;
   drainDeadlineAt?: string | null | undefined;
   drainForce: boolean;
   drainRequestedAt?: string | null | undefined;
@@ -18036,7 +18074,9 @@ export const SyncReconcileRequestMachine$outboundSchema: z.ZodType<
 > = z.object({
   capacityGroup: z.string(),
   cpuCores: z.nullable(z.number()).optional(),
-  drainBlockers: z.array(z.lazy(() => DrainBlocker$outboundSchema)).optional(),
+  drainBlockers: z.array(
+    z.lazy(() => SyncReconcileRequestDrainBlocker$outboundSchema),
+  ).optional(),
   drainDeadlineAt: z.nullable(z.string()).optional(),
   drainForce: z.boolean(),
   drainRequestedAt: z.nullable(z.string()).optional(),
@@ -18067,30 +18107,43 @@ export const MemoryUnit10$outboundSchema: z.ZodEnum<typeof MemoryUnit10> = z
   .enum(MemoryUnit10);
 
 /** @internal */
-export type Memory10$Outbound = {
+export type SyncReconcileRequestMemory10$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory10$outboundSchema: z.ZodType<Memory10$Outbound, Memory10> = z
-  .object({
-    unit: MemoryUnit10$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory10$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory10$Outbound,
+  SyncReconcileRequestMemory10
+> = z.object({
+  unit: MemoryUnit10$outboundSchema,
+  value: z.number(),
+});
 
-export function memory10ToJSON(memory10: Memory10): string {
-  return JSON.stringify(Memory10$outboundSchema.parse(memory10));
+export function syncReconcileRequestMemory10ToJSON(
+  syncReconcileRequestMemory10: SyncReconcileRequestMemory10,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory10$outboundSchema.parse(
+      syncReconcileRequestMemory10,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion10$Outbound = Memory10$Outbound | any;
+export type MemoryUnion10$Outbound =
+  | SyncReconcileRequestMemory10$Outbound
+  | any;
 
 /** @internal */
 export const MemoryUnion10$outboundSchema: z.ZodType<
   MemoryUnion10$Outbound,
   MemoryUnion10
-> = z.union([z.lazy(() => Memory10$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory10$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion10ToJSON(memoryUnion10: MemoryUnion10): string {
   return JSON.stringify(MemoryUnion10$outboundSchema.parse(memoryUnion10));
@@ -18203,9 +18256,9 @@ export function syncReconcileRequestStatus22ToJSON(
 export type DataMachines2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup4$Outbound>;
-  cpu?: Cpu10$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu10$Outbound | any | null | undefined;
   machines: Array<SyncReconcileRequestMachine$Outbound>;
-  memory?: Memory10$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory10$Outbound | any | null | undefined;
   name: string;
   nodes: Nodes4$Outbound;
   status: SyncReconcileRequestStatus22$Outbound;
@@ -18219,11 +18272,16 @@ export const DataMachines2$outboundSchema: z.ZodType<
 > = z.object({
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(z.lazy(() => CapacityGroup4$outboundSchema)),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu10$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu10$outboundSchema), z.any()]),
+  ).optional(),
   machines: z.array(z.lazy(() => SyncReconcileRequestMachine$outboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory10$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory10$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes4$outboundSchema),
   status: z.lazy(() => SyncReconcileRequestStatus22$outboundSchema),
@@ -18500,29 +18558,36 @@ export const CpuUnit9$outboundSchema: z.ZodEnum<typeof CpuUnit9> = z.enum(
 );
 
 /** @internal */
-export type Cpu9$Outbound = {
+export type SyncReconcileRequestCpu9$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu9$outboundSchema: z.ZodType<Cpu9$Outbound, Cpu9> = z.object({
+export const SyncReconcileRequestCpu9$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu9$Outbound,
+  SyncReconcileRequestCpu9
+> = z.object({
   unit: CpuUnit9$outboundSchema,
   value: z.number(),
 });
 
-export function cpu9ToJSON(cpu9: Cpu9): string {
-  return JSON.stringify(Cpu9$outboundSchema.parse(cpu9));
+export function syncReconcileRequestCpu9ToJSON(
+  syncReconcileRequestCpu9: SyncReconcileRequestCpu9,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu9$outboundSchema.parse(syncReconcileRequestCpu9),
+  );
 }
 
 /** @internal */
-export type CpuUnion9$Outbound = Cpu9$Outbound | any;
+export type CpuUnion9$Outbound = SyncReconcileRequestCpu9$Outbound | any;
 
 /** @internal */
 export const CpuUnion9$outboundSchema: z.ZodType<
   CpuUnion9$Outbound,
   CpuUnion9
-> = z.union([z.lazy(() => Cpu9$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu9$outboundSchema), z.any()]);
 
 export function cpuUnion9ToJSON(cpuUnion9: CpuUnion9): string {
   return JSON.stringify(CpuUnion9$outboundSchema.parse(cpuUnion9));
@@ -18534,30 +18599,41 @@ export const MemoryUnit9$outboundSchema: z.ZodEnum<typeof MemoryUnit9> = z.enum(
 );
 
 /** @internal */
-export type Memory9$Outbound = {
+export type SyncReconcileRequestMemory9$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory9$outboundSchema: z.ZodType<Memory9$Outbound, Memory9> = z
-  .object({
-    unit: MemoryUnit9$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory9$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory9$Outbound,
+  SyncReconcileRequestMemory9
+> = z.object({
+  unit: MemoryUnit9$outboundSchema,
+  value: z.number(),
+});
 
-export function memory9ToJSON(memory9: Memory9): string {
-  return JSON.stringify(Memory9$outboundSchema.parse(memory9));
+export function syncReconcileRequestMemory9ToJSON(
+  syncReconcileRequestMemory9: SyncReconcileRequestMemory9,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory9$outboundSchema.parse(
+      syncReconcileRequestMemory9,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion9$Outbound = Memory9$Outbound | any;
+export type MemoryUnion9$Outbound = SyncReconcileRequestMemory9$Outbound | any;
 
 /** @internal */
 export const MemoryUnion9$outboundSchema: z.ZodType<
   MemoryUnion9$Outbound,
   MemoryUnion9
-> = z.union([z.lazy(() => Memory9$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory9$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion9ToJSON(memoryUnion9: MemoryUnion9): string {
   return JSON.stringify(MemoryUnion9$outboundSchema.parse(memoryUnion9));
@@ -18695,8 +18771,8 @@ export function syncReconcileRequestStatus21ToJSON(
 export type DataAzure2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup3$Outbound>;
-  cpu?: Cpu9$Outbound | any | null | undefined;
-  memory?: Memory9$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu9$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory9$Outbound | any | null | undefined;
   name: string;
   nodes: Nodes3$Outbound;
   providerFleets: Array<ProviderFleet3$Outbound>;
@@ -18712,10 +18788,15 @@ export const DataAzure2$outboundSchema: z.ZodType<
 > = z.object({
   backendClusterId: z.nullable(z.string()).optional(),
   capacityGroups: z.array(z.lazy(() => CapacityGroup3$outboundSchema)),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu9$outboundSchema), z.any()]))
-    .optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory9$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu9$outboundSchema), z.any()]),
+  ).optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory9$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   nodes: z.lazy(() => Nodes3$outboundSchema),
   providerFleets: z.array(z.lazy(() => ProviderFleet3$outboundSchema)),
@@ -18994,29 +19075,36 @@ export const CpuUnit8$outboundSchema: z.ZodEnum<typeof CpuUnit8> = z.enum(
 );
 
 /** @internal */
-export type Cpu8$Outbound = {
+export type SyncReconcileRequestCpu8$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu8$outboundSchema: z.ZodType<Cpu8$Outbound, Cpu8> = z.object({
+export const SyncReconcileRequestCpu8$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu8$Outbound,
+  SyncReconcileRequestCpu8
+> = z.object({
   unit: CpuUnit8$outboundSchema,
   value: z.number(),
 });
 
-export function cpu8ToJSON(cpu8: Cpu8): string {
-  return JSON.stringify(Cpu8$outboundSchema.parse(cpu8));
+export function syncReconcileRequestCpu8ToJSON(
+  syncReconcileRequestCpu8: SyncReconcileRequestCpu8,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu8$outboundSchema.parse(syncReconcileRequestCpu8),
+  );
 }
 
 /** @internal */
-export type CpuUnion8$Outbound = Cpu8$Outbound | any;
+export type CpuUnion8$Outbound = SyncReconcileRequestCpu8$Outbound | any;
 
 /** @internal */
 export const CpuUnion8$outboundSchema: z.ZodType<
   CpuUnion8$Outbound,
   CpuUnion8
-> = z.union([z.lazy(() => Cpu8$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu8$outboundSchema), z.any()]);
 
 export function cpuUnion8ToJSON(cpuUnion8: CpuUnion8): string {
   return JSON.stringify(CpuUnion8$outboundSchema.parse(cpuUnion8));
@@ -19028,30 +19116,41 @@ export const MemoryUnit8$outboundSchema: z.ZodEnum<typeof MemoryUnit8> = z.enum(
 );
 
 /** @internal */
-export type Memory8$Outbound = {
+export type SyncReconcileRequestMemory8$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory8$outboundSchema: z.ZodType<Memory8$Outbound, Memory8> = z
-  .object({
-    unit: MemoryUnit8$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory8$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory8$Outbound,
+  SyncReconcileRequestMemory8
+> = z.object({
+  unit: MemoryUnit8$outboundSchema,
+  value: z.number(),
+});
 
-export function memory8ToJSON(memory8: Memory8): string {
-  return JSON.stringify(Memory8$outboundSchema.parse(memory8));
+export function syncReconcileRequestMemory8ToJSON(
+  syncReconcileRequestMemory8: SyncReconcileRequestMemory8,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory8$outboundSchema.parse(
+      syncReconcileRequestMemory8,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion8$Outbound = Memory8$Outbound | any;
+export type MemoryUnion8$Outbound = SyncReconcileRequestMemory8$Outbound | any;
 
 /** @internal */
 export const MemoryUnion8$outboundSchema: z.ZodType<
   MemoryUnion8$Outbound,
   MemoryUnion8
-> = z.union([z.lazy(() => Memory8$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory8$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion8ToJSON(memoryUnion8: MemoryUnion8): string {
   return JSON.stringify(MemoryUnion8$outboundSchema.parse(memoryUnion8));
@@ -19189,8 +19288,8 @@ export function syncReconcileRequestStatus20ToJSON(
 export type DataGcp2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup2$Outbound>;
-  cpu?: Cpu8$Outbound | any | null | undefined;
-  memory?: Memory8$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu8$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory8$Outbound | any | null | undefined;
   name: string;
   nodes: Nodes2$Outbound;
   providerFleets: Array<ProviderFleet2$Outbound>;
@@ -19204,10 +19303,15 @@ export const DataGcp2$outboundSchema: z.ZodType<DataGcp2$Outbound, DataGcp2> = z
   .object({
     backendClusterId: z.nullable(z.string()).optional(),
     capacityGroups: z.array(z.lazy(() => CapacityGroup2$outboundSchema)),
-    cpu: z.nullable(z.union([z.lazy(() => Cpu8$outboundSchema), z.any()]))
-      .optional(),
-    memory: z.nullable(z.union([z.lazy(() => Memory8$outboundSchema), z.any()]))
-      .optional(),
+    cpu: z.nullable(
+      z.union([z.lazy(() => SyncReconcileRequestCpu8$outboundSchema), z.any()]),
+    ).optional(),
+    memory: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileRequestMemory8$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes2$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet2$outboundSchema)),
@@ -19486,29 +19590,36 @@ export const CpuUnit7$outboundSchema: z.ZodEnum<typeof CpuUnit7> = z.enum(
 );
 
 /** @internal */
-export type Cpu7$Outbound = {
+export type SyncReconcileRequestCpu7$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu7$outboundSchema: z.ZodType<Cpu7$Outbound, Cpu7> = z.object({
+export const SyncReconcileRequestCpu7$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu7$Outbound,
+  SyncReconcileRequestCpu7
+> = z.object({
   unit: CpuUnit7$outboundSchema,
   value: z.number(),
 });
 
-export function cpu7ToJSON(cpu7: Cpu7): string {
-  return JSON.stringify(Cpu7$outboundSchema.parse(cpu7));
+export function syncReconcileRequestCpu7ToJSON(
+  syncReconcileRequestCpu7: SyncReconcileRequestCpu7,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu7$outboundSchema.parse(syncReconcileRequestCpu7),
+  );
 }
 
 /** @internal */
-export type CpuUnion7$Outbound = Cpu7$Outbound | any;
+export type CpuUnion7$Outbound = SyncReconcileRequestCpu7$Outbound | any;
 
 /** @internal */
 export const CpuUnion7$outboundSchema: z.ZodType<
   CpuUnion7$Outbound,
   CpuUnion7
-> = z.union([z.lazy(() => Cpu7$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu7$outboundSchema), z.any()]);
 
 export function cpuUnion7ToJSON(cpuUnion7: CpuUnion7): string {
   return JSON.stringify(CpuUnion7$outboundSchema.parse(cpuUnion7));
@@ -19520,30 +19631,41 @@ export const MemoryUnit7$outboundSchema: z.ZodEnum<typeof MemoryUnit7> = z.enum(
 );
 
 /** @internal */
-export type Memory7$Outbound = {
+export type SyncReconcileRequestMemory7$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory7$outboundSchema: z.ZodType<Memory7$Outbound, Memory7> = z
-  .object({
-    unit: MemoryUnit7$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory7$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory7$Outbound,
+  SyncReconcileRequestMemory7
+> = z.object({
+  unit: MemoryUnit7$outboundSchema,
+  value: z.number(),
+});
 
-export function memory7ToJSON(memory7: Memory7): string {
-  return JSON.stringify(Memory7$outboundSchema.parse(memory7));
+export function syncReconcileRequestMemory7ToJSON(
+  syncReconcileRequestMemory7: SyncReconcileRequestMemory7,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory7$outboundSchema.parse(
+      syncReconcileRequestMemory7,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion7$Outbound = Memory7$Outbound | any;
+export type MemoryUnion7$Outbound = SyncReconcileRequestMemory7$Outbound | any;
 
 /** @internal */
 export const MemoryUnion7$outboundSchema: z.ZodType<
   MemoryUnion7$Outbound,
   MemoryUnion7
-> = z.union([z.lazy(() => Memory7$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory7$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion7ToJSON(memoryUnion7: MemoryUnion7): string {
   return JSON.stringify(MemoryUnion7$outboundSchema.parse(memoryUnion7));
@@ -19681,8 +19803,8 @@ export function syncReconcileRequestStatus19ToJSON(
 export type DataAws2$Outbound = {
   backendClusterId?: string | null | undefined;
   capacityGroups: Array<CapacityGroup1$Outbound>;
-  cpu?: Cpu7$Outbound | any | null | undefined;
-  memory?: Memory7$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu7$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory7$Outbound | any | null | undefined;
   name: string;
   nodes: Nodes1$Outbound;
   providerFleets: Array<ProviderFleet1$Outbound>;
@@ -19696,10 +19818,15 @@ export const DataAws2$outboundSchema: z.ZodType<DataAws2$Outbound, DataAws2> = z
   .object({
     backendClusterId: z.nullable(z.string()).optional(),
     capacityGroups: z.array(z.lazy(() => CapacityGroup1$outboundSchema)),
-    cpu: z.nullable(z.union([z.lazy(() => Cpu7$outboundSchema), z.any()]))
-      .optional(),
-    memory: z.nullable(z.union([z.lazy(() => Memory7$outboundSchema), z.any()]))
-      .optional(),
+    cpu: z.nullable(
+      z.union([z.lazy(() => SyncReconcileRequestCpu7$outboundSchema), z.any()]),
+    ).optional(),
+    memory: z.nullable(
+      z.union([
+        z.lazy(() => SyncReconcileRequestMemory7$outboundSchema),
+        z.any(),
+      ]),
+    ).optional(),
     name: z.string(),
     nodes: z.lazy(() => Nodes1$outboundSchema),
     providerFleets: z.array(z.lazy(() => ProviderFleet1$outboundSchema)),
@@ -20151,29 +20278,36 @@ export const CpuUnit6$outboundSchema: z.ZodEnum<typeof CpuUnit6> = z.enum(
 );
 
 /** @internal */
-export type Cpu6$Outbound = {
+export type SyncReconcileRequestCpu6$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu6$outboundSchema: z.ZodType<Cpu6$Outbound, Cpu6> = z.object({
+export const SyncReconcileRequestCpu6$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu6$Outbound,
+  SyncReconcileRequestCpu6
+> = z.object({
   unit: CpuUnit6$outboundSchema,
   value: z.number(),
 });
 
-export function cpu6ToJSON(cpu6: Cpu6): string {
-  return JSON.stringify(Cpu6$outboundSchema.parse(cpu6));
+export function syncReconcileRequestCpu6ToJSON(
+  syncReconcileRequestCpu6: SyncReconcileRequestCpu6,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu6$outboundSchema.parse(syncReconcileRequestCpu6),
+  );
 }
 
 /** @internal */
-export type CpuUnion6$Outbound = Cpu6$Outbound | any;
+export type CpuUnion6$Outbound = SyncReconcileRequestCpu6$Outbound | any;
 
 /** @internal */
 export const CpuUnion6$outboundSchema: z.ZodType<
   CpuUnion6$Outbound,
   CpuUnion6
-> = z.union([z.lazy(() => Cpu6$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu6$outboundSchema), z.any()]);
 
 export function cpuUnion6ToJSON(cpuUnion6: CpuUnion6): string {
   return JSON.stringify(CpuUnion6$outboundSchema.parse(cpuUnion6));
@@ -20316,30 +20450,41 @@ export const MemoryUnit6$outboundSchema: z.ZodEnum<typeof MemoryUnit6> = z.enum(
 );
 
 /** @internal */
-export type Memory6$Outbound = {
+export type SyncReconcileRequestMemory6$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory6$outboundSchema: z.ZodType<Memory6$Outbound, Memory6> = z
-  .object({
-    unit: MemoryUnit6$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory6$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory6$Outbound,
+  SyncReconcileRequestMemory6
+> = z.object({
+  unit: MemoryUnit6$outboundSchema,
+  value: z.number(),
+});
 
-export function memory6ToJSON(memory6: Memory6): string {
-  return JSON.stringify(Memory6$outboundSchema.parse(memory6));
+export function syncReconcileRequestMemory6ToJSON(
+  syncReconcileRequestMemory6: SyncReconcileRequestMemory6,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory6$outboundSchema.parse(
+      syncReconcileRequestMemory6,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion6$Outbound = Memory6$Outbound | any;
+export type MemoryUnion6$Outbound = SyncReconcileRequestMemory6$Outbound | any;
 
 /** @internal */
 export const MemoryUnion6$outboundSchema: z.ZodType<
   MemoryUnion6$Outbound,
   MemoryUnion6
-> = z.union([z.lazy(() => Memory6$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory6$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion6ToJSON(memoryUnion6: MemoryUnion6): string {
   return JSON.stringify(MemoryUnion6$outboundSchema.parse(memoryUnion6));
@@ -20670,9 +20815,9 @@ export function workloadUnion3ToJSON(workloadUnion3: WorkloadUnion3): string {
 /** @internal */
 export type DataKubernetes3$Outbound = {
   commandSupported: boolean;
-  cpu?: Cpu6$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu6$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent10$Outbound>;
-  memory?: Memory6$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory6$Outbound | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod3$Outbound>;
@@ -20689,11 +20834,16 @@ export const DataKubernetes3$outboundSchema: z.ZodType<
   DataKubernetes3
 > = z.object({
   commandSupported: z.boolean(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu6$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu6$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent10$outboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory6$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory6$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod3$outboundSchema)),
@@ -22589,29 +22739,36 @@ export const CpuUnit5$outboundSchema: z.ZodEnum<typeof CpuUnit5> = z.enum(
 );
 
 /** @internal */
-export type Cpu5$Outbound = {
+export type SyncReconcileRequestCpu5$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu5$outboundSchema: z.ZodType<Cpu5$Outbound, Cpu5> = z.object({
+export const SyncReconcileRequestCpu5$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu5$Outbound,
+  SyncReconcileRequestCpu5
+> = z.object({
   unit: CpuUnit5$outboundSchema,
   value: z.number(),
 });
 
-export function cpu5ToJSON(cpu5: Cpu5): string {
-  return JSON.stringify(Cpu5$outboundSchema.parse(cpu5));
+export function syncReconcileRequestCpu5ToJSON(
+  syncReconcileRequestCpu5: SyncReconcileRequestCpu5,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu5$outboundSchema.parse(syncReconcileRequestCpu5),
+  );
 }
 
 /** @internal */
-export type CpuUnion5$Outbound = Cpu5$Outbound | any;
+export type CpuUnion5$Outbound = SyncReconcileRequestCpu5$Outbound | any;
 
 /** @internal */
 export const CpuUnion5$outboundSchema: z.ZodType<
   CpuUnion5$Outbound,
   CpuUnion5
-> = z.union([z.lazy(() => Cpu5$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu5$outboundSchema), z.any()]);
 
 export function cpuUnion5ToJSON(cpuUnion5: CpuUnion5): string {
   return JSON.stringify(CpuUnion5$outboundSchema.parse(cpuUnion5));
@@ -22714,30 +22871,41 @@ export const MemoryUnit5$outboundSchema: z.ZodEnum<typeof MemoryUnit5> = z.enum(
 );
 
 /** @internal */
-export type Memory5$Outbound = {
+export type SyncReconcileRequestMemory5$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory5$outboundSchema: z.ZodType<Memory5$Outbound, Memory5> = z
-  .object({
-    unit: MemoryUnit5$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory5$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory5$Outbound,
+  SyncReconcileRequestMemory5
+> = z.object({
+  unit: MemoryUnit5$outboundSchema,
+  value: z.number(),
+});
 
-export function memory5ToJSON(memory5: Memory5): string {
-  return JSON.stringify(Memory5$outboundSchema.parse(memory5));
+export function syncReconcileRequestMemory5ToJSON(
+  syncReconcileRequestMemory5: SyncReconcileRequestMemory5,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory5$outboundSchema.parse(
+      syncReconcileRequestMemory5,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion5$Outbound = Memory5$Outbound | any;
+export type MemoryUnion5$Outbound = SyncReconcileRequestMemory5$Outbound | any;
 
 /** @internal */
 export const MemoryUnion5$outboundSchema: z.ZodType<
   MemoryUnion5$Outbound,
   MemoryUnion5
-> = z.union([z.lazy(() => Memory5$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory5$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion5ToJSON(memoryUnion5: MemoryUnion5): string {
   return JSON.stringify(MemoryUnion5$outboundSchema.parse(memoryUnion5));
@@ -22832,11 +23000,11 @@ export type DataLocal3$Outbound = {
   bindMountCount: number;
   containerId?: string | null | undefined;
   containerUnit?: ContainerUnit$Outbound | any | null | undefined;
-  cpu?: Cpu5$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu5$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent5$Outbound>;
   image?: string | null | undefined;
   localUrl?: string | null | undefined;
-  memory?: Memory5$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory5$Outbound | any | null | undefined;
   name?: string | null | undefined;
   portCount: number;
   restartCount?: number | null | undefined;
@@ -22856,13 +23024,18 @@ export const DataLocal3$outboundSchema: z.ZodType<
   containerUnit: z.nullable(
     z.union([z.lazy(() => ContainerUnit$outboundSchema), z.any()]),
   ).optional(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu5$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu5$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent5$outboundSchema)),
   image: z.nullable(z.string()).optional(),
   localUrl: z.nullable(z.string()).optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory5$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory5$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.nullable(z.string()).optional(),
   portCount: z.int(),
   restartCount: z.nullable(z.int()).optional(),
@@ -22882,29 +23055,36 @@ export const CpuUnit4$outboundSchema: z.ZodEnum<typeof CpuUnit4> = z.enum(
 );
 
 /** @internal */
-export type Cpu4$Outbound = {
+export type SyncReconcileRequestCpu4$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu4$outboundSchema: z.ZodType<Cpu4$Outbound, Cpu4> = z.object({
+export const SyncReconcileRequestCpu4$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu4$Outbound,
+  SyncReconcileRequestCpu4
+> = z.object({
   unit: CpuUnit4$outboundSchema,
   value: z.number(),
 });
 
-export function cpu4ToJSON(cpu4: Cpu4): string {
-  return JSON.stringify(Cpu4$outboundSchema.parse(cpu4));
+export function syncReconcileRequestCpu4ToJSON(
+  syncReconcileRequestCpu4: SyncReconcileRequestCpu4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu4$outboundSchema.parse(syncReconcileRequestCpu4),
+  );
 }
 
 /** @internal */
-export type CpuUnion4$Outbound = Cpu4$Outbound | any;
+export type CpuUnion4$Outbound = SyncReconcileRequestCpu4$Outbound | any;
 
 /** @internal */
 export const CpuUnion4$outboundSchema: z.ZodType<
   CpuUnion4$Outbound,
   CpuUnion4
-> = z.union([z.lazy(() => Cpu4$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu4$outboundSchema), z.any()]);
 
 export function cpuUnion4ToJSON(cpuUnion4: CpuUnion4): string {
   return JSON.stringify(CpuUnion4$outboundSchema.parse(cpuUnion4));
@@ -23045,30 +23225,41 @@ export const MemoryUnit4$outboundSchema: z.ZodEnum<typeof MemoryUnit4> = z.enum(
 );
 
 /** @internal */
-export type Memory4$Outbound = {
+export type SyncReconcileRequestMemory4$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory4$outboundSchema: z.ZodType<Memory4$Outbound, Memory4> = z
-  .object({
-    unit: MemoryUnit4$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory4$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory4$Outbound,
+  SyncReconcileRequestMemory4
+> = z.object({
+  unit: MemoryUnit4$outboundSchema,
+  value: z.number(),
+});
 
-export function memory4ToJSON(memory4: Memory4): string {
-  return JSON.stringify(Memory4$outboundSchema.parse(memory4));
+export function syncReconcileRequestMemory4ToJSON(
+  syncReconcileRequestMemory4: SyncReconcileRequestMemory4,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory4$outboundSchema.parse(
+      syncReconcileRequestMemory4,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion4$Outbound = Memory4$Outbound | any;
+export type MemoryUnion4$Outbound = SyncReconcileRequestMemory4$Outbound | any;
 
 /** @internal */
 export const MemoryUnion4$outboundSchema: z.ZodType<
   MemoryUnion4$Outbound,
   MemoryUnion4
-> = z.union([z.lazy(() => Memory4$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory4$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion4ToJSON(memoryUnion4: MemoryUnion4): string {
   return JSON.stringify(MemoryUnion4$outboundSchema.parse(memoryUnion4));
@@ -23402,9 +23593,9 @@ export const WorkloadKind2$outboundSchema: z.ZodEnum<typeof WorkloadKind2> = z
 
 /** @internal */
 export type DataKubernetes2$Outbound = {
-  cpu?: Cpu4$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu4$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent4$Outbound>;
-  memory?: Memory4$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory4$Outbound | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod2$Outbound>;
@@ -23421,11 +23612,16 @@ export const DataKubernetes2$outboundSchema: z.ZodType<
   DataKubernetes2$Outbound,
   DataKubernetes2
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu4$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu4$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent4$outboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory4$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory4$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod2$outboundSchema)),
@@ -23451,29 +23647,36 @@ export const CpuUnit3$outboundSchema: z.ZodEnum<typeof CpuUnit3> = z.enum(
 );
 
 /** @internal */
-export type Cpu3$Outbound = {
+export type SyncReconcileRequestCpu3$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu3$outboundSchema: z.ZodType<Cpu3$Outbound, Cpu3> = z.object({
+export const SyncReconcileRequestCpu3$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu3$Outbound,
+  SyncReconcileRequestCpu3
+> = z.object({
   unit: CpuUnit3$outboundSchema,
   value: z.number(),
 });
 
-export function cpu3ToJSON(cpu3: Cpu3): string {
-  return JSON.stringify(Cpu3$outboundSchema.parse(cpu3));
+export function syncReconcileRequestCpu3ToJSON(
+  syncReconcileRequestCpu3: SyncReconcileRequestCpu3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu3$outboundSchema.parse(syncReconcileRequestCpu3),
+  );
 }
 
 /** @internal */
-export type CpuUnion3$Outbound = Cpu3$Outbound | any;
+export type CpuUnion3$Outbound = SyncReconcileRequestCpu3$Outbound | any;
 
 /** @internal */
 export const CpuUnion3$outboundSchema: z.ZodType<
   CpuUnion3$Outbound,
   CpuUnion3
-> = z.union([z.lazy(() => Cpu3$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu3$outboundSchema), z.any()]);
 
 export function cpuUnion3ToJSON(cpuUnion3: CpuUnion3): string {
   return JSON.stringify(CpuUnion3$outboundSchema.parse(cpuUnion3));
@@ -23616,30 +23819,41 @@ export const MemoryUnit3$outboundSchema: z.ZodEnum<typeof MemoryUnit3> = z.enum(
 );
 
 /** @internal */
-export type Memory3$Outbound = {
+export type SyncReconcileRequestMemory3$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory3$outboundSchema: z.ZodType<Memory3$Outbound, Memory3> = z
-  .object({
-    unit: MemoryUnit3$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory3$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory3$Outbound,
+  SyncReconcileRequestMemory3
+> = z.object({
+  unit: MemoryUnit3$outboundSchema,
+  value: z.number(),
+});
 
-export function memory3ToJSON(memory3: Memory3): string {
-  return JSON.stringify(Memory3$outboundSchema.parse(memory3));
+export function syncReconcileRequestMemory3ToJSON(
+  syncReconcileRequestMemory3: SyncReconcileRequestMemory3,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory3$outboundSchema.parse(
+      syncReconcileRequestMemory3,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion3$Outbound = Memory3$Outbound | any;
+export type MemoryUnion3$Outbound = SyncReconcileRequestMemory3$Outbound | any;
 
 /** @internal */
 export const MemoryUnion3$outboundSchema: z.ZodType<
   MemoryUnion3$Outbound,
   MemoryUnion3
-> = z.union([z.lazy(() => Memory3$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory3$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion3ToJSON(memoryUnion3: MemoryUnion3): string {
   return JSON.stringify(MemoryUnion3$outboundSchema.parse(memoryUnion3));
@@ -23905,11 +24119,11 @@ export function syncReconcileRequestStatus10ToJSON(
 export type DataHorizonPlatform$Outbound = {
   attentionCount: number;
   containerId: string;
-  cpu?: Cpu3$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu3$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent3$Outbound>;
   image?: string | null | undefined;
   latestUpdateTimestamp?: string | null | undefined;
-  memory?: Memory3$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory3$Outbound | any | null | undefined;
   observedImage?: string | null | undefined;
   replicaUnits: Array<ReplicaUnit$Outbound>;
   replicas: Replicas2$Outbound;
@@ -23925,13 +24139,18 @@ export const DataHorizonPlatform$outboundSchema: z.ZodType<
 > = z.object({
   attentionCount: z.int(),
   containerId: z.string(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu3$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu3$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent3$outboundSchema)),
   image: z.nullable(z.string()).optional(),
   latestUpdateTimestamp: z.nullable(z.string()).optional(),
-  memory: z.nullable(z.union([z.lazy(() => Memory3$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory3$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   observedImage: z.nullable(z.string()).optional(),
   replicaUnits: z.array(z.lazy(() => ReplicaUnit$outboundSchema)),
   replicas: z.lazy(() => Replicas2$outboundSchema),
@@ -24006,29 +24225,36 @@ export const CpuUnit2$outboundSchema: z.ZodEnum<typeof CpuUnit2> = z.enum(
 );
 
 /** @internal */
-export type Cpu2$Outbound = {
+export type SyncReconcileRequestCpu2$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu2$outboundSchema: z.ZodType<Cpu2$Outbound, Cpu2> = z.object({
+export const SyncReconcileRequestCpu2$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu2$Outbound,
+  SyncReconcileRequestCpu2
+> = z.object({
   unit: CpuUnit2$outboundSchema,
   value: z.number(),
 });
 
-export function cpu2ToJSON(cpu2: Cpu2): string {
-  return JSON.stringify(Cpu2$outboundSchema.parse(cpu2));
+export function syncReconcileRequestCpu2ToJSON(
+  syncReconcileRequestCpu2: SyncReconcileRequestCpu2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu2$outboundSchema.parse(syncReconcileRequestCpu2),
+  );
 }
 
 /** @internal */
-export type CpuUnion2$Outbound = Cpu2$Outbound | any;
+export type CpuUnion2$Outbound = SyncReconcileRequestCpu2$Outbound | any;
 
 /** @internal */
 export const CpuUnion2$outboundSchema: z.ZodType<
   CpuUnion2$Outbound,
   CpuUnion2
-> = z.union([z.lazy(() => Cpu2$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu2$outboundSchema), z.any()]);
 
 export function cpuUnion2ToJSON(cpuUnion2: CpuUnion2): string {
   return JSON.stringify(CpuUnion2$outboundSchema.parse(cpuUnion2));
@@ -24131,30 +24357,41 @@ export const MemoryUnit2$outboundSchema: z.ZodEnum<typeof MemoryUnit2> = z.enum(
 );
 
 /** @internal */
-export type Memory2$Outbound = {
+export type SyncReconcileRequestMemory2$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory2$outboundSchema: z.ZodType<Memory2$Outbound, Memory2> = z
-  .object({
-    unit: MemoryUnit2$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory2$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory2$Outbound,
+  SyncReconcileRequestMemory2
+> = z.object({
+  unit: MemoryUnit2$outboundSchema,
+  value: z.number(),
+});
 
-export function memory2ToJSON(memory2: Memory2): string {
-  return JSON.stringify(Memory2$outboundSchema.parse(memory2));
+export function syncReconcileRequestMemory2ToJSON(
+  syncReconcileRequestMemory2: SyncReconcileRequestMemory2,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory2$outboundSchema.parse(
+      syncReconcileRequestMemory2,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion2$Outbound = Memory2$Outbound | any;
+export type MemoryUnion2$Outbound = SyncReconcileRequestMemory2$Outbound | any;
 
 /** @internal */
 export const MemoryUnion2$outboundSchema: z.ZodType<
   MemoryUnion2$Outbound,
   MemoryUnion2
-> = z.union([z.lazy(() => Memory2$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory2$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion2ToJSON(memoryUnion2: MemoryUnion2): string {
   return JSON.stringify(MemoryUnion2$outboundSchema.parse(memoryUnion2));
@@ -24377,10 +24614,10 @@ export function syncReconcileRequestStatus9ToJSON(
 /** @internal */
 export type DataLocal2$Outbound = {
   commandSupported: boolean;
-  cpu?: Cpu2$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu2$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent2$Outbound>;
   imagePathPresent: boolean;
-  memory?: Memory2$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory2$Outbound | any | null | undefined;
   pid?: number | null | undefined;
   process?: Process$Outbound | any | null | undefined;
   readinessProbeOk?: boolean | null | undefined;
@@ -24395,12 +24632,17 @@ export const DataLocal2$outboundSchema: z.ZodType<
   DataLocal2
 > = z.object({
   commandSupported: z.boolean(),
-  cpu: z.nullable(z.union([z.lazy(() => Cpu2$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu2$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent2$outboundSchema)),
   imagePathPresent: z.boolean(),
-  memory: z.nullable(z.union([z.lazy(() => Memory2$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory2$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   pid: z.nullable(z.int()).optional(),
   process: z.nullable(z.union([z.lazy(() => Process$outboundSchema), z.any()]))
     .optional(),
@@ -24420,29 +24662,36 @@ export const CpuUnit1$outboundSchema: z.ZodEnum<typeof CpuUnit1> = z.enum(
 );
 
 /** @internal */
-export type Cpu1$Outbound = {
+export type SyncReconcileRequestCpu1$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Cpu1$outboundSchema: z.ZodType<Cpu1$Outbound, Cpu1> = z.object({
+export const SyncReconcileRequestCpu1$outboundSchema: z.ZodType<
+  SyncReconcileRequestCpu1$Outbound,
+  SyncReconcileRequestCpu1
+> = z.object({
   unit: CpuUnit1$outboundSchema,
   value: z.number(),
 });
 
-export function cpu1ToJSON(cpu1: Cpu1): string {
-  return JSON.stringify(Cpu1$outboundSchema.parse(cpu1));
+export function syncReconcileRequestCpu1ToJSON(
+  syncReconcileRequestCpu1: SyncReconcileRequestCpu1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestCpu1$outboundSchema.parse(syncReconcileRequestCpu1),
+  );
 }
 
 /** @internal */
-export type CpuUnion1$Outbound = Cpu1$Outbound | any;
+export type CpuUnion1$Outbound = SyncReconcileRequestCpu1$Outbound | any;
 
 /** @internal */
 export const CpuUnion1$outboundSchema: z.ZodType<
   CpuUnion1$Outbound,
   CpuUnion1
-> = z.union([z.lazy(() => Cpu1$outboundSchema), z.any()]);
+> = z.union([z.lazy(() => SyncReconcileRequestCpu1$outboundSchema), z.any()]);
 
 export function cpuUnion1ToJSON(cpuUnion1: CpuUnion1): string {
   return JSON.stringify(CpuUnion1$outboundSchema.parse(cpuUnion1));
@@ -24583,30 +24832,41 @@ export const MemoryUnit1$outboundSchema: z.ZodEnum<typeof MemoryUnit1> = z.enum(
 );
 
 /** @internal */
-export type Memory1$Outbound = {
+export type SyncReconcileRequestMemory1$Outbound = {
   unit: string;
   value: number;
 };
 
 /** @internal */
-export const Memory1$outboundSchema: z.ZodType<Memory1$Outbound, Memory1> = z
-  .object({
-    unit: MemoryUnit1$outboundSchema,
-    value: z.number(),
-  });
+export const SyncReconcileRequestMemory1$outboundSchema: z.ZodType<
+  SyncReconcileRequestMemory1$Outbound,
+  SyncReconcileRequestMemory1
+> = z.object({
+  unit: MemoryUnit1$outboundSchema,
+  value: z.number(),
+});
 
-export function memory1ToJSON(memory1: Memory1): string {
-  return JSON.stringify(Memory1$outboundSchema.parse(memory1));
+export function syncReconcileRequestMemory1ToJSON(
+  syncReconcileRequestMemory1: SyncReconcileRequestMemory1,
+): string {
+  return JSON.stringify(
+    SyncReconcileRequestMemory1$outboundSchema.parse(
+      syncReconcileRequestMemory1,
+    ),
+  );
 }
 
 /** @internal */
-export type MemoryUnion1$Outbound = Memory1$Outbound | any;
+export type MemoryUnion1$Outbound = SyncReconcileRequestMemory1$Outbound | any;
 
 /** @internal */
 export const MemoryUnion1$outboundSchema: z.ZodType<
   MemoryUnion1$Outbound,
   MemoryUnion1
-> = z.union([z.lazy(() => Memory1$outboundSchema), z.any()]);
+> = z.union([
+  z.lazy(() => SyncReconcileRequestMemory1$outboundSchema),
+  z.any(),
+]);
 
 export function memoryUnion1ToJSON(memoryUnion1: MemoryUnion1): string {
   return JSON.stringify(MemoryUnion1$outboundSchema.parse(memoryUnion1));
@@ -24939,9 +25199,9 @@ export const WorkloadKind1$outboundSchema: z.ZodEnum<typeof WorkloadKind1> = z
 
 /** @internal */
 export type DataKubernetes1$Outbound = {
-  cpu?: Cpu1$Outbound | any | null | undefined;
+  cpu?: SyncReconcileRequestCpu1$Outbound | any | null | undefined;
   events: Array<SyncReconcileRequestEvent1$Outbound>;
-  memory?: Memory1$Outbound | any | null | undefined;
+  memory?: SyncReconcileRequestMemory1$Outbound | any | null | undefined;
   name: string;
   namespace: string;
   pods: Array<Pod1$Outbound>;
@@ -24959,11 +25219,16 @@ export const DataKubernetes1$outboundSchema: z.ZodType<
   DataKubernetes1$Outbound,
   DataKubernetes1
 > = z.object({
-  cpu: z.nullable(z.union([z.lazy(() => Cpu1$outboundSchema), z.any()]))
-    .optional(),
+  cpu: z.nullable(
+    z.union([z.lazy(() => SyncReconcileRequestCpu1$outboundSchema), z.any()]),
+  ).optional(),
   events: z.array(z.lazy(() => SyncReconcileRequestEvent1$outboundSchema)),
-  memory: z.nullable(z.union([z.lazy(() => Memory1$outboundSchema), z.any()]))
-    .optional(),
+  memory: z.nullable(
+    z.union([
+      z.lazy(() => SyncReconcileRequestMemory1$outboundSchema),
+      z.any(),
+    ]),
+  ).optional(),
   name: z.string(),
   namespace: z.string(),
   pods: z.array(z.lazy(() => Pod1$outboundSchema)),
