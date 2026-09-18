@@ -40,25 +40,22 @@ pub use resource_permissions_helper::*;
 
 use std::collections::BTreeMap;
 
-use alien_core::{
-    access_request_crd::brand_slug, branded_standard_resource_tags, branded_tag_key, Platform,
-    ALIEN_STACK_TAG_KEY, DEFAULT_ALIEN_LABEL_DOMAIN,
-};
+use alien_core::{branded_standard_resource_tags, branded_tag_key, Platform, ALIEN_STACK_TAG_KEY};
 
 const LEGACY_LABEL_DOMAIN_MARKER_PREFIX: &str = "alien.dev/legacy-label-domain-";
 const CURRENT_LABEL_DOMAIN_MARKER: &str = "alien.dev/label-domain";
 const KUBERNETES_LABEL_VALUE_MAX_LEN: usize = 63;
 
 fn current_kubernetes_label_domain(configured: &str) -> String {
-    if configured == DEFAULT_ALIEN_LABEL_DOMAIN {
-        configured.to_string()
-    } else {
-        brand_slug(configured)
-    }
+    alien_core::access_request_crd::current_kubernetes_label_domain(configured)
 }
 
 fn explicit_legacy_label_domain<'a>(configured: &'a str, current: &str) -> Option<&'a str> {
-    (configured != current && is_valid_kubernetes_dns_subdomain(configured)).then_some(configured)
+    (configured != current)
+        .then(|| {
+            alien_core::access_request_crd::explicit_legacy_kubernetes_label_domain(configured)
+        })
+        .flatten()
 }
 
 fn is_valid_kubernetes_dns_subdomain(value: &str) -> bool {

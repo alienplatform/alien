@@ -365,7 +365,7 @@ fn add_remote_operator_files(
             }));
         }
         let deployment_label_key = branded_tag_key(
-            alien_core::access_request_crd::brand_slug(label_domain),
+            alien_core::access_request_crd::current_kubernetes_label_domain(label_domain),
             ALIEN_STACK_TAG_KEY,
         );
         *values = values.replacen(
@@ -376,8 +376,11 @@ fn add_remote_operator_files(
             ),
             1,
         );
-        let legacy_deployment_label_key = branded_tag_key(label_domain, ALIEN_STACK_TAG_KEY);
-        if legacy_deployment_label_key != deployment_label_key {
+        if let Some(legacy_label_domain) =
+            alien_core::access_request_crd::explicit_legacy_kubernetes_label_domain(label_domain)
+        {
+            let legacy_deployment_label_key =
+                branded_tag_key(legacy_label_domain, ALIEN_STACK_TAG_KEY);
             *values = values.replacen(
                 default_legacy_label_key,
                 &format!(
@@ -7243,10 +7246,32 @@ mod tests {
         let chart = sample_product_chart();
         let branded_chart =
             sample_product_chart_with_collector_and_label_domain(false, Some("acme.dev"));
+        let default_domain_chart =
+            sample_product_chart_with_collector_and_label_domain(false, Some("alien.dev"));
+        let display_name_chart =
+            sample_product_chart_with_collector_and_label_domain(false, Some("My Cool App"));
 
         assert!(!chart.files.contains_key("crds/alien-access-requests.yaml"));
         assert!(
             branded_chart.files["values.yaml"].contains("deploymentLabelKey: 'acme/deployment'")
+        );
+        assert!(
+            default_domain_chart.files["values.yaml"]
+                .contains("deploymentLabelKey: 'alien.dev/deployment'"),
+            "the explicit default domain must keep the runtime's qualified current label"
+        );
+        assert!(
+            default_domain_chart.files["values.yaml"].contains("legacyDeploymentLabelKey: \"\""),
+            "the explicit default domain has no distinct legacy key"
+        );
+        assert!(
+            display_name_chart.files["values.yaml"]
+                .contains("deploymentLabelKey: 'mycoolapp/deployment'"),
+            "free-form brands must use the runtime's DNS-safe current label"
+        );
+        assert!(
+            display_name_chart.files["values.yaml"].contains("legacyDeploymentLabelKey: \"\""),
+            "an invalid legacy domain must not become a Kubernetes label key"
         );
         let crd_template = &chart.files["templates/remote-operator-crd.yaml"];
         assert!(crd_template.contains("if .Values.remoteOperator.enabled"));
