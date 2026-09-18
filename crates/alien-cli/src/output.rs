@@ -1,5 +1,5 @@
 use crate::error::{ErrorData, Result};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, AlienErrorData, Context, GenericError, IntoAlienError};
 use console::{style, Key, Term};
 use serde::Serialize;
 use std::fs;
@@ -19,6 +19,60 @@ pub fn print_json<T: Serialize>(value: &T) -> Result<()> {
         })?;
     println!("{json}");
     Ok(())
+}
+
+/// A safe stderr companion for a failed `--json` command.
+///
+/// JSON remains the sole stdout document, while automation that captures
+/// stdout still gets an actionable failure in its logs. Callers must pass an
+/// error that has already crossed [`AlienError::into_external`]. Deliberately
+/// omit structured context: it may contain request inputs or provider data.
+pub fn json_error_diagnostic(error: &AlienError<GenericError>, request_id: Option<&str>) -> String {
+    let message = sanitize_terminal_field(&error.message);
+    match request_id.map(sanitize_terminal_field) {
+        Some(request_id) => format!(
+            "alien: {}: {message} (request id: {request_id})",
+            error.code
+        ),
+        None => format!("alien: {}: {message}", error.code),
+    }
+}
+
+pub fn json_error_request_id<T>(error: &AlienError<T>) -> Option<String>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    find_request_id(error).map(ToOwned::to_owned)
+}
+
+fn find_request_id<T>(error: &AlienError<T>) -> Option<&str>
+where
+    T: AlienErrorData + Clone + std::fmt::Debug + Serialize,
+{
+    error
+        .context
+        .as_ref()
+        .and_then(serde_json::Value::as_object)
+        .and_then(|context| {
+            context
+                .get("requestId")
+                .or_else(|| context.get("request_id"))
+        })
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| error.source.as_deref().and_then(find_request_id))
+}
+
+fn sanitize_terminal_field(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .collect()
 }
 
 pub fn write_json_file<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -296,5 +350,60 @@ mod tests {
 
         let contents = fs::read_to_string(&path).unwrap();
         assert!(contents.contains("\"hello\": \"again\""));
+    }
+
+    #[test]
+    fn json_error_diagnostic_is_single_line_and_includes_request_id() {
+        let mut error = AlienError::new(GenericError {
+            message: "release failed\nretry safely".to_string(),
+        });
+        error.context = Some(serde_json::json!({
+            "requestId": "req_123",
+            "secretInput": "must-not-be-rendered"
+        }));
+
+        let request_id = json_error_request_id(&error);
+        let diagnostic = json_error_diagnostic(&error, request_id.as_deref());
+
+        assert_eq!(
+            diagnostic,
+            "alien: GENERIC_ERROR: release failed retry safely (request id: req_123)"
+        );
+        assert!(!diagnostic.contains("must-not-be-rendered"));
+    }
+
+    #[test]
+    fn internal_json_error_diagnostic_uses_sanitized_external_error() {
+        let mut error = AlienError::new(GenericError {
+            message: "provider returned secret-token".to_string(),
+        });
+        error.internal = true;
+
+        let request_id = json_error_request_id(&error);
+        let diagnostic = json_error_diagnostic(&error.into_external(), request_id.as_deref());
+
+        assert_eq!(diagnostic, "alien: GENERIC_ERROR: Internal server error");
+        assert!(!diagnostic.contains("secret-token"));
+    }
+
+    #[test]
+    fn internal_json_error_preserves_safe_request_id_and_strips_controls() {
+        let mut error = AlienError::new(GenericError {
+            message: "provider returned secret-token".to_string(),
+        });
+        error.internal = true;
+        error.context = Some(serde_json::json!({
+            "requestId": "req_123\nforged\u{001b}[31m"
+        }));
+
+        let request_id = json_error_request_id(&error);
+        let diagnostic = json_error_diagnostic(&error.into_external(), request_id.as_deref());
+
+        assert_eq!(
+            diagnostic,
+            "alien: GENERIC_ERROR: Internal server error (request id: req_123 forged [31m)"
+        );
+        assert!(!diagnostic.contains("secret-token"));
+        assert!(!diagnostic.chars().any(char::is_control));
     }
 }
