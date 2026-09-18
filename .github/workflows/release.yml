@@ -1418,7 +1418,7 @@ jobs:
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
             platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1487,7 +1487,7 @@ jobs:
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
             platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1554,7 +1554,7 @@ jobs:
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
             platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien
-          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1636,7 +1636,7 @@ jobs:
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
             platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe
-          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-${{ needs.prepare.outputs.source_ref }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
