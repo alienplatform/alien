@@ -67,6 +67,8 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+              - '.github/workflows/ci-fast.yml'
+              - '.github/workflows/ci-fork.yml'
               # The image contract tests read the Dockerfiles as text, so a change
               # to one of those is a change this job has to see.
               - 'docker/**'
