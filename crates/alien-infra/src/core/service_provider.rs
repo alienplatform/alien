@@ -20,6 +20,7 @@ use alien_aws_clients::{
     rds::{RdsApi, RdsClient},
     s3::{S3Api, S3Client},
     secrets_manager::{SecretsManagerApi, SecretsManagerClient},
+    service_quotas::{ServiceQuotasApi, ServiceQuotasClient},
     ses::{SesApi, SesClient},
     sqs::{SqsApi, SqsClient},
     ssm::{SsmApi, SsmClient},
@@ -132,6 +133,10 @@ pub trait PlatformServiceProvider: Send + Sync {
     ) -> Result<Arc<dyn DynamoDbApi>>;
     async fn get_aws_sqs_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn SqsApi>>;
     async fn get_aws_ec2_client(&self, config: &AwsClientConfig) -> Result<Arc<dyn Ec2Api>>;
+    async fn get_aws_service_quotas_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ServiceQuotasApi>>;
     async fn get_aws_autoscaling_client(
         &self,
         config: &AwsClientConfig,
@@ -693,6 +698,22 @@ impl PlatformServiceProvider for DefaultPlatformServiceProvider {
                 resource_id: None,
             })?;
         Ok(Arc::new(Ec2Client::new(
+            reqwest::Client::new(),
+            credentials,
+        )))
+    }
+
+    async fn get_aws_service_quotas_client(
+        &self,
+        config: &AwsClientConfig,
+    ) -> Result<Arc<dyn ServiceQuotasApi>> {
+        let credentials = AwsCredentialProvider::from_config(config.clone())
+            .await
+            .context(crate::error::ErrorData::CloudPlatformError {
+                message: "Failed to create AWS credential provider".to_string(),
+                resource_id: None,
+            })?;
+        Ok(Arc::new(ServiceQuotasClient::new(
             reqwest::Client::new(),
             credentials,
         )))

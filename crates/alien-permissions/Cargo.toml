@@ -20,7 +20,7 @@ json5 = "0.4"
 json5 = "0.4"
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-alien-core = { workspace = true }
+alien-permission-types = { workspace = true }
 indexmap = { workspace = true, features = ["serde"] }
 
 [dev-dependencies]

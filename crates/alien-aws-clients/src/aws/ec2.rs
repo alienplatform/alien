@@ -114,6 +114,7 @@ pub trait Ec2Api: Send + Sync + std::fmt::Debug {
         &self,
         request: AllocateAddressRequest,
     ) -> Result<AllocateAddressResponse>;
+    async fn describe_addresses(&self) -> Result<DescribeAddressesResponse>;
     async fn release_address(&self, allocation_id: &str) -> Result<()>;
 
     // Route Table Operations
@@ -1057,6 +1058,14 @@ impl Ec2Api for Ec2Client {
         }
 
         self.send_form(form_data, "AllocateAddress", "ElasticIP")
+            .await
+    }
+
+    async fn describe_addresses(&self) -> Result<DescribeAddressesResponse> {
+        let mut form_data = HashMap::new();
+        form_data.insert("Action".to_string(), "DescribeAddresses".to_string());
+        form_data.insert("Version".to_string(), "2016-11-15".to_string());
+        self.send_form(form_data, "DescribeAddresses", "Elastic IP addresses")
             .await
     }
 
@@ -2543,6 +2552,30 @@ pub struct AllocateAddressResponse {
     pub domain: Option<String>,
 }
 
+/// Response from listing all Elastic IP addresses allocated in the Region.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DescribeAddressesResponse {
+    pub addresses_set: Option<AddressSet>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AddressSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<Address>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Address {
+    pub allocation_id: Option<String>,
+    pub public_ip: Option<String>,
+    pub domain: Option<String>,
+    /// Present for addresses allocated from a customer-owned public IPv4 pool
+    /// (BYOIP). Those addresses do not consume the EC2-VPC Elastic IP quota.
+    pub public_ipv4_pool: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Route Table Request/Response Types
 // ---------------------------------------------------------------------------
@@ -3829,6 +3862,36 @@ mod volume_operation_tests {
         );
         assert_eq!(modifications.items[0].progress, Some(100));
         assert_eq!(described.next_token.as_deref(), Some("next-page"));
+    }
+
+    #[test]
+    fn describe_addresses_response_deserializes_all_vpc_addresses() {
+        let response: DescribeAddressesResponse = quick_xml::de::from_str(
+            r#"<DescribeAddressesResponse xmlns="http://ec2.amazonaws.com/doc/2016-11-15/">
+                <addressesSet>
+                    <item><publicIp>203.0.113.1</publicIp><allocationId>eipalloc-1</allocationId><domain>vpc</domain><publicIpv4Pool>amazon</publicIpv4Pool></item>
+                    <item><publicIp>203.0.113.2</publicIp><allocationId>eipalloc-2</allocationId><domain>vpc</domain></item>
+                    <item><publicIp>203.0.113.3</publicIp><allocationId>eipalloc-byoip</allocationId><domain>vpc</domain><publicIpv4Pool>ipv4pool-ec2-1234567890abcdef0</publicIpv4Pool></item>
+                </addressesSet>
+            </DescribeAddressesResponse>"#,
+        )
+        .expect("DescribeAddresses response should deserialize");
+
+        let addresses = response.addresses_set.expect("addressesSet is present");
+        assert_eq!(addresses.items.len(), 3);
+        assert_eq!(
+            addresses.items[0].allocation_id.as_deref(),
+            Some("eipalloc-1")
+        );
+        assert_eq!(addresses.items[0].public_ipv4_pool.as_deref(), Some("amazon"));
+        assert!(addresses
+            .items
+            .iter()
+            .all(|address| address.domain.as_deref() == Some("vpc")));
+        assert_eq!(
+            addresses.items[2].public_ipv4_pool.as_deref(),
+            Some("ipv4pool-ec2-1234567890abcdef0")
+        );
     }
 }
 

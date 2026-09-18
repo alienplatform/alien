@@ -24,7 +24,10 @@ use alien_deployment::{
         acquire_setup_run_deployment, combine_operation_and_finalization, final_reconcile,
         release_deployment, ManagerApiTransport, SetupDeleteAcquireOutcome,
     },
-    runner::{run_step_loop as shared_run_step_loop, RunnerPolicy, RunnerResult},
+    runner::{
+        preserve_semantic_failure, run_step_loop as shared_run_step_loop, RunnerPolicy,
+        RunnerResult,
+    },
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_infra::{ClientConfigExt, StackStateExt};
@@ -4801,7 +4804,7 @@ pub async fn push_initial_setup(
 
     // Always reconcile + release, even on error.
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        preserve_semantic_failure(runner_result, &state),
         final_reconcile(
             client,
             deployment_id,
@@ -5092,7 +5095,7 @@ async fn run_runtime_deletion(
 
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        preserve_semantic_failure(runner_result, state),
         final_reconcile(
             client,
             deployment_id,
@@ -5215,7 +5218,7 @@ async fn run_setup_deletion(
 
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        preserve_semantic_failure(runner_result, state),
         final_reconcile(
             client,
             deployment_id,
