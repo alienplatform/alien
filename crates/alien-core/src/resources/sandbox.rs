@@ -496,6 +496,20 @@ pub struct Sandbox {
     pub id: String,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
+    /// The base image the image build pulls, when that pull has to be authenticated.
+    ///
+    /// Only an AWS sandbox has one. There `code.image` names an S3 bundle and the base image
+    /// lives in the `FROM` of the Dockerfile inside it, so nothing else in the stack says which
+    /// registry the build reaches. Two readers need that and neither can derive it: the emitters,
+    /// which grant the build role the ECR actions an authenticated pull needs — a role without
+    /// them fails the build with `AccessDenied` minutes in rather than at plan time — and the
+    /// cross-account grant, which opens the hosting repository to the customer's account and has
+    /// only this to name the repository by.
+    ///
+    /// Absent means the base image is pulled anonymously and the build authenticates to nothing,
+    /// which is every sandbox declared before this field existed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_base_image: Option<String>,
     /// Enforced resource ceilings.
     ///
     /// Optional because not every platform can enforce them, and a declaration that names none
@@ -574,6 +588,25 @@ impl Sandbox {
                          prebuilt reference"
                     .to_string(),
             }));
+        }
+
+        // Only the AWS backend builds an image, so only there is there a base image behind
+        // `code.image` for a grant to name. Everywhere else `code.image` is the reference the
+        // platform pulls itself, and a second one would be a grant nothing ever reads — the
+        // silent no-op the capability contract forbids.
+        if let Some(base_image) = &self.private_base_image {
+            if platform != Platform::Aws {
+                return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
+                    resource_id: self.id.clone(),
+                    field: "privateBaseImage".to_string(),
+                    value: base_image.clone(),
+                    reason: format!(
+                        "only an AWS sandbox builds its image from a bundle, so only there does \
+                         a base image sit behind code.image; {platform} pulls code.image itself, \
+                         and a private reference for it belongs in code.image"
+                    ),
+                }));
+            }
         }
 
         // Read before the limits, because the image is declared whether or not any are.
@@ -1598,6 +1631,39 @@ mod tests {
             .validate_for_platform(Platform::Kubernetes)
             .expect_err("Kubernetes preview is deferred");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+    }
+
+    /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and
+    /// here it is worse than useless: the reader would take it for a base image that needs
+    /// authenticating while the platform pulls `code.image` itself.
+    #[test]
+    fn a_private_base_image_is_refused_off_aws() {
+        let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        sandbox.code = SandboxCode::Image {
+            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+        };
+        sandbox.private_base_image =
+            Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme:tag".to_string());
+
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("AWS builds its image from a bundle, so a base image sits behind code.image");
+
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("a backend that builds no image must refuse a base image for one");
+            assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
+            assert!(
+                error.to_string().contains("privateBaseImage"),
+                "the refusal must name the field the user declared: {error}"
+            );
+        }
     }
 
     #[test]

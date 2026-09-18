@@ -32,6 +32,36 @@ fn sandbox_fixture_with(egress: SandboxEgress, image: &str) -> Sandbox {
         .build()
 }
 
+/// The reference the platform writes for a base image it hosts privately.
+///
+/// Region-templated because one bundle key serves every regional store, and the emitters resolve
+/// the token per region.
+const PRIVATE_BASE_IMAGE: &str =
+    "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-acme:agents-abc123";
+
+/// A Frozen sandbox whose bundle builds on a base image only a credentialed pull reaches.
+fn sandbox_stack_with_private_base(name: &str) -> (Stack, StackSettings) {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let mut sandbox = sandbox_fixture(SandboxEgress::Deny);
+    sandbox.private_base_image = Some(PRIVATE_BASE_IMAGE.to_string());
+    let stack = Stack::new(name.to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .build();
+    (stack, settings)
+}
+
 /// A sandbox and the network its egress connector attaches to, which the emitter requires.
 fn sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSettings) {
     sandbox_stack_with_lifecycle(name, egress, ResourceLifecycle::Frozen)
@@ -104,6 +134,63 @@ fn grants_ecr(statement: &serde_json::Value) -> bool {
             .iter()
             .any(|action| action.as_str().is_some_and(|a| a.starts_with("ecr:")))
     })
+}
+
+/// What a build role must carry to pull a base image a registry serves only with credentials.
+///
+/// One assertion for the two lifecycles that earn the grant, because the emitter renders one
+/// definition for both: a pair of per-lifecycle assertions could each pass while the two drifted
+/// into authenticating differently against the same registry. `role` names which one is under
+/// test so a failure says so.
+fn assert_authenticates_to_ecr(statements: &[serde_json::Value], role: &str) {
+    // The identity itself needs all three actions — a repository policy on the registry side is
+    // not enough.
+    let ecr = statements
+        .iter()
+        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
+        .unwrap_or_else(|| panic!("a {role} build role must authenticate to ECR: {statements:#?}"));
+    assert_eq!(
+        ecr["Sid"], "PullSandboxBaseImage",
+        "the statement a security reviewer reads must say what it is for"
+    );
+    assert_eq!(
+        ecr["Action"],
+        serde_json::json!([
+            "ecr:GetAuthorizationToken",
+            "ecr:BatchGetImage",
+            "ecr:GetDownloadUrlForLayer"
+        ]),
+        "exactly the token call and the two pull actions, nothing wider"
+    );
+    assert_eq!(
+        ecr["Resource"],
+        serde_json::json!("*"),
+        "GetAuthorizationToken is only accepted against `*`"
+    );
+
+    // Same-account pulls are authorized by identity policy alone, so without this Deny the
+    // Allow above makes a customer-authored Dockerfile a reader of every private repository
+    // in the customer's own account.
+    let deny = statements
+        .iter()
+        .find(|statement| statement["Effect"] == "Deny")
+        .unwrap_or_else(|| {
+            panic!("same-account pulls must be denied on a {role} build role: {statements:#?}")
+        });
+    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
+    assert_eq!(
+        deny["Action"],
+        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
+        "the deny covers exactly the two pull actions — never the token call, which the \
+         cross-account login needs"
+    );
+    assert_eq!(
+        deny["Resource"],
+        serde_json::json!({
+            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+        }),
+        "the deny must name this account's repositories through pseudo parameters, not literals"
+    );
 }
 
 /// Every resource type the rendered template declares.
@@ -242,55 +329,8 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         "the controller is handed the bundle it builds from: {import_data:#}"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
-    let statements = build_role_statements(&template);
-    let ecr = statements
-        .iter()
-        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
-    assert_eq!(
-        ecr["Sid"], "PullSandboxBaseImage",
-        "the statement a security reviewer reads must say what it is for"
-    );
-    assert_eq!(
-        ecr["Action"],
-        serde_json::json!([
-            "ecr:GetAuthorizationToken",
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-        ]),
-        "exactly the token call and the two pull actions, nothing wider"
-    );
-    assert_eq!(
-        ecr["Resource"],
-        serde_json::json!("*"),
-        "GetAuthorizationToken is only accepted against `*`"
-    );
-
-    // Same-account pulls are authorized by identity policy alone, so without this Deny the
-    // Allow above makes a customer-authored Dockerfile a reader of every private repository
-    // in the customer's own account.
-    let deny = statements
-        .iter()
-        .find(|statement| statement["Effect"] == "Deny")
-        .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
-        });
-    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
-    assert_eq!(
-        deny["Action"],
-        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-        "the deny covers exactly the two pull actions — never the token call, which the \
-         cross-account login needs"
-    );
-    assert_eq!(
-        deny["Resource"],
-        serde_json::json!({
-            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
-        }),
-        "the deny must name this account's repositories through pseudo parameters, not literals"
-    );
+    // A runtime build's base image comes from a private registry by construction.
+    assert_authenticates_to_ecr(&build_role_statements(&template), "Live");
 }
 
 /// A grant naming the one object the template was generated with denies the build the first
@@ -333,6 +373,43 @@ fn only_a_live_build_role_reads_the_bundle_prefix() {
     );
 }
 
+/// The ECR grant follows the base image, not the lifecycle.
+///
+/// A Frozen sandbox is the capability's own shape, and its bundle can still build on an image
+/// Alien serves only with credentials. Without this the build role is the one the *customer*
+/// applied, so the denial lands minutes into `CreateMicrovmImage` in their account — not at plan
+/// time, and not anywhere a generated template would show it.
+#[test]
+fn a_frozen_sandbox_authenticates_to_ecr_for_a_private_base_image() {
+    let (stack, settings) = sandbox_stack_with_private_base("acme-sandbox-private");
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "frozen sandbox on a private base image",
+    );
+
+    // Still the Frozen shape: the image is baked by stack creation, not handed to a controller.
+    let types = resource_types(&template);
+    assert!(
+        types.iter().any(|t| t == "AWS::Lambda::MicrovmImage"),
+        "a private base image must not turn the sandbox into a runtime-built one: {types:?}"
+    );
+
+    let statements = build_role_statements(&template);
+    assert_authenticates_to_ecr(&statements, "Frozen");
+
+    // The bundle grant stays the Frozen one. A private base is a reason to authenticate, not a
+    // reason to widen S3 reach to the prefix a rebuilding Live sandbox needs.
+    assert_eq!(
+        bundle_grant(&template),
+        "arn:${AWS::Partition}:s3:::acme-artifacts/agents/bundle.zip",
+        "a Frozen role still reads the one object its template names"
+    );
+}
+
 /// The Frozen path is the one every installed stack is on.
 #[test]
 fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
@@ -370,12 +447,13 @@ fn a_frozen_sandbox_still_bakes_its_image_into_the_setup_stack() {
     );
     assert_eq!(parsed.build_role_arn, None);
 
-    // A setup-baked image pulls its public base anonymously; an ECR grant here would hand the
-    // role running a customer-authored Dockerfile pull access it never needs.
+    // This sandbox declares no `privateBaseImage`, so its build pulls a public base anonymously;
+    // an ECR grant here would hand the role running a customer-authored Dockerfile pull access it
+    // never needs.
     let statements = build_role_statements(&template);
     assert!(
         !statements.iter().any(grants_ecr),
-        "a Frozen build role must carry no ECR action: {statements:#?}"
+        "a build role whose base image is public must carry no ECR action: {statements:#?}"
     );
 
     // See `build_role_trust_policy` for why the condition belongs on this statement.

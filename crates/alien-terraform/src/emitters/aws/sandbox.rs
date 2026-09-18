@@ -145,53 +145,11 @@ impl TfEmitter for AwsSandboxEmitter {
                 ("Resource", Expression::String("*".to_string())),
             ]),
         ];
-        // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
-        // role carries no ECR grant; a runtime-built image's base is a private registry image.
-        if runtime_built {
-            build_statements.push(Expression::from_iter([
-                (
-                    "Sid",
-                    Expression::String("PullSandboxBaseImage".to_string()),
-                ),
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    // The token call plus the two pull actions a live build was observed to be
-                    // denied without — the registry's repository policy alone did not authorize it.
-                    Expression::from(vec![
-                        Expression::String("ecr:GetAuthorizationToken".to_string()),
-                        Expression::String("ecr:BatchGetImage".to_string()),
-                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
-                    ]),
-                ),
-                // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
-                // the base image is unknown when the module is rendered, so the pull pair is `*`
-                // too; the Deny below stops it reading this account's own private repositories.
-                ("Resource", Expression::String("*".to_string())),
-            ]));
-            // Same-account pulls are authorized by identity policy alone — no repository policy
-            // participates — and this role runs a customer-authored Dockerfile. The base image
-            // is cross-account by construction, so a same-account pull is never legitimate.
-            build_statements.push(Expression::from_iter([
-                (
-                    "Sid",
-                    Expression::String("DenySameAccountImagePull".to_string()),
-                ),
-                ("Effect", Expression::String("Deny".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![
-                        Expression::String("ecr:BatchGetImage".to_string()),
-                        Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
-                    ]),
-                ),
-                (
-                    "Resource",
-                    expr::template(
-                        "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
-                    ),
-                ),
-            ]));
+        // The ECR grant follows the base image, not the lifecycle: a runtime-built image's base is
+        // a private registry image by construction, and a setup-baked one's is pulled anonymously
+        // unless the declaration names a `privateBaseImage`.
+        if runtime_built || sandbox.private_base_image.is_some() {
+            build_statements.extend(private_base_image_statements());
         }
         let build_policy =
             iam_role_policy_block(label, label, "sandbox-image-build", build_statements);
@@ -511,6 +469,60 @@ fn lifecycle_fields(sandbox: &Sandbox) -> Vec<(&'static str, Expression)> {
         seconds.map(|seconds| (key, Expression::Number(i64::from(seconds).into())))
     })
     .collect()
+}
+
+/// The statements a build role needs to pull a base image a registry serves only with credentials.
+///
+/// One definition for the two lifecycles that earn them, because they authenticate against the
+/// same registry and a second copy would drift into one of them pulling differently from the
+/// other. `Sid`s included: they are what an operator reading a denied build's policy matches on.
+fn private_base_image_statements() -> [Expression; 2] {
+    [
+        Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("PullSandboxBaseImage".to_string()),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                // The token call plus the two pull actions a live build was observed to be
+                // denied without — the registry's repository policy alone did not authorize it.
+                Expression::from(vec![
+                    Expression::String("ecr:GetAuthorizationToken".to_string()),
+                    Expression::String("ecr:BatchGetImage".to_string()),
+                    Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                ]),
+            ),
+            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
+            // the base image is unknown when the module is rendered, so the pull pair is `*`
+            // too; the Deny below stops it reading this account's own private repositories.
+            ("Resource", Expression::String("*".to_string())),
+        ]),
+        // Same-account pulls are authorized by identity policy alone — no repository policy
+        // participates — and this role runs a customer-authored Dockerfile. The base image
+        // is cross-account by construction, so a same-account pull is never legitimate.
+        Expression::from_iter([
+            (
+                "Sid",
+                Expression::String("DenySameAccountImagePull".to_string()),
+            ),
+            ("Effect", Expression::String("Deny".to_string())),
+            (
+                "Action",
+                Expression::from(vec![
+                    Expression::String("ecr:BatchGetImage".to_string()),
+                    Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
+                ]),
+            ),
+            (
+                "Resource",
+                expr::template(
+                    "arn:${data.aws_partition.current.partition}:ecr:*:${data.aws_caller_identity.current.account_id}:repository/*",
+                ),
+            ),
+        ]),
+    ]
 }
 
 /// Whether this sandbox's image is built by the runtime controller rather than by `terraform apply`.

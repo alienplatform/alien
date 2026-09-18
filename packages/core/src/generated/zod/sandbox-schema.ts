@@ -26,7 +26,8 @@ get "lifecycle"(){
 get "limits"(){
                 return z.union([SandboxLimitsSchema, z.null()]).optional()
               },
-"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none."))
+"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.")),
+"privateBaseImage": z.string().describe("The base image the image build pulls, when that pull has to be authenticated.\n\nOnly an AWS sandbox has one. There `code.image` names an S3 bundle and the base image\nlives in the `FROM` of the Dockerfile inside it, so nothing else in the stack says which\nregistry the build reaches. Two readers need that and neither can derive it: the emitters,\nwhich grant the build role the ECR actions an authenticated pull needs — a role without\nthem fails the build with `AccessDenied` minutes in rather than at plan time — and the\ncross-account grant, which opens the hosting repository to the customer's account and has\nonly this to name the repository by.\n\nAbsent means the base image is pulled anonymously and the build authenticates to nothing,\nwhich is every sandbox declared before this field existed.").nullish()
     }).describe("An isolated environment for running untrusted code, created at runtime.")
 
 export type Sandbox = z.infer<typeof SandboxSchema>

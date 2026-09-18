@@ -514,12 +514,23 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         "a Live role reads the prefix the moving key stays inside, not the one object"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
+    // A runtime build's base image comes from a private registry by construction.
+    assert_authenticates_to_ecr(&statements, "Live");
+}
+
+/// What a build role must carry to pull a base image a registry serves only with credentials.
+///
+/// One assertion for the two lifecycles that earn the grant, because the emitter renders one
+/// definition for both: a pair of per-lifecycle assertions could each pass while the two drifted
+/// into authenticating differently against the same registry. `role` names which one is under
+/// test so a failure says so.
+fn assert_authenticates_to_ecr(statements: &[serde_json::Value], role: &str) {
+    // The identity itself needs all three actions — a repository policy on the registry side is
+    // not enough.
     let allow = statements
         .iter()
         .find(|statement| statement["Sid"] == "PullSandboxBaseImage")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
+        .unwrap_or_else(|| panic!("a {role} build role must authenticate to ECR: {statements:#?}"));
     assert_eq!(allow["Effect"], "Allow");
     assert_eq!(
         allow["Action"],
@@ -542,7 +553,7 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         .iter()
         .find(|statement| statement["Effect"] == "Deny")
         .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
+            panic!("same-account pulls must be denied on a {role} build role: {statements:#?}")
         });
     assert_eq!(deny["Sid"], "DenySameAccountImagePull");
     assert_eq!(
@@ -558,6 +569,64 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
              ${data.aws_caller_identity.current.account_id}:repository/*"
         ),
         "the deny must name this account's repositories through data sources, not literals"
+    );
+}
+
+/// The ECR grant follows the base image, not the lifecycle.
+///
+/// A Frozen sandbox is the capability's own shape, and its bundle can still build on an image
+/// Alien serves only with credentials. The module a customer applies is what installs this role,
+/// so without the grant the denial lands minutes into `CreateMicrovmImage` in their account —
+/// not at plan time, and nowhere `terraform plan` would show it.
+#[test]
+fn a_frozen_sandbox_module_authenticates_to_ecr_for_a_private_base_image() {
+    let settings = StackSettings {
+        network: Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        }),
+        ..StackSettings::default()
+    };
+    let mut sandbox = sandbox_fixture_with(SandboxEgress::Deny, "s3://acme-artifacts/bundle.zip");
+    // Region-templated because one bundle key serves every regional store, and the emitters
+    // resolve the token per region.
+    sandbox.private_base_image = Some(
+        "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-acme:agents-abc123"
+            .to_string(),
+    );
+    let stack = Stack::new("acme-sandbox-private".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(settings.network.clone().expect("network"))
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(sandbox, ResourceLifecycle::Frozen)
+        .build();
+
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    assert_terraform_valid(&module, "frozen sandbox module on a private base image");
+
+    let rendered: String = module.iter().map(|(_, contents)| contents).collect();
+    // Still the Frozen shape: the image is built by `terraform apply`, not by a controller.
+    assert!(
+        rendered.contains("LatestActiveImageVersion"),
+        "a private base image must not turn the sandbox into a runtime-built one:\n{rendered}"
+    );
+
+    let statements = build_policy_statements(&rendered);
+    assert_authenticates_to_ecr(&statements, "Frozen");
+
+    // A private base is a reason to authenticate, not a reason to widen S3 reach to the prefix
+    // a rebuilding Live sandbox needs.
+    let bundle = statements
+        .iter()
+        .find(|statement| statement["Sid"] == "ReadSandboxBundle")
+        .unwrap_or_else(|| panic!("a Frozen build role must read its bundle: {statements:#?}"));
+    assert_eq!(
+        bundle["Resource"],
+        "arn:${data.aws_partition.current.partition}:s3:::acme-artifacts/bundle.zip",
+        "a Frozen role still reads the one object its module names"
     );
 }
 

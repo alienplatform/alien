@@ -63,6 +63,20 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
+   * Names the base image the image build pulls, when that pull has to be authenticated.
+   *
+   * AWS only, and only alongside an `s3://` bundle: the base image lives in the `FROM` of the
+   * Dockerfile inside that bundle, so nothing else in the stack says which registry the build
+   * reaches. Declaring it is what grants the build role the ECR actions an authenticated pull
+   * needs — without it the build fails with `AccessDenied` partway through rather than at plan
+   * time. Leave it unset for a base image that is pulled anonymously.
+   */
+  public privateBaseImage(image: string): this {
+    this._config.privateBaseImage = image
+    return this
+  }
+
+  /**
    * Sets the enforced cpu, memory, disk and process ceilings.
    */
   public limits(limits: SandboxLimits): this {

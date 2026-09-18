@@ -469,14 +469,62 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
     )
 }
 
-/// What the build role may do: read the bundle, write its own build logs, and — only when the
-/// image is built at runtime — authenticate to ECR for its base image.
+/// The statements a build role needs to pull a base image a registry serves only with credentials.
+///
+/// One definition for the two lifecycles that earn them, because they authenticate against the
+/// same registry and a second copy would drift into one of them pulling differently from the
+/// other. `Sid`s included: they are what an operator reading a denied build's policy matches on.
+fn private_base_image_statements() -> [CfExpression; 2] {
+    [
+        CfExpression::object([
+            ("Sid", CfExpression::from("PullSandboxBaseImage")),
+            ("Effect", CfExpression::from("Allow")),
+            (
+                "Action",
+                // The token call plus the two pull actions a live build was observed to be
+                // denied without — the registry's repository policy alone did not authorize it.
+                CfExpression::list([
+                    CfExpression::from("ecr:GetAuthorizationToken"),
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
+            // base image is unknown when the template is generated, so the pull pair is `*` too;
+            // the Deny below is what stops it reading this account's own private repositories.
+            ("Resource", CfExpression::from("*")),
+        ]),
+        // Same-account pulls are authorized by identity policy alone — no repository policy
+        // participates — and this role runs a customer-authored Dockerfile. The base image is
+        // cross-account by construction, so a same-account pull is never legitimate.
+        CfExpression::object([
+            ("Sid", CfExpression::from("DenySameAccountImagePull")),
+            ("Effect", CfExpression::from("Deny")),
+            (
+                "Action",
+                CfExpression::list([
+                    CfExpression::from("ecr:BatchGetImage"),
+                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
+                ]),
+            ),
+            (
+                "Resource",
+                CfExpression::sub("arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"),
+            ),
+        ]),
+    ]
+}
+
+/// What the build role may do: read the bundle, write its own build logs, and — where the base
+/// image is served only with credentials — authenticate to ECR for it.
 ///
 /// A setup-baked image is built once, from the bundle the template names, so its role reads that
 /// one object; a runtime-built image reads the prefix instead — see `artifact_prefix_arn`.
 ///
-/// A setup-baked image builds from a public base and pulls it anonymously, so the Frozen role
-/// carries no ECR grant; a runtime-built image's base is a private registry image.
+/// The ECR grant follows the base image rather than the lifecycle. A runtime-built image's base is
+/// a private registry image by construction; a setup-baked one's is public unless the declaration
+/// names a `privateBaseImage`, and a role that reads that declaration without the grant fails the
+/// build with `AccessDenied` partway through instead of at plan time.
 fn build_policies(
     sandbox: &Sandbox,
     artifact_uri: BundleUri<'_>,
@@ -522,43 +570,8 @@ fn build_policies(
             ("Resource", CfExpression::from("*")),
         ]),
     ];
-    if runtime_built {
-        statements.push(CfExpression::object([
-            ("Sid", CfExpression::from("PullSandboxBaseImage")),
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                // The token call plus the two pull actions a live build was observed to be
-                // denied without — the registry's repository policy alone did not authorize it.
-                CfExpression::list([
-                    CfExpression::from("ecr:GetAuthorizationToken"),
-                    CfExpression::from("ecr:BatchGetImage"),
-                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
-                ]),
-            ),
-            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
-            // base image is unknown when the template is generated, so the pull pair is `*` too;
-            // the Deny below is what stops it reading this account's own private repositories.
-            ("Resource", CfExpression::from("*")),
-        ]));
-        // Same-account pulls are authorized by identity policy alone — no repository policy
-        // participates — and this role runs a customer-authored Dockerfile. The base image is
-        // cross-account by construction, so a same-account pull is never legitimate.
-        statements.push(CfExpression::object([
-            ("Sid", CfExpression::from("DenySameAccountImagePull")),
-            ("Effect", CfExpression::from("Deny")),
-            (
-                "Action",
-                CfExpression::list([
-                    CfExpression::from("ecr:BatchGetImage"),
-                    CfExpression::from("ecr:GetDownloadUrlForLayer"),
-                ]),
-            ),
-            (
-                "Resource",
-                CfExpression::sub("arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"),
-            ),
-        ]));
+    if runtime_built || sandbox.private_base_image.is_some() {
+        statements.extend(private_base_image_statements());
     }
     Ok(CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-image-build")),
