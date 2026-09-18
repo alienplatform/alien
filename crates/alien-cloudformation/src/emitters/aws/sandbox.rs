@@ -14,6 +14,7 @@ use crate::{
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
 };
+use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, ResourceLifecycle,
     Result, Sandbox, SandboxCode, SandboxEgress,
@@ -26,10 +27,7 @@ use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, Bindi
 const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
-const AGENT_PORT: i64 = 8971;
-
-/// Unprivileged identity commands run as inside the sandbox, never the agent's own.
-const EXEC_UID: &str = "60000";
+const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
 
 /// The one destination the session's security group permits, which reaches nothing.
 const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
@@ -609,11 +607,14 @@ fn hooks() -> CfExpression {
 /// request arrives, and one MicroVM is one session.
 fn environment_variables() -> CfExpression {
     let pairs = [
-        ("ALIEN_SANDBOX_ROOT", "/sandbox".to_string()),
-        ("ALIEN_SANDBOX_PORT", AGENT_PORT.to_string()),
-        ("ALIEN_SANDBOX_AUTHORIZATION", "transport".to_string()),
-        ("ALIEN_SANDBOX_EXEC_UID", EXEC_UID.to_string()),
-        ("ALIEN_SANDBOX_EXEC_GID", EXEC_UID.to_string()),
+        ("ALIEN_SANDBOX_ROOT", AWS_MICROVM.session_root.to_string()),
+        ("ALIEN_SANDBOX_PORT", AWS_MICROVM.port.to_string()),
+        (
+            "ALIEN_SANDBOX_AUTHORIZATION",
+            AWS_MICROVM.authorization.env_value().to_string(),
+        ),
+        ("ALIEN_SANDBOX_EXEC_UID", AWS_MICROVM.exec_uid.to_string()),
+        ("ALIEN_SANDBOX_EXEC_GID", AWS_MICROVM.exec_uid.to_string()),
     ];
 
     CfExpression::list(pairs.into_iter().map(|(key, value)| {
@@ -1098,12 +1099,10 @@ mod tests {
     /// or run as different uids depending on which package format the customer installed.
     #[test]
     fn the_agent_contract_matches_the_terraform_emitter() {
+        // The port and the exec identity come from the shared contract and cannot diverge. What
+        // is left here is what both formats still spell themselves, asserted against the same
+        // literal rather than a shared constant, which would make this crate depend on the other.
         assert_eq!(ARCHITECTURE, "ARM_64");
-        assert_eq!(AGENT_PORT, 8971);
-        assert_eq!(EXEC_UID, "60000");
-        // Both formats deny by permitting one destination that reaches nothing. They agree by
-        // asserting the same literal rather than by sharing a constant, which would make this
-        // crate depend on the other package format.
         assert_eq!(LOOPBACK_ONLY_CIDR, "127.0.0.1/32");
     }
 }

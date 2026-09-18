@@ -8,20 +8,24 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use alien_commands::Envelope;
+#[cfg(any(feature = "gcp", feature = "azure"))]
+use alien_worker_protocol::control::{
+    CronEvent, QueueMessage as ProtoQueueMessage, StorageEvent as ProtoStorageEvent,
+};
 use alien_worker_protocol::{
-    control::{
-        self, ArcCommand, CronEvent, QueueMessage as ProtoQueueMessage,
-        StorageEvent as ProtoStorageEvent, Task,
-    },
+    control::{self, ArcCommand, Task},
     ControlGrpcServer,
 };
 use axum::{
-    body::{Body, Bytes},
-    http::{header, Request, Response, StatusCode},
+    body::Body,
+    http::{Request, Response, StatusCode},
     response::IntoResponse,
     Router,
 };
+#[cfg(any(feature = "gcp", feature = "azure"))]
+use axum::{body::Bytes, http::header};
 use chrono::{DateTime, Utc};
+#[cfg(any(feature = "gcp", feature = "azure"))]
 use cloudevents::EventBuilder;
 use futures_util::{StreamExt, TryStreamExt};
 use http_body_util::BodyExt;
@@ -92,6 +96,7 @@ pub(super) async fn serve_with_bounded_shutdown(
 }
 
 /// Timeout for event (queue/storage/cron) `send_task` round-trips.
+#[cfg(any(feature = "aws", feature = "gcp", feature = "azure"))]
 pub(crate) const EVENT_TASK_TIMEOUT: Duration = Duration::from_secs(300);
 
 /// Bound one pushed command by both its configured Worker timeout and the
@@ -222,6 +227,7 @@ pub(crate) async fn process_pushed_command(
 /// before storage params are fetched, matching the Local/Kubernetes HTTP push
 /// path. Returns `false` only for a params-decode error so transports that use
 /// non-2xx responses for native delivery retries can preserve that behavior.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn process_received_command(
     envelope: &Envelope,
     control_server: &ControlGrpcServer,
@@ -473,6 +479,7 @@ pub(crate) async fn handle_command(
 }
 
 /// Send a queue message to the application.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn send_queue_message(
     qm: &alien_core::QueueMessage,
     control_server: &ControlGrpcServer,
@@ -519,6 +526,7 @@ pub(crate) async fn send_queue_message(
 /// Dispatch parsed queue messages to the app: command envelopes go through
 /// the command path (decode params, send, submit response), everything else
 /// is delivered as a regular queue message.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn dispatch_queue_messages(
     queue_messages: Vec<alien_core::QueueMessage>,
     control_server: &ControlGrpcServer,
@@ -536,6 +544,7 @@ pub(crate) async fn dispatch_queue_messages(
 }
 
 /// Send converted storage events to the application, one task per event.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn send_storage_events(
     storage_events: alien_core::StorageEvents,
     control_server: &ControlGrpcServer,
@@ -590,6 +599,7 @@ pub(crate) async fn send_storage_events(
 }
 
 /// Send a cron event to the application.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub(crate) async fn send_cron_event(
     schedule_name: String,
     schedule_time: DateTime<Utc>,
@@ -710,6 +720,7 @@ pub async fn envelope_to_command(envelope: &Envelope) -> alien_commands::Result<
 /// Parse CloudEvent from HTTP headers and body.
 ///
 /// Supports both structured format (JSON body) and binary format (headers + body).
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub fn parse_cloudevent_from_http(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
@@ -720,6 +731,7 @@ pub fn parse_cloudevent_from_http(
 /// Parse CloudEvent with Dapr extension headers.
 ///
 /// Same as `parse_cloudevent_from_http` but also extracts Dapr-specific extensions.
+#[cfg(any(feature = "gcp", feature = "azure"))]
 pub fn parse_cloudevent_from_http_with_extensions(
     headers: &axum::http::HeaderMap,
     body: &Bytes,
@@ -727,6 +739,7 @@ pub fn parse_cloudevent_from_http_with_extensions(
     parse_cloudevent_from_http_impl(headers, body, true)
 }
 
+#[cfg(any(feature = "gcp", feature = "azure"))]
 fn parse_cloudevent_from_http_impl(
     headers: &axum::http::HeaderMap,
     body: &Bytes,

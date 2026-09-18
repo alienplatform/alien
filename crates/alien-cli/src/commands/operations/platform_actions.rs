@@ -5,12 +5,11 @@ use std::io::Read;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use alien_commands_client::{CommandsClient, CommandsClientConfig};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_operations_sdk::PluginManifest;
+use alien_operations_sdk::CanonicalPluginManifest;
 use alien_platform_api::types::{
-    InvokeOperationRequest, InvokeOperationResponseStatus, VerifyOperationCheckRequest,
-    VerifyOperationCheckResponseOutcome,
+    CommandResultAvailability, CommandState, InvokeOperationRequest, InvokeOperationResponseStatus,
+    VerifyOperationCheckRequest, VerifyOperationCheckResponseOutcome,
 };
 use alien_platform_api::SdkResultExt as _;
 use reqwest::Method;
@@ -85,16 +84,17 @@ pub async fn invoke_task(
             field: "params".to_string(),
             message: "Invalid JSON".to_string(),
         })?;
-    let resolved = crate::platform_deployment_resolver::resolve_with_manager(
+    let sdk_client = ctx.sdk_client().await?;
+    let deployment = crate::platform_deployment_resolver::resolve(
         ctx,
+        &sdk_client,
+        workspace,
         options.deployment,
         Some(project),
         !options.json,
     )
     .await?;
-    let deployment_id = String::from(resolved.detail.id.clone());
-
-    let sdk_client = ctx.sdk_client().await?;
+    let deployment_id = String::from(deployment.id.clone());
     let invocation = sdk_client
         .invoke_operation()
         .workspace(workspace)
@@ -106,6 +106,7 @@ pub async fn invoke_task(
             params: Some(params),
             remediation_plan_id: None,
             access_request_id: None,
+            idempotency_key: None,
         })
         .send()
         .await
@@ -116,9 +117,7 @@ pub async fn invoke_task(
         })?
         .into_inner();
 
-    let (invocation, access_request_id) = if invocation.status
-        == InvokeOperationResponseStatus::PendingApproval
-    {
+    let invocation = if invocation.status == InvokeOperationResponseStatus::PendingApproval {
         if !options.request_access {
             if options.json {
                 print_json(&invocation)?;
@@ -138,7 +137,7 @@ pub async fn invoke_task(
             return Ok(());
         }
 
-        let (invocation, access_request_id) = request_access_then_reinvoke(
+        let (invocation, _) = request_access_then_reinvoke(
             &sdk_client,
             workspace,
             project,
@@ -149,9 +148,9 @@ pub async fn invoke_task(
             options.access_duration,
         )
         .await?;
-        (invocation, Some(access_request_id))
+        invocation
     } else {
-        (invocation, None)
+        invocation
     };
 
     let command_id = invocation.command_id.ok_or_else(|| {
@@ -163,24 +162,17 @@ pub async fn invoke_task(
             url: None,
         })
     })?;
-    let commands_url = format!("{}/v1", resolved.manager.manager_url.trim_end_matches('/'));
-    let client = CommandsClient::with_http_client(
-        &commands_url,
-        &deployment_id,
-        resolved.manager.http_client,
-        CommandsClientConfig {
-            timeout: Duration::from_secs(options.timeout_secs),
-            ..Default::default()
-        },
-    );
-    let result: Value = client
-        .wait_for_completion(&command_id)
-        .await
-        .into_alien_error()
-        .context(ErrorData::ApiRequestFailed {
-            message: format!("operation '{operation_ref}' failed"),
-            url: Some(commands_url),
-        })?;
+    // Poll through Platform rather than reading the Manager directly. Platform
+    // owns command authorization and applies the immutable result contract's
+    // redaction policy before returning operation output.
+    let result = wait_for_platform_operation(
+        &sdk_client,
+        workspace,
+        &command_id,
+        operation_ref,
+        Duration::from_secs(options.timeout_secs),
+    )
+    .await?;
 
     // The write already ran and `result` is its real outcome — a failure to
     // even check verification (network blip, API error) must not be reported
@@ -191,10 +183,9 @@ pub async fn invoke_task(
         workspace,
         project,
         &deployment_id,
+        &command_id,
         plugin,
         operation,
-        access_request_id.as_deref(),
-        &result,
     )
     .await
     {
@@ -246,6 +237,116 @@ enum VerificationOutcome {
     Skipped { reason: String },
 }
 
+async fn wait_for_platform_operation(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    command_id: &str,
+    operation_ref: &str,
+    timeout: Duration,
+) -> Result<Value> {
+    let deadline = std::time::Instant::now() + timeout;
+
+    loop {
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(operation_wait_timeout(operation_ref, command_id, timeout));
+        }
+
+        let response = tokio::time::timeout(
+            remaining,
+            sdk_client
+                .get_command()
+                .id(command_id)
+                .workspace(workspace)
+                .send(),
+        )
+        .await
+        .map_err(|_| operation_wait_timeout(operation_ref, command_id, timeout))?
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: format!("checking operation '{operation_ref}' (command {command_id})"),
+            url: None,
+        })?
+        .into_inner();
+
+        match response.state {
+            CommandState::Succeeded => {
+                // Platform intentionally omits output that requires an explicit
+                // sensitive-result confirmation. Never bypass that boundary by
+                // falling back to the Manager endpoint.
+                return Ok(completed_operation_result(
+                    response.result_availability,
+                    response.result,
+                ));
+            }
+            CommandState::Failed => {
+                let detail = response
+                    .error
+                    .map(Value::Object)
+                    .map(|value| value.to_string())
+                    .unwrap_or_else(|| "no error detail was returned".to_string());
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "operation '{operation_ref}' failed (command {command_id}): {detail}"
+                    ),
+                    url: None,
+                }));
+            }
+            CommandState::Expired => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "operation '{operation_ref}' expired before completion (command {command_id})"
+                    ),
+                    url: None,
+                }));
+            }
+            CommandState::PendingUpload | CommandState::Pending | CommandState::Dispatched => {}
+        }
+
+        let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+        if !remaining.is_zero() {
+            tokio::time::sleep(Duration::from_secs(1).min(remaining)).await;
+        }
+    }
+}
+
+fn completed_operation_result(
+    availability: Option<CommandResultAvailability>,
+    result: Option<Value>,
+) -> Value {
+    match availability {
+        // Serde represents both an absent field and a JSON null as `None` for
+        // `Option<Value>`. The explicit availability field preserves that
+        // distinction for typed operation results.
+        Some(CommandResultAvailability::Available) => result.unwrap_or(Value::Null),
+        Some(CommandResultAvailability::Protected) => protected_operation_result(),
+        // Compatibility with Platform versions that predate the discriminator:
+        // keep returning a present result, but fail closed when it was omitted.
+        None => result.unwrap_or_else(protected_operation_result),
+    }
+}
+
+fn protected_operation_result() -> Value {
+    json!({
+        "available": false,
+        "reason": "The operation completed, but its result is protected or unavailable through Platform API."
+    })
+}
+
+fn operation_wait_timeout(
+    operation_ref: &str,
+    command_id: &str,
+    timeout: Duration,
+) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ApiRequestFailed {
+        message: format!(
+            "timed out after {}s waiting for operation '{operation_ref}' (command {command_id}); the command may still complete",
+            timeout.as_secs()
+        ),
+        url: None,
+    })
+}
+
 /// `--request-access`: create an exact access request for the denied
 /// operation, wait for it to be approved, then re-invoke with the resulting
 /// `access_request_id` so it dispatches under that approval instead of the
@@ -271,11 +372,10 @@ async fn request_access_then_reinvoke(
                 message: "Invalid JSON".to_string(),
             })?,
     );
-    // Requested duration is informational on create (the approver sets the
-    // real grant window on approve) — reuse the same parser only to fail
-    // fast on an obviously malformed --access-duration before creating
-    // anything.
-    let _ = crate::commands::access_requests::parse_duration_minutes(access_duration)?;
+    let requested_expires_at = crate::commands::access_requests::requested_expiration(
+        chrono::Utc::now(),
+        Some(access_duration),
+    )?;
 
     let created = sdk_client
         .create_access_request()
@@ -289,6 +389,8 @@ async fn request_access_then_reinvoke(
             title: None,
             reason: None,
             remediation_plan_id: None,
+            replay_key: None,
+            requested_expires_at,
             commands: Vec::new(),
         })
         .send()
@@ -384,6 +486,7 @@ async fn request_access_then_reinvoke(
             params: Some(reinvoke_params),
             remediation_plan_id: None,
             access_request_id: Some(created.id.to_string()),
+            idempotency_key: None,
         })
         .send()
         .await
@@ -422,10 +525,9 @@ async fn verify_operation(
     workspace: &str,
     project: &str,
     deployment_id: &str,
+    command_id: &str,
     plugin: &str,
     operation: &str,
-    access_request_id: Option<&str>,
-    write_result: &Value,
 ) -> Result<VerificationOutcome> {
     // The declared verification timeout covers this whole function, not just
     // the retry loop below — start the clock before the FIRST verify-check
@@ -455,14 +557,7 @@ async fn verify_operation(
             .verify_operation_check()
             .workspace(workspace)
             .project(project)
-            .body(VerifyOperationCheckRequest {
-                deployment_id: deployment_id.to_string(),
-                plugin: plugin.to_string(),
-                operation: operation.to_string(),
-                access_request_id: access_request_id.map(str::to_string),
-                remediation_plan_id: None,
-                write_result: Some(write_result.clone()),
-            })
+            .body(verify_operation_check_request(deployment_id, command_id)?)
             .send(),
     )
     .await
@@ -538,14 +633,7 @@ async fn verify_operation(
                 .verify_operation_check()
                 .workspace(workspace)
                 .project(project)
-                .body(VerifyOperationCheckRequest {
-                    deployment_id: deployment_id.to_string(),
-                    plugin: plugin.to_string(),
-                    operation: operation.to_string(),
-                    access_request_id: access_request_id.map(str::to_string),
-                    remediation_plan_id: None,
-                    write_result: Some(write_result.clone()),
-                })
+                .body(verify_operation_check_request(deployment_id, command_id)?)
                 .send(),
         )
         .await;
@@ -561,7 +649,9 @@ async fn verify_operation(
             .into_inner();
 
         match check.outcome {
-            VerifyOperationCheckResponseOutcome::Verified => return Ok(VerificationOutcome::Verified),
+            VerifyOperationCheckResponseOutcome::Verified => {
+                return Ok(VerificationOutcome::Verified)
+            }
             VerifyOperationCheckResponseOutcome::Failed => {
                 return Ok(VerificationOutcome::Unverified {
                     reason: check
@@ -585,6 +675,21 @@ async fn verify_operation(
             "timed out after {}s waiting for the change to be confirmed",
             timeout.as_secs()
         ),
+    })
+}
+
+fn verify_operation_check_request(
+    deployment_id: &str,
+    command_id: &str,
+) -> Result<VerifyOperationCheckRequest> {
+    Ok(VerifyOperationCheckRequest {
+        deployment_id: deployment_id.to_string(),
+        command_id: command_id.try_into().into_alien_error().context(
+            ErrorData::ValidationError {
+                field: "command-id".to_string(),
+                message: "Invalid operation command ID".to_string(),
+            },
+        )?,
     })
 }
 
@@ -671,14 +776,15 @@ pub async fn publish_task(
         .into_alien_error()
         .context(ErrorData::ApiRequestFailed {
             message: "uploading the bundle to storage".to_string(),
-            url: Some(presign.upload_url.clone()),
+            // A presigned URL is itself a live write credential. Never retain
+            // it in structured errors, logs, or JSON output.
+            url: None,
         })?;
     if !put_response.status().is_success() {
         let status = put_response.status();
-        let body = put_response.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!("bundle upload failed ({status}): {body}"),
-            url: Some(presign.upload_url.clone()),
+            message: format!("bundle upload failed ({status})"),
+            url: None,
         }));
     }
 
@@ -783,7 +889,7 @@ pub async fn list_task(
 /// S3, rather than only being caught by the platform's own (looser, string
 /// name/version/tier-only) validation after upload. Returns the raw JSON
 /// value (forwarded verbatim) plus the parsed manifest.
-fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, PluginManifest)> {
+fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, CanonicalPluginManifest)> {
     let reader = std::io::Cursor::new(bytes);
     let mut archive =
         zip::ZipArchive::new(reader)
@@ -807,7 +913,7 @@ fn read_bundle_metadata(bytes: &[u8], path: &PathBuf) -> Result<(Value, PluginMa
             message: "metadata.json is not valid JSON".to_string(),
         },
     )?;
-    let manifest = PluginManifest::parse_and_validate(contents.as_bytes()).context(
+    let manifest = super::check::parse_manifest_for_cli(contents.as_bytes()).context(
         ErrorData::ConfigurationError {
             message: format!("bundle '{}' has an invalid manifest", path.display()),
         },
@@ -867,6 +973,18 @@ mod tests {
     }
 
     #[test]
+    fn reads_released_legacy_metadata_from_bundle() {
+        let meta: Value = serde_json::from_str(super::super::check::legacy_verification_manifest())
+            .expect("legacy fixture JSON");
+        let bytes = bundle_with_metadata(&meta);
+
+        let (_, parsed) = read_bundle_metadata(&bytes, &PathBuf::from("legacy.zip"))
+            .expect("publish must preserve released legacy manifest support");
+        assert!(parsed.operations[0].input_schema.is_some());
+        assert!(parsed.operations[1].output_schema.is_none());
+    }
+
+    #[test]
     fn rejects_bundle_without_metadata() {
         // A ZIP with no metadata.json.
         let mut buf = Vec::new();
@@ -902,5 +1020,43 @@ mod tests {
         for reference in ["get-pods", "/get-pods", "kubernetes/", "a/b/c"] {
             assert_eq!(parse_operation_reference(reference), None);
         }
+    }
+
+    #[test]
+    fn verification_request_uses_the_immutable_command_contract() {
+        let command_id = format!("cmd_{}", "a".repeat(28));
+        let request = verify_operation_check_request("dep_123", &command_id)
+            .expect("valid command ID should build the request");
+        let value = serde_json::to_value(request).expect("request serializes");
+
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "deploymentId": "dep_123",
+                "commandId": command_id,
+            })
+        );
+    }
+
+    #[test]
+    fn available_null_operation_result_remains_json_null() {
+        assert_eq!(
+            completed_operation_result(Some(CommandResultAvailability::Available), None),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn protected_operation_result_remains_withheld() {
+        assert_eq!(
+            completed_operation_result(
+                Some(CommandResultAvailability::Protected),
+                Some(json!({ "must": "not leak" })),
+            ),
+            json!({
+                "available": false,
+                "reason": "The operation completed, but its result is protected or unavailable through Platform API."
+            })
+        );
     }
 }

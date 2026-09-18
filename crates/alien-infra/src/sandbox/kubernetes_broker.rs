@@ -18,12 +18,10 @@ use crate::error::{ErrorData, Result};
 use crate::sandbox::{claim_idle_pod, idle_selector};
 use alien_core::sandbox_capability::{SandboxCapabilityClaims, SandboxOperationClass};
 use alien_core::sandbox_capability_token;
+use alien_core::sandbox_image::AGENT_PORT;
 use alien_error::{AlienError, Context};
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
-
-/// Port the agent serves inside a sandbox pod.
-const AGENT_PORT: u16 = 8971;
 
 /// How long a minted capability lives.
 ///

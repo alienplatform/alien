@@ -6,7 +6,7 @@
 import { CreateProjectFromTemplateBuckets } from "@alienplatform/platform-api/models/operations";
 
 let value: CreateProjectFromTemplateBuckets = {
-  enabled: true,
+  enabled: false,
   access: "read-write",
 };
 ```
@@ -15,5 +15,5 @@ let value: CreateProjectFromTemplateBuckets = {
 
 | Field                                                                                                    | Type                                                                                                     | Required                                                                                                 | Description                                                                                              |
 | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `enabled`                                                                                                | *true*                                                                                                   | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
+| `enabled`                                                                                                | *boolean*                                                                                                | :heavy_check_mark:                                                                                       | N/A                                                                                                      |
 | `access`                                                                                                 | [operations.CreateProjectFromTemplateAccess](../../models/operations/createprojectfromtemplateaccess.md) | :heavy_check_mark:                                                                                       | N/A                                                                                                      |

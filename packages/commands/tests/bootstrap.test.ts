@@ -29,7 +29,13 @@ function bootstrapResponse(
 }
 
 function createResponse() {
-  return { commandId: "cmd_1", state: "PENDING", inlineAllowedUpTo: 150_000, next: "poll" }
+  return {
+    commandId: "cmd_1",
+    created: true,
+    state: "PENDING",
+    inlineAllowedUpTo: 150_000,
+    next: "poll",
+  }
 }
 
 function successStatus(value: unknown) {

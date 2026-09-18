@@ -14,6 +14,7 @@ export const CreateCommandRequestSchema = z.object({
 "deadline": z.iso.datetime().describe("Optional deadline for command completion").nullish(),
 "deploymentId": z.string().describe("Target deployment identifier"),
 "idempotencyKey": z.string().describe("Optional idempotency key").nullish(),
+"operationResultContract": z.optional(z.any().describe("Opaque result-handling contract the registry must persist atomically\nwith command creation before the command becomes executable.")),
 get "params"(){
                 return BodySpecSchema.describe("Body specification supporting inline and storage modes")
               },

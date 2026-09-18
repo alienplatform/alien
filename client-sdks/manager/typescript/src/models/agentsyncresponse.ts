@@ -10,6 +10,10 @@ import {
   ExecutionClaim,
   ExecutionClaim$inboundSchema,
 } from "./executionclaim.js";
+import {
+  TargetOperationsBundleSet,
+  TargetOperationsBundleSet$inboundSchema,
+} from "./targetoperationsbundleset.js";
 
 export type AgentSyncResponse = {
   /**
@@ -30,6 +34,7 @@ export type AgentSyncResponse = {
   currentState?: any | undefined;
   executionClaim?: ExecutionClaim | null | undefined;
   target?: any | undefined;
+  targetOperationsBundleSet?: TargetOperationsBundleSet | null | undefined;
 };
 
 /** @internal */
@@ -41,6 +46,8 @@ export const AgentSyncResponse$inboundSchema: z.ZodType<
   currentState: z.any().optional(),
   executionClaim: z.nullable(ExecutionClaim$inboundSchema).optional(),
   target: z.any().optional(),
+  targetOperationsBundleSet: z.nullable(TargetOperationsBundleSet$inboundSchema)
+    .optional(),
 });
 
 export function agentSyncResponseFromJSON(

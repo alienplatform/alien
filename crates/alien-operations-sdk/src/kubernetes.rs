@@ -190,7 +190,9 @@ fn invalid<T>(reason: &str) -> Result<T> {
 mod tests {
     use serde_json::{json, Value};
 
-    use crate::{KubernetesOperationPermissions, PluginManifest, RiskTier};
+    use crate::{CanonicalPluginManifest, KubernetesOperationPermissions, RiskTier};
+
+    type PluginManifest = CanonicalPluginManifest;
 
     fn manifest() -> Value {
         json!({

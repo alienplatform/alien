@@ -8,7 +8,7 @@ libc = "0.2"
 # Alien crates
 alien-core = { workspace = true }
 alien-error = { workspace = true }
-alien-worker-runtime = { workspace = true }
+alien-worker-runtime = { workspace = true, default-features = false, features = ["local", "otlp"] }
 alien-bindings = { workspace = true }
 alien-worker-protocol = { workspace = true, features = ["server"] }
 

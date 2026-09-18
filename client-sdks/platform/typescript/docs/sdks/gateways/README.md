@@ -23,7 +23,7 @@ const alien = new Alien({
 
 async function run() {
   const result = await alien.gateways.getWorkspaceOverview({
-    gateway: "encryption",
+    gateway: "ai",
   });
 
   console.log(result);
@@ -49,7 +49,7 @@ const alien = new AlienCore({
 
 async function run() {
   const res = await gatewaysGetWorkspaceOverview(alien, {
-    gateway: "encryption",
+    gateway: "ai",
   });
   if (res.ok) {
     const { value: result } = res;

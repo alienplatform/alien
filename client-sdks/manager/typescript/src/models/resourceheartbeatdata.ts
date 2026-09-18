@@ -121,11 +121,11 @@ import {
 
 export type ResourceHeartbeatDataSandbox = {
   /**
-   * Content-free telemetry about a sandbox's sessions.
+   * Content-free telemetry about what a sandbox resource is running.
    *
    * @remarks
    *
-   * Never anything from inside a session. A controller reaches only the cloud's management APIs,
+   * Never anything from inside a sandbox. A controller reaches only the cloud's management APIs,
    * and the whole point of the resource is that the control plane cannot see what runs in it.
    */
   data: SandboxHeartbeatData;

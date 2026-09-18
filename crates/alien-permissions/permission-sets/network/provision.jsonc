@@ -97,7 +97,8 @@
             "ec2:DescribeAddresses",
             "ec2:DescribeSecurityGroups",
             "ec2:DescribeSecurityGroupRules",
-            "ec2:DescribeTags"
+            "ec2:DescribeTags",
+            "servicequotas:GetServiceQuota"
           ]
         },
         "binding": {

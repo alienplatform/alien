@@ -182,7 +182,7 @@ fn emit_rerun_if_changed(path: &Path) {
 /// Validates a permission set JSONC at build time and returns the ID if successful
 fn validate_permission_set(content: &str, path: &Path) -> Result<String, String> {
     // Parse as PermissionSet to validate structure and fields
-    let permission_set: alien_core::permissions::PermissionSet =
+    let permission_set: alien_permission_types::PermissionSet =
         json5::from_str(content).map_err(|e| format!("JSON parsing error: {}", e))?;
 
     // Ensure ID is not empty

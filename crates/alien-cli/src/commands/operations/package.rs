@@ -10,7 +10,6 @@ use std::process::Command;
 
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::manifest::Arch;
-use alien_operations_sdk::PluginManifest;
 use serde_json::Value;
 use zip::write::SimpleFileOptions;
 
@@ -18,20 +17,23 @@ use crate::commands::operations::check::validate_manifest;
 use crate::error::{ErrorData, Result};
 
 pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
+    let directory_arg = directory;
+    let directory = Path::new(directory.unwrap_or("."));
+    ensure_typed_metadata_current(directory)?;
+
     // Fail fast on a broken manifest before spending time on a release
     // build. Validates silently (no stdout) so `--json` still emits exactly
     // one parseable document; re-read as raw bytes below since
     // single_arch_manifest_json needs to rewrite the manifest's JSON, not
     // the parsed struct.
-    let manifest = validate_manifest(directory)?;
+    let manifest = validate_manifest(directory_arg)?;
 
-    let directory = Path::new(directory.unwrap_or("."));
     let manifest_path = directory.join(alien_operations_sdk::manifest::MANIFEST_FILENAME);
-    let manifest_bytes = std::fs::read(&manifest_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
+    let manifest_bytes = std::fs::read(&manifest_path).into_alien_error().context(
+        ErrorData::ConfigurationError {
             message: format!("could not read '{}'", manifest_path.display()),
-        })?;
+        },
+    )?;
 
     // Plugins run inside the operator/worker's Linux runtime regardless of
     // what OS `alien operations package` itself runs on (per the
@@ -67,7 +69,8 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
     // that claims a binary it doesn't ship would register a plugin that
     // fails at invocation time on the other architecture, not at publish
     // time when the mistake is still cheap to catch.
-    let single_arch_manifest_bytes = single_arch_manifest_json(&manifest_bytes, arch, binary_entry)?;
+    let single_arch_manifest_bytes =
+        single_arch_manifest_json(&manifest_bytes, arch, binary_entry)?;
     write_bundle(
         &bundle_path,
         &single_arch_manifest_bytes,
@@ -81,7 +84,11 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
             "architecture": arch.as_str(),
         }))?;
     } else {
-        println!("Built bundle '{}' ({} only).", bundle_path.display(), arch.as_str());
+        println!(
+            "Built bundle '{}' ({} only).",
+            bundle_path.display(),
+            arch.as_str()
+        );
         println!();
         println!("Note: this bundle only contains a binary for this host's architecture. A");
         println!("published plugin should offer both amd64 and arm64 — build the other");
@@ -95,17 +102,61 @@ pub fn package_task(directory: Option<&str>, json: bool) -> Result<()> {
     Ok(())
 }
 
+/// Scaffolded plugins generate metadata from their typed operation registry.
+/// Refuse to package a stale checked-in copy: a unit test is useful feedback,
+/// but the bundle boundary is the point that must enforce the contract.
+fn ensure_typed_metadata_current(directory: &Path) -> Result<()> {
+    ensure_typed_metadata_current_via(directory, Path::new("cargo"))
+}
+
+fn ensure_typed_metadata_current_via(directory: &Path, cargo: &Path) -> Result<()> {
+    if !directory.join("src/bin/generate-metadata.rs").is_file() {
+        return Ok(());
+    }
+    let output = Command::new(cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--bin",
+            "generate-metadata",
+            "--",
+            "--check",
+        ])
+        .current_dir(directory)
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "could not check generated metadata in '{}'",
+                directory.display()
+            ),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "generated metadata in '{}' is stale or invalid; run `cargo run --bin generate-metadata` before packaging",
+            directory.display()
+        ),
+    }))
+}
+
 /// Rewrite `manifest_bytes`'s `binaries` map to declare only `arch` →
 /// `binary_entry`, dropping any other architecture the manifest on disk
 /// declares (e.g. a scaffolded two-arch template). Preserves every other
 /// field verbatim — this only narrows what the packaged bundle claims to
 /// ship, not the plugin's declared operations, tiers, or verification.
-fn single_arch_manifest_json(manifest_bytes: &[u8], arch: Arch, binary_entry: &str) -> Result<Vec<u8>> {
-    let mut value: Value = serde_json::from_slice(manifest_bytes).into_alien_error().context(
-        ErrorData::ConfigurationError {
+fn single_arch_manifest_json(
+    manifest_bytes: &[u8],
+    arch: Arch,
+    binary_entry: &str,
+) -> Result<Vec<u8>> {
+    let mut value: Value = serde_json::from_slice(manifest_bytes)
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
             message: "could not re-parse the manifest to narrow its declared binaries".to_string(),
-        },
-    )?;
+        })?;
     let binaries = value
         .get_mut("binaries")
         .and_then(Value::as_object_mut)
@@ -115,7 +166,10 @@ fn single_arch_manifest_json(manifest_bytes: &[u8], arch: Arch, binary_entry: &s
             })
         })?;
     binaries.clear();
-    binaries.insert(arch.as_str().to_string(), Value::String(binary_entry.to_string()));
+    binaries.insert(
+        arch.as_str().to_string(),
+        Value::String(binary_entry.to_string()),
+    );
 
     serde_json::to_vec_pretty(&value)
         .into_alien_error()
@@ -154,7 +208,10 @@ fn ensure_target_installed(target_triple: &str) -> Result<()> {
 /// process-wide `PATH` other tests in this binary may run concurrently
 /// against.
 fn ensure_target_installed_via(target_triple: &str, rustup_bin: &str) -> Result<()> {
-    let output = match Command::new(rustup_bin).args(["target", "list", "--installed"]).output() {
+    let output = match Command::new(rustup_bin)
+        .args(["target", "list", "--installed"])
+        .output()
+    {
         Ok(output) => output,
         Err(_) => return Ok(()),
     };
@@ -190,11 +247,21 @@ fn ensure_target_installed_via(target_triple: &str, rustup_bin: &str) -> Result<
 /// with a shared target directory would build successfully but land its
 /// binary somewhere else, and the hardcoded path would then report a false
 /// "binary missing" after a build that actually succeeded.
-fn build_release_binary(directory: &Path, crate_name: &str, target_triple: &str) -> Result<PathBuf> {
+fn build_release_binary(
+    directory: &Path,
+    crate_name: &str,
+    target_triple: &str,
+) -> Result<PathBuf> {
     ensure_target_installed(target_triple)?;
 
     let output = Command::new("cargo")
-        .args(["build", "--release", "--target", target_triple, "--message-format=json"])
+        .args([
+            "build",
+            "--release",
+            "--target",
+            target_triple,
+            "--message-format=json",
+        ])
         .current_dir(directory)
         .output()
         .into_alien_error()
@@ -263,11 +330,12 @@ fn write_bundle(
     binary_entry: &str,
     binary_path: &Path,
 ) -> Result<()> {
-    let binary_bytes = std::fs::read(binary_path)
-        .into_alien_error()
-        .context(ErrorData::ConfigurationError {
-            message: format!("could not read built binary '{}'", binary_path.display()),
-        })?;
+    let binary_bytes =
+        std::fs::read(binary_path)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!("could not read built binary '{}'", binary_path.display()),
+            })?;
 
     let file = std::fs::File::create(bundle_path)
         .into_alien_error()
@@ -281,7 +349,10 @@ fn write_bundle(
     let binary_options = SimpleFileOptions::default().unix_permissions(0o755);
 
     archive
-        .start_file(alien_operations_sdk::manifest::MANIFEST_FILENAME, metadata_options)
+        .start_file(
+            alien_operations_sdk::manifest::MANIFEST_FILENAME,
+            metadata_options,
+        )
         .into_alien_error()
         .context(ErrorData::ConfigurationError {
             message: "could not add metadata.json to bundle".to_string(),
@@ -318,6 +389,7 @@ fn write_bundle(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_operations_sdk::CanonicalPluginManifest;
 
     #[test]
     fn writes_a_bundle_with_metadata_and_the_binary_entry() {
@@ -330,23 +402,32 @@ mod tests {
             "operations": [{ "name": "health" }]
         }"#;
         let binary_path = temp.path().join("demo-binary");
-        std::fs::write(&binary_path, b"not a real binary, just test bytes").expect("write fake binary");
+        std::fs::write(&binary_path, b"not a real binary, just test bytes")
+            .expect("write fake binary");
         let bundle_path = temp.path().join("demo-0.1.0.zip");
 
-        write_bundle(&bundle_path, manifest_bytes, "demo-linux-amd64", &binary_path)
-            .expect("bundle should write");
+        write_bundle(
+            &bundle_path,
+            manifest_bytes,
+            "demo-linux-amd64",
+            &binary_path,
+        )
+        .expect("bundle should write");
 
         let bytes = std::fs::read(&bundle_path).expect("read bundle");
-        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open bundle as zip");
+        let mut archive =
+            zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open bundle as zip");
         let names: Vec<_> = archive.file_names().map(str::to_string).collect();
         assert!(names.contains(&"metadata.json".to_string()));
         assert!(names.contains(&"demo-linux-amd64".to_string()));
 
-        let mut metadata_entry = archive.by_name("metadata.json").expect("bundle has metadata.json");
+        let mut metadata_entry = archive
+            .by_name("metadata.json")
+            .expect("bundle has metadata.json");
         let mut bundled_metadata = String::new();
         std::io::Read::read_to_string(&mut metadata_entry, &mut bundled_metadata)
             .expect("read metadata.json from bundle");
-        let manifest = PluginManifest::parse_and_validate(bundled_metadata.as_bytes())
+        let manifest = CanonicalPluginManifest::parse_and_validate(bundled_metadata.as_bytes())
             .expect("bundled metadata should still be a valid manifest");
         assert_eq!(manifest.name, "demo");
     }
@@ -367,9 +448,10 @@ mod tests {
             "operations": [{ "name": "health" }]
         }"#;
 
-        let narrowed = single_arch_manifest_json(two_arch_manifest, Arch::Arm64, "demo-linux-arm64")
-            .expect("narrowing should succeed");
-        let manifest = PluginManifest::parse_and_validate(&narrowed)
+        let narrowed =
+            single_arch_manifest_json(two_arch_manifest, Arch::Arm64, "demo-linux-arm64")
+                .expect("narrowing should succeed");
+        let manifest = CanonicalPluginManifest::parse_and_validate(&narrowed)
             .expect("narrowed manifest should still be valid");
 
         assert_eq!(manifest.binaries.len(), 1);
@@ -385,6 +467,47 @@ mod tests {
     }
 
     #[test]
+    fn package_preflight_and_arch_narrowing_accept_released_legacy_metadata() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let manifest_bytes = super::super::check::legacy_verification_manifest().as_bytes();
+        std::fs::write(temp.path().join("metadata.json"), manifest_bytes)
+            .expect("write legacy metadata");
+
+        let manifest = validate_manifest(Some(temp.path().to_str().expect("utf8 path")))
+            .expect("package preflight must preserve released legacy manifest support");
+        let binary_entry = manifest.binaries[&Arch::Amd64].as_str();
+        let narrowed = single_arch_manifest_json(manifest_bytes, Arch::Amd64, binary_entry)
+            .expect("package should narrow released legacy metadata");
+        super::super::check::parse_manifest_for_cli(&narrowed)
+            .expect("packaged legacy metadata must remain consumable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn package_boundary_runs_the_scaffold_metadata_check() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().expect("create temp dir");
+        std::fs::create_dir_all(temp.path().join("src/bin")).expect("create generator directory");
+        std::fs::write(
+            temp.path().join("src/bin/generate-metadata.rs"),
+            "fn main() {}\n",
+        )
+        .expect("write generator marker");
+        let fake_cargo = temp.path().join("cargo");
+        std::fs::write(&fake_cargo, "#!/bin/sh\nexit 1\n").expect("write fake cargo");
+        let mut permissions = std::fs::metadata(&fake_cargo)
+            .expect("read fake cargo metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_cargo, permissions).expect("make fake cargo executable");
+
+        let error = ensure_typed_metadata_current_via(temp.path(), &fake_cargo)
+            .expect_err("a failed generated metadata check must block packaging");
+        assert!(error.to_string().contains("before packaging"));
+    }
+
+    #[test]
     fn binary_artifact_path_finds_the_named_bin_targets_executable() {
         // A realistic slice of `cargo build --message-format=json` output:
         // a lib-target artifact (no `executable`) followed by the bin
@@ -392,22 +515,31 @@ mod tests {
         // out only the matching bin target's executable, wherever Cargo
         // actually placed it — not assume `target/release`.
         let stdout = concat!(
-            r#"{"reason":"compiler-artifact","target":{"name":"demo_plugin","kind":["lib"]},"executable":null}"#, "\n",
-            r#"{"reason":"compiler-artifact","target":{"name":"other-crate","kind":["bin"]},"executable":"/somewhere/else/other-crate"}"#, "\n",
-            r#"{"reason":"compiler-artifact","target":{"name":"demo-plugin","kind":["bin"]},"executable":"/custom/target/dir/release/demo-plugin"}"#, "\n",
-            r#"{"reason":"build-finished","success":true}"#, "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"demo_plugin","kind":["lib"]},"executable":null}"#,
+            "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"other-crate","kind":["bin"]},"executable":"/somewhere/else/other-crate"}"#,
+            "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"demo-plugin","kind":["bin"]},"executable":"/custom/target/dir/release/demo-plugin"}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":true}"#,
+            "\n",
         );
 
         let path = binary_artifact_path(stdout.as_bytes(), "demo-plugin")
             .expect("should find the matching bin target's executable");
-        assert_eq!(path, PathBuf::from("/custom/target/dir/release/demo-plugin"));
+        assert_eq!(
+            path,
+            PathBuf::from("/custom/target/dir/release/demo-plugin")
+        );
     }
 
     #[test]
     fn binary_artifact_path_returns_none_when_no_matching_bin_target_exists() {
         let stdout = concat!(
-            r#"{"reason":"compiler-artifact","target":{"name":"demo_plugin","kind":["lib"]},"executable":null}"#, "\n",
-            r#"{"reason":"build-finished","success":true}"#, "\n",
+            r#"{"reason":"compiler-artifact","target":{"name":"demo_plugin","kind":["lib"]},"executable":null}"#,
+            "\n",
+            r#"{"reason":"build-finished","success":true}"#,
+            "\n",
         );
         assert!(binary_artifact_path(stdout.as_bytes(), "demo-plugin").is_none());
     }
@@ -419,7 +551,10 @@ mod tests {
         // `cargo package` itself runs on (macOS in CI and on most
         // developers' machines).
         assert_eq!(linux_target_triple(Arch::Amd64), "x86_64-unknown-linux-gnu");
-        assert_eq!(linux_target_triple(Arch::Arm64), "aarch64-unknown-linux-gnu");
+        assert_eq!(
+            linux_target_triple(Arch::Arm64),
+            "aarch64-unknown-linux-gnu"
+        );
     }
 
     #[test]
@@ -439,8 +574,11 @@ mod tests {
         // itself couldn't be asked — `cargo build` is the real verdict.
         // Point at a binary name that cannot resolve, rather than mutating
         // the process-wide PATH other tests in this binary run against.
-        ensure_target_installed_via("sparc64-unknown-linux-gnu", "definitely-not-a-real-rustup-binary")
-            .expect("an unresolvable rustup binary must not block packaging");
+        ensure_target_installed_via(
+            "sparc64-unknown-linux-gnu",
+            "definitely-not-a-real-rustup-binary",
+        )
+        .expect("an unresolvable rustup binary must not block packaging");
     }
 
     #[test]

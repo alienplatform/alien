@@ -13,6 +13,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+use alien_core::sandbox_image::Authorization;
 use alien_core::{Sandbox, SandboxCode};
 
 /// Label carrying the sandbox a pod belongs to; the enumeration scope for reaping.
@@ -158,7 +159,7 @@ pub fn capability_environment(public_key_base64: &str) -> Vec<EnvVar> {
     vec![
         EnvVar {
             name: "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
-            value: Some("capability".to_string()),
+            value: Some(Authorization::Capability.env_value().to_string()),
             value_from: None,
         },
         EnvVar {

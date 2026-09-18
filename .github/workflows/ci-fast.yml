@@ -67,6 +67,12 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+              # The image contract tests read the Dockerfiles as text, so a change
+              # to one of those is a change this job has to see.
+              - 'docker/**'
+              # The smoke test qualifies the published image, and its own harness
+              # is what proves it fails loudly. Both run in this job.
+              - 'scripts/smoke-sandbox-agent*'
             typescript:
               # `pnpm format-and-lint` runs Biome from the repository root.
               # Match its source formats repository-wide instead of trying to
@@ -268,6 +274,19 @@ jobs:
         run: |
           cargo test -p alien-bindings --features platform-sdk --lib remote::
 
+      - name: Sandbox agent image contract
+        # The committed GCP Dockerfile is generated from the contract, and this
+        # compares the two. Named here so a Dockerfile-only change still fails
+        # visibly rather than inside the workspace run.
+        run: |
+          cargo test -p alien-core --lib sandbox_image
+
+      - name: Sandbox agent smoke test harness
+        # Drives the release smoke test against a stub docker, once per failure
+        # mode, asserting each exits nonzero AND annotates. Needs no daemon.
+        run: |
+          ./scripts/smoke-sandbox-agent.test.sh
+
   typescript:
     name: TypeScript packages and CLIs
     needs: [pr-conventions, changes]
@@ -388,7 +407,7 @@ jobs:
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
         env:
-          NODE_OPTIONS: "--max-old-space-size=4096"
+          NODE_OPTIONS: "--max-old-space-size=12288"
         run: pnpm build && pnpm -C packages/package-layout check
 
       - name: Rust and TypeScript command integration

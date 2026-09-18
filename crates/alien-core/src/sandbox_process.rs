@@ -1,9 +1,7 @@
 //! Turning a child process into sandbox output frames.
 //!
-//! Two backends need this and neither can be the other's dependency: the in-sandbox agent runs a
-//! command in its own guest, and the GCP binding runs one through a launcher CLI on the Cloud
-//! Run container. The framing rules are the same on both sides and subtle enough that a second
-//! implementation would drift, so they live here once.
+//! The framing rules are subtle enough that a second implementation would drift, so they live
+//! here once rather than beside their caller. `alien-sandbox-agent` is the only consumer.
 //!
 //! The rules, all of which cost something to learn:
 //!
@@ -35,13 +33,6 @@ use tokio::sync::mpsc;
 /// Output with no newline in it would otherwise be buffered whole: `output_cap` is enforced only
 /// after a read returns, so it bounds what is kept, never what is allocated.
 const MAX_FRAME_BYTES: u64 = 64 * 1024;
-
-/// Port the agent listens on inside a sandbox.
-///
-/// Defined once because two independent copies are a runtime-only failure: the image build places
-/// the agent on one port and the client dials the other, and nothing catches it until a sandbox
-/// hangs. AWS scopes its endpoint token to an explicit port set, so this cannot be discovered.
-pub const AGENT_PORT: u16 = 8971;
 
 /// How many frames may sit between the process and the caller.
 ///

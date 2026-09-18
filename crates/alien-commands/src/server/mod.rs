@@ -102,6 +102,12 @@ pub struct CommandServer {
 }
 
 impl CommandServer {
+    /// True only when the configured registry can atomically persist typed
+    /// operation result contracts before command execution becomes possible.
+    pub fn persists_operation_result_contract(&self) -> bool {
+        self.command_registry.persists_operation_result_contract()
+    }
+
     /// Create a new command server instance
     pub fn new(
         kv: Arc<dyn Kv>,
@@ -253,6 +259,7 @@ impl CommandServer {
                 if let Some(s) = status {
                     return Ok(CreateCommandResponse {
                         command_id: existing_id,
+                        created: false,
                         state: s.state,
                         storage_upload: None,
                         inline_allowed_up_to: self.inline_max_bytes as u64,
@@ -287,6 +294,7 @@ impl CommandServer {
                 initial_state,
                 request.deadline,
                 request_size_bytes,
+                request.operation_result_contract.clone(),
             )
             .await?;
 
@@ -321,6 +329,7 @@ impl CommandServer {
                 let state = status.map(|s| s.state).unwrap_or(CommandState::Pending);
                 return Ok(CreateCommandResponse {
                     command_id: winner_id,
+                    created: false,
                     state,
                     storage_upload: None,
                     inline_allowed_up_to: self.inline_max_bytes as u64,
@@ -374,6 +383,7 @@ impl CommandServer {
 
         Ok(CreateCommandResponse {
             command_id,
+            created: true,
             state: final_state,
             storage_upload,
             inline_allowed_up_to: self.inline_max_bytes as u64,
@@ -1121,6 +1131,12 @@ impl CommandServer {
     // =========================================================================
 
     async fn validate_create_command(&self, request: &CreateCommandRequest) -> Result<()> {
+        validate_operation_result_contract_request(
+            &request.command,
+            request.operation_result_contract.is_some(),
+            self.command_registry.persists_operation_result_contract(),
+        )?;
+
         if request.command.is_empty() {
             return Err(AlienError::new(ErrorData::InvalidCommand {
                 message: "Command name cannot be empty".to_string(),
@@ -1946,6 +1962,33 @@ impl CommandServer {
     }
 }
 
+fn validate_operation_result_contract_request(
+    command: &str,
+    contract_present: bool,
+    registry_supports_contract: bool,
+) -> Result<()> {
+    let operation_command = command.strip_prefix("operation/v1/").is_some_and(|digest| {
+        digest.len() == 64
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    });
+    if operation_command && !contract_present {
+        return Err(AlienError::new(ErrorData::InvalidCommand {
+            message: "Version-qualified operation commands require an immutable result contract"
+                .to_string(),
+        }));
+    }
+    if contract_present && (!operation_command || !registry_supports_contract) {
+        return Err(AlienError::new(ErrorData::InvalidCommand {
+            message:
+                "This command registry cannot persist the operation result contract before dispatch"
+                    .to_string(),
+        }));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod relative_url_tests {
     use super::*;
@@ -2097,5 +2140,15 @@ mod idempotency_key_tests {
         let err = validate_command_name("a:b").expect_err("':'-bearing command must be rejected");
         assert_eq!(err.code, "INVALID_COMMAND");
         assert!(validate_command_name("a").is_ok());
+    }
+
+    #[test]
+    fn versioned_operation_requires_atomic_result_contract_support() {
+        let command = format!("operation/v1/{}", "a".repeat(64));
+
+        assert!(validate_operation_result_contract_request(&command, true, true).is_ok());
+        assert!(validate_operation_result_contract_request(&command, false, true).is_err());
+        assert!(validate_operation_result_contract_request(&command, true, false).is_err());
+        assert!(validate_operation_result_contract_request("postgres/health", true, true).is_err());
     }
 }

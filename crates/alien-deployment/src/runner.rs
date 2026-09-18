@@ -99,6 +99,31 @@ pub struct RunnerResult {
     pub steps_executed: usize,
 }
 
+/// Convert a terminal semantic failure carried in deployment state into the
+/// operation error before callers finalize and release the execution claim.
+/// The step loop returns `Ok(RunnerResult)` after durably checkpointing such a
+/// failure; treating every `Ok` as success would let a later finalization error
+/// replace the controller/preflight error that actually stopped the operation.
+pub fn preserve_semantic_failure(
+    result: Result<RunnerResult>,
+    state: &DeploymentState,
+) -> std::result::Result<RunnerResult, AlienError> {
+    match result {
+        Ok(result) if result.loop_result.outcome == LoopOutcome::Failure => {
+            Err(state.error.clone().unwrap_or_else(|| {
+                AlienError::new(alien_error::GenericError {
+                    message: format!(
+                        "deployment failed at status {:?}",
+                        result.loop_result.final_status
+                    ),
+                })
+            }))
+        }
+        Ok(result) => Ok(result),
+        Err(error) => Err(error.into_generic()),
+    }
+}
+
 /// Progress snapshot after each deployment step.
 pub struct StepProgress<'a> {
     pub step_number: usize,
@@ -627,6 +652,30 @@ mod tests {
             internal = "true"
         )]
         TransientCheckpoint,
+    }
+
+    #[test]
+    fn semantic_runner_failure_returns_the_checkpointed_operation_error() {
+        let mut state = test_state();
+        state.status = DeploymentStatus::PreflightsFailed;
+        state.error = Some(AlienError::new(alien_error::GenericError {
+            message: "compute pool 'preview' has no selected machine".to_string(),
+        }));
+        let result = RunnerResult {
+            loop_result: LoopResult {
+                stop_reason: LoopStopReason::Failed,
+                outcome: LoopOutcome::Failure,
+                final_status: DeploymentStatus::PreflightsFailed,
+            },
+            steps_executed: 1,
+        };
+
+        let error = preserve_semantic_failure(Ok(result), &state)
+            .expect_err("semantic failure must become an operation error");
+        assert_eq!(
+            error.message,
+            "compute pool 'preview' has no selected machine"
+        );
     }
 
     #[async_trait]

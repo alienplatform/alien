@@ -58,6 +58,17 @@ pub trait OperationsExecutor: Send + Sync + 'static {
 /// `state.cancel` fires.
 #[async_trait]
 pub trait OperationsExecLoop: Send + Sync + 'static {
+    /// Whether this receiver registers the version-qualified
+    /// `operation/v1/<sha256>` command addresses used by the canonical
+    /// operations contract.
+    ///
+    /// This defaults to `false` so existing downstream receivers cannot claim
+    /// support merely by compiling against a newer operator SDK. Receivers
+    /// must opt in only after they implement the version-qualified address.
+    fn supports_versioned_command_address(&self) -> bool {
+        false
+    }
+
     async fn run(self: Arc<Self>, state: Arc<OperatorState>);
 }
 
@@ -152,6 +163,8 @@ mod tests {
             operations_sync_handler: None,
             cancel: cancel.clone(),
         });
+
+        assert!(!UnimplementedOperationsExecLoop.supports_versioned_command_address());
 
         let mut task = tokio::spawn(Arc::new(UnimplementedOperationsExecLoop).run(state));
         assert!(

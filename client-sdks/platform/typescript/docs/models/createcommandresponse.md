@@ -14,6 +14,7 @@ let value: CreateCommandResponse = {
     resourceType: "container",
   },
   deliveryMode: "pull",
+  operationResultContractPersisted: false,
 };
 ```
 
@@ -26,3 +27,4 @@ let value: CreateCommandResponse = {
 | `deploymentModel`                                                                                | [models.CreateCommandResponseDeploymentModel](../models/createcommandresponsedeploymentmodel.md) | :heavy_check_mark:                                                                               | How to dispatch the command                                                                      |                                                                                                  |
 | `target`                                                                                         | [models.CreateCommandResponseTarget](../models/createcommandresponsetarget.md)                   | :heavy_check_mark:                                                                               | Resource the command is addressed to                                                             |                                                                                                  |
 | `deliveryMode`                                                                                   | [models.CreateCommandResponseDeliveryMode](../models/createcommandresponsedeliverymode.md)       | :heavy_check_mark:                                                                               | How the command is delivered to its target                                                       |                                                                                                  |
+| `operationResultContractPersisted`                                                               | *boolean*                                                                                        | :heavy_check_mark:                                                                               | Whether an operation result contract was stored atomically with this command                     |                                                                                                  |

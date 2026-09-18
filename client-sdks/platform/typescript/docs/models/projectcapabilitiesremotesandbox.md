@@ -7,15 +7,14 @@ import { ProjectCapabilitiesRemoteSandbox } from "@alienplatform/platform-api/mo
 
 let value: ProjectCapabilitiesRemoteSandbox = {
   enabled: true,
-  maxSessionLifetimeSeconds: 393466,
 };
 ```
 
 ## Fields
 
-| Field                       | Type                        | Required                    | Description                 |
-| --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `enabled`                   | *true*                      | :heavy_check_mark:          | N/A                         |
-| `baseImage`                 | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `imageBundleUri`            | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `maxSessionLifetimeSeconds` | *number*                    | :heavy_check_mark:          | N/A                         |
+| Field                                                                    | Type                                                                     | Required                                                                 | Description                                                              |
+| ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
+| `enabled`                                                                | *boolean*                                                                | :heavy_check_mark:                                                       | N/A                                                                      |
+| `baseImage`                                                              | *string*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `azure`                                                                  | [models.ProjectCapabilitiesAzure](../models/projectcapabilitiesazure.md) | :heavy_minus_sign:                                                       | N/A                                                                      |
+| `maxLifetimeSeconds`                                                     | *number*                                                                 | :heavy_minus_sign:                                                       | N/A                                                                      |

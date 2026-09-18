@@ -38,6 +38,7 @@ pub fn create_request_decision(
         CommandCapability::Operations {
             command: scoped_command,
         } => requested_target == Some(OPERATOR_COMMAND_TARGET_ID) && scoped_command == command,
+        CommandCapability::Status { .. } => false,
         CommandCapability::Receive { .. } => false,
     };
 
@@ -168,6 +169,37 @@ pub fn sender_context_decision(subject: &Subject, command: &CommandAccessContext
     )
 }
 
+/// Decide exact command-status access for a short-lived proxy capability.
+///
+/// `None` means the subject does not carry a status capability and the route
+/// should continue with its ordinary authorization policy. A status
+/// capability is definitive and is bound to the command plus its canonical
+/// workspace, project, and deployment ownership fields.
+pub fn status_context_decision(
+    subject: &Subject,
+    command_id: &str,
+    command: &CommandAccessContext,
+) -> Option<bool> {
+    let Scope::Commands {
+        project_id,
+        deployment_id,
+        capability: CommandCapability::Status {
+            command_id: scoped_command_id,
+        },
+    } = &subject.scope
+    else {
+        return None;
+    };
+
+    Some(
+        subject.role == Role::CommandCapability
+            && scoped_command_id == command_id
+            && subject.workspace_id == command.workspace_id
+            && project_id == &command.project_id
+            && deployment_id == &command.deployment_id,
+    )
+}
+
 /// Decide lease access when the subject carries a commands scope.
 pub fn receiver_deployment_decision(
     subject: &Subject,
@@ -288,6 +320,74 @@ mod tests {
         );
         assert_eq!(sender_context_decision(&subject, &command), Some(false));
         assert!(!receiver_context_allowed(&subject, &command));
+    }
+
+    #[test]
+    fn status_capability_reads_only_its_exact_command_and_ownership_context() {
+        let command = CommandAccessContext {
+            workspace_id: "workspace-1".to_string(),
+            project_id: "project-1".to_string(),
+            deployment_id: "deployment-1".to_string(),
+            target: CommandTarget::new(OPERATOR_COMMAND_TARGET_ID, CommandTargetType::Daemon),
+        };
+        let exact = Subject {
+            kind: SubjectKind::ServiceAccount {
+                id: "command-status-proxy".to_string(),
+            },
+            workspace_id: "workspace-1".to_string(),
+            scope: Scope::Commands {
+                project_id: "project-1".to_string(),
+                deployment_id: "deployment-1".to_string(),
+                capability: CommandCapability::Status {
+                    command_id: "command-1".to_string(),
+                },
+            },
+            role: Role::CommandCapability,
+            bearer_token: String::new(),
+        };
+
+        assert_eq!(
+            status_context_decision(&exact, "command-1", &command),
+            Some(true)
+        );
+        assert_eq!(
+            status_context_decision(&exact, "command-2", &command),
+            Some(false)
+        );
+
+        for (workspace_id, project_id, deployment_id) in [
+            ("workspace-2", "project-1", "deployment-1"),
+            ("workspace-1", "project-2", "deployment-1"),
+            ("workspace-1", "project-1", "deployment-2"),
+        ] {
+            let mut changed = exact.clone();
+            changed.workspace_id = workspace_id.to_string();
+            changed.scope = Scope::Commands {
+                project_id: project_id.to_string(),
+                deployment_id: deployment_id.to_string(),
+                capability: CommandCapability::Status {
+                    command_id: "command-1".to_string(),
+                },
+            };
+            assert_eq!(
+                status_context_decision(&changed, "command-1", &command),
+                Some(false)
+            );
+        }
+
+        assert_eq!(
+            status_context_decision(
+                &operations_subject(
+                    "workspace-1",
+                    "project-1",
+                    "deployment-1",
+                    "postgres/health",
+                ),
+                "command-1",
+                &command,
+            ),
+            None
+        );
     }
 
     #[test]

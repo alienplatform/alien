@@ -5,15 +5,13 @@
 ```typescript
 import { ConfigureRemoteSandboxRequest } from "@alienplatform/platform-api/models";
 
-let value: ConfigureRemoteSandboxRequest = {
-  maxSessionLifetimeSeconds: 678048,
-};
+let value: ConfigureRemoteSandboxRequest = {};
 ```
 
 ## Fields
 
-| Field                       | Type                        | Required                    | Description                 |
-| --------------------------- | --------------------------- | --------------------------- | --------------------------- |
-| `baseImage`                 | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `imageBundleUri`            | *string*                    | :heavy_minus_sign:          | N/A                         |
-| `maxSessionLifetimeSeconds` | *number*                    | :heavy_check_mark:          | N/A                         |
+| Field                                                                                        | Type                                                                                         | Required                                                                                     | Description                                                                                  |
+| -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
+| `baseImage`                                                                                  | *string*                                                                                     | :heavy_minus_sign:                                                                           | N/A                                                                                          |
+| `azure`                                                                                      | [models.ConfigureRemoteSandboxRequestAzure](../models/configureremotesandboxrequestazure.md) | :heavy_minus_sign:                                                                           | N/A                                                                                          |
+| `maxLifetimeSeconds`                                                                         | *number*                                                                                     | :heavy_minus_sign:                                                                           | N/A                                                                                          |

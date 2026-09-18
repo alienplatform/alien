@@ -6,7 +6,7 @@
 import { ConfigureProjectSourceKeys } from "@alienplatform/platform-api/models/operations";
 
 let value: ConfigureProjectSourceKeys = {
-  enabled: true,
+  enabled: false,
   applicationEncryption: true,
 };
 ```
@@ -15,5 +15,5 @@ let value: ConfigureProjectSourceKeys = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `enabled`               | *true*                  | :heavy_check_mark:      | N/A                     |
-| `applicationEncryption` | *true*                  | :heavy_check_mark:      | N/A                     |
+| `enabled`               | *boolean*               | :heavy_check_mark:      | N/A                     |
+| `applicationEncryption` | *boolean*               | :heavy_check_mark:      | N/A                     |

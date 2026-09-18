@@ -283,13 +283,37 @@ where
         (Ok(value), Ok(())) => Ok(value),
         (Ok(_), Err(finalization_error)) => Err(finalization_error),
         (Err(operation_error), Ok(())) => Err(operation_error.into_generic()),
-        (Err(operation_error), Err(finalization_error)) => Err(operation_error
-            .into_generic()
-            .context(alien_error::GenericError {
-                message: format!(
-                    "Operation failed and deployment finalization also failed: {finalization_error}"
-                ),
-            })),
+        (Err(operation_error), Err(finalization_error)) => {
+            let mut primary = operation_error.into_generic();
+            // Treat finalization as a second error boundary. In particular, do not
+            // embed its arbitrary context in a public primary error: internal
+            // errors may carry provider responses or credentials there.
+            let mut finalization = finalization_error.into_external();
+            finalization.context = None;
+            finalization.source = None;
+            let finalization_summary = serde_json::json!({
+                "code": finalization.code,
+                "message": finalization.message,
+                "retryable": finalization.retryable,
+            });
+            let mut context = primary
+                .context
+                .take()
+                .and_then(|value| value.as_object().cloned())
+                .unwrap_or_default();
+            context.insert("finalizationError".to_string(), finalization_summary);
+            primary.context = Some(serde_json::Value::Object(context));
+
+            // Also retain the sanitized secondary failure in the source chain so
+            // the normal human renderer shows it instead of silently hiding it in
+            // structured context.
+            let mut tail = &mut primary;
+            while let Some(ref mut source) = tail.source {
+                tail = source;
+            }
+            tail.source = Some(Box::new(finalization));
+            Err(primary)
+        }
     }
 }
 
@@ -669,14 +693,48 @@ mod tests {
         )
         .expect_err("both failures must be reported");
 
-        assert!(error.message.contains("reconcile failed"));
+        assert_eq!(error.message, "runner failed");
         assert_eq!(
             error
-                .source
-                .as_deref()
-                .map(|source| source.message.as_str()),
-            Some("runner failed")
+                .context
+                .as_ref()
+                .and_then(|context| context.get("finalizationError"))
+                .and_then(|error| error.get("message"))
+                .and_then(serde_json::Value::as_str),
+            Some("reconcile failed")
         );
+        assert!(error
+            .human_report()
+            .causes
+            .iter()
+            .any(|cause| cause.message == "reconcile failed"));
+    }
+
+    #[test]
+    fn internal_finalization_details_are_not_embedded_in_external_error() {
+        let operation_error = AlienError::new(alien_error::GenericError {
+            message: "runner failed".to_string(),
+        });
+        let mut finalization_error = AlienError::new(alien_error::GenericError {
+            message: "provider response contained secret-token".to_string(),
+        });
+        finalization_error.internal = true;
+        finalization_error.context = Some(serde_json::json!({ "credential": "secret-token" }));
+
+        let error = combine_operation_and_finalization::<(), _>(
+            Err(operation_error),
+            Err(finalization_error),
+        )
+        .expect_err("both failures must be reported");
+        let serialized = serde_json::to_string(&error).expect("serialize combined error");
+
+        assert!(!serialized.contains("secret-token"));
+        assert!(serialized.contains("Internal server error"));
+        assert!(error
+            .human_report()
+            .causes
+            .iter()
+            .any(|cause| cause.message == "Internal server error"));
     }
 
     #[tokio::test]

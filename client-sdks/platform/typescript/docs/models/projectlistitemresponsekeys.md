@@ -6,8 +6,8 @@
 import { ProjectListItemResponseKeys } from "@alienplatform/platform-api/models";
 
 let value: ProjectListItemResponseKeys = {
-  enabled: true,
-  applicationEncryption: true,
+  enabled: false,
+  applicationEncryption: false,
 };
 ```
 
@@ -15,5 +15,5 @@ let value: ProjectListItemResponseKeys = {
 
 | Field                   | Type                    | Required                | Description             |
 | ----------------------- | ----------------------- | ----------------------- | ----------------------- |
-| `enabled`               | *true*                  | :heavy_check_mark:      | N/A                     |
-| `applicationEncryption` | *true*                  | :heavy_check_mark:      | N/A                     |
+| `enabled`               | *boolean*               | :heavy_check_mark:      | N/A                     |
+| `applicationEncryption` | *boolean*               | :heavy_check_mark:      | N/A                     |
