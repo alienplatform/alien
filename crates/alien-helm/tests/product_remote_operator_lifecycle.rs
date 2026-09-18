@@ -153,6 +153,17 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
         [
             "load",
             "docker-image",
+            OPERATOR_FIXTURE_BASE_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
             GOOD_OPERATOR_IMAGE,
             "--name",
             "alien-product-lifecycle",
@@ -322,6 +333,22 @@ rules:
             &helm_namespace,
             "--ignore-not-found",
             "--no-hooks",
+        ],
+        None,
+    );
+    // `--no-hooks` leaves that Failed pre-delete Job in the namespace. Delete
+    // it before retrying the same release name, or the next `--wait` uninstall
+    // treats the leftover Job as the current hook.
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "job",
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found=true",
+            "--wait=true",
+            &format!("--selector=app.kubernetes.io/instance={disabled_failure_release}"),
         ],
         None,
     );
