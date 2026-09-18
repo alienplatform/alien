@@ -4,7 +4,7 @@
 //! `GET /install.ps1` returns a PowerShell script for Windows.
 //!
 //! Supports `?version=1.2.3` query parameter to pin a specific version
-//! (defaults to `latest`).
+//! (defaults to the stable release channel).
 
 use axum::{
     extract::{Query, State},
@@ -105,7 +105,7 @@ async fn install_response(
             }
             format!("v{v}")
         }
-        None => "latest".to_string(),
+        None => "stable".to_string(),
     };
 
     let script = match kind {
@@ -134,6 +134,25 @@ die() {{
   echo "$1" >&2
   exit 1
 }}
+
+if [ "$VERSION_PATH" = "stable" ]; then
+  if command -v curl >/dev/null 2>&1; then
+    VERSION_PATH="$(curl -fsSL "$RELEASES_URL/channels/stable")"
+  elif command -v wget >/dev/null 2>&1; then
+    VERSION_PATH="$(wget -q -O - "$RELEASES_URL/channels/stable")"
+  else
+    die "Either curl or wget is required"
+  fi
+  case "$VERSION_PATH" in
+    v*) ;;
+    *) die "Invalid stable channel version: $VERSION_PATH" ;;
+  esac
+  case "${{VERSION_PATH#v}}" in
+    ""|*[!ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-]*)
+      die "Invalid stable channel version: $VERSION_PATH"
+      ;;
+  esac
+fi
 
 UNAME_S="$(uname -s)"
 case "$UNAME_S" in
@@ -215,13 +234,21 @@ fn generate_powershell_install_script(releases_url: &str, version_path: &str) ->
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "SilentlyContinue"
 
+$VersionPath = "{version_path}"
+if ($VersionPath -eq "stable") {{
+  $VersionPath = (Invoke-RestMethod -Uri "{releases_url}/channels/stable" -ErrorAction Stop).Trim()
+  if ($VersionPath -notmatch '^v[A-Za-z0-9._-]+$') {{
+    throw "Invalid stable channel version: $VersionPath"
+  }}
+}}
+
 if (-not [Environment]::Is64BitOperatingSystem) {{
   throw "alien-deploy requires 64-bit Windows."
 }}
 
 $Platform = "windows-x86_64"
 $FileName = "alien-deploy.exe"
-$Url = "{releases_url}/alien-deploy/{version_path}/$Platform/$FileName"
+$Url = "{releases_url}/alien-deploy/$VersionPath/$Platform/$FileName"
 $InstallDir = if ($env:INSTALL_DIR) {{
   $env:INSTALL_DIR
 }} else {{
@@ -278,7 +305,7 @@ mod tests {
 
     #[test]
     fn unix_installer_parses_with_system_sh() {
-        let script = generate_install_script("https://releases.example.com", "latest");
+        let script = generate_install_script("https://releases.example.com", "stable");
         let mut child = Command::new("sh")
             .arg("-n")
             .stdin(Stdio::piped())
@@ -339,19 +366,142 @@ mod tests {
         assert!(!is_safe_releases_url("https://example.com/$HOME"));
     }
 
-    #[test]
-    fn unix_installer_execs_installed_cli_with_arguments() {
-        let script = generate_install_script("https://releases.example.com", "latest");
-
-        assert!(script.contains("if [ \"$#\" -gt 0 ]; then"));
-        assert!(script.contains("exec \"$INSTALL_DIR/alien-deploy\" \"$@\""));
+    // Execute real interpreters against an HTTP fixture: text matching cannot
+    // catch quoting, channel resolution, or download failures.
+    async fn run_installer_case(
+        kind: InstallerKind,
+        version: Option<&str>,
+        pointer: &str,
+        status: u16,
+    ) {
+        let powershell = matches!(kind, InstallerKind::PowerShell);
+        if powershell && Command::new("pwsh").arg("--version").output().is_err() {
+            eprintln!("PowerShell execution requires pwsh; skipped on this host");
+            return;
+        }
+        let server = httpmock::MockServer::start();
+        let channel = server.mock(|when, then| {
+            when.path("/channels/stable");
+            then.status(status).body(pointer);
+        });
+        let binary = "#!/bin/sh\nprintf 'arg=<%s>\\n' \"$@\"\nexit 7\n";
+        let binary_path = if powershell {
+            "/alien-deploy/v1.2.3/windows-x86_64/alien-deploy.exe".to_owned()
+        } else {
+            let os = if cfg!(target_os = "macos") {
+                "darwin"
+            } else {
+                "linux"
+            };
+            format!(
+                "/alien-deploy/v1.2.3/{os}-{}/alien-deploy",
+                std::env::consts::ARCH
+            )
+        };
+        let download = server.mock(|when, then| {
+            when.path(&binary_path);
+            then.status(200).body(binary);
+        });
+        let response = install_response(
+            server.base_url(),
+            InstallParams {
+                version: version.map(str::to_owned),
+            },
+            kind,
+        )
+        .await;
+        assert_eq!(response.status(), http::StatusCode::OK);
+        let script = axum::body::to_bytes(response.into_body(), 64 * 1024)
+            .await
+            .unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join(if powershell {
+            "install.ps1"
+        } else {
+            "install.sh"
+        });
+        std::fs::write(&script_path, script).unwrap();
+        let mut command = Command::new(if powershell { "pwsh" } else { "sh" });
+        if powershell {
+            command.args(["-NoProfile", "-NonInteractive", "-File"]);
+        }
+        command.arg(script_path).env("INSTALL_DIR", dir.path());
+        if !powershell {
+            command.args(["deploy", "space in argument", "--no-browser"]);
+        }
+        let output = command.output().unwrap();
+        channel.assert_hits(usize::from(version.is_none()));
+        let valid = version.is_some() || (status == 200 && pointer == "v1.2.3\n");
+        download.assert_hits(usize::from(valid));
+        let installed = dir.path().join(if powershell {
+            "alien-deploy.exe"
+        } else {
+            "alien-deploy"
+        });
+        if valid {
+            assert_eq!(std::fs::read_to_string(installed).unwrap(), binary);
+            if powershell {
+                assert!(
+                    output.status.success(),
+                    "{}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            } else {
+                assert_eq!(output.status.code(), Some(7));
+                assert!(String::from_utf8_lossy(&output.stdout)
+                    .ends_with("arg=<deploy>\narg=<space in argument>\narg=<--no-browser>\n"));
+            }
+        } else {
+            assert!(!output.status.success());
+            assert!(!installed.exists());
+        }
     }
 
-    #[test]
-    fn powershell_installer_execs_installed_cli_with_arguments() {
-        let script = generate_powershell_install_script("https://releases.example.com", "latest");
+    #[tokio::test]
+    async fn unix_installer_resolves_stable_and_forwards_arguments_and_exit_status() {
+        run_installer_case(InstallerKind::Unix, None, "v1.2.3\n", 200).await;
+    }
 
-        assert!(script.contains("if ($args.Count -gt 0)"));
-        assert!(script.contains("& $BinaryPath @args"));
+    #[tokio::test]
+    async fn explicit_unix_version_does_not_fetch_channel() {
+        run_installer_case(InstallerKind::Unix, Some("1.2.3"), "", 404).await;
+    }
+
+    #[tokio::test]
+    async fn unix_installer_rejects_invalid_or_unavailable_channel() {
+        for pointer in [
+            "",
+            "v",
+            "latest",
+            "v1.2.3/../../latest",
+            "v1.2.3\necho unsafe",
+        ] {
+            run_installer_case(InstallerKind::Unix, None, pointer, 200).await;
+        }
+        run_installer_case(InstallerKind::Unix, None, "missing", 404).await;
+    }
+
+    #[tokio::test]
+    async fn powershell_installer_resolves_stable_when_pwsh_available() {
+        run_installer_case(InstallerKind::PowerShell, None, "v1.2.3\n", 200).await;
+    }
+
+    #[tokio::test]
+    async fn explicit_powershell_version_does_not_fetch_channel_when_pwsh_available() {
+        run_installer_case(InstallerKind::PowerShell, Some("1.2.3"), "", 404).await;
+    }
+
+    #[tokio::test]
+    async fn powershell_installer_rejects_invalid_or_unavailable_channel_when_pwsh_available() {
+        for pointer in [
+            "",
+            "v",
+            "latest",
+            "v1.2.3/../../latest",
+            "v1.2.3\necho unsafe",
+        ] {
+            run_installer_case(InstallerKind::PowerShell, None, pointer, 200).await;
+        }
+        run_installer_case(InstallerKind::PowerShell, None, "missing", 404).await;
     }
 }
