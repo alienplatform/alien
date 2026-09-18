@@ -3,9 +3,9 @@ use progenitor::{GenerationSettings, InterfaceStyle};
 #[path = "build/openapi_filter.rs"]
 mod openapi_filter;
 
-// The filtered client currently generates about 535,000 lines. Leave enough
+// The deduplicated filtered client currently generates about 195,000 lines. Leave enough
 // room for normal API evolution while catching accidental graph explosions.
-const MAX_FILTERED_GENERATED_LINES: usize = 600_000;
+const MAX_FILTERED_GENERATED_LINES: usize = 240_000;
 
 fn main() {
     // Spawn on a thread with an 8 MB stack to avoid overflow on Windows (1 MB default).
