@@ -153,17 +153,6 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
         [
             "load",
             "docker-image",
-            OPERATOR_FIXTURE_BASE_IMAGE,
-            "--name",
-            "alien-product-lifecycle",
-        ],
-        None,
-    );
-    run_ok(
-        "kind",
-        [
-            "load",
-            "docker-image",
             GOOD_OPERATOR_IMAGE,
             "--name",
             "alien-product-lifecycle",

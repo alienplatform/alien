@@ -1007,12 +1007,38 @@ spec:
                     ;;
                 esac
               }
+              owned_by_this_release() {
+                kind="$1"
+                name="$2"
+                expected_instance="$3"
+                actual_release="$(field "$kind" "$name" '{.metadata.annotations.meta\.helm\.sh/release-name}')" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                actual_namespace="$(field "$kind" "$name" '{.metadata.annotations.meta\.helm\.sh/release-namespace}')" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                actual_service="$(field "$kind" "$name" '{.metadata.labels.app\.kubernetes\.io/managed-by}')" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                actual_instance="$(field "$kind" "$name" '{.metadata.labels.app\.kubernetes\.io/instance}')" || {
+                  echo "Refusing cleanup: cannot read $kind $namespace/$name." >&2
+                  exit 1
+                }
+                [ "$actual_release" = "$release_name" ] && [ "$actual_namespace" = "$namespace" ] && [ "$actual_service" = "$release_service" ] && [ "$actual_instance" = "$expected_instance" ]
+              }
               if ! resource_exists configmap "$identity_record"; then
                 if resource_exists configmap "$identity_completion"; then
                   echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
                   exit 1
                 fi
-                if resource_exists deployment "$resource_name" || resource_exists persistentvolumeclaim "$identity_pvc"; then
+                if resource_exists deployment "$resource_name" && owned_by_this_release deployment "$resource_name" "$resource_name"; then
+                  echo "Refusing cleanup: Remote Operator workload or identity storage remains without its identity record." >&2
+                  exit 1
+                fi
+                if resource_exists persistentvolumeclaim "$identity_pvc" && owned_by_this_release persistentvolumeclaim "$identity_pvc" "$resource_name"; then
                   echo "Refusing cleanup: Remote Operator workload or identity storage remains without its identity record." >&2
                   exit 1
                 fi
@@ -4892,8 +4918,24 @@ spec:
               expected_release_name="$(printf '%s' {{ .Release.Name | b64enc | quote }} | base64 -d)"
               expected_release_namespace="$(printf '%s' {{ .Release.Namespace | b64enc | quote }} | base64 -d)"
               expected_release_service="$(printf '%s' {{ .Release.Service | b64enc | quote }} | base64 -d)"
-              scope_contract="$(kubectl -n "$namespace" get configmap "$scope_name" -o go-template='{{ "{{" }} printf "%t\t%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s" .immutable (len .data) (index .data "version") (index .data "labelKey") (index .data "legacyLabelKey") (index .data "labelValue") (index .data "resourceLabelKey") (index .data "firstSafeRevision") (index .metadata.annotations "meta.helm.sh/release-name") (index .metadata.annotations "meta.helm.sh/release-namespace") (index .metadata.labels "app.kubernetes.io/managed-by") (index .metadata.labels "app.kubernetes.io/instance") {{ "}}" }}{{ "{{" }} printf "\t%s" (index .metadata.labels "alien.dev/runtime-cleanup-scope") {{ "}}" }}')"
-              IFS="$(printf '\t')" read -r scope_immutable scope_data_count scope_version deployment_label_key legacy_deployment_label_key deployment_label_value resource_label_key first_safe_revision scope_release_name scope_release_namespace scope_release_service scope_release_instance scope_marker <<EOF
+              # One field per line: BusyBox ash `read` collapses empty IFS fields,
+              # and the optional legacy label key is empty on default-domain charts.
+              scope_contract="$(kubectl -n "$namespace" get configmap "$scope_name" -o go-template='{{ "{{" }} printf "%t\n%d\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n" .immutable (len .data) (index .data "version") (index .data "labelKey") (index .data "legacyLabelKey") (index .data "labelValue") (index .data "resourceLabelKey") (index .data "firstSafeRevision") (index .metadata.annotations "meta.helm.sh/release-name") (index .metadata.annotations "meta.helm.sh/release-namespace") (index .metadata.labels "app.kubernetes.io/managed-by") (index .metadata.labels "app.kubernetes.io/instance") (index .metadata.labels "alien.dev/runtime-cleanup-scope") {{ "}}" }}')"
+              {
+                read -r scope_immutable
+                read -r scope_data_count
+                read -r scope_version
+                read -r deployment_label_key
+                read -r legacy_deployment_label_key
+                read -r deployment_label_value
+                read -r resource_label_key
+                read -r first_safe_revision
+                read -r scope_release_name
+                read -r scope_release_namespace
+                read -r scope_release_service
+                read -r scope_release_instance
+                read -r scope_marker
+              } <<EOF
               $scope_contract
               EOF
               if [ "$scope_immutable" != true ] || [ "$scope_data_count" != 6 ] || [ "$scope_version" != 2 ] || [ "$deployment_label_key" != "$expected_label_key" ] || [ "$legacy_deployment_label_key" != "$expected_legacy_label_key" ] || [ "$deployment_label_value" != "$expected_label_value" ] || [ "$resource_label_key" != "$expected_resource_label_key" ] || [ "$scope_release_name" != "$expected_release_name" ] || [ "$scope_release_namespace" != "$expected_release_namespace" ] || [ "$scope_release_service" != "$expected_release_service" ] || [ "$scope_release_instance" != "$expected_release_name" ] || [ "$scope_marker" != v2 ]; then
@@ -7177,6 +7219,10 @@ mod tests {
 
         let cleanup = &chart.files["templates/cleanup-job.yaml"];
         assert!(cleanup.contains("scope_contract="));
+        assert!(
+            cleanup.contains("read -r legacy_deployment_label_key"),
+            "BusyBox ash collapses empty IFS fields, so parse the optional legacy key as its own line"
+        );
         assert!(cleanup.contains("scope_data_count\" != 6"));
         assert!(cleanup.contains("ambiguous legacy ownership"));
         assert!(cleanup.contains("jobs.batch,pods"));
@@ -7324,6 +7370,10 @@ mod tests {
         ));
         assert!(!cleanup.contains("adopt_cleanup_resource"));
         assert!(cleanup.contains("No Remote Operator identity record exists"));
+        assert!(
+            cleanup.contains("owned_by_this_release"),
+            "same-name foreign identity storage must not block uninstall"
+        );
         assert!(cleanup.contains("--ignore-not-found -o name"));
         assert!(cleanup.contains("cannot determine whether $1 $namespace/$2 exists"));
         assert!(cleanup.contains(
