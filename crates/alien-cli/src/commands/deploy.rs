@@ -28,6 +28,7 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::ClientConfigExt;
 use alien_platform_api::Client as SdkClient;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
@@ -1176,6 +1177,15 @@ async fn parse_empty_api_response(response: reqwest::Response, message: &str) ->
 
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    let environment = std::env::vars().collect();
+    deploy_task_with_environment(args, ctx, &environment).await
+}
+
+async fn deploy_task_with_environment(
+    args: DeployArgs,
+    ctx: ExecutionMode,
+    environment: &HashMap<String, String>,
+) -> Result<()> {
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1211,6 +1221,19 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     steps.activate(0, Some(resolved_args.name.clone()));
 
     let platform = resolved_args.platform_enum;
+
+    // Validate runner-local provider configuration before creating any durable
+    // deployment record or token. Machines does not use a local cloud client.
+    let client_config =
+        if platform == Platform::Machines {
+            None
+        } else {
+            Some(ClientConfig::from_env(platform, environment).await.context(
+                ErrorData::ConfigurationError {
+                    message: format!("Failed to build client config for platform {:?}", platform),
+                },
+            )?)
+        };
 
     let base_url = ctx.base_url();
 
@@ -1545,14 +1568,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 message: format!("Unknown deployment status: {}", deployment.status),
             })?;
 
-    // Get cloud credentials from environment
-    use alien_infra::ClientConfigExt;
-    let client_config =
-        ClientConfig::from_std_env(platform)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to build client config for platform {:?}", platform),
-            })?;
+    let client_config = client_config.expect("non-Machines deploys validate client config");
 
     // Build deployment state
     let mut current = DeploymentState {
@@ -2068,6 +2084,7 @@ mod tests {
     use super::*;
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -2099,6 +2116,50 @@ mod tests {
             "aws",
         ])
         .expect_err("deployment-group selector and scoped token must conflict");
+    }
+
+    #[tokio::test]
+    async fn invalid_provider_config_fails_before_any_deployment_api_request() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test API listener");
+        let server_url = format!(
+            "http://{}",
+            listener.local_addr().expect("read listener address")
+        );
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "must-not-be-created",
+            "--platform",
+            "azure",
+            "--token",
+            "deployment-token-must-not-be-sent",
+        ])
+        .expect("valid deploy arguments");
+
+        let error = deploy_task_with_environment(
+            args,
+            ExecutionMode::Standalone {
+                server_url,
+                api_key: "deployment-token-must-not-be-sent".to_string(),
+            },
+            &HashMap::new(),
+        )
+        .await
+        .expect_err("unsupported provider configuration must fail preflight");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(
+            error.message.contains("Azure"),
+            "unexpected provider error: {error:?}"
+        );
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "provider preflight failure must not contact the deployment API"
+        );
     }
 
     #[test]
@@ -2297,6 +2358,7 @@ max = 1
             platform: "aws".to_string(),
             platform_enum: Platform::Aws,
             network_settings: None,
+            compute_settings: None,
             input_values: HashMap::new(),
             public_subdomain: None,
         };
