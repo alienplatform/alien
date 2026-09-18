@@ -79,6 +79,7 @@ jobs:
       qualification_run_id: ${{ steps.qualification.outputs.run_id }}
       qualification_head_sha: ${{ steps.qualification.outputs.head_sha }}
       release_commit: ${{ steps.merged_version.outputs.commit }}
+      platform_ref: ${{ steps.platform_revision.outputs.ref }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -96,6 +97,16 @@ jobs:
             echo "::error::Qualification must validate its exact source commit"
             exit 1
           fi
+
+      - name: Read official CLI Platform revision
+        id: platform_revision
+        run: |
+          ref=$(tr -d '[:space:]' < .github/official-cli-platform-revision)
+          if ! grep -qE '^[0-9a-f]{40}$' <<< "$ref"; then
+            echo "::error::.github/official-cli-platform-revision must contain one exact commit"
+            exit 1
+          fi
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
 
       - name: Test release metadata and routing
         run: node --test scripts/sdk-release-metadata.test.mjs scripts/release-routing.test.mjs
@@ -1388,19 +1399,26 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - uses: actions/checkout@v7
+        with:
+          repository: alienplatform/platform
+          ref: ${{ needs.prepare.outputs.platform_ref }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: platform
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
         with:
           path: |
-            target/x86_64-unknown-linux-musl/release/alien
             target/x86_64-unknown-linux-musl/release/alien-deploy
             target/x86_64-unknown-linux-musl/release/alien-operator
             target/x86_64-unknown-linux-musl/release/alien-worker-runtime
             target/x86_64-unknown-linux-musl/release/alien-manager
             target/x86_64-unknown-linux-musl/release/alien-sandbox-agent
+            platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-b2
+          key: release-linux-x86_64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1416,15 +1434,20 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
+            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target x86_64-unknown-linux-musl
+          ln -sfn "$GITHUB_WORKSPACE" alien
+          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
+            --bin alien --target x86_64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/x86_64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/x86_64-unknown-linux-musl/release/${binary}" "staged/x86_64-unknown-linux-musl/${binary}"
           done
+          cp platform/crates/alien-clix/target/x86_64-unknown-linux-musl/release/alien staged/x86_64-unknown-linux-musl/alien
+          staged/x86_64-unknown-linux-musl/alien --help >/dev/null
 
       - name: Upload x86_64 linux binaries
         uses: actions/upload-artifact@v7
@@ -1445,19 +1468,26 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - uses: actions/checkout@v7
+        with:
+          repository: alienplatform/platform
+          ref: ${{ needs.prepare.outputs.platform_ref }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: platform
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
         with:
           path: |
-            target/aarch64-unknown-linux-musl/release/alien
             target/aarch64-unknown-linux-musl/release/alien-deploy
             target/aarch64-unknown-linux-musl/release/alien-operator
             target/aarch64-unknown-linux-musl/release/alien-worker-runtime
             target/aarch64-unknown-linux-musl/release/alien-manager
             target/aarch64-unknown-linux-musl/release/alien-sandbox-agent
+            platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien
           # Bump the -bN suffix whenever the set of cached binaries changes.
-          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-b2
+          key: release-linux-aarch64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: ./.github/actions/setup-rust
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1473,15 +1503,20 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
+            -p alien-deploy-cli -p alien-operator -p alien-worker-runtime -p alien-manager -p alien-sandbox-agent \
             --target aarch64-unknown-linux-musl
+          ln -sfn "$GITHUB_WORKSPACE" alien
+          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
+            --bin alien --target aarch64-unknown-linux-musl
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-unknown-linux-musl
-          for binary in alien alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
+          for binary in alien-deploy alien-operator alien-worker-runtime alien-manager alien-sandbox-agent; do
             cp "target/aarch64-unknown-linux-musl/release/${binary}" "staged/aarch64-unknown-linux-musl/${binary}"
           done
+          cp platform/crates/alien-clix/target/aarch64-unknown-linux-musl/release/alien staged/aarch64-unknown-linux-musl/alien
+          staged/aarch64-unknown-linux-musl/alien --help >/dev/null
 
       - name: Upload aarch64 linux binaries
         uses: actions/upload-artifact@v7
@@ -1504,15 +1539,22 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - uses: actions/checkout@v7
+        with:
+          repository: alienplatform/platform
+          ref: ${{ needs.prepare.outputs.platform_ref }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: platform
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
         with:
           path: |
-            target/aarch64-apple-darwin/release/alien
             target/aarch64-apple-darwin/release/alien-deploy
             target/aarch64-apple-darwin/release/alien-operator
-          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}
+            platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien
+          key: release-darwin-aarch64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1543,15 +1585,20 @@ jobs:
           CARGO_NET_GIT_FETCH_WITH_CLI: "true"
         run: |
           depot cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator \
+            -p alien-deploy-cli -p alien-operator \
             --target aarch64-apple-darwin
+          ln -sfn "$GITHUB_WORKSPACE" alien
+          depot cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
+            --bin alien --target aarch64-apple-darwin
 
       - name: Stage binaries for upload
         run: |
           mkdir -p staged/aarch64-apple-darwin
-          for binary in alien alien-deploy alien-operator; do
+          for binary in alien-deploy alien-operator; do
             cp "target/aarch64-apple-darwin/release/${binary}" "staged/aarch64-apple-darwin/${binary}"
           done
+          cp platform/crates/alien-clix/target/aarch64-apple-darwin/release/alien staged/aarch64-apple-darwin/alien
+          staged/aarch64-apple-darwin/alien --help >/dev/null
 
       - name: Upload aarch64 darwin binaries
         uses: actions/upload-artifact@v7
@@ -1574,15 +1621,22 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.source_ref }}
 
+      - uses: actions/checkout@v7
+        with:
+          repository: alienplatform/platform
+          ref: ${{ needs.prepare.outputs.platform_ref }}
+          token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          path: platform
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
         with:
           path: |
-            target/x86_64-pc-windows-msvc/release/alien.exe
             target/x86_64-pc-windows-msvc/release/alien-deploy.exe
             target/x86_64-pc-windows-msvc/release/alien-operator.exe
-          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}
+            platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe
+          key: release-windows-x86_64-v${{ needs.prepare.outputs.version }}-clix-${{ needs.prepare.outputs.platform_ref }}-b1
 
       - uses: dtolnay/rust-toolchain@nightly
         if: steps.binary-cache.outputs.cache-hit != 'true'
@@ -1615,16 +1669,20 @@ jobs:
         run: |
           export PATH="/c/Program Files/NASM:$PATH"
           cargo build --release \
-            -p alien-cli -p alien-deploy-cli -p alien-operator \
+            -p alien-deploy-cli -p alien-operator \
             --target x86_64-pc-windows-msvc
+          cmd //c "mklink /J alien ."
+          cargo build --release --manifest-path platform/crates/alien-clix/Cargo.toml \
+            --bin alien --target x86_64-pc-windows-msvc
 
       - name: Stage binaries for upload
         shell: bash
         run: |
           mkdir -p staged/x86_64-pc-windows-msvc
-          cp target/x86_64-pc-windows-msvc/release/alien.exe staged/x86_64-pc-windows-msvc/
           cp target/x86_64-pc-windows-msvc/release/alien-deploy.exe staged/x86_64-pc-windows-msvc/
           cp target/x86_64-pc-windows-msvc/release/alien-operator.exe staged/x86_64-pc-windows-msvc/
+          cp platform/crates/alien-clix/target/x86_64-pc-windows-msvc/release/alien.exe staged/x86_64-pc-windows-msvc/
+          staged/x86_64-pc-windows-msvc/alien.exe --help >/dev/null
 
       - name: Upload windows binaries
         uses: actions/upload-artifact@v7
