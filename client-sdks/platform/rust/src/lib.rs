@@ -357,49 +357,31 @@ mod tests {
 
     #[test]
     fn reconcile_state_preserves_runtime_update_metadata() {
-        let state = serde_json::json!({
-            "status": "updating",
-            "platform": "machines",
-            "protocolVersion": 1,
-            "runtimeMetadata": {
-                "directSetupRevision": "setup-revision-2",
-                "pendingPreparedStack": {
-                    "id": "updated-stack",
-                    "resources": {}
-                },
-                "setupUpdateAuthorization": {
-                    "nonce": "nonce-1",
-                    "baselineFrozenDigest": "before",
-                    "targetFrozenDigest": "after",
-                    "releaseId": "rel_123",
-                    "setupTarget": "aws",
-                    "setupFingerprint": "fingerprint",
-                    "setupFingerprintVersion": 1
-                }
+        let runtime_metadata = serde_json::json!({
+            "directSetupRevision": "setup-revision-2",
+            "pendingPreparedStack": {
+                "id": "updated-stack",
+                "resources": {}
+            },
+            "setupUpdateAuthorization": {
+                "nonce": "nonce-1",
+                "baselineFrozenDigest": "before",
+                "targetFrozenDigest": "after",
+                "releaseId": "rel_123",
+                "setupTarget": "aws",
+                "setupFingerprint": "fingerprint",
+                "setupFingerprintVersion": 1
             }
         });
 
-        let request = serde_json::json!({
-            "deploymentId": "dep_0000000000000000000000000000",
-            "state": state
-        });
-        let sdk_request: types::SyncReconcileRequest =
-            serde_json::from_value(request).expect("reconcile request should deserialize");
+        let sdk_metadata: types::DeploymentDetailResponseRuntimeMetadata =
+            serde_json::from_value(runtime_metadata).expect("runtime metadata should deserialize");
         let serialized =
-            serde_json::to_value(sdk_request.state).expect("deployment state should serialize");
+            serde_json::to_value(sdk_metadata).expect("runtime metadata should serialize");
 
-        assert_eq!(
-            serialized["runtimeMetadata"]["directSetupRevision"],
-            "setup-revision-2"
-        );
-        assert_eq!(
-            serialized["runtimeMetadata"]["pendingPreparedStack"]["id"],
-            "updated-stack"
-        );
-        assert_eq!(
-            serialized["runtimeMetadata"]["setupUpdateAuthorization"]["nonce"],
-            "nonce-1"
-        );
+        assert_eq!(serialized["directSetupRevision"], "setup-revision-2");
+        assert_eq!(serialized["pendingPreparedStack"]["id"], "updated-stack");
+        assert_eq!(serialized["setupUpdateAuthorization"]["nonce"], "nonce-1");
     }
 
     #[test]
