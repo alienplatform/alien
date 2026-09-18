@@ -415,6 +415,20 @@ mod tests {
             .await
             .unwrap();
         let dir = tempfile::tempdir().unwrap();
+        let valid = version.is_some() || (status == 200 && pointer == "v1.2.3\n");
+        let installed = dir.path().join(if powershell {
+            "alien-deploy.exe"
+        } else {
+            "alien-deploy"
+        });
+        #[cfg(unix)]
+        if powershell && valid {
+            use std::os::unix::fs::PermissionsExt;
+            // Windows does not need an executable bit. On Unix, pre-create an
+            // executable destination so pwsh can invoke the downloaded fixture.
+            std::fs::write(&installed, "").unwrap();
+            std::fs::set_permissions(&installed, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let script_path = dir.path().join(if powershell {
             "install.ps1"
         } else {
@@ -426,21 +440,16 @@ mod tests {
             command.args(["-NoProfile", "-NonInteractive", "-File"]);
         }
         command.arg(script_path).env("INSTALL_DIR", dir.path());
-        if !powershell {
+        let forward_arguments = !powershell || cfg!(unix);
+        if forward_arguments {
             command.args(["deploy", "space in argument", "--no-browser"]);
         }
         let output = command.output().unwrap();
         channel.assert_hits(usize::from(version.is_none()));
-        let valid = version.is_some() || (status == 200 && pointer == "v1.2.3\n");
         download.assert_hits(usize::from(valid));
-        let installed = dir.path().join(if powershell {
-            "alien-deploy.exe"
-        } else {
-            "alien-deploy"
-        });
         if valid {
             assert_eq!(std::fs::read_to_string(installed).unwrap(), binary);
-            if powershell {
+            if !forward_arguments {
                 assert!(
                     output.status.success(),
                     "{}",
