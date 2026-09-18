@@ -147,6 +147,14 @@ jobs:
         with:
           version: v0.16.0
 
+      - name: Enable sccache for Rust compilation
+        run: |
+          if [[ -x "${SCCACHE_PATH:-}" ]]; then
+            echo "RUSTC_WRAPPER=$SCCACHE_PATH" >> "$GITHUB_ENV"
+          else
+            echo "::warning::sccache is unavailable; using uncached Rust compilation"
+          fi
+
       - uses: taiki-e/install-action@nextest
 
       - uses: oven-sh/setup-bun@v2
