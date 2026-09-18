@@ -99,7 +99,10 @@ test("stable binary releases publish the pinned Platform composition as alien", 
       block,
       new RegExp(`cp platform/crates/alien-clix/target/${target}/release/${binary} `),
     )
-    assert.match(block, new RegExp(`${binary.replace(".", "\\.")} --help >/dev/null`))
+    assert.match(
+      block,
+      new RegExp(`staged/${target}/${binary.replace(".", "\\.")} --help >/dev/null`),
+    )
   }
 
   assert.doesNotMatch(workflow, /-p alien-cli -p alien-deploy-cli/)
