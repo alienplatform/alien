@@ -777,11 +777,13 @@ dependencies = [
  "alien-core",
  "alien-error",
  "alien-operations-sdk",
+ "alien-terraform",
  "indexmap 2.14.1",
  "insta",
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
@@ -1059,6 +1061,7 @@ dependencies = [
  "alien-deployment",
  "alien-error",
  "alien-infra",
+ "alien-k8s-clients",
  "alien-local",
  "alien-manager-api",
  "async-trait",

@@ -23,6 +23,8 @@
 //! When no brand is set it falls back to the Alien defaults
 //! (`accessrequests.alien` / `AlienAccessRequest`).
 
+use crate::DEFAULT_ALIEN_LABEL_DOMAIN;
+
 /// The default (unbranded) slug the access-request CRD lives under.
 pub const DEFAULT_BRAND: &str = "alien";
 
@@ -82,7 +84,7 @@ pub fn access_request_crd_names(brand_name: Option<&str>) -> AccessRequestCrdNam
 /// The lowercase alphanumeric brand slug from a name's first dot-separated
 /// label (so a real domain's first label still works as input), with any
 /// remaining non-alphanumerics (spaces, punctuation) stripped out.
-fn brand_slug(name: &str) -> String {
+pub fn brand_slug(name: &str) -> String {
     let first_label = name.split('.').next().unwrap_or(name);
     let slug: String = first_label
         .chars()
@@ -94,6 +96,42 @@ fn brand_slug(name: &str) -> String {
     } else {
         slug
     }
+}
+
+/// Returns the DNS-safe label domain used by current Kubernetes resources.
+pub fn current_kubernetes_label_domain(configured: &str) -> String {
+    if configured == DEFAULT_ALIEN_LABEL_DOMAIN {
+        configured.to_string()
+    } else {
+        brand_slug(configured)
+    }
+}
+
+/// Returns a valid, distinct legacy label domain for a branded deployment.
+pub fn explicit_legacy_kubernetes_label_domain(configured: &str) -> Option<&str> {
+    let current = current_kubernetes_label_domain(configured);
+    (configured != current && is_valid_kubernetes_label_domain(configured)).then_some(configured)
+}
+
+/// Whether a value can safely serve as the domain portion of a Kubernetes label key.
+pub fn is_valid_kubernetes_label_domain(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value.split('.').all(|label| {
+            !label.is_empty()
+                && label.len() <= 63
+                && label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+                && label
+                    .as_bytes()
+                    .first()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+                && label
+                    .as_bytes()
+                    .last()
+                    .is_some_and(u8::is_ascii_alphanumeric)
+        })
 }
 
 /// Capitalize the first character (ASCII).

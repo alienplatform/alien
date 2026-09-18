@@ -24,7 +24,7 @@ use tracing::info;
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 #[cfg(feature = "aws")]
 use crate::core::split_certificate_chain;
-use crate::core::ResourceControllerContext;
+use crate::core::{kubernetes_cleanup_resource_labels, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 
 const ENDPOINT_WAIT: Duration = Duration::from_secs(10);
@@ -66,6 +66,7 @@ pub(crate) struct KubernetesPublicEndpointTarget<'a> {
     pub(crate) target_port: u16,
     pub(crate) health_check_path: Option<String>,
     pub(crate) public: bool,
+    pub(crate) deployment_labels: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,13 +123,22 @@ struct ManagedAcmCertificateInput {
 
 pub(crate) async fn reconcile_kubernetes_public_endpoint(
     ctx: &ResourceControllerContext<'_>,
-    target: KubernetesPublicEndpointTarget<'_>,
+    mut target: KubernetesPublicEndpointTarget<'_>,
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<KubernetesEndpointAction> {
+    target.deployment_labels = kubernetes_cleanup_resource_labels(ctx, target.resource_id);
     let mut plan = match resolve_endpoint_plan(ctx, &target)? {
         EndpointPlanResolution::Disabled => {
-            delete_kubernetes_public_endpoint(ctx, target.resource_id, target.namespace, state)
-                .await?;
+            delete_kubernetes_public_endpoint(
+                ctx,
+                target.resource_id,
+                target.namespace,
+                target.workload_name,
+                target.component,
+                true,
+                state,
+            )
+            .await?;
             state.public_url = None;
             state.load_balancer_endpoint = None;
             return Ok(KubernetesEndpointAction::Ready);
@@ -146,6 +156,8 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
     let previous_gke_health_check_policy_name = state.gke_health_check_policy_name.clone();
     let previous_azure_health_check_policy_name = state.azure_health_check_policy_name.clone();
     let previous_managed_tls_secret_name = state.managed_tls_secret_name.clone();
+    let previous_managed_tls_certificate_id = state.published_certificate_id.clone();
+    let mut pending_state = state.clone();
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
@@ -167,7 +179,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
         target.resource_id,
     )
     .await?;
-    state.service_name = Some(service_name.clone());
+    pending_state.service_name = Some(service_name.clone());
 
     let mut active_managed_tls_secret_name = None;
     let mut active_managed_acm_certificate = false;
@@ -192,11 +204,14 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 certificate_id,
                 issued_at.as_deref(),
                 target.resource_id,
+                endpoint_labels(&target, name),
+                previous_managed_tls_secret_name.as_deref(),
+                previous_managed_tls_certificate_id.as_deref(),
             )
             .await?;
-            state.managed_tls_secret_name = Some(name.clone());
-            state.published_certificate_id = Some(certificate_id.clone());
-            state.published_certificate_issued_at = issued_at.clone();
+            pending_state.managed_tls_secret_name = Some(name.clone());
+            pending_state.published_certificate_id = Some(certificate_id.clone());
+            pending_state.published_certificate_issued_at = issued_at.clone();
             active_managed_tls_secret_name = Some(name.clone());
             Some(KubernetesTlsSecretRef {
                 secret_name: name.clone(),
@@ -248,7 +263,7 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             let certificate_arn = publish_managed_acm_certificate(
                 ctx,
                 &target,
-                state,
+                &mut pending_state,
                 ManagedAcmCertificateInput {
                     region: region.clone(),
                     tags: tags.clone(),
@@ -284,11 +299,11 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 target.resource_id,
             )
             .await?;
-            state.ingress_name = Some(ingress_name.clone());
-            state.gateway_name = None;
-            state.http_route_name = None;
-            state.gke_health_check_policy_name = None;
-            state.azure_health_check_policy_name = None;
+            pending_state.ingress_name = Some(ingress_name.clone());
+            pending_state.gateway_name = None;
+            pending_state.http_route_name = None;
+            pending_state.gke_health_check_policy_name = None;
+            pending_state.azure_health_check_policy_name = None;
             observe_ingress_endpoint(&route_client, target.namespace, &ingress_name, profile)
                 .await?
         }
@@ -356,19 +371,21 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
                 )
                 .await?;
             }
-            state.gateway_name = Some(gateway_name.clone());
-            state.http_route_name = Some(route_name);
-            state.gke_health_check_policy_name = health_check_policy_name;
-            state.azure_health_check_policy_name = azure_health_check_policy_name;
-            state.ingress_name = None;
+            pending_state.gateway_name = Some(gateway_name.clone());
+            pending_state.http_route_name = Some(route_name);
+            pending_state.gke_health_check_policy_name = health_check_policy_name;
+            pending_state.azure_health_check_policy_name = azure_health_check_policy_name;
+            pending_state.ingress_name = None;
             observe_gateway_endpoint(&route_client, target.namespace, &gateway_name).await?
         }
     };
 
-    cleanup_stale_endpoint_objects(
+    let cleanup_result = cleanup_stale_endpoint_objects(
         ctx,
         target.namespace,
         target.resource_id,
+        target.workload_name,
+        target.component,
         &route_client,
         PreviousEndpointObjects {
             ingress_name: previous_ingress_name,
@@ -377,19 +394,33 @@ pub(crate) async fn reconcile_kubernetes_public_endpoint(
             gke_health_check_policy_name: previous_gke_health_check_policy_name,
             azure_health_check_policy_name: previous_azure_health_check_policy_name,
             managed_tls_secret_name: previous_managed_tls_secret_name,
+            managed_tls_certificate_id: previous_managed_tls_certificate_id,
         },
         ActiveEndpointObjects {
-            ingress_name: state.ingress_name.clone(),
-            gateway_name: state.gateway_name.clone(),
-            http_route_name: state.http_route_name.clone(),
-            gke_health_check_policy_name: state.gke_health_check_policy_name.clone(),
-            azure_health_check_policy_name: state.azure_health_check_policy_name.clone(),
+            ingress_name: pending_state.ingress_name.clone(),
+            gateway_name: pending_state.gateway_name.clone(),
+            http_route_name: pending_state.http_route_name.clone(),
+            gke_health_check_policy_name: pending_state.gke_health_check_policy_name.clone(),
+            azure_health_check_policy_name: pending_state.azure_health_check_policy_name.clone(),
             managed_tls_secret_name: active_managed_tls_secret_name,
             managed_acm_certificate: active_managed_acm_certificate,
         },
-        state,
+        &mut pending_state,
     )
-    .await?;
+    .await;
+    if let Err(error) = cleanup_result {
+        // ACM imports have provider-assigned identities and must survive a
+        // retry even when stale Kubernetes cleanup fails. Route and Secret
+        // names remain at their previous values so the retry still knows
+        // exactly which stale objects to remove.
+        if active_managed_acm_certificate {
+            state.managed_acm_certificate_arn = pending_state.managed_acm_certificate_arn;
+            state.published_certificate_id = pending_state.published_certificate_id;
+            state.published_certificate_issued_at = pending_state.published_certificate_issued_at;
+        }
+        return Err(error);
+    }
+    *state = pending_state;
 
     let Some(endpoint) = endpoint else {
         state.public_url = None;
@@ -432,6 +463,9 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
     ctx: &ResourceControllerContext<'_>,
     resource_id: &str,
     namespace: &str,
+    workload_name: &str,
+    component: &str,
+    legacy_owner_proven: bool,
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
@@ -447,54 +481,257 @@ pub(crate) async fn delete_kubernetes_public_endpoint(
         .service_provider
         .get_kubernetes_secrets_client(kubernetes_config)
         .await?;
+    let desired_scope = kubernetes_cleanup_resource_labels(ctx, resource_id);
 
-    if let Some(route_name) = state.http_route_name.take() {
-        delete_not_found_ok(
-            route_client.delete_http_route(namespace, &route_name).await,
+    if let Some(route_name) = state.http_route_name.clone() {
+        match get_endpoint_object_or_none(
+            route_client.get_http_route(namespace, &route_name).await,
             &route_name,
-        )?;
+        )? {
+            None => state.http_route_name = None,
+            Some(object)
+                if endpoint_json_has_delete_owner(&object, &desired_scope, &route_name)
+                    || (legacy_owner_proven
+                        && endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &route_name,
+                            workload_name,
+                            component,
+                        )) =>
+            {
+                delete_not_found_ok(
+                    route_client.delete_http_route(namespace, &route_name).await,
+                    &route_name,
+                )?;
+                state.http_route_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "HTTPRoute",
+                    &route_name,
+                    resource_id,
+                ))
+            }
+        }
     }
-    if let Some(policy_name) = state.gke_health_check_policy_name.take() {
-        delete_not_found_ok(
+    if let Some(policy_name) = state.gke_health_check_policy_name.clone() {
+        match get_endpoint_object_or_none(
             route_client
-                .delete_gke_health_check_policy(namespace, &policy_name)
+                .get_gke_health_check_policy(namespace, &policy_name)
                 .await,
             &policy_name,
-        )?;
+        )? {
+            None => state.gke_health_check_policy_name = None,
+            Some(object)
+                if endpoint_json_has_delete_owner(&object, &desired_scope, &policy_name)
+                    || (legacy_owner_proven
+                        && endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &policy_name,
+                            workload_name,
+                            component,
+                        )) =>
+            {
+                delete_not_found_ok(
+                    route_client
+                        .delete_gke_health_check_policy(namespace, &policy_name)
+                        .await,
+                    &policy_name,
+                )?;
+                state.gke_health_check_policy_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "GKE HealthCheckPolicy",
+                    &policy_name,
+                    resource_id,
+                ));
+            }
+        }
     }
-    if let Some(policy_name) = state.azure_health_check_policy_name.take() {
-        delete_not_found_ok(
+    if let Some(policy_name) = state.azure_health_check_policy_name.clone() {
+        match get_endpoint_object_or_none(
             route_client
-                .delete_azure_health_check_policy(namespace, &policy_name)
+                .get_azure_health_check_policy(namespace, &policy_name)
                 .await,
             &policy_name,
-        )?;
+        )? {
+            None => state.azure_health_check_policy_name = None,
+            Some(object)
+                if endpoint_json_has_delete_owner(&object, &desired_scope, &policy_name)
+                    || (legacy_owner_proven
+                        && endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &policy_name,
+                            workload_name,
+                            component,
+                        )) =>
+            {
+                delete_not_found_ok(
+                    route_client
+                        .delete_azure_health_check_policy(namespace, &policy_name)
+                        .await,
+                    &policy_name,
+                )?;
+                state.azure_health_check_policy_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "Azure HealthCheckPolicy",
+                    &policy_name,
+                    resource_id,
+                ));
+            }
+        }
     }
-    if let Some(gateway_name) = state.gateway_name.take() {
-        delete_not_found_ok(
-            route_client.delete_gateway(namespace, &gateway_name).await,
+    if let Some(gateway_name) = state.gateway_name.clone() {
+        match get_endpoint_object_or_none(
+            route_client.get_gateway(namespace, &gateway_name).await,
             &gateway_name,
-        )?;
+        )? {
+            None => state.gateway_name = None,
+            Some(object)
+                if endpoint_json_has_delete_owner(&object, &desired_scope, &gateway_name)
+                    || (legacy_owner_proven
+                        && endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &gateway_name,
+                            workload_name,
+                            component,
+                        )) =>
+            {
+                delete_not_found_ok(
+                    route_client.delete_gateway(namespace, &gateway_name).await,
+                    &gateway_name,
+                )?;
+                state.gateway_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "Gateway",
+                    &gateway_name,
+                    resource_id,
+                ));
+            }
+        }
     }
-    if let Some(ingress_name) = state.ingress_name.take() {
-        delete_not_found_ok(
-            route_client.delete_ingress(namespace, &ingress_name).await,
+    if let Some(ingress_name) = state.ingress_name.clone() {
+        match get_endpoint_object_or_none(
+            route_client.get_ingress(namespace, &ingress_name).await,
             &ingress_name,
-        )?;
+        )? {
+            None => state.ingress_name = None,
+            Some(object)
+                if endpoint_labels_match_delete_owner(
+                    object.metadata.labels.as_ref(),
+                    &desired_scope,
+                    &ingress_name,
+                ) || (legacy_owner_proven
+                    && endpoint_labels_match_legacy_delete_owner(
+                        object.metadata.labels.as_ref(),
+                        &ingress_name,
+                        workload_name,
+                        component,
+                    )) =>
+            {
+                delete_not_found_ok(
+                    route_client.delete_ingress(namespace, &ingress_name).await,
+                    &ingress_name,
+                )?;
+                state.ingress_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "Ingress",
+                    &ingress_name,
+                    resource_id,
+                ));
+            }
+        }
     }
-    if let Some(service_name) = state.service_name.take() {
-        delete_not_found_ok(
-            service_client
-                .delete_service(namespace, &service_name)
-                .await,
+    if let Some(service_name) = state.service_name.clone() {
+        match get_endpoint_object_or_none(
+            service_client.get_service(namespace, &service_name).await,
             &service_name,
-        )?;
+        )? {
+            None => state.service_name = None,
+            Some(object)
+                if endpoint_labels_match_delete_owner(
+                    object.metadata.labels.as_ref(),
+                    &desired_scope,
+                    &service_name,
+                ) || (legacy_owner_proven
+                    && endpoint_labels_match_legacy_delete_owner(
+                        object.metadata.labels.as_ref(),
+                        &service_name,
+                        workload_name,
+                        component,
+                    )) =>
+            {
+                delete_not_found_ok(
+                    service_client
+                        .delete_service(namespace, &service_name)
+                        .await,
+                    &service_name,
+                )?;
+                state.service_name = None;
+            }
+            Some(_) => {
+                return Err(endpoint_delete_refusal(
+                    "Service",
+                    &service_name,
+                    resource_id,
+                ));
+            }
+        }
     }
-    if let Some(secret_name) = state.managed_tls_secret_name.take() {
-        delete_not_found_ok(
-            secrets_client.delete_secret(namespace, &secret_name).await,
+    if let Some(secret_name) = state.managed_tls_secret_name.clone() {
+        match get_endpoint_object_or_none(
+            secrets_client.get_secret(namespace, &secret_name).await,
             &secret_name,
-        )?;
+        )? {
+            None => state.managed_tls_secret_name = None,
+            Some(object) => {
+                let certificate_matches =
+                    state
+                        .published_certificate_id
+                        .as_deref()
+                        .is_some_and(|certificate_id| {
+                            object
+                                .metadata
+                                .annotations
+                                .as_ref()
+                                .and_then(|annotations| annotations.get("certificate-id"))
+                                .map(String::as_str)
+                                == Some(certificate_id)
+                        });
+                let current_owner = endpoint_labels_match_delete_owner(
+                    object.metadata.labels.as_ref(),
+                    &desired_scope,
+                    &secret_name,
+                );
+                let legacy_owner = object
+                    .metadata
+                    .labels
+                    .as_ref()
+                    .is_none_or(BTreeMap::is_empty);
+                if object.type_.as_deref() != Some("kubernetes.io/tls")
+                    || !certificate_matches
+                    || !(current_owner || legacy_owner)
+                {
+                    return Err(endpoint_delete_refusal(
+                        "TLS Secret",
+                        &secret_name,
+                        resource_id,
+                    ));
+                }
+                delete_not_found_ok(
+                    secrets_client.delete_secret(namespace, &secret_name).await,
+                    &secret_name,
+                )?;
+                state.managed_tls_secret_name = None;
+            }
+        }
     }
     delete_managed_acm_certificate(ctx, resource_id, state).await?;
 
@@ -512,6 +749,7 @@ struct PreviousEndpointObjects {
     gke_health_check_policy_name: Option<String>,
     azure_health_check_policy_name: Option<String>,
     managed_tls_secret_name: Option<String>,
+    managed_tls_certificate_id: Option<String>,
 }
 
 struct ActiveEndpointObjects {
@@ -528,53 +766,178 @@ async fn cleanup_stale_endpoint_objects(
     ctx: &ResourceControllerContext<'_>,
     namespace: &str,
     resource_id: &str,
+    workload_name: &str,
+    component: &str,
     route_client: &std::sync::Arc<dyn alien_k8s_clients::RouteApi>,
     previous: PreviousEndpointObjects,
     active: ActiveEndpointObjects,
     state: &mut KubernetesPublicEndpointState,
 ) -> Result<()> {
+    let desired_scope = kubernetes_cleanup_resource_labels(ctx, resource_id);
     if let Some(route_name) = previous.http_route_name {
         if Some(route_name.as_str()) != active.http_route_name.as_deref() {
-            delete_not_found_ok(
-                route_client.delete_http_route(namespace, &route_name).await,
+            match get_endpoint_object_or_none(
+                route_client.get_http_route(namespace, &route_name).await,
                 &route_name,
-            )?;
+            )? {
+                None => {}
+                Some(object)
+                    if endpoint_json_has_delete_owner(&object, &desired_scope, &route_name)
+                        || endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &route_name,
+                            workload_name,
+                            component,
+                        ) =>
+                {
+                    delete_not_found_ok(
+                        route_client.delete_http_route(namespace, &route_name).await,
+                        &route_name,
+                    )?;
+                }
+                Some(_) => {
+                    return Err(endpoint_delete_refusal(
+                        "HTTPRoute",
+                        &route_name,
+                        resource_id,
+                    ))
+                }
+            }
         }
     }
     if let Some(policy_name) = previous.gke_health_check_policy_name {
         if Some(policy_name.as_str()) != active.gke_health_check_policy_name.as_deref() {
-            delete_not_found_ok(
+            match get_endpoint_object_or_none(
                 route_client
-                    .delete_gke_health_check_policy(namespace, &policy_name)
+                    .get_gke_health_check_policy(namespace, &policy_name)
                     .await,
                 &policy_name,
-            )?;
+            )? {
+                None => {}
+                Some(object)
+                    if endpoint_json_has_delete_owner(&object, &desired_scope, &policy_name)
+                        || endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &policy_name,
+                            workload_name,
+                            component,
+                        ) =>
+                {
+                    delete_not_found_ok(
+                        route_client
+                            .delete_gke_health_check_policy(namespace, &policy_name)
+                            .await,
+                        &policy_name,
+                    )?;
+                }
+                Some(_) => {
+                    return Err(endpoint_delete_refusal(
+                        "GKE HealthCheckPolicy",
+                        &policy_name,
+                        resource_id,
+                    ))
+                }
+            }
         }
     }
     if let Some(policy_name) = previous.azure_health_check_policy_name {
         if Some(policy_name.as_str()) != active.azure_health_check_policy_name.as_deref() {
-            delete_not_found_ok(
+            match get_endpoint_object_or_none(
                 route_client
-                    .delete_azure_health_check_policy(namespace, &policy_name)
+                    .get_azure_health_check_policy(namespace, &policy_name)
                     .await,
                 &policy_name,
-            )?;
+            )? {
+                None => {}
+                Some(object)
+                    if endpoint_json_has_delete_owner(&object, &desired_scope, &policy_name)
+                        || endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &policy_name,
+                            workload_name,
+                            component,
+                        ) =>
+                {
+                    delete_not_found_ok(
+                        route_client
+                            .delete_azure_health_check_policy(namespace, &policy_name)
+                            .await,
+                        &policy_name,
+                    )?;
+                }
+                Some(_) => {
+                    return Err(endpoint_delete_refusal(
+                        "Azure HealthCheckPolicy",
+                        &policy_name,
+                        resource_id,
+                    ))
+                }
+            }
         }
     }
     if let Some(gateway_name) = previous.gateway_name {
         if Some(gateway_name.as_str()) != active.gateway_name.as_deref() {
-            delete_not_found_ok(
-                route_client.delete_gateway(namespace, &gateway_name).await,
+            match get_endpoint_object_or_none(
+                route_client.get_gateway(namespace, &gateway_name).await,
                 &gateway_name,
-            )?;
+            )? {
+                None => {}
+                Some(object)
+                    if endpoint_json_has_delete_owner(&object, &desired_scope, &gateway_name)
+                        || endpoint_json_has_legacy_delete_owner(
+                            &object,
+                            &gateway_name,
+                            workload_name,
+                            component,
+                        ) =>
+                {
+                    delete_not_found_ok(
+                        route_client.delete_gateway(namespace, &gateway_name).await,
+                        &gateway_name,
+                    )?;
+                }
+                Some(_) => {
+                    return Err(endpoint_delete_refusal(
+                        "Gateway",
+                        &gateway_name,
+                        resource_id,
+                    ))
+                }
+            }
         }
     }
     if let Some(ingress_name) = previous.ingress_name {
         if Some(ingress_name.as_str()) != active.ingress_name.as_deref() {
-            delete_not_found_ok(
-                route_client.delete_ingress(namespace, &ingress_name).await,
+            match get_endpoint_object_or_none(
+                route_client.get_ingress(namespace, &ingress_name).await,
                 &ingress_name,
-            )?;
+            )? {
+                None => {}
+                Some(object)
+                    if endpoint_labels_match_delete_owner(
+                        object.metadata.labels.as_ref(),
+                        &desired_scope,
+                        &ingress_name,
+                    ) || endpoint_labels_match_legacy_delete_owner(
+                        object.metadata.labels.as_ref(),
+                        &ingress_name,
+                        workload_name,
+                        component,
+                    ) =>
+                {
+                    delete_not_found_ok(
+                        route_client.delete_ingress(namespace, &ingress_name).await,
+                        &ingress_name,
+                    )?;
+                }
+                Some(_) => {
+                    return Err(endpoint_delete_refusal(
+                        "Ingress",
+                        &ingress_name,
+                        resource_id,
+                    ))
+                }
+            }
         }
     }
 
@@ -585,10 +948,50 @@ async fn cleanup_stale_endpoint_objects(
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            delete_not_found_ok(
-                secrets_client.delete_secret(namespace, &secret_name).await,
+            match get_endpoint_object_or_none(
+                secrets_client.get_secret(namespace, &secret_name).await,
                 &secret_name,
-            )?;
+            )? {
+                None => {}
+                Some(object) => {
+                    let certificate_matches = previous
+                        .managed_tls_certificate_id
+                        .as_deref()
+                        .is_some_and(|certificate_id| {
+                            object
+                                .metadata
+                                .annotations
+                                .as_ref()
+                                .and_then(|annotations| annotations.get("certificate-id"))
+                                .map(String::as_str)
+                                == Some(certificate_id)
+                        });
+                    let current_owner = endpoint_labels_match_delete_owner(
+                        object.metadata.labels.as_ref(),
+                        &desired_scope,
+                        &secret_name,
+                    );
+                    let legacy_owner = object
+                        .metadata
+                        .labels
+                        .as_ref()
+                        .is_none_or(BTreeMap::is_empty);
+                    if object.type_.as_deref() != Some("kubernetes.io/tls")
+                        || !certificate_matches
+                        || !(current_owner || legacy_owner)
+                    {
+                        return Err(endpoint_delete_refusal(
+                            "TLS Secret",
+                            &secret_name,
+                            resource_id,
+                        ));
+                    }
+                    delete_not_found_ok(
+                        secrets_client.delete_secret(namespace, &secret_name).await,
+                        &secret_name,
+                    )?;
+                }
+            }
         }
     }
     state.managed_tls_secret_name = active.managed_tls_secret_name;
@@ -750,6 +1153,7 @@ pub(crate) fn worker_public_endpoint_target<'a>(
         target_port: 8080,
         health_check_path: health_check_path.map(ToString::to_string),
         public,
+        deployment_labels: BTreeMap::new(),
     }
 }
 
@@ -778,6 +1182,7 @@ pub(crate) fn daemon_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        deployment_labels: BTreeMap::new(),
     })
 }
 
@@ -804,6 +1209,7 @@ pub(crate) fn container_public_endpoint_target<'a>(
         target_port: http_port.unwrap_or(80),
         health_check_path: health_check_path.map(ToString::to_string),
         public: http_port.is_some(),
+        deployment_labels: BTreeMap::new(),
     })
 }
 
@@ -1374,6 +1780,13 @@ async fn upsert_service(
                     resource_id: Some(resource_id.to_string()),
                 },
             )?;
+            ensure_endpoint_labels_allow_adoption(
+                existing.metadata.labels.as_ref(),
+                service.metadata.labels.as_ref(),
+                "Service",
+                name,
+                resource_id,
+            )?;
             service.metadata.resource_version = existing.metadata.resource_version;
             client
                 .update_service(namespace, name, &service)
@@ -1400,6 +1813,9 @@ async fn upsert_tls_secret(
     certificate_id: &str,
     issued_at: Option<&str>,
     resource_id: &str,
+    labels: BTreeMap<String, String>,
+    previous_managed_name: Option<&str>,
+    previous_certificate_id: Option<&str>,
 ) -> Result<()> {
     let mut annotations = BTreeMap::new();
     annotations.insert("certificate-id".to_string(), certificate_id.to_string());
@@ -1411,6 +1827,7 @@ async fn upsert_tls_secret(
         metadata: ObjectMeta {
             name: Some(name.to_string()),
             namespace: Some(namespace.to_string()),
+            labels: Some(labels),
             annotations: Some(annotations),
             ..Default::default()
         },
@@ -1437,6 +1854,38 @@ async fn upsert_tls_secret(
                     resource_id: Some(resource_id.to_string()),
                 },
             )?;
+            let scoped_owner = ensure_endpoint_labels_allow_adoption(
+                existing.metadata.labels.as_ref(),
+                secret.metadata.labels.as_ref(),
+                "Secret",
+                name,
+                resource_id,
+            );
+            let existing_certificate_id = existing
+                .metadata
+                .annotations
+                .as_ref()
+                .and_then(|annotations| annotations.get("certificate-id"))
+                .map(String::as_str);
+            let legacy_owner_proven = existing
+                .metadata
+                .labels
+                .as_ref()
+                .is_none_or(BTreeMap::is_empty)
+                && previous_managed_name == Some(name)
+                && previous_certificate_id.is_some()
+                && existing_certificate_id == previous_certificate_id;
+            if existing.type_.as_deref() != Some("kubernetes.io/tls") {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to mutate Kubernetes TLS Secret '{name}' because it is not a TLS Secret owned by public endpoint resource '{resource_id}'"
+                    ),
+                    resource_id: Some(resource_id.to_string()),
+                }));
+            }
+            if !legacy_owner_proven {
+                scoped_owner?;
+            }
             secret.metadata.resource_version = existing.metadata.resource_version;
             client
                 .update_secret(namespace, name, &secret)
@@ -1469,6 +1918,13 @@ async fn upsert_ingress(
                     message: format!("Failed to get Ingress '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
                 },
+            )?;
+            ensure_endpoint_labels_allow_adoption(
+                existing.metadata.labels.as_ref(),
+                ingress.metadata.labels.as_ref(),
+                "Ingress",
+                name,
+                resource_id,
             )?;
             ingress.metadata.resource_version = existing.metadata.resource_version;
             client
@@ -1503,6 +1959,13 @@ async fn upsert_gateway(
                     resource_id: Some(resource_id.to_string()),
                 },
             )?;
+            ensure_endpoint_json_labels_allow_adoption(
+                &existing,
+                &gateway,
+                "Gateway",
+                name,
+                resource_id,
+            )?;
             copy_resource_version(&mut gateway, &existing);
             client
                 .update_gateway(namespace, name, &gateway)
@@ -1535,6 +1998,13 @@ async fn upsert_http_route(
                     message: format!("Failed to get HTTPRoute '{}' before update", name),
                     resource_id: Some(resource_id.to_string()),
                 },
+            )?;
+            ensure_endpoint_json_labels_allow_adoption(
+                &existing,
+                &route,
+                "HTTPRoute",
+                name,
+                resource_id,
             )?;
             copy_resource_version(&mut route, &existing);
             client
@@ -1576,6 +2046,13 @@ async fn upsert_gke_health_check_policy(
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            ensure_endpoint_json_labels_allow_adoption(
+                &existing,
+                &policy,
+                "GKE HealthCheckPolicy",
+                name,
+                resource_id,
+            )?;
             copy_resource_version(&mut policy, &existing);
             client
                 .update_gke_health_check_policy(namespace, name, &policy)
@@ -1616,6 +2093,13 @@ async fn upsert_azure_health_check_policy(
                     ),
                     resource_id: Some(resource_id.to_string()),
                 })?;
+            ensure_endpoint_json_labels_allow_adoption(
+                &existing,
+                &policy,
+                "Azure HealthCheckPolicy",
+                name,
+                resource_id,
+            )?;
             copy_resource_version(&mut policy, &existing);
             client
                 .update_azure_health_check_policy(namespace, name, &policy)
@@ -1829,26 +2313,158 @@ fn delete_not_found_ok(result: alien_client_core::Result<()>, name: &str) -> Res
     }
 }
 
+fn get_endpoint_object_or_none<T>(
+    result: alien_client_core::Result<T>,
+    name: &str,
+) -> Result<Option<T>> {
+    match result {
+        Ok(object) => Ok(Some(object)),
+        Err(error)
+            if matches!(
+                error.error,
+                Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+            ) =>
+        {
+            Ok(None)
+        }
+        Err(error) => Err(error.context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to inspect Kubernetes public endpoint object '{name}' before deletion"
+            ),
+            resource_id: None,
+        })),
+    }
+}
+
+fn endpoint_json_has_delete_owner(
+    object: &Value,
+    desired_scope: &BTreeMap<String, String>,
+    name: &str,
+) -> bool {
+    let labels = json_labels(object);
+    endpoint_labels_match_delete_owner(labels.as_ref(), desired_scope, name)
+}
+
+fn endpoint_json_has_legacy_delete_owner(
+    object: &Value,
+    name: &str,
+    workload_name: &str,
+    component: &str,
+) -> bool {
+    let labels = json_labels(object);
+    endpoint_labels_match_legacy_delete_owner(labels.as_ref(), name, workload_name, component)
+}
+
+fn endpoint_labels_match_delete_owner(
+    existing: Option<&BTreeMap<String, String>>,
+    desired_scope: &BTreeMap<String, String>,
+    name: &str,
+) -> bool {
+    existing.is_some_and(|labels| {
+        labels.get("managed-by").map(String::as_str) == Some("runtime")
+            && labels.get("endpoint").map(String::as_str) == Some(name)
+            && desired_scope
+                .iter()
+                .all(|(key, value)| labels.get(key) == Some(value))
+    })
+}
+
+fn endpoint_labels_match_legacy_delete_owner(
+    existing: Option<&BTreeMap<String, String>>,
+    name: &str,
+    workload_name: &str,
+    component: &str,
+) -> bool {
+    !workload_name.is_empty()
+        && existing.is_some_and(|labels| {
+            !labels.keys().any(|key| key.ends_with("/deployment"))
+                && labels.get("managed-by").map(String::as_str) == Some("runtime")
+                && labels.get("endpoint").map(String::as_str) == Some(name)
+                && labels.get("app").map(String::as_str) == Some(workload_name)
+                && labels.get("component").map(String::as_str) == Some(component)
+        })
+}
+
+fn endpoint_delete_refusal(kind: &str, name: &str, resource_id: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ResourceConfigInvalid {
+        message: format!(
+            "Refusing to delete Kubernetes {kind} '{name}' because it is not owned by public endpoint resource '{resource_id}' in this deployment"
+        ),
+        resource_id: Some(resource_id.to_string()),
+    })
+}
+
 fn endpoint_labels(
     target: &KubernetesPublicEndpointTarget<'_>,
     name: &str,
 ) -> BTreeMap<String, String> {
-    BTreeMap::from([
+    let mut labels = BTreeMap::from([
         ("app".to_string(), target.workload_name.to_string()),
         ("component".to_string(), target.component.to_string()),
         ("managed-by".to_string(), "runtime".to_string()),
         ("endpoint".to_string(), name.to_string()),
-    ])
+    ]);
+    labels.extend(target.deployment_labels.clone());
+    labels
+}
+
+fn ensure_endpoint_labels_allow_adoption(
+    existing: Option<&BTreeMap<String, String>>,
+    desired: Option<&BTreeMap<String, String>>,
+    kind: &str,
+    name: &str,
+    resource_id: &str,
+) -> Result<()> {
+    let desired = desired.cloned().unwrap_or_default();
+    if crate::core::kubernetes_labels_match_identity(
+        existing,
+        &desired,
+        &["managed-by", "component", "app", "endpoint"],
+    ) && crate::core::kubernetes_labels_have_compatible_scope(existing, &desired)
+    {
+        return Ok(());
+    }
+
+    Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+        message: format!(
+            "Refusing to mutate Kubernetes {kind} '{name}' because it is not owned by public endpoint resource '{resource_id}' in this deployment"
+        ),
+        resource_id: Some(resource_id.to_string()),
+    }))
+}
+
+fn json_labels(value: &Value) -> Option<BTreeMap<String, String>> {
+    value
+        .pointer("/metadata/labels")
+        .cloned()
+        .and_then(|labels| serde_json::from_value(labels).ok())
+}
+
+fn ensure_endpoint_json_labels_allow_adoption(
+    existing: &Value,
+    desired: &Value,
+    kind: &str,
+    name: &str,
+    resource_id: &str,
+) -> Result<()> {
+    let existing_labels = json_labels(existing);
+    let desired_labels = json_labels(desired);
+    ensure_endpoint_labels_allow_adoption(
+        existing_labels.as_ref(),
+        desired_labels.as_ref(),
+        kind,
+        name,
+        resource_id,
+    )
 }
 
 fn merge_labels(
-    mut base: BTreeMap<String, String>,
+    base: BTreeMap<String, String>,
     extra: &HashMap<String, String>,
 ) -> BTreeMap<String, String> {
-    for (key, value) in extra {
-        base.insert(key.clone(), value.clone());
-    }
-    base
+    let mut labels = btree_from_hash(extra);
+    labels.extend(base);
+    labels
 }
 
 fn btree_from_hash(values: &HashMap<String, String>) -> BTreeMap<String, String> {
@@ -1937,6 +2553,10 @@ mod tests {
             target_port: 8080,
             health_check_path: None,
             public: true,
+            deployment_labels: BTreeMap::from([(
+                "alien.dev/deployment".to_string(),
+                "test-release".to_string(),
+            )]),
         }
     }
 
@@ -1967,6 +2587,12 @@ mod tests {
     #[test]
     fn ingress_with_byo_acm_arn_sets_alb_certificate_annotation() {
         let target = endpoint_target();
+        let mut profile_labels = HashMap::new();
+        profile_labels.insert(
+            "alien.dev/deployment".to_string(),
+            "attacker-selected".to_string(),
+        );
+        profile_labels.insert("custom".to_string(), "kept".to_string());
         let plan = EndpointPlan {
             hostname: Some("api.example.com".to_string()),
             public_url: Some("https://api.example.com".to_string()),
@@ -1978,6 +2604,7 @@ mod tests {
                     ip_address_type: None,
                     subnet_ids: vec![],
                 }),
+                labels: profile_labels,
                 ..Default::default()
             }),
             certificate: EndpointCertificate::AwsAcmArn(
@@ -1999,6 +2626,13 @@ mod tests {
             annotations.get("alb.ingress.kubernetes.io/certificate-arn"),
             Some(&"arn:aws:acm:us-east-1:123456789012:certificate/customer".to_string())
         );
+        let labels = ingress.metadata.labels.expect("ingress labels");
+        assert_eq!(
+            labels.get("alien.dev/deployment").map(String::as_str),
+            Some("test-release"),
+            "custom route labels must not override cleanup ownership"
+        );
+        assert_eq!(labels.get("custom").map(String::as_str), Some("kept"));
     }
 
     #[test]
