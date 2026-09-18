@@ -13,6 +13,11 @@ crate-type = ["rlib"]
 alien-client-core = { workspace = true }
 alien-core = { workspace = true }
 alien-error = { workspace = true }
+alien-azure-models-1 = { workspace = true }
+alien-azure-models-2 = { workspace = true }
+alien-azure-models-3 = { workspace = true }
+alien-azure-models-4 = { workspace = true }
+alien-azure-models-5 = { workspace = true }
 
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
@@ -37,6 +42,7 @@ regress = { version = "0.11.0" }
 # jwt-simple = { version = "0.12.12", default-features = false, features = ["pure-rust"] }
 
 [dev-dependencies]
+alien-azure-model-generator = { path = "../alien-azure-model-generator", version = "3.3.22" }
 rand = { workspace = true }
 reqwest = { workspace = true, features = ["json", "rustls-tls-webpki-roots"] }
 serde_json = { workspace = true, features = ["preserve_order"] }
@@ -59,13 +65,11 @@ workspace = true
 default = []
 # Retains every generated Azure model for explicit compatibility checks. Alien's
 # production graph uses the smaller deterministic reachable-model set.
-full-models = []
+full-models = [
+    "alien-azure-models-1/full-models",
+    "alien-azure-models-2/full-models",
+    "alien-azure-models-3/full-models",
+    "alien-azure-models-4/full-models",
+    "alien-azure-models-5/full-models",
+]
 test-utils = ["dep:mockall"]
-
-[build-dependencies]
-prettyplease = "0.2.22"
-progenitor = { version = "0.11.0", default-features = false }
-serde_json = "1.0"
-syn = "2.0"
-openapiv3 = "2.2.0"
-quote = "1.0"

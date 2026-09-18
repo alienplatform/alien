@@ -1,105 +1,161 @@
-use std::collections::{BTreeMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::path::Path;
 
-#[path = "build/schema_filter.rs"]
-mod schema_filter;
+pub mod schema_filter;
 
-fn main() {
-    generate_azure_models();
+pub const MODEL_ROOTS_JSON: &str = include_str!("../model_roots.json");
+pub const MODEL_SHARDS_JSON: &str = include_str!("../model_shards.json");
+
+const MODEL_SPECS: [(&str, &str); 25] = [
+    ("ContainerApps.json", "container_apps.rs"),
+    ("ManagedEnvironments.json", "managed_environments.rs"),
+    ("Jobs.json", "jobs.rs"),
+    (
+        "ManagedEnvironmentsDaprComponents.json",
+        "managed_environments_dapr_components.rs",
+    ),
+    (
+        "authorization-RoleDefinitionsCalls.json",
+        "authorization_role_definitions.rs",
+    ),
+    (
+        "authorization-RoleAssignmentsCalls.json",
+        "authorization_role_assignments.rs",
+    ),
+    ("ManagedIdentity.json", "managed_identity.rs"),
+    ("blob.json", "blob.rs"),
+    ("table.json", "table.rs"),
+    ("storage.json", "storage.rs"),
+    ("resources.json", "resources.rs"),
+    ("containerregistry.json", "containerregistry.rs"),
+    ("keyvault.json", "keyvault.rs"),
+    ("secrets.json", "secrets.rs"),
+    ("certificates.json", "certificates.rs"),
+    ("Queue.json", "queue.rs"),
+    ("namespace-preview.json", "queue_namespace.rs"),
+    ("virtualNetwork.json", "virtual_network.rs"),
+    ("natGateway.json", "nat_gateway.rs"),
+    ("publicIpAddress.json", "public_ip_address.rs"),
+    ("networkSecurityGroup.json", "network_security_group.rs"),
+    ("loadBalancer.json", "load_balancer.rs"),
+    ("ComputeRP.json", "compute_rp.rs"),
+    ("DiskRP.json", "disk_rp.rs"),
+    ("managedClusters.json", "managed_clusters.rs"),
+];
+
+/// Return the specification filenames assigned to a line-balanced model shard.
+pub fn model_specs(shard: usize) -> Vec<String> {
+    let shards = parse_model_shards(MODEL_SHARDS_JSON)
+        .unwrap_or_else(|message| panic!("invalid Azure model shard manifest: {message}"));
+    shards
+        .get(&shard.to_string())
+        .unwrap_or_else(|| panic!("missing Azure model shard {shard}"))
+        .clone()
 }
 
-fn generate_azure_models() {
-    println!("cargo:rerun-if-changed=build.rs");
-    println!("cargo:rerun-if-changed=build/model_roots.json");
+/// Find the line-balanced shard that owns an Azure specification.
+pub fn model_shard_for_spec(spec_name: &str) -> Option<usize> {
+    let shards = parse_model_shards(MODEL_SHARDS_JSON)
+        .unwrap_or_else(|message| panic!("invalid Azure model shard manifest: {message}"));
+    shards.into_iter().find_map(|(shard, specs)| {
+        specs
+            .iter()
+            .any(|candidate| candidate == spec_name)
+            .then(|| shard.parse().expect("validated Azure model shard key"))
+    })
+}
 
+fn parse_model_shards(json: &str) -> Result<BTreeMap<String, Vec<String>>, String> {
+    let shards: BTreeMap<String, Vec<String>> =
+        serde_json::from_str(json).map_err(|error| error.to_string())?;
+    let known_specs = MODEL_SPECS
+        .iter()
+        .map(|(spec_name, _)| *spec_name)
+        .collect::<BTreeSet<_>>();
+    let mut assigned_specs = BTreeSet::new();
+
+    for (shard, specs) in &shards {
+        shard
+            .parse::<usize>()
+            .map_err(|_| format!("shard key {shard:?} is not a positive integer"))?
+            .checked_sub(1)
+            .ok_or_else(|| "shard keys must start at 1".to_string())?;
+        for spec_name in specs {
+            if !assigned_specs.insert(spec_name.as_str()) {
+                return Err(format!(
+                    "specification {spec_name:?} is assigned to multiple shards"
+                ));
+            }
+        }
+    }
+
+    if assigned_specs != known_specs {
+        let missing = known_specs.difference(&assigned_specs).collect::<Vec<_>>();
+        let unknown = assigned_specs.difference(&known_specs).collect::<Vec<_>>();
+        return Err(format!(
+            "manifest and generator mappings differ; missing {missing:?}, unknown {unknown:?}"
+        ));
+    }
+
+    Ok(shards)
+}
+
+fn validate_selected_specs(selected_specs: &[String], openapi_dir: &Path) {
+    let selected = selected_specs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        selected.len(),
+        selected_specs.len(),
+        "Azure model shard contains duplicate specifications"
+    );
+
+    let checked_in = std::fs::read_dir(openapi_dir)
+        .unwrap_or_else(|error| panic!("could not read {}: {error}", openapi_dir.display()))
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (path.extension().and_then(|extension| extension.to_str()) == Some("json"))
+                .then(|| path.file_name().unwrap().to_string_lossy().into_owned())
+        })
+        .collect::<BTreeSet<_>>();
+    let checked_in = checked_in
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        checked_in, selected,
+        "checked-in Azure specifications do not exactly match their model shard"
+    );
+}
+
+/// Generate a selected subset of Azure model modules into Cargo's output directory.
+pub fn generate_azure_models(
+    selected_specs: &[String],
+    openapi_dir: &std::path::Path,
+    model_roots_json: &str,
+    full_models: bool,
+    max_filtered_lines: usize,
+) -> usize {
+    parse_model_shards(MODEL_SHARDS_JSON)
+        .unwrap_or_else(|message| panic!("invalid Azure model shard manifest: {message}"));
+    validate_selected_specs(selected_specs, openapi_dir);
     let model_roots: BTreeMap<String, Vec<String>> =
-        serde_json::from_str(include_str!("build/model_roots.json")).unwrap();
+        serde_json::from_str(model_roots_json).unwrap();
     let mut total_generated_lines = 0;
 
-    let specs = [
-        (
-            "./openapi/ContainerApps.json",
-            "src/azure/models/container_apps.rs",
-        ),
-        (
-            "./openapi/ManagedEnvironments.json",
-            "src/azure/models/managed_environments.rs",
-        ),
-        ("./openapi/Jobs.json", "src/azure/models/jobs.rs"),
-        (
-            "./openapi/ManagedEnvironmentsDaprComponents.json",
-            "src/azure/models/managed_environments_dapr_components.rs",
-        ),
-        (
-            "./openapi/authorization-RoleDefinitionsCalls.json",
-            "src/azure/models/authorization_role_definitions.rs",
-        ),
-        (
-            "./openapi/authorization-RoleAssignmentsCalls.json",
-            "src/azure/models/authorization_role_assignments.rs",
-        ),
-        (
-            "./openapi/ManagedIdentity.json",
-            "src/azure/models/managed_identity.rs",
-        ),
-        ("./openapi/blob.json", "src/azure/models/blob.rs"),
-        ("./openapi/table.json", "src/azure/models/table.rs"),
-        ("./openapi/storage.json", "src/azure/models/storage.rs"),
-        ("./openapi/resources.json", "src/azure/models/resources.rs"),
-        (
-            "./openapi/containerregistry.json",
-            "src/azure/models/containerregistry.rs",
-        ),
-        ("./openapi/keyvault.json", "src/azure/models/keyvault.rs"),
-        ("./openapi/secrets.json", "src/azure/models/secrets.rs"),
-        (
-            "./openapi/certificates.json",
-            "src/azure/models/certificates.rs",
-        ),
-        ("./openapi/Queue.json", "src/azure/models/queue.rs"),
-        (
-            "./openapi/namespace-preview.json",
-            "src/azure/models/queue_namespace.rs",
-        ),
-        (
-            "./openapi/virtualNetwork.json",
-            "src/azure/models/virtual_network.rs",
-        ),
-        (
-            "./openapi/natGateway.json",
-            "src/azure/models/nat_gateway.rs",
-        ),
-        (
-            "./openapi/publicIpAddress.json",
-            "src/azure/models/public_ip_address.rs",
-        ),
-        (
-            "./openapi/networkSecurityGroup.json",
-            "src/azure/models/network_security_group.rs",
-        ),
-        (
-            "./openapi/loadBalancer.json",
-            "src/azure/models/load_balancer.rs",
-        ),
-        ("./openapi/ComputeRP.json", "src/azure/models/compute_rp.rs"),
-        ("./openapi/DiskRP.json", "src/azure/models/disk_rp.rs"),
-        (
-            "./openapi/managedClusters.json",
-            "src/azure/models/managed_clusters.rs",
-        ),
-    ];
-
-    for (src, output_file) in specs.iter() {
-        println!("cargo:rerun-if-changed={}", src);
-        let file = std::fs::File::open(src).unwrap();
+    for (spec_name, output_file) in MODEL_SPECS
+        .iter()
+        .filter(|(spec_name, _)| selected_specs.iter().any(|selected| selected == *spec_name))
+    {
+        let source_path = openapi_dir.join(*spec_name);
+        println!("cargo:rerun-if-changed={}", source_path.display());
+        let file = std::fs::File::open(source_path).unwrap();
         let mut spec_json: serde_json::Value = serde_json::from_reader(file).unwrap();
         remove_zero_min_length(&mut spec_json);
-        if !cfg!(feature = "full-models") {
-            let spec_name = std::path::Path::new(src)
-                .file_name()
-                .and_then(|name| name.to_str())
-                .expect("Azure spec path must end in a UTF-8 filename");
+        if !full_models {
             let roots = model_roots
-                .get(spec_name)
+                .get(*spec_name)
                 .unwrap_or_else(|| panic!("missing model roots for {spec_name}"));
             schema_filter::retain_reachable_schemas(&mut spec_json, roots).unwrap();
         }
@@ -117,9 +173,7 @@ fn generate_azure_models() {
             .iter()
             .find_map(|item| {
                 if let syn::Item::Mod(module) = item {
-                    if module.ident == "types"
-                        && module.vis == syn::Visibility::Public(Default::default())
-                    {
+                    if module.ident == "types" && matches!(module.vis, syn::Visibility::Public(_)) {
                         return Some(module);
                     }
                 }
@@ -133,33 +187,6 @@ fn generate_azure_models() {
         } else {
             panic!("Types module has no content");
         };
-
-        // Add bon::Builder to all struct derives
-        // for item in types_content.iter_mut() {
-        //     if let syn::Item::Struct(struct_item) = item {
-        //         // Only add bon::Builder to structs with named fields
-        //         if matches!(struct_item.fields, syn::Fields::Named(_)) {
-        //             // Find the derive attribute and add bon::Builder to it
-        //             for attr in struct_item.attrs.iter_mut() {
-        //                 if attr.path().is_ident("derive") {
-        //                     if let syn::Meta::List(ref mut meta_list) = attr.meta {
-        //                         // Convert the existing tokens to string, add bon::Builder, and reparse
-        //                         let existing_derives = meta_list.tokens.to_string();
-        //                         let new_derives = if existing_derives.is_empty() {
-        //                             "bon::Builder".to_string()
-        //                         } else {
-        //                             format!("{}, bon::Builder", existing_derives)
-        //                         };
-
-        //                         // Parse the new derive list back into tokens
-        //                         meta_list.tokens = new_derives.parse().unwrap();
-        //                     }
-        //                     break;
-        //                 }
-        //             }
-        //         }
-        //     }
-        // }
 
         // Add deserialize_with for fields with serde(default)
         for item in types_content.iter_mut() {
@@ -319,20 +346,18 @@ fn generate_azure_models() {
         total_generated_lines += content.lines().count();
 
         let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
-        let file_name = std::path::Path::new(output_file)
-            .file_name()
-            .expect("invalid output_file");
-        let out_file = std::path::Path::new(&out_dir).join(file_name);
+        let out_file = std::path::Path::new(&out_dir).join(*output_file);
 
         std::fs::write(out_file, content).unwrap();
     }
 
-    if !cfg!(feature = "full-models") {
+    if !full_models {
         assert!(
-            total_generated_lines <= 165_000,
+            total_generated_lines <= max_filtered_lines,
             "filtered Azure models expanded to {total_generated_lines} lines; update model roots intentionally or investigate newly reachable schemas"
         );
     }
+    total_generated_lines
 }
 
 fn remove_zero_min_length(value: &mut serde_json::Value) {
@@ -351,5 +376,36 @@ fn remove_zero_min_length(value: &mut serde_json::Value) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_model_shards, MODEL_SHARDS_JSON};
+
+    #[test]
+    fn checked_in_manifest_has_exactly_one_owner_for_every_generator_spec() {
+        parse_model_shards(MODEL_SHARDS_JSON).unwrap();
+    }
+
+    #[test]
+    fn rejects_duplicate_spec_ownership() {
+        let manifest = MODEL_SHARDS_JSON.replace(
+            "\"publicIpAddress.json\"",
+            "\"ComputeRP.json\", \"publicIpAddress.json\"",
+        );
+
+        assert!(parse_model_shards(&manifest)
+            .unwrap_err()
+            .contains("assigned to multiple shards"));
+    }
+
+    #[test]
+    fn rejects_missing_generator_spec() {
+        let manifest = MODEL_SHARDS_JSON.replace("    \"publicIpAddress.json\",\n", "");
+
+        assert!(parse_model_shards(&manifest)
+            .unwrap_err()
+            .contains("manifest and generator mappings differ"));
     }
 }
