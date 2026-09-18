@@ -65,10 +65,7 @@ test("dev mode can reach only the reusable npm dev workflow", () => {
 })
 
 test("stable binary releases publish the pinned Platform composition as alien", () => {
-  assert.match(
-    workflow,
-    /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/,
-  )
+  assert.match(workflow, /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/)
   assert.match(workflow, /repository: alienplatform\/platform/)
 
   for (const target of [
