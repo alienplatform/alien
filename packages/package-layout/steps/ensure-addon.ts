@@ -6,7 +6,10 @@
 // injected at publish time) / a locally-built artifact. CI has neither prebuild
 // nor a dev artifact, so build one ourselves and hand its path to the compile
 // step for staging. Skipped (and logged) whenever an artifact is already
-// available, so local runs stay fast.
+// available, so local runs stay fast. Source fallbacks use Cargo's development
+// profile because this is a behavior check, and the surrounding CI job already
+// builds native addons and CLIs in that profile. A release fallback would
+// compile the same dependency graph into a profile that no later step reuses.
 
 import { existsSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -105,7 +108,7 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       )
       return undefined
     }
-    for (const profile of ["release", "debug"]) {
+    for (const profile of ["debug", "release"]) {
       const candidate = join(repoRoot, "target", profile, GATEWAY_BINARY)
       if (existsSync(candidate)) {
         console.log(
@@ -115,14 +118,10 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       }
     }
     console.log(
-      `[gateway] no prebuild and no built binary; building with \`cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE}\` (CI path)...`,
+      `[gateway] no prebuild and no built binary; building with \`cargo build --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE}\` (shared development-profile CI path)...`,
     )
-    const build = run(
-      "cargo",
-      ["build", "--release", "--bin", GATEWAY_BINARY, "-p", GATEWAY_CRATE],
-      repoRoot,
-    )
-    const built = join(repoRoot, "target", "release", GATEWAY_BINARY)
+    const build = run("cargo", ["build", "--bin", GATEWAY_BINARY, "-p", GATEWAY_CRATE], repoRoot)
+    const built = join(repoRoot, "target", "debug", GATEWAY_BINARY)
     if (build.status === 0 && existsSync(built)) {
       console.log(`[gateway] built ${relative(scriptDir, built)}.`)
       return built
@@ -134,7 +133,7 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       check: "addon-build",
       package: "ai-gateway",
       status: "fail",
-      reason: `cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE} did not produce a binary on this host`,
+      reason: `cargo build --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE} did not produce a binary on this host`,
       evidence: lastLine(build.stderr) || lastLine(build.stdout) || `exit ${build.status}`,
     })
     return undefined
