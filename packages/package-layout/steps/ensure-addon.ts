@@ -6,7 +6,10 @@
 // injected at publish time) / a locally-built artifact. CI has neither prebuild
 // nor a dev artifact, so build one ourselves and hand its path to the compile
 // step for staging. Skipped (and logged) whenever an artifact is already
-// available, so local runs stay fast.
+// available, so local runs stay fast. CI prebuilds the gateway in the unified
+// development-profile CLI graph. The isolated fallback remains a release build
+// so a narrower standalone feature graph cannot be reused by a later, broader
+// development-profile Cargo command.
 
 import { existsSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
@@ -105,7 +108,7 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       )
       return undefined
     }
-    for (const profile of ["release", "debug"]) {
+    for (const profile of ["debug", "release"]) {
       const candidate = join(repoRoot, "target", profile, GATEWAY_BINARY)
       if (existsSync(candidate)) {
         console.log(
@@ -115,7 +118,7 @@ export function ensureAddon(ctx: Ctx): CheckResult[] {
       }
     }
     console.log(
-      `[gateway] no prebuild and no built binary; building with \`cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE}\` (CI path)...`,
+      `[gateway] no prebuild and no built binary; building with \`cargo build --release --bin ${GATEWAY_BINARY} -p ${GATEWAY_CRATE}\` (isolated fallback)...`,
     )
     const build = run(
       "cargo",

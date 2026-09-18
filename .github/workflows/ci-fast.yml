@@ -385,6 +385,10 @@ jobs:
         working-directory: crates/alien-bindings-node
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
+      - name: Build all CLIs and package gateway
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway
+
       - name: Build package-layout dependencies
         run: pnpm --filter @alienplatform/sdk... build
 
@@ -396,10 +400,6 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
-
-      - name: Build all CLIs
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
-        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
 
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
