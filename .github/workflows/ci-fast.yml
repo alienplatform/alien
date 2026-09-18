@@ -67,6 +67,8 @@ jobs:
               - 'examples/**'
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
+              - '.github/workflows/ci-fast.yml'
+              - '.github/workflows/ci-fork.yml'
               # The image contract tests read the Dockerfiles as text, so a change
               # to one of those is a change this job has to see.
               - 'docker/**'
@@ -246,13 +248,11 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
           )
-          cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
-
-      # The steps below cover code behind non-default cargo features, which the
-      # workspace run above compiles with default features only.
-      - name: Manager OpenAPI security contract
-        run: |
-          cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
+          # Compile non-default feature coverage in the same unified graph. Running
+          # these as later `cargo test` commands adds two serial recompilation tails.
+          cargo nextest run --workspace \
+            --features alien-manager/openapi,alien-bindings/platform-sdk \
+            --filter-expr "${FILTER_CLAUSES[*]}"
 
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
@@ -266,13 +266,6 @@ jobs:
             | sed -n 's/.*"executable":"\([^"]*privileged-[^"]*\)".*/\1/p' | head -1)
           test -x "$binary"
           sudo "$binary" --ignored
-
-      - name: Remote bindings tests (non-cloud)
-        # `platform-sdk` is not a default feature, so `remote::` is cfg'd out of
-        # the workspace run. The cloud client crates' unit tests already run
-        # there via the `kind(test)`-only filters.
-        run: |
-          cargo test -p alien-bindings --features platform-sdk --lib remote::
 
       - name: Sandbox agent image contract
         # The committed GCP Dockerfile is generated from the contract, and this
