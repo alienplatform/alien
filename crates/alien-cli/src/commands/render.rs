@@ -8,6 +8,50 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
+
+pub type CloudFormationRegistryExtension = fn(&mut alien_cloudformation::CfRegistry);
+pub type TerraformRegistryExtension = fn(&mut alien_terraform::TfRegistry);
+
+static CLOUDFORMATION_REGISTRY_EXTENSION: OnceLock<CloudFormationRegistryExtension> =
+    OnceLock::new();
+static TERRAFORM_REGISTRY_EXTENSION: OnceLock<TerraformRegistryExtension> = OnceLock::new();
+
+/// Registers additional CloudFormation emitters for a composed CLI.
+///
+/// Call this once during process startup, before running a render command.
+/// The OSS `alien` binary intentionally leaves the built-in registry unchanged.
+pub fn register_cloudformation_registry_extension(extension: CloudFormationRegistryExtension) {
+    CLOUDFORMATION_REGISTRY_EXTENSION
+        .set(extension)
+        .expect("CloudFormation registry extension already registered");
+}
+
+/// Registers additional Terraform emitters for a composed CLI.
+///
+/// Call this once during process startup, before running a render command.
+/// The OSS `alien` binary intentionally leaves the built-in registry unchanged.
+pub fn register_terraform_registry_extension(extension: TerraformRegistryExtension) {
+    TERRAFORM_REGISTRY_EXTENSION
+        .set(extension)
+        .expect("Terraform registry extension already registered");
+}
+
+fn cloudformation_registry() -> alien_cloudformation::CfRegistry {
+    let mut registry = alien_cloudformation::CfRegistry::built_in();
+    if let Some(extension) = CLOUDFORMATION_REGISTRY_EXTENSION.get() {
+        extension(&mut registry);
+    }
+    registry
+}
+
+fn terraform_registry() -> alien_terraform::TfRegistry {
+    let mut registry = alien_terraform::TfRegistry::built_in();
+    if let Some(extension) = TERRAFORM_REGISTRY_EXTENSION.get() {
+        extension(&mut registry);
+    }
+    registry
+}
 
 /// Render setup artifacts for review.
 #[derive(Parser, Debug, Clone)]
@@ -211,7 +255,7 @@ fn render_cloudformation(
     stack_settings: &StackSettings,
     args: &RenderArgs,
 ) -> Result<()> {
-    let registry = alien_cloudformation::CfRegistry::built_in();
+    let registry = cloudformation_registry();
     let registration = registration_mode(args)?;
     let template = alien_cloudformation::generate_cloudformation_template(
         stack,
@@ -282,7 +326,7 @@ fn render_terraform(
     args: &RenderArgs,
 ) -> Result<()> {
     let target = args.target.expect("validated by validate_args");
-    let registry = alien_terraform::TfRegistry::built_in();
+    let registry = terraform_registry();
     let module = alien_terraform::generate_terraform_module(
         stack,
         terraform_target(target),
