@@ -63,7 +63,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listDeploymentGroups",
     "listDeployments",
     "listEvents",
-    "listMachinesInventory",
+    "listDeploymentMachines",
     "listManagerEvents",
     "listManagers",
     "listMemberships",
