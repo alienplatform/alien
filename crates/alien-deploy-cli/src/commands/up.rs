@@ -159,6 +159,10 @@ pub struct UpArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Validate the config locally without authentication, API calls, or deployment tracking.
+    #[arg(long, requires = "config")]
+    pub validate_only: bool,
+
     /// Stack input value for setup (id=value).
     #[arg(long = "input")]
     pub input_values: Vec<String>,
@@ -839,8 +843,8 @@ mod tests {
     #[test]
     fn load_stack_settings_omits_server_owned_deployment_model() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "machines"]);
-        let settings =
-            load_stack_settings(&args, Platform::Machines, None).expect("settings should load");
+        let settings = load_stack_settings(&args, Platform::Machines, Platform::Machines, None)
+            .expect("settings should load");
 
         let wire = serde_json::to_value(settings).expect("settings should serialize");
         assert_eq!(wire.get("deploymentModel"), None);
@@ -849,8 +853,8 @@ mod tests {
     #[test]
     fn load_stack_settings_requests_pull_for_local() {
         let args = UpArgs::parse_from(["alien-deploy", "--platform", "local"]);
-        let settings =
-            load_stack_settings(&args, Platform::Local, None).expect("settings should load");
+        let settings = load_stack_settings(&args, Platform::Local, Platform::Local, None)
+            .expect("settings should load");
 
         assert_eq!(settings.deployment_model, DeploymentModel::Pull);
         let wire = serde_json::to_value(sdk_stack_settings(&settings).expect("sdk settings"))
@@ -1140,7 +1144,7 @@ machine = "m8i.xlarge"
         let config = load_deploy_config(&args)
             .expect("config should load")
             .expect("config should exist");
-        let settings = load_stack_settings(&args, Platform::Aws, Some(&config))
+        let settings = load_stack_settings(&args, Platform::Aws, Platform::Aws, Some(&config))
             .expect("stack settings should load");
         let selection = settings
             .compute
@@ -1432,6 +1436,85 @@ region = "old"
     }
 
     #[test]
+    fn validate_only_needs_no_token_and_rejects_cross_provider_network() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+name = "cross-provider"
+platform = "aws"
+
+[network]
+type = "byo-vpc-gcp"
+network_name = "network"
+subnet_name = "subnet"
+region = "us-central1"
+"#,
+        )
+        .expect("config syntax should parse");
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+
+        let error = validate_deploy_config(&args, None, Some(&config))
+            .expect_err("cross-provider network must fail locally");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("not compatible"));
+    }
+
+    #[test]
+    fn validate_only_uses_kubernetes_base_platform_for_networks() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+name = "kubernetes-on-aws"
+platform = "kubernetes"
+basePlatform = "aws"
+
+[network]
+type = "byo-vpc-aws"
+vpc_id = "vpc-123"
+public_subnet_ids = ["subnet-public"]
+private_subnet_ids = ["subnet-private"]
+"#,
+        )
+        .expect("config syntax should parse");
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+
+        validate_deploy_config(&args, None, Some(&config))
+            .expect("AWS network is valid for Kubernetes with an AWS base platform");
+    }
+
+    #[test]
+    fn validate_only_rejects_missing_non_local_name() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+platform = "aws"
+
+[network]
+type = "create"
+"#,
+        )
+        .expect("config syntax should parse");
+        let args = UpArgs::parse_from([
+            "alien-deploy",
+            "--config",
+            "deployment.toml",
+            "--validate-only",
+        ]);
+
+        let error = validate_deploy_config(&args, None, Some(&config))
+            .expect_err("a non-local deployment without a name must fail validation");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("name"));
+    }
+
+    #[test]
     fn stack_input_values_are_typed() {
         let values = collect_deployer_input_values(
             &[
@@ -1460,6 +1543,11 @@ region = "old"
 
 pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>) -> Result<()> {
     let deploy_config = load_deploy_config(&args)?;
+    if args.validate_only {
+        validate_deploy_config(&args, embedded_config, deploy_config.as_ref())?;
+        output::success("Deployment config is valid.");
+        return Ok(());
+    }
     // Resolve token and platform from args, embedded config, or tracked deployment
     let resolved = resolve_deployment_info(&args, embedded_config, deploy_config.as_ref())?;
     let token = resolved.token;
@@ -1590,7 +1678,12 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
             }
         };
 
-    let stack_settings = load_stack_settings(&args, platform, deploy_config.as_ref())?;
+    let stack_settings = load_stack_settings(
+        &args,
+        platform,
+        install_context_platform,
+        deploy_config.as_ref(),
+    )?;
 
     if print_progress {
         let banner_title = embedded_config
@@ -1924,6 +2017,66 @@ pub async fn up_command(args: UpArgs, embedded_config: Option<&DeployCliConfig>)
     eprintln!();
     output::success(&format!("Deployment '{}' is active.", name));
 
+    Ok(())
+}
+
+fn validate_deploy_config(
+    args: &UpArgs,
+    embedded_config: Option<&DeployCliConfig>,
+    deploy_config: Option<&DeployConfigFile>,
+) -> Result<()> {
+    let config = deploy_config.expect("clap requires --config with --validate-only");
+    let platform_name = args
+        .platform
+        .as_deref()
+        .or(config.platform.as_deref())
+        .or_else(|| embedded_config.and_then(|value| value.default_platform.as_deref()))
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "platform".to_string(),
+                message: "Config field `platform` or --platform is required for validation."
+                    .to_string(),
+            })
+        })?;
+    let platform = Platform::from_str(platform_name).map_err(|message| {
+        AlienError::new(ErrorData::ValidationError {
+            field: "platform".to_string(),
+            message,
+        })
+    })?;
+    let base_platform = args
+        .base_platform
+        .as_deref()
+        .or(config.base_platform.as_deref());
+    let base_platform = parse_base_platform(platform, base_platform)?;
+    if platform != Platform::Local && args.name.as_deref().or(config.name.as_deref()).is_none() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "name".to_string(),
+            message: "--name or config field `name` is required for non-local deployments."
+                .to_string(),
+        }));
+    }
+    let network_platform = base_platform.unwrap_or(platform);
+    let settings = load_stack_settings(args, platform, network_platform, Some(config))?;
+    if let Some(network_settings) = settings.network.as_ref() {
+        network::validate_network_settings_for_platform(network_settings, network_platform)
+            .map_err(|message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message,
+                })
+            })?;
+    }
+    if let Some(compute) = settings.compute.as_ref() {
+        for (pool, selection) in &compute.pools {
+            selection.validate().map_err(|message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: format!("compute.pools.{pool}"),
+                    message,
+                })
+            })?;
+        }
+    }
     Ok(())
 }
 
@@ -2530,6 +2683,7 @@ pub(crate) fn resolve_platform_option(
 fn load_stack_settings(
     args: &UpArgs,
     platform: Platform,
+    network_platform: Platform,
     deploy_config: Option<&DeployConfigFile>,
 ) -> Result<StackSettings> {
     let mut settings = StackSettings::default();
@@ -2560,13 +2714,15 @@ fn load_stack_settings(
     }
 
     if args.network.network_mode != NetworkMode::Auto {
-        let network_override = network::parse_network_settings(&args.network, platform.as_str())
-            .map_err(|e| {
-                AlienError::new(ErrorData::ValidationError {
-                    field: "network".to_string(),
-                    message: e,
-                })
-            })?;
+        let network_override =
+            network::parse_network_settings(&args.network, network_platform.as_str()).map_err(
+                |e| {
+                    AlienError::new(ErrorData::ValidationError {
+                        field: "network".to_string(),
+                        message: e,
+                    })
+                },
+            )?;
         if let Some(network) = network_override {
             settings.network = Some(network);
         }
