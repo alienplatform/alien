@@ -345,9 +345,15 @@ pub async fn cleanup_deleted_registry_access(
     // nothing naming it. A sandbox is only ever granted this one repository, so a deployment that
     // still declares one can revoke it without the field.
     if registry_access_granted && matches!(platform, Platform::Aws) && declares_sandbox(state) {
-        let own_repository = project_repository(artifact_registry.as_ref(), project_id);
-        if let Some(own_repository) = own_repository {
-            if !repo_ids.contains(&own_repository) {
+        if let Some(own_repository) = project_repository(artifact_registry.as_ref(), project_id) {
+            // Only a repository that exists: a worker-only grant on the shared repository would
+            // otherwise send cleanup at a project repository nobody ever created.
+            if !repo_ids.contains(&own_repository)
+                && artifact_registry
+                    .get_repository(&own_repository)
+                    .await
+                    .is_ok()
+            {
                 repo_ids.push(own_repository);
                 repo_ids.sort();
             }
@@ -486,13 +492,26 @@ fn declares_sandbox(state: &DeploymentState) -> bool {
             .is_some_and(has_sandbox)
 }
 
-/// The AWS account a `{account}.dkr.ecr.{region}.amazonaws.com` host names, where the region may
-/// still be the `{region}` token a stored reference carries.
-fn ecr_registry_account(host: &str) -> Option<&str> {
+/// The account and region a `{account}.dkr.ecr.{region}.amazonaws.com` host names.
+fn ecr_registry_identity(host: &str) -> Option<(&str, &str)> {
     let host = alien_core::image_rewrite::strip_url_scheme(host);
     let host = host.split('/').next()?;
     let (account, rest) = host.split_once(".dkr.ecr.")?;
-    rest.ends_with(".amazonaws.com").then_some(account)
+    let region = rest.strip_suffix(".amazonaws.com")?;
+    Some((account, region))
+}
+
+/// Whether an image is served by the registry the grant is written on. A stored reference keeps
+/// the `{region}` token, which stands for whichever region the deployment renders; any other
+/// region names a different repository than the one being opened.
+fn served_by_registry(image: &str, registry_endpoint: &str) -> bool {
+    let (Some((account, region)), Some((registry_account, registry_region))) = (
+        ecr_registry_identity(image),
+        ecr_registry_identity(registry_endpoint),
+    ) else {
+        return false;
+    };
+    account == registry_account && (region == "{region}" || region == registry_region)
 }
 
 fn collect_image_repositories(
@@ -517,8 +536,7 @@ fn collect_image_repositories(
             };
             // The host too: the grant is written on this registry, so a same-path repository in
             // another account would be granted here and pulled from there.
-            let own_registry =
-                ecr_registry_account(image) == ecr_registry_account(registry_endpoint);
+            let own_registry = served_by_registry(image, registry_endpoint);
             if entry.config.downcast_ref::<Sandbox>().is_some()
                 && (repo_id != own_repository || !own_registry)
             {
@@ -1288,6 +1306,9 @@ mod tests {
             // This project's repository path, in another account: granting here would open a
             // repository the build never pulls from.
             "210987654321.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+            // The configured account, another region: the grant would open a repository in
+            // us-east-2 while the build pulls from eu-west-1.
+            "123456789012.dkr.ecr.eu-west-1.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
         ] {
             let state = aws_state_with_stack(sandbox_stack(Some(image)));
             assert!(
