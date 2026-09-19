@@ -24,6 +24,7 @@ pub struct ManagerTransport {
     deployment_store: Arc<dyn DeploymentStore>,
     bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    project_id: String,
     session: String,
     execution_claim: Option<ExecutionClaim>,
 }
@@ -33,6 +34,7 @@ impl ManagerTransport {
         deployment_store: Arc<dyn DeploymentStore>,
         bindings_provider: Option<Arc<dyn BindingsProviderApi>>,
         target_bindings_providers: HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+        project_id: String,
         session: String,
         execution_claim: Option<ExecutionClaim>,
     ) -> Self {
@@ -40,6 +42,7 @@ impl ManagerTransport {
             deployment_store,
             bindings_provider,
             target_bindings_providers,
+            project_id,
             session,
             execution_claim,
         }
@@ -79,6 +82,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             &self.bindings_provider,
             &self.target_bindings_providers,
             deployment_id,
+            &self.project_id,
             &mut updated_state,
         )
         .await;
@@ -112,6 +116,7 @@ impl DeploymentLoopTransport for ManagerTransport {
             &self.bindings_provider,
             &self.target_bindings_providers,
             deployment_id,
+            &self.project_id,
             &updated_state,
         )
         .await

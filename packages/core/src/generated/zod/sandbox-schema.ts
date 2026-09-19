@@ -26,7 +26,8 @@ get "lifecycle"(){
 get "limits"(){
                 return z.union([SandboxLimitsSchema, z.null()]).optional()
               },
-"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none."))
+"previewPorts": z.optional(z.array(z.int().min(0)).describe("Ports eligible for a preview capability. An application reaches its sandbox through the\nprovider, so it cannot widen its own ingress at runtime; a holder of a remote binding's\ncredentials is bounded by no port condition, which is why a remote sandbox declares none.")),
+"privateBaseImage": z.string().describe("Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is\nwhat the cross-account grant opens. Live only: the grant needs the customer account,\nwhich registration reports. Absent means the base image is pulled anonymously.").nullish()
     }).describe("An isolated environment for running untrusted code, created at runtime.")
 
 export type Sandbox = z.infer<typeof SandboxSchema>

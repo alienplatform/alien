@@ -75,6 +75,21 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 ));
             }
 
+            // Setup builds a Frozen image before the deployment registers, and only registration
+            // tells the registry which customer account to open the base image's repository to.
+            if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+                if sandbox.private_base_image.is_some()
+                    && resource_entry.lifecycle == ResourceLifecycle::Frozen
+                {
+                    errors.push(format!(
+                        "Sandbox '{}' declares a private base image, which requires the Live \
+                         lifecycle; a Frozen image is built before the registry can grant the \
+                         customer's account access to it",
+                        resource_id
+                    ));
+                }
+            }
+
             // A linked sandbox's binding carries `imageArn` and `imageVersion`, both required
             // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller
             // has built, so the emitted binding would fail to deserialize at startup.
@@ -435,6 +450,42 @@ mod tests {
                 "the refusal must not carry collapsed indentation: {message}"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn a_private_base_image_is_refused_on_a_frozen_sandbox() {
+        let with_private_base = |lifecycle| {
+            let mut stack = sandbox_stack(lifecycle);
+            let entry = stack.resources.get_mut("agents").expect("sandbox entry");
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .expect("sandbox config")
+                .clone();
+            sandbox.private_base_image = Some(
+                "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_a:v1".to_string(),
+            );
+            entry.config = alien_core::Resource::new(sandbox);
+            stack
+        };
+
+        let frozen = FrozenResourceLifecycleCheck
+            .check(&with_private_base(ResourceLifecycle::Frozen), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(!frozen.success);
+        let message = frozen
+            .errors
+            .iter()
+            .find(|error| error.contains("requires the Live lifecycle"))
+            .unwrap_or_else(|| panic!("the refusal must name why: {:?}", frozen.errors));
+        assert!(!message.contains("  "), "collapsed indentation: {message}");
+
+        let live = FrozenResourceLifecycleCheck
+            .check(&with_private_base(ResourceLifecycle::Live), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(live.success, "{:?}", live.errors);
     }
 
     /// A Worker's binding to a sandbox carries `imageArn` and `imageVersion`, both required fields
