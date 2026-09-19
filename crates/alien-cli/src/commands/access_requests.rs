@@ -1,13 +1,14 @@
 //! CLI commands for access requests — a complete, non-Slack path to REQUEST
-//! time-boxed operation access. Approval always happens on the customer's
-//! side, in-cluster via `kubectl patch` on the grant custom resource (or the
-//! operator's own reporting loop) — there is deliberately no CLI or
-//! dashboard action that approves a request; Alien is never the approver.
+//! time-boxed operation and/or remote-debugging access. Approval always
+//! happens on the customer's side, in-cluster via `kubectl patch` on the
+//! grant custom resource (or the operator's own reporting loop) — there is
+//! deliberately no CLI or dashboard action that approves a request; Alien is
+//! never the approver.
 
 use std::time::Duration;
 
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_platform_api::types::{CreateAccessRequest, CreateAccessRequestMaxRisk};
+use alien_platform_api::types::{CreateAccessRequest, CreateAccessRequestMaxRisk, DebugGrantTool};
 use alien_platform_api::SdkResultExt as _;
 use chrono::{DateTime, Utc};
 use clap::{Parser, Subcommand};
@@ -20,13 +21,16 @@ use crate::ui::dim_label;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
-    about = "Request time-boxed operation access",
-    long_about = "Request time-boxed operation access.
+    about = "Request time-boxed operation and remote-debugging access",
+    long_about = "Request time-boxed access to operations, remote debugging, or both.
 
 Access requests work the same way whether they come from Slack, an AI agent, or here.
-An exact request covers one operation; a wildcard request covers every operation a
-plugin exposes right now, up to a risk cap — approval freezes that list, so operations
-added to the plugin later are never included.
+An exact operation request covers one operation; a wildcard request covers every
+operation a plugin exposes right now, up to a risk cap — approval freezes that list, so
+operations added to the plugin later are never included. A debug-tool request covers a
+remote-debugging session for kubectl, aws, gcloud, or az. Combine --operation and
+--debug-tool to request both on the same row; approving, denying, expiring, or revoking
+the request applies to both at once.
 
 Approval always happens on the customer's side (in-cluster, via kubectl or the
 operator's own reporting loop) — there is no command here that approves a request.
@@ -41,6 +45,15 @@ EXAMPLES:
     # Request temporary access to every read-only Kubernetes operation
     alien access-requests create --deployment mycustomer/prod \\
       --operation 'kubernetes/*' --max-risk read-only --duration 1h
+
+    # Request a kubectl debug session scoped to one namespace
+    alien access-requests create --deployment mycustomer/prod \\
+      --debug-tool kubectl --debug-namespace braintrust --duration 30m
+
+    # Request both an operation and a debug session in one row
+    alien access-requests create --deployment mycustomer/prod \\
+      --operation 'kubernetes/*' --max-risk read-only \\
+      --debug-tool kubectl --debug-namespace braintrust --duration 30m
 
     # Review a request, then wait for the customer to approve it
     alien access-requests get ar_123
@@ -62,7 +75,8 @@ pub struct AccessRequestsArgs {
 
 #[derive(Subcommand, Debug, Clone)]
 pub enum AccessRequestsAction {
-    /// Create an access request — exact (<plugin>/<operation>) or wildcard (<plugin>/*).
+    /// Create an access request — an operations grant (exact <plugin>/<operation> or
+    /// wildcard <plugin>/*), a remote-debugging grant (--debug-tool), or both.
     Create {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>.
         #[arg(long)]
@@ -71,7 +85,7 @@ pub enum AccessRequestsAction {
         /// Operation to request: an exact <plugin>/<operation>, or a wildcard
         /// <plugin>/* covering every operation the plugin exposes right now.
         #[arg(long)]
-        operation: String,
+        operation: Option<String>,
 
         /// Operation parameters as JSON. Only valid for an exact operation.
         #[arg(long)]
@@ -80,6 +94,21 @@ pub enum AccessRequestsAction {
         /// Highest risk tier a wildcard grant may cover: read-only | mutating | destructive. Required for a wildcard operation.
         #[arg(long = "max-risk")]
         max_risk: Option<String>,
+
+        /// Remote-debugging tool to request access for: kubectl | aws | gcloud | az.
+        /// May be combined with --operation to request both in one row.
+        #[arg(long = "debug-tool")]
+        debug_tool: Option<String>,
+
+        /// Kubernetes namespace to scope a `kubectl` debug grant to. Requires --debug-tool kubectl.
+        #[arg(long = "debug-namespace")]
+        debug_namespace: Option<String>,
+
+        /// Cloud account/project/subscription to scope an `aws`/`gcloud`/`az` debug
+        /// grant to (e.g. an AWS account id, a GCP project id). Requires --debug-tool
+        /// set to that provider.
+        #[arg(long = "debug-cloud-scope")]
+        debug_cloud_scope: Option<String>,
 
         /// Requested approval duration, e.g. 1h, 30m. Approvals cannot extend past this deadline.
         #[arg(long)]
@@ -119,6 +148,9 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
             operation,
             params,
             max_risk,
+            debug_tool,
+            debug_namespace,
+            debug_cloud_scope,
             duration,
             title,
             reason,
@@ -130,9 +162,12 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
                 &project,
                 CreateTaskOptions {
                     deployment: &deployment,
-                    operation: &operation,
+                    operation: operation.as_deref(),
                     params: params.as_deref(),
                     max_risk: max_risk.as_deref(),
+                    debug_tool: debug_tool.as_deref(),
+                    debug_namespace: debug_namespace.as_deref(),
+                    debug_cloud_scope: debug_cloud_scope.as_deref(),
                     title: title.as_deref(),
                     reason: reason.as_deref(),
                     duration: duration.as_deref(),
@@ -150,9 +185,12 @@ pub async fn access_requests_task(args: AccessRequestsArgs, ctx: ExecutionMode) 
 
 struct CreateTaskOptions<'a> {
     deployment: &'a str,
-    operation: &'a str,
+    operation: Option<&'a str>,
     params: Option<&'a str>,
     max_risk: Option<&'a str>,
+    debug_tool: Option<&'a str>,
+    debug_namespace: Option<&'a str>,
+    debug_cloud_scope: Option<&'a str>,
     title: Option<&'a str>,
     reason: Option<&'a str>,
     duration: Option<&'a str>,
@@ -179,68 +217,96 @@ async fn create_task(
     .to_string();
     let requested_expires_at = requested_expiration(Utc::now(), options.duration)?;
 
+    if options.operation.is_none() && options.debug_tool.is_none() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "operation".to_string(),
+            message: "Pass --operation (for operations access), --debug-tool (for remote \
+                debugging), or both."
+                .to_string(),
+        }));
+    }
+
     // `<plugin>/*` is a wildcard request; anything else is an exact operation.
-    let is_wildcard = options.operation.ends_with("/*");
+    let is_wildcard = options.operation.is_some_and(|op| op.ends_with("/*"));
 
     if is_wildcard && options.params.is_some() {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "params".to_string(),
             message: format!(
                 "--params only applies to an exact operation, not a wildcard pattern like '{}'.",
-                options.operation
+                options.operation.unwrap_or_default()
             ),
         }));
     }
 
-    let body = if !is_wildcard {
-        let params: Option<Value> = options
-            .params
-            .map(|raw| {
-                serde_json::from_str(raw)
-                    .into_alien_error()
-                    .context(ErrorData::ValidationError {
-                        field: "params".to_string(),
-                        message: "Invalid JSON".to_string(),
-                    })
-            })
-            .transpose()?;
-        CreateAccessRequest {
-            deployment_id,
-            operation: Some(options.operation.to_string()),
-            params,
-            operation_pattern: None,
-            max_risk: None,
-            title: options.title.map(str::to_string),
-            reason: options.reason.map(str::to_string),
-            remediation_plan_id: None,
-            replay_key: None,
-            requested_expires_at,
-            commands: Vec::new(),
+    let (operation, params, operation_pattern, max_risk) = match options.operation {
+        None => (None, None, None, None),
+        Some(operation) if !is_wildcard => {
+            let params: Option<Value> = options
+                .params
+                .map(|raw| {
+                    serde_json::from_str(raw)
+                        .into_alien_error()
+                        .context(ErrorData::ValidationError {
+                            field: "params".to_string(),
+                            message: "Invalid JSON".to_string(),
+                        })
+                })
+                .transpose()?;
+            (Some(operation.to_string()), params, None, None)
         }
-    } else {
-        let Some(max_risk) = options.max_risk else {
-            return Err(AlienError::new(ErrorData::ValidationError {
-                field: "max-risk".to_string(),
-                message: format!(
-                    "'{}' is a wildcard pattern and requires --max-risk (read-only | mutating | destructive).",
-                    options.operation
-                ),
-            }));
-        };
-        let max_risk = parse_max_risk(max_risk)?;
-        CreateAccessRequest {
-            deployment_id,
-            operation: None,
-            params: None,
-            operation_pattern: Some(options.operation.to_string()),
-            max_risk: Some(max_risk),
-            title: options.title.map(str::to_string),
-            reason: options.reason.map(str::to_string),
-            remediation_plan_id: None,
-            replay_key: None,
-            requested_expires_at,
-            commands: Vec::new(),
+        Some(operation) => {
+            let Some(max_risk) = options.max_risk else {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "max-risk".to_string(),
+                    message: format!(
+                        "'{operation}' is a wildcard pattern and requires --max-risk (read-only | mutating | destructive).",
+                    ),
+                }));
+            };
+            let max_risk = parse_max_risk(max_risk)?;
+            (None, None, Some(operation.to_string()), Some(max_risk))
         }
+    };
+
+    let debug_tool = options.debug_tool.map(parse_debug_tool).transpose()?;
+    if options.debug_namespace.is_some() && debug_tool != Some(DebugGrantTool::Kubectl)
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "debug-namespace".to_string(),
+            message: "--debug-namespace requires --debug-tool kubectl.".to_string(),
+        }));
+    }
+    if options.debug_cloud_scope.is_some() && debug_tool.is_none() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "debug-cloud-scope".to_string(),
+            message: "--debug-cloud-scope requires --debug-tool.".to_string(),
+        }));
+    }
+    if options.debug_cloud_scope.is_some() && debug_tool == Some(DebugGrantTool::Kubectl)
+    {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "debug-cloud-scope".to_string(),
+            message: "--debug-cloud-scope does not apply to --debug-tool kubectl; use --debug-namespace."
+                .to_string(),
+        }));
+    }
+
+    let body = CreateAccessRequest {
+        deployment_id,
+        operation,
+        params,
+        operation_pattern,
+        max_risk,
+        debug_tool,
+        debug_namespace: options.debug_namespace.map(str::to_string),
+        debug_cloud_scope: options.debug_cloud_scope.map(str::to_string),
+        title: options.title.map(str::to_string),
+        reason: options.reason.map(str::to_string),
+        remediation_plan_id: None,
+        commands: Vec::new(),
+        replay_key: None,
+        requested_expires_at,
     };
 
     let created = sdk_client
@@ -274,6 +340,7 @@ async fn create_task(
             "operationPattern": created.operation_pattern,
             "maxRisk": created.max_risk,
             "commands": created.commands,
+            "debugGrant": created.debug_grant,
             "approvedUntil": created.approved_until,
             "kubectlApprove": kubectl_approve,
         }))?;
@@ -290,6 +357,19 @@ async fn create_task(
                     .unwrap_or_default();
                 println!("  - {}{tier} — {}", command.command, command.summary);
             }
+        }
+        if let Some(debug_grant) = created.debug_grant.as_ref() {
+            let scope = debug_grant
+                .namespace
+                .as_deref()
+                .or(debug_grant.cloud_scope.as_deref())
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!(
+                "{} {}{scope}",
+                dim_label("Debug access:"),
+                debug_grant.tool
+            );
         }
         print_kubectl_approve(&kubectl_approve, created.status);
         println!();
@@ -338,6 +418,19 @@ fn parse_max_risk(value: &str) -> Result<CreateAccessRequestMaxRisk> {
     }
 }
 
+pub(crate) fn parse_debug_tool(value: &str) -> Result<DebugGrantTool> {
+    match value {
+        "kubectl" => Ok(DebugGrantTool::Kubectl),
+        "aws" => Ok(DebugGrantTool::Aws),
+        "gcloud" => Ok(DebugGrantTool::Gcloud),
+        "az" => Ok(DebugGrantTool::Az),
+        other => Err(AlienError::new(ErrorData::ValidationError {
+            field: "debug-tool".to_string(),
+            message: format!("'{other}' is not a supported debug tool. Use kubectl, aws, gcloud, or az."),
+        })),
+    }
+}
+
 async fn get_task(
     sdk_client: &alien_platform_api::Client,
     workspace: &str,
@@ -377,6 +470,7 @@ async fn get_task(
             "operationPattern": request.operation_pattern,
             "maxRisk": request.max_risk,
             "commands": request.commands,
+            "debugGrant": request.debug_grant,
             "approvedUntil": request.approved_until,
             "kubectlApprove": kubectl_approve,
         }))?;
@@ -386,6 +480,19 @@ async fn get_task(
         println!("{} {}", dim_label("Status"), request.status);
         if let Some(pattern) = &request.operation_pattern {
             println!("{} {}", dim_label("Pattern"), pattern);
+        }
+        if let Some(debug_grant) = request.debug_grant.as_ref() {
+            let scope = debug_grant
+                .namespace
+                .as_deref()
+                .or(debug_grant.cloud_scope.as_deref())
+                .map(|s| format!(" ({s})"))
+                .unwrap_or_default();
+            println!(
+                "{} {}{scope}",
+                dim_label("Debug access:"),
+                debug_grant.tool
+            );
         }
         if let Some(until) = &request.approved_until {
             println!("{} {}", dim_label("Approved until"), until);
@@ -526,6 +633,68 @@ async fn wait_task(
             return Err(AlienError::new(ErrorData::ApiRequestFailed {
                 message: format!(
                     "timed out after {timeout_secs}s waiting for access request '{id}' to be approved"
+                ),
+                url: None,
+            }));
+        }
+        tokio::time::sleep(Duration::from_secs(3)).await;
+    }
+}
+
+/// Poll a queued access request until the customer approves it in-cluster,
+/// printing the `kubectl patch` approve command once it becomes available.
+/// Shared by `--request-access` shortcuts (`alien operations invoke
+/// --request-access`, `alien debug --request-access`) that need to wait
+/// silently on stdout (reserved for the caller's own eventual result) and
+/// just get the id back on success.
+pub(crate) async fn wait_for_approval(
+    sdk_client: &alien_platform_api::Client,
+    workspace: &str,
+    id: &str,
+) -> Result<String> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(3600);
+    let mut printed_kubectl_approve = false;
+    loop {
+        let request = sdk_client
+            .get_access_request()
+            .id(id)
+            .workspace(workspace)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!("waiting for access request '{id}'"),
+                url: None,
+            })?
+            .into_inner();
+
+        if !printed_kubectl_approve {
+            let kubectl_approve = fetch_kubectl_approve(sdk_client, workspace, id).await?;
+            if let Some(command) = &kubectl_approve {
+                eprintln!("{}", dim_label("Run this in-cluster to approve:"));
+                eprintln!("  {command}");
+                printed_kubectl_approve = true;
+            }
+        }
+
+        match request.status {
+            alien_platform_api::types::AccessRequestStatus::CustomerApproved => {
+                return Ok(request.id);
+            }
+            alien_platform_api::types::AccessRequestStatus::Rejected
+            | alien_platform_api::types::AccessRequestStatus::Expired => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!("access request '{id}' is '{}', not approved", request.status),
+                    url: None,
+                }));
+            }
+            _ => {}
+        }
+
+        if std::time::Instant::now() >= deadline {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "timed out after 3600s waiting for access request '{id}' to be approved"
                 ),
                 url: None,
             }));

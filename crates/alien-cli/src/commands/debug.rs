@@ -16,6 +16,7 @@
 use crate::error::{ErrorData, Result};
 use crate::execution_context::{ExecutionMode, ManagerContext};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_platform_api::SdkResultExt as _;
 use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use clap::{Args, Parser, Subcommand};
 use futures::{SinkExt, StreamExt};
@@ -46,6 +47,12 @@ DEPLOYMENT can be a deployment ID (`dep_...`) or `<group>/<name>`.",
     alien debug acme/prod -- gcloud projects list
     alien debug acme/prod -- kubectl get pods
 
+    # Remote Operator (pull-mode Kubernetes) deployments require an approved
+    # access request covering the tool + namespace/scope you're debugging:
+    alien access-requests create --deployment acme/prod \\
+      --debug-tool kubectl --debug-namespace braintrust --duration 30m
+    alien debug acme/prod --access-request ar_123 -- kubectl get pods -n braintrust
+
     # No `--` arg drops you into a local interactive shell with the env set:
     alien debug acme/prod
 
@@ -70,6 +77,24 @@ pub struct DebugArgs {
     /// If omitted, an interactive shell ($SHELL, or /bin/sh) is spawned instead.
     #[arg(last = true)]
     pub cmd: Vec<String>,
+
+    /// Access request id (`ar_...`) authorizing this debug session. Required for
+    /// Remote Operator (pull-mode Kubernetes) deployments, where debugging shares
+    /// the same approval flow as `alien operations invoke`. Create one with
+    /// `alien access-requests create --debug-tool <kubectl|aws|gcloud|az> ...`.
+    #[arg(long = "access-request", conflicts_with = "request_access")]
+    pub access_request: Option<String>,
+
+    /// Shortcut: create a debug-tool access request for this deployment, wait for
+    /// customer approval, then start the session against it. Creates the same
+    /// access-request resource as `alien access-requests create --debug-tool ...`.
+    #[arg(long = "request-access", conflicts_with = "access_request")]
+    pub request_access: bool,
+
+    /// Requested approval duration for `--request-access`, e.g. 30m, 1h.
+    /// Informational until approved; the approver sets the actual grant window.
+    #[arg(long = "access-duration", default_value = "30m")]
+    pub access_duration: String,
 
     /// Emit errors as JSON. The spawned command's stdout/stderr are always passed
     /// through unchanged.
@@ -155,6 +180,12 @@ struct CreateDebugSessionRequest {
     /// Whether the requested runtime session needs a TTY.
     #[serde(skip_serializing_if = "Option::is_none")]
     tty: Option<bool>,
+    /// Access request id (`ar_...`) authorizing this session. Required by the
+    /// manager for pull-mode Kubernetes (Remote Operator) sessions; ignored
+    /// for push-mode cloud/Machines sessions, which aren't gated by access
+    /// requests in this round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    access_request_id: Option<String>,
 }
 
 // Wire types live in `alien-debug-session` so the manager (push mode) and
@@ -182,6 +213,29 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
 
     let (manager, deployment_id) = resolve_debug_target(&ctx, deployment, true).await?;
 
+    let access_request_id = if args.request_access {
+        let tool = args.cmd.first().cloned().ok_or_else(|| {
+            AlienError::new(ErrorData::ValidationError {
+                field: "cmd".to_string(),
+                message: "`--request-access` needs a command to debug, e.g. \
+                    `alien debug acme/prod --request-access -- kubectl get pods -n braintrust`."
+                    .to_string(),
+            })
+        })?;
+        Some(
+            request_debug_access_then_wait(
+                &ctx,
+                &deployment_id,
+                &tool,
+                &args.access_duration,
+                args.json,
+            )
+            .await?,
+        )
+    } else {
+        args.access_request.clone()
+    };
+
     // No CLI-side caching: every invocation asks the manager to create-or-
     // reuse a session. The manager controls session lifetime, token rotation,
     // and registry eviction.
@@ -194,11 +248,72 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
             machine: None,
             command: None,
             tty: None,
+            access_request_id,
         },
     )
     .await?;
     let session = resolve_pending_session(&manager, session).await?;
     exec_with_session(deployment, session, &args.cmd).await
+}
+
+/// `--request-access` shortcut: create a debug-tool access request for
+/// `deployment_id`, wait for the customer to approve it in-cluster, and
+/// return its id. Creates the exact same access-request resource as `alien
+/// access-requests create --debug-tool ...` — this is sugar over that call
+/// plus a wait loop, not a separate approval path.
+async fn request_debug_access_then_wait(
+    ctx: &ExecutionMode,
+    deployment_id: &str,
+    tool: &str,
+    access_duration: &str,
+    json: bool,
+) -> Result<String> {
+    let debug_tool = crate::commands::access_requests::parse_debug_tool(tool)?;
+    let requested_expires_at = crate::commands::access_requests::requested_expiration(
+        chrono::Utc::now(),
+        Some(access_duration),
+    )?;
+
+    let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+    let sdk_client = ctx.sdk_client().await?;
+
+    let created = sdk_client
+        .create_access_request()
+        .workspace(&workspace)
+        .body(alien_platform_api::types::CreateAccessRequest {
+            deployment_id: deployment_id.to_string(),
+            operation: None,
+            params: None,
+            operation_pattern: None,
+            max_risk: None,
+            debug_tool: Some(debug_tool),
+            debug_namespace: None,
+            debug_cloud_scope: None,
+            title: None,
+            reason: None,
+            remediation_plan_id: None,
+            commands: Vec::new(),
+            replay_key: None,
+            requested_expires_at,
+        })
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "creating debug access request".to_string(),
+            url: None,
+        })?
+        .into_inner();
+
+    // Progress goes to stderr, same reasoning as operations' `--request-access`:
+    // in --json mode stdout is reserved for exactly one JSON document (the
+    // final result), so progress can't share it.
+    eprintln!(
+        "Debug access requested: {}\nWaiting for the customer to approve it in-cluster...",
+        created.id
+    );
+
+    crate::commands::access_requests::wait_for_approval(&sdk_client, &workspace, &created.id).await
 }
 
 impl DebugArgs {
@@ -229,6 +344,7 @@ async fn runtime_shell_task(args: DebugShellArgs, ctx: ExecutionMode) -> Result<
             machine: args.machine.clone(),
             command: None,
             tty: Some(true),
+            access_request_id: None,
         },
     )
     .await?;
@@ -259,6 +375,7 @@ async fn runtime_exec_task(args: DebugExecArgs, ctx: ExecutionMode) -> Result<()
             machine: args.machine.clone(),
             command: Some(args.cmd.clone()),
             tty: Some(false),
+            access_request_id: None,
         },
     )
     .await?;
