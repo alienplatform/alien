@@ -1048,3 +1048,45 @@ fn deterministic_bytes(len: usize) -> Vec<u8> {
     out.truncate(len);
     out
 }
+
+/// The route authorizes before it provisions, and names only a repository its proxy can route.
+#[tokio::test]
+async fn image_repository_provisioning_authorizes_first_and_serves_only_cloud_registries() {
+    let s = setup().await;
+    let client = reqwest::Client::new();
+    let provision = |token: &str, platform: &str| {
+        client
+            .post(format!("{}/v1/image-repositories", s.manager_url))
+            .header("Authorization", format!("Bearer {token}"))
+            .json(&serde_json::json!({ "projectId": "default", "platform": platform }))
+            .send()
+    };
+
+    let expect_error = |status: u16, code: &'static str, reason: &'static str| {
+        move |resp: reqwest::Response| async move {
+            assert_eq!(resp.status(), status);
+            let body: serde_json::Value = resp.json().await.unwrap();
+            assert_eq!(body["code"], code, "{body}");
+            assert!(body.to_string().contains(reason), "{body}");
+        }
+    };
+
+    expect_error(403, "FORBIDDEN", "cannot provision")(
+        provision(&s.deployment_token, "aws").await.unwrap(),
+    )
+    .await;
+
+    // The local registry names repositories off its proxy route, so a name returned for it could
+    // not be pushed to.
+    expect_error(400, "BAD_REQUEST", "cloud registries only")(
+        provision(&s.admin_token, "local").await.unwrap(),
+    )
+    .await;
+
+    // A missing binding is the manager's configuration, not the caller's request, so it surfaces
+    // as a sanitized server error rather than a 400 blaming the caller.
+    expect_error(500, "GENERIC_ERROR", "Internal server error")(
+        provision(&s.admin_token, "aws").await.unwrap(),
+    )
+    .await;
+}

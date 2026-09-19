@@ -16,8 +16,8 @@ use alien_bindings::{
 };
 use alien_core::{
     AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    Platform, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata, Sandbox, SandboxCode,
-    Stack, StackState, Worker, WorkerCode,
+    Platform, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata, Sandbox, Stack,
+    StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
@@ -220,6 +220,7 @@ pub async fn reconcile_registry_access(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     deployment_id: &str,
+    project_id: &str,
     state: &mut DeploymentState,
 ) {
     let environment_info = match &state.environment_info {
@@ -267,7 +268,7 @@ pub async fn reconcile_registry_access(
         }
     };
 
-    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state);
+    let (repo_ids, refused_any) = repository_access(artifact_registry.as_ref(), state, project_id);
     if repo_ids.is_empty() {
         return;
     }
@@ -284,7 +285,9 @@ pub async fn reconcile_registry_access(
         .await;
     }
 
-    if granted {
+    // A refused reference keeps the grant incomplete, so the refusal is logged every cycle
+    // instead of hidden behind a flag that stops reconciliation.
+    if granted && !refused_any {
         let rm = state
             .runtime_metadata
             .get_or_insert_with(RuntimeMetadata::default);
@@ -303,6 +306,7 @@ pub async fn cleanup_deleted_registry_access(
     bindings_provider: &Option<Arc<dyn BindingsProviderApi>>,
     target_bindings_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     deployment_id: &str,
+    project_id: &str,
     state: &DeploymentState,
 ) -> Result<()> {
     if state.status != DeploymentStatus::Deleted {
@@ -336,7 +340,7 @@ pub async fn cleanup_deleted_registry_access(
         }));
     };
 
-    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state);
+    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
     if repo_ids.is_empty() {
         return if registry_access_granted {
             Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
@@ -366,10 +370,21 @@ pub async fn cleanup_deleted_registry_access(
 fn repository_ids_for_access(
     artifact_registry: &dyn ArtifactRegistry,
     state: &DeploymentState,
+    project_id: &str,
 ) -> Vec<String> {
+    repository_access(artifact_registry, state, project_id).0
+}
+
+/// The repositories to grant, and whether any sandbox base image was refused as not this
+/// project's.
+fn repository_access(
+    artifact_registry: &dyn ArtifactRegistry,
+    state: &DeploymentState,
+    project_id: &str,
+) -> (Vec<String>, bool) {
     let prefix = artifact_registry.upstream_repository_prefix();
     if prefix.is_empty() {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     if matches!(
@@ -380,20 +395,21 @@ fn repository_ids_for_access(
         Some(Platform::Aws)
     ) {
         let mut repo_ids = HashSet::new();
-        collect_image_repositories(state, &prefix, INCLUDE_SANDBOX, &mut repo_ids);
+        let refused =
+            collect_image_repositories(state, &prefix, project_id, INCLUDE_SANDBOX, &mut repo_ids);
         let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
         repo_ids.sort();
-        return repo_ids;
+        return (repo_ids, refused);
     }
 
     if !has_image_in_repository_prefix(state, &prefix, EXCLUDE_SANDBOX) {
-        return Vec::new();
+        return (Vec::new(), false);
     }
 
     let repo_ids = HashSet::from([prefix]);
     let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
     repo_ids.sort();
-    repo_ids
+    (repo_ids, false)
 }
 
 /// Only the AWS sandbox takes its root filesystem from an image Alien hosts, so counting one on
@@ -402,6 +418,10 @@ const INCLUDE_SANDBOX: bool = true;
 const EXCLUDE_SANDBOX: bool = false;
 
 /// The image a resource pulls from Alien's registry, if it declares one.
+///
+/// A worker names it in `code.image`. An AWS sandbox's `code.image` is its S3 bundle URI and
+/// matches no repository prefix, so `privateBaseImage`, what its Dockerfile pulls, is the only
+/// field naming the repository its build needs opened.
 fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Option<&str> {
     if let Some(worker) = entry.config.downcast_ref::<Worker>() {
         return match &worker.code {
@@ -411,10 +431,7 @@ fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Opt
     }
     if include_sandbox {
         if let Some(sandbox) = entry.config.downcast_ref::<Sandbox>() {
-            return match &sandbox.code {
-                SandboxCode::Image { image } => Some(image),
-                _ => None,
-            };
+            return sandbox.private_base_image.as_deref();
         }
     }
     None
@@ -423,17 +440,33 @@ fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Opt
 fn collect_image_repositories(
     state: &DeploymentState,
     prefix: &str,
+    project_id: &str,
     include_sandbox: bool,
     repo_ids: &mut HashSet<String>,
-) {
+) -> bool {
+    let mut refused = false;
+    // Every project shares the prefix, so a sandbox's free-text base image could otherwise name
+    // a sibling project's repository and open it to this deployment's account.
+    let own_repository = format!("{prefix}-{project_id}");
     let mut collect = |stack: &Stack| {
-        for (_id, entry) in stack.resources() {
+        for (id, entry) in stack.resources() {
             let Some(image) = resource_image_reference(entry, include_sandbox) else {
                 continue;
             };
-            if let Some(repo_id) = ecr_repository_from_image(image, prefix) {
-                repo_ids.insert(repo_id);
+            let Some(repo_id) = ecr_repository_from_image(image, prefix) else {
+                continue;
+            };
+            if entry.config.downcast_ref::<Sandbox>().is_some() && repo_id != own_repository {
+                warn!(
+                    resource_id = %id,
+                    repository = %repo_id,
+                    project_id = %project_id,
+                    "Refusing registry access for a sandbox base image outside its project's repository"
+                );
+                refused = true;
+                continue;
             }
+            repo_ids.insert(repo_id);
         }
     };
 
@@ -448,6 +481,7 @@ fn collect_image_repositories(
             collect(stack);
         }
     }
+    refused
 }
 
 fn has_image_in_repository_prefix(
@@ -671,7 +705,7 @@ mod tests {
     };
     use alien_core::{
         ReleaseInfo, RemoteStackManagement, Resource, ResourceLifecycle, ResourceOutputs,
-        ResourceStatus, SandboxEgress, SandboxLifecyclePolicy, StackResourceState,
+        ResourceStatus, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, StackResourceState,
     };
     use alien_error::AlienError;
     use async_trait::async_trait;
@@ -902,13 +936,24 @@ mod tests {
             .build()
     }
 
-    fn sandbox_stack(image: &str) -> Stack {
+    /// The bundle URI a stored AWS sandbox carries in `code.image`.
+    ///
+    /// An AWS sandbox's `code.image` is an S3 bundle URI, so this — not a registry reference — is
+    /// what the scan reads there.
+    const STORED_BUNDLE_URI: &str = "s3://acme-sandbox-bundles/sandbox-bundle/abc123/bundle.zip";
+
+    /// A stored AWS sandbox, with the base image its bundle pulls named separately.
+    ///
+    /// `None` is a sandbox built on a public base: it authenticates to nothing and so earns no
+    /// grant.
+    fn sandbox_stack(private_base_image: Option<&str>) -> Stack {
         Stack::new("test-stack".to_string())
             .add(
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
-                        image: image.to_string(),
+                        image: STORED_BUNDLE_URI.to_string(),
                     })
+                    .maybe_private_base_image(private_base_image.map(str::to_string))
                     .egress(SandboxEgress::Allow)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
@@ -1017,6 +1062,8 @@ mod tests {
         );
     }
 
+    const PROJECT: &str = "prj_test";
+
     #[test]
     fn aws_registry_access_skips_container_only_stack() {
         let registry = TestArtifactRegistry {
@@ -1025,7 +1072,7 @@ mod tests {
         };
         let state = aws_state_with_stack(Stack::new("test-stack".to_string()).build());
 
-        assert!(repository_ids_for_access(&registry, &state).is_empty());
+        assert!(repository_ids_for_access(&registry, &state, PROJECT).is_empty());
     }
 
     #[test]
@@ -1039,7 +1086,7 @@ mod tests {
         ));
 
         assert_eq!(
-            repository_ids_for_access(&registry, &state),
+            repository_ids_for_access(&registry, &state, PROJECT),
             vec!["alien-artifacts-prj_test".to_string()]
         );
     }
@@ -1054,7 +1101,7 @@ mod tests {
             "manager.example.com/prj_test/test-worker:abc123",
         ));
 
-        assert!(repository_ids_for_access(&registry, &state).is_empty());
+        assert!(repository_ids_for_access(&registry, &state, PROJECT).is_empty());
     }
 
     #[test]
@@ -1068,7 +1115,7 @@ mod tests {
         ));
 
         assert_eq!(
-            repository_ids_for_access(&registry, &state),
+            repository_ids_for_access(&registry, &state, PROJECT),
             vec!["test-project/alien-artifacts".to_string()]
         );
     }
@@ -1135,42 +1182,47 @@ mod tests {
             Some("BINDINGS_ERROR")
         );
     }
+    /// `code.image` holds the S3 bundle, so the sandbox's repository comes from `privateBaseImage`.
     #[test]
-    fn aws_registry_access_uses_sandbox_image_repository() {
+    fn aws_registry_access_uses_sandbox_base_image_repository_not_the_bundle() {
         let registry = TestArtifactRegistry {
-            prefix: "alien-artifacts-prj_test".to_string(),
+            prefix: "alien-artifacts".to_string(),
             fail_remove: false,
         };
-        // A sandbox base image pushed through the registry proxy, which is the only shape that
-        // names a repository Alien hosts.
-        let state = aws_state_with_stack(sandbox_stack(
-            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
-        ));
+        // A stored reference: resolved onto the release registry and still
+        // region-templated, because one bundle key serves every regional store and the host
+        // carries the token the emitters resolve later.
+        let state = aws_state_with_stack(sandbox_stack(Some(
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+        )));
 
         assert_eq!(
-            repository_ids_for_access(&registry, &state),
+            repository_ids_for_access(&registry, &state, PROJECT),
             vec!["alien-artifacts-prj_test".to_string()],
-            "a sandbox-only stack must resolve the repository its base image lives in"
+            "the grant names the repository hosting the base image, and the {{region}} token in \
+             its host does not stop the repository being derived"
         );
     }
 
     #[test]
     fn aws_registry_access_skips_sandbox_images_outside_the_repository_prefix() {
         let registry = TestArtifactRegistry {
-            prefix: "alien-artifacts-prj_test".to_string(),
+            prefix: "alien-artifacts".to_string(),
             fail_remove: false,
         };
 
         for image in [
-            "s3://acme-artifacts/agents/bundle.zip",
             "ubuntu:24.04",
             "ghcr.io/acme/sandbox:latest",
-            "manager.example.com/alien-artifacts-prj_other:agents-abc123",
+            // Under the shared prefix but a sibling project's: granting it would open that
+            // project's images to this deployment's account.
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_other:agents-abc123",
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts:agents-abc123",
         ] {
-            let state = aws_state_with_stack(sandbox_stack(image));
+            let state = aws_state_with_stack(sandbox_stack(Some(image)));
             assert!(
-                repository_ids_for_access(&registry, &state).is_empty(),
-                "'{image}' names no repository Alien hosts and must not produce a grant"
+                repository_ids_for_access(&registry, &state, PROJECT).is_empty(),
+                "'{image}' is not this project's repository and must not produce a grant"
             );
         }
     }
@@ -1178,17 +1230,17 @@ mod tests {
     #[test]
     fn aws_sandbox_only_stack_grants_the_customer_account_and_rsm_role() {
         let registry = TestArtifactRegistry {
-            prefix: "alien-artifacts-prj_test".to_string(),
+            prefix: "alien-artifacts".to_string(),
             fail_remove: false,
         };
         let role_arn = "arn:aws:iam::123456789012:role/alien-rsm-role";
-        let mut state = aws_state_with_stack(sandbox_stack(
-            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
-        ));
+        let mut state = aws_state_with_stack(sandbox_stack(Some(
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+        )));
         state.stack_state = Some(registered_stack_state(role_arn));
 
         assert_eq!(
-            repository_ids_for_access(&registry, &state),
+            repository_ids_for_access(&registry, &state, PROJECT),
             vec!["alien-artifacts-prj_test".to_string()]
         );
 
@@ -1285,9 +1337,9 @@ mod tests {
 
     #[test]
     fn aws_cleanup_guard_covers_a_sandbox_only_stack() {
-        let state = aws_state_with_stack(sandbox_stack(
-            "manager.example.com/alien-artifacts-prj_test:agents-abc123",
-        ));
+        let state = aws_state_with_stack(sandbox_stack(Some(
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
+        )));
 
         assert!(
             has_registry_backed_image(&state, &Platform::Aws),
@@ -1298,16 +1350,20 @@ mod tests {
             "no GCP sandbox pulls from Alien's registry, so cleanup must stay a no-op there"
         );
 
-        // The guard is deliberately looser than the repository scan and asks only whether an
-        // image is declared, matching what a Worker naming a public image has always done.
-        let bundle_state = aws_state_with_stack(sandbox_stack("s3://acme-artifacts/bundle.zip"));
-        assert!(has_registry_backed_image(&bundle_state, &Platform::Aws));
+        // A public base image authenticates to nothing, so no grant was ever made and there is
+        // nothing for cleanup to revoke. The bundle URI in `code.image` is not a registry
+        // reference and must not be mistaken for one.
+        let public_state = aws_state_with_stack(sandbox_stack(None));
+        assert!(
+            !has_registry_backed_image(&public_state, &Platform::Aws),
+            "a sandbox built on a public base earns no grant, so cleanup has nothing to revoke"
+        );
     }
 
     #[test]
     fn aws_registry_access_covers_a_worker_and_a_sandbox_together() {
         let registry = TestArtifactRegistry {
-            prefix: "alien-artifacts-prj_test".to_string(),
+            prefix: "alien-artifacts".to_string(),
             fail_remove: false,
         };
         let stack = Stack::new("test-stack".to_string())
@@ -1324,9 +1380,13 @@ mod tests {
             .add(
                 Sandbox::new("agents".to_string())
                     .code(SandboxCode::Image {
-                        image: "manager.example.com/alien-artifacts-prj_test-sandbox:agents-abc123"
-                            .to_string(),
+                        image: STORED_BUNDLE_URI.to_string(),
                     })
+                    .private_base_image(
+                        "123456789012.dkr.ecr.{region}.amazonaws.com/\
+                         alien-artifacts-prj_test:agents-abc123"
+                            .to_string(),
+                    )
                     .egress(SandboxEgress::Allow)
                     .lifecycle(SandboxLifecyclePolicy {
                         max_lifetime_seconds: None,
@@ -1338,12 +1398,55 @@ mod tests {
             .build();
 
         assert_eq!(
-            repository_ids_for_access(&registry, &aws_state_with_stack(stack)),
-            vec![
-                "alien-artifacts-prj_test".to_string(),
-                "alien-artifacts-prj_test-sandbox".to_string()
-            ],
-            "each resource keeps its own repository and neither displaces the other"
+            repository_ids_for_access(&registry, &aws_state_with_stack(stack), PROJECT),
+            vec!["alien-artifacts-prj_test".to_string()],
+            "a worker and a sandbox in one project share its repository and one grant"
+        );
+    }
+
+    #[test]
+    fn a_refused_sandbox_base_image_leaves_the_grant_incomplete() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+        };
+        let stack = Stack::new("test-stack".to_string())
+            .add(
+                Worker::new("test-worker".to_string())
+                    .code(WorkerCode::Image {
+                        image: "manager.example.com/alien-artifacts-prj_test:test-worker-abc123"
+                            .to_string(),
+                    })
+                    .permissions("execution".to_string())
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(SandboxCode::Image {
+                        image: STORED_BUNDLE_URI.to_string(),
+                    })
+                    .private_base_image(
+                        "123456789012.dkr.ecr.{region}.amazonaws.com/\
+                         alien-artifacts-prj_other:agents-abc123"
+                            .to_string(),
+                    )
+                    .egress(SandboxEgress::Allow)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let (repo_ids, refused) =
+            repository_access(&registry, &aws_state_with_stack(stack), PROJECT);
+        assert_eq!(repo_ids, vec!["alien-artifacts-prj_test".to_string()]);
+        assert!(
+            refused,
+            "the worker's grant must not mark the deployment fully granted"
         );
     }
 
@@ -1353,12 +1456,12 @@ mod tests {
             prefix: "test-project/alien-artifacts".to_string(),
             fail_remove: false,
         };
-        let state = gcp_state_with_stack(sandbox_stack(
+        let state = gcp_state_with_stack(sandbox_stack(Some(
             "manager.example.com/test-project/alien-artifacts/agents:abc123",
-        ));
+        )));
 
         assert!(
-            repository_ids_for_access(&registry, &state).is_empty(),
+            repository_ids_for_access(&registry, &state, PROJECT).is_empty(),
             "a GCP sandbox takes no image from Alien's registry, so it must grant nothing"
         );
     }
