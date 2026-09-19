@@ -347,15 +347,24 @@ pub async fn cleanup_deleted_registry_access(
     if registry_access_granted && matches!(platform, Platform::Aws) && declares_sandbox(state) {
         if let Some(own_repository) = project_repository(artifact_registry.as_ref(), project_id) {
             // Only a repository that exists: a worker-only grant on the shared repository would
-            // otherwise send cleanup at a project repository nobody ever created.
-            if !repo_ids.contains(&own_repository)
-                && artifact_registry
-                    .get_repository(&own_repository)
-                    .await
-                    .is_ok()
-            {
-                repo_ids.push(own_repository);
-                repo_ids.sort();
+            // otherwise send cleanup at a project repository nobody ever created. A lookup that
+            // fails for any other reason is not an answer — revoking nothing would leave the
+            // customer's read in place with nothing left to retry it.
+            if !repo_ids.contains(&own_repository) {
+                match artifact_registry.get_repository(&own_repository).await {
+                    Ok(_) => {
+                        repo_ids.push(own_repository);
+                        repo_ids.sort();
+                    }
+                    Err(error) if error.http_status_code == Some(404) => {}
+                    Err(error) => return Err(error)
+                        .context(ErrorData::RegistryAccessCleanupFailed {
+                        deployment_id: deployment_id.to_string(),
+                        reason: format!(
+                            "repository '{own_repository}' could not be read to revoke its grant"
+                        ),
+                    }),
+                }
             }
         }
     }
