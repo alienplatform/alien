@@ -290,6 +290,11 @@ pub enum Role {
     /// This role is paired with [`Scope::Deployment`] and must not imply generic
     /// deployment read or mutation access.
     RemoteBindingResolver,
+    /// Exact capability for ensuring one project's image repository exists.
+    ///
+    /// This role is paired with [`Scope::Project`] and must not imply image push
+    /// or any other project access.
+    ImageRepositoryProvisioner,
 }
 
 #[cfg(test)]
