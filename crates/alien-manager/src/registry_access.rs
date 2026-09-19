@@ -340,7 +340,19 @@ pub async fn cleanup_deleted_registry_access(
         }));
     };
 
-    let repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
+    let mut repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
+    // A release that drops `privateBaseImage` would otherwise leave the grant it earned with
+    // nothing naming it. A sandbox is only ever granted this one repository, so a deployment that
+    // still declares one can revoke it without the field.
+    if registry_access_granted && matches!(platform, Platform::Aws) && declares_sandbox(state) {
+        let own_repository = project_repository(artifact_registry.as_ref(), project_id);
+        if let Some(own_repository) = own_repository {
+            if !repo_ids.contains(&own_repository) {
+                repo_ids.push(own_repository);
+                repo_ids.sort();
+            }
+        }
+    }
     if repo_ids.is_empty() {
         return if registry_access_granted {
             Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
@@ -395,8 +407,14 @@ fn repository_access(
         Some(Platform::Aws)
     ) {
         let mut repo_ids = HashSet::new();
-        let refused =
-            collect_image_repositories(state, &prefix, project_id, INCLUDE_SANDBOX, &mut repo_ids);
+        let refused = collect_image_repositories(
+            state,
+            &prefix,
+            &artifact_registry.registry_endpoint(),
+            project_id,
+            INCLUDE_SANDBOX,
+            &mut repo_ids,
+        );
         let mut repo_ids: Vec<_> = repo_ids.into_iter().collect();
         repo_ids.sort();
         return (repo_ids, refused);
@@ -437,9 +455,50 @@ fn resource_image_reference(entry: &ResourceEntry, include_sandbox: bool) -> Opt
     None
 }
 
+/// The one repository a sandbox in this project can be granted, if the registry names repositories
+/// by prefix at all.
+fn project_repository(
+    artifact_registry: &dyn ArtifactRegistry,
+    project_id: &str,
+) -> Option<String> {
+    let prefix = artifact_registry.upstream_repository_prefix();
+    (!prefix.is_empty()).then(|| format!("{prefix}-{project_id}"))
+}
+
+fn declares_sandbox(state: &DeploymentState) -> bool {
+    let has_sandbox = |stack: &Stack| {
+        stack
+            .resources()
+            .any(|(_id, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+    };
+    state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| has_sandbox(&release.stack))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| has_sandbox(&release.stack))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
+            .is_some_and(has_sandbox)
+}
+
+/// The AWS account a `{account}.dkr.ecr.{region}.amazonaws.com` host names, where the region may
+/// still be the `{region}` token a stored reference carries.
+fn ecr_registry_account(host: &str) -> Option<&str> {
+    let host = alien_core::image_rewrite::strip_url_scheme(host);
+    let host = host.split('/').next()?;
+    let (account, rest) = host.split_once(".dkr.ecr.")?;
+    rest.ends_with(".amazonaws.com").then_some(account)
+}
+
 fn collect_image_repositories(
     state: &DeploymentState,
     prefix: &str,
+    registry_endpoint: &str,
     project_id: &str,
     include_sandbox: bool,
     repo_ids: &mut HashSet<String>,
@@ -456,7 +515,13 @@ fn collect_image_repositories(
             let Some(repo_id) = ecr_repository_from_image(image, prefix) else {
                 continue;
             };
-            if entry.config.downcast_ref::<Sandbox>().is_some() && repo_id != own_repository {
+            // The host too: the grant is written on this registry, so a same-path repository in
+            // another account would be granted here and pulled from there.
+            let own_registry =
+                ecr_registry_account(image) == ecr_registry_account(registry_endpoint);
+            if entry.config.downcast_ref::<Sandbox>().is_some()
+                && (repo_id != own_repository || !own_registry)
+            {
                 warn!(
                     resource_id = %id,
                     repository = %repo_id,
@@ -721,7 +786,9 @@ mod tests {
     #[async_trait]
     impl ArtifactRegistry for TestArtifactRegistry {
         fn registry_endpoint(&self) -> String {
-            format!("https://{}.example.com", self.prefix)
+            // The ECR shape, since the sandbox check compares the account a reference names
+            // against the account its grant would be written in.
+            "https://123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string()
         }
 
         fn upstream_repository_prefix(&self) -> String {
@@ -1058,7 +1125,7 @@ mod tests {
         assert_eq!(registry.upstream_repository_prefix(), "alien-e2e");
         assert_eq!(
             derive_native_image_host(&None, &target_providers, &Platform::Aws).await,
-            Some("alien-e2e.example.com".to_string())
+            Some("123456789012.dkr.ecr.us-east-2.amazonaws.com".to_string())
         );
     }
 
@@ -1218,6 +1285,9 @@ mod tests {
             // project's images to this deployment's account.
             "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_other:agents-abc123",
             "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts:agents-abc123",
+            // This project's repository path, in another account: granting here would open a
+            // repository the build never pulls from.
+            "210987654321.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:agents-abc123",
         ] {
             let state = aws_state_with_stack(sandbox_stack(Some(image)));
             assert!(
@@ -1447,6 +1517,27 @@ mod tests {
         assert!(
             refused,
             "the worker's grant must not mark the deployment fully granted"
+        );
+    }
+
+    /// A release that drops `privateBaseImage` leaves the grant it earned named nowhere, so
+    /// cleanup falls back to the one repository a sandbox is ever granted.
+    #[test]
+    fn a_dropped_base_image_still_names_the_repository_cleanup_must_revoke() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+        };
+        let dropped = aws_state_with_stack(sandbox_stack(None));
+
+        assert!(
+            repository_ids_for_access(&registry, &dropped, PROJECT).is_empty(),
+            "nothing in the stack names a repository once the field is gone"
+        );
+        assert!(declares_sandbox(&dropped));
+        assert_eq!(
+            project_repository(&registry, PROJECT),
+            Some("alien-artifacts-prj_test".to_string())
         );
     }
 
