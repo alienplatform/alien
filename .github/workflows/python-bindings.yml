@@ -44,7 +44,9 @@ jobs:
       - name: Install test tools
         run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1'
       - name: Build and install local-provider wheel
-        run: maturin develop --manifest-path crates/alien-bindings-python/Cargo.toml --no-default-features --features local
+        run: |
+          maturin build --manifest-path crates/alien-bindings-python/Cargo.toml --no-default-features --features local --out dist
+          python -m pip install --force-reinstall dist/*.whl
       - name: Check Python sources
         run: |
           ruff check crates/alien-bindings-python/python crates/alien-bindings-python/tests examples/python-bindings
@@ -70,7 +72,7 @@ jobs:
         with:
           command: build
           target: ${{ matrix.target }}
-          args: --release --out dist --no-default-features --features all-platforms
+          args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms
       - uses: actions/upload-artifact@v4
         with:
           name: alienplatform-${{ matrix.os }}
