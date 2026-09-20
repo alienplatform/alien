@@ -63,6 +63,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64
             manylinux: "2014"
+          - os: ubuntu-latest
+            target: aarch64
+            manylinux: "2014"
           - os: macos-14
             target: aarch64
             manylinux: "off"
@@ -78,6 +81,6 @@ jobs:
           args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms
       - uses: actions/upload-artifact@v4
         with:
-          name: alienplatform-${{ matrix.os }}
+          name: alienplatform-${{ matrix.os }}-${{ matrix.target }}
           path: dist/*.whl
           if-no-files-found: error
