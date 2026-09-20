@@ -1,0 +1,1 @@
+{"type":"string","description":"Origin of the exact Operator image running this process.","enum":["package","configured"],"x-readme-ref-name":"OperatorImageSource"}

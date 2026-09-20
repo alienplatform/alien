@@ -24,6 +24,11 @@ import {
   OperatorCapabilityReport$outboundSchema,
 } from "./operatorcapabilityreport.js";
 import {
+  OperatorImageReport,
+  OperatorImageReport$Outbound,
+  OperatorImageReport$outboundSchema,
+} from "./operatorimagereport.js";
+import {
   ResourceHeartbeat,
   ResourceHeartbeat$Outbound,
   ResourceHeartbeat$outboundSchema,
@@ -43,6 +48,7 @@ export type AgentSyncRequest = {
   executionClaim?: ExecutionClaim | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
   operationsReport?: OperationsReport | null | undefined;
+  operatorImage?: OperatorImageReport | null | undefined;
   operatorVersion?: string | null | undefined;
   /**
    * Managed resource status samples emitted by pull-mode deployment steps.
@@ -60,6 +66,7 @@ export type AgentSyncRequest$Outbound = {
   executionClaim?: ExecutionClaim$Outbound | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   operationsReport?: OperationsReport$Outbound | null | undefined;
+  operatorImage?: OperatorImageReport$Outbound | null | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session?: string | undefined;
@@ -78,6 +85,7 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
   operationsReport: z.nullable(OperationsReport$outboundSchema).optional(),
+  operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
   operatorVersion: z.nullable(z.string()).optional(),
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string().optional(),

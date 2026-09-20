@@ -143,6 +143,32 @@ fn test_reconcile_data(
     }
 }
 
+#[test]
+fn reconcile_input_adds_an_optional_image_receipt_without_expanding_reconcile_data() {
+    let data = test_reconcile_data(
+        "dep_compatibility",
+        "session",
+        DeploymentStatus::Running,
+        None,
+    );
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let report = alien_core::sync::OperatorImageReport {
+        source: alien_core::sync::OperatorImageSource::Configured,
+        package_id: None,
+        package_version: None,
+        image: format!("registry.example.test/operator@{digest}"),
+        digest,
+    };
+
+    let (data, received_report) = ReconcileInput::builder(data)
+        .operator_image(report.clone())
+        .build()
+        .into_parts();
+
+    assert_eq!(data.deployment_id, "dep_compatibility");
+    assert_eq!(received_report, Some(report));
+}
+
 // =============================================================================
 // DeploymentStore tests
 // =============================================================================

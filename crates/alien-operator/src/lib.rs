@@ -36,6 +36,7 @@ pub use db::{Approval, ApprovalStatus};
 pub use error::ErrorData;
 pub use lock::InstanceLock;
 
+use alien_core::sync::OperatorImageReport;
 use alien_error::{AlienError, Context as _};
 use alien_k8s_clients::{
     kubernetes::kubernetes_request_utils::sign_send_no_response, KubernetesClient,
@@ -193,6 +194,7 @@ pub async fn run_operator_with_cancel_and_loops(
     let runtime_options = OperatorRuntimeOptions::from_env()?;
     run_operator_with_cancel_and_loops_and_runtime(
         config,
+        None,
         service_provider,
         debug_session_loop,
         access_request_loop,
@@ -207,6 +209,7 @@ pub async fn run_operator_with_cancel_and_loops(
 #[allow(clippy::too_many_arguments)]
 async fn run_operator_with_cancel_and_loops_and_runtime(
     config: OperatorConfig,
+    operator_image: Option<OperatorImageReport>,
     service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
     debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
     access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
@@ -318,6 +321,7 @@ async fn run_operator_with_cancel_and_loops_and_runtime(
                 loops::sync::run_sync_loop_with_command_address_support(
                     state,
                     operations_command_address_v1,
+                    operator_image,
                 )
                 .await;
             }
@@ -789,6 +793,7 @@ mod tests {
             Duration::from_secs(5),
             run_operator_with_cancel_and_loops_and_runtime(
                 config,
+                None,
                 None,
                 None,
                 None,

@@ -317,6 +317,8 @@ export type { ObservedInventoryBatch } from "./zod/observed-inventory-batch-sche
 export type { ObservedResourceSample } from "./zod/observed-resource-sample-schema.js";
 export type { OperationsBundleDownload } from "./zod/operations-bundle-download-schema.js";
 export type { OperationsReport } from "./zod/operations-report-schema.js";
+export type { OperatorImageReport } from "./zod/operator-image-report-schema.js";
+export type { OperatorImageSource } from "./zod/operator-image-source-schema.js";
 export type { PermissionGrant } from "./zod/permission-grant-schema.js";
 export type { PermissionProfile } from "./zod/permission-profile-schema.js";
 export type { PermissionSetReference } from "./zod/permission-set-reference-schema.js";
@@ -746,6 +748,8 @@ export { ObservedInventoryBatchSchema } from "./zod/observed-inventory-batch-sch
 export { ObservedResourceSampleSchema } from "./zod/observed-resource-sample-schema.js";
 export { OperationsBundleDownloadSchema } from "./zod/operations-bundle-download-schema.js";
 export { OperationsReportSchema } from "./zod/operations-report-schema.js";
+export { OperatorImageReportSchema } from "./zod/operator-image-report-schema.js";
+export { OperatorImageSourceSchema } from "./zod/operator-image-source-schema.js";
 export { PermissionGrantSchema } from "./zod/permission-grant-schema.js";
 export { PermissionProfileSchema } from "./zod/permission-profile-schema.js";
 export { PermissionSetReferenceSchema } from "./zod/permission-set-reference-schema.js";

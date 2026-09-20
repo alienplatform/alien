@@ -25,6 +25,11 @@ import {
   OperatorCapabilityReport$Outbound,
   OperatorCapabilityReport$outboundSchema,
 } from "./operatorcapabilityreport.js";
+import {
+  RemoteOperatorImageIdentity,
+  RemoteOperatorImageIdentity$Outbound,
+  RemoteOperatorImageIdentity$outboundSchema,
+} from "./remoteoperatorimageidentity.js";
 
 export const SyncReconcileRequestBackendEnum = {
   Aws: "aws",
@@ -8764,6 +8769,10 @@ export type SyncReconcileRequest = {
    * Operator binary version reported by the runtime.
    */
   operatorVersion?: string | undefined;
+  /**
+   * Exact immutable image identity reported by a running Remote Operator.
+   */
+  operatorImage?: RemoteOperatorImageIdentity | undefined;
   /**
    * Operations bundle set the Operator currently has loaded, for plugin-sync status tracking.
    */
@@ -26504,6 +26513,7 @@ export type SyncReconcileRequest$Outbound = {
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   operatorVersion?: string | undefined;
+  operatorImage?: RemoteOperatorImageIdentity$Outbound | undefined;
   operationsReport?: OperationsReport$Outbound | undefined;
 };
 
@@ -26525,6 +26535,7 @@ export const SyncReconcileRequest$outboundSchema: z.ZodType<
     .optional(),
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   operatorVersion: z.string().optional(),
+  operatorImage: RemoteOperatorImageIdentity$outboundSchema.optional(),
   operationsReport: OperationsReport$outboundSchema.optional(),
 });
 

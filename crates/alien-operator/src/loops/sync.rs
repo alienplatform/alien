@@ -10,7 +10,10 @@
 use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
 use alien_core::{
-    sync::{OperatorCapabilityReport, OperatorCapabilityState, SyncRequest, SyncResponse},
+    sync::{
+        OperatorCapabilityReport, OperatorCapabilityState, OperatorImageReport, SyncInput,
+        SyncRequest, SyncResponse,
+    },
     DeploymentStatus, ObservedInventoryBatch, Platform,
 };
 use alien_deployment::run_observe_pass;
@@ -31,7 +34,7 @@ use uuid::Uuid;
 /// 4. Stores in local database for deployment loop
 /// 5. Creates approval record if manual approval is required
 pub async fn run_sync_loop(state: Arc<OperatorState>) {
-    run_sync_loop_with_command_address_support(state, false).await;
+    run_sync_loop_with_command_address_support(state, false, None).await;
 }
 
 /// Run the sync loop with capabilities declared by injected runtime loops.
@@ -42,6 +45,7 @@ pub async fn run_sync_loop(state: Arc<OperatorState>) {
 pub(crate) async fn run_sync_loop_with_command_address_support(
     state: Arc<OperatorState>,
     operations_command_address_v1: bool,
+    operator_image: Option<OperatorImageReport>,
 ) {
     let interval = Duration::from_secs(state.config.sync_interval_seconds);
 
@@ -73,6 +77,7 @@ pub(crate) async fn run_sync_loop_with_command_address_support(
             &client,
             sync_config.url.as_str(),
             operations_command_address_v1,
+            operator_image.as_ref(),
         )
         .await
         {
@@ -128,6 +133,7 @@ async fn sync_with_manager(
     client: &Client,
     base_url: &str,
     operations_command_address_v1: bool,
+    operator_image: Option<&OperatorImageReport>,
 ) -> crate::error::Result<bool> {
     // Get current deployment state from local database (or create default if not exists)
     let mut deployment_state =
@@ -223,6 +229,12 @@ async fn sync_with_manager(
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
     };
+    let sync_input = match operator_image.cloned() {
+        Some(operator_image) => SyncInput::builder(sync_request)
+            .operator_image(operator_image)
+            .build(),
+        None => SyncInput::builder(sync_request).build(),
+    };
 
     // Call manager with deployment_id in request body.
     //
@@ -240,7 +252,7 @@ async fn sync_with_manager(
 
     let response = client
         .post(&url)
-        .json(&sync_request)
+        .json(&sync_input)
         .send()
         .await
         .into_alien_error()

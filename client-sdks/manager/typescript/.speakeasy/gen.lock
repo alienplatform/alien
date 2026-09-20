@@ -84,7 +84,7 @@ trackedFiles:
     pristine_git_object: 75fbd10b3ff0a37624d782a12c83dbf24ecfe647
   docs/models/agentsyncrequest.md:
     id: 1e4d91a49d66
-    last_write_checksum: sha1:61c6576d3c33f7eb21ea2c1140f25339fa7e587d
+    last_write_checksum: sha1:8486be8a274845169dd5552dedebf10f7eb3fac6
     pristine_git_object: e2cf5dd2cb0ac52fe14bea2f95680b46cbe283ca
   docs/models/agentsyncresponse.md:
     id: 583fd712cbe4
@@ -1214,6 +1214,10 @@ trackedFiles:
     id: 69a1cc321a0d
     last_write_checksum: sha1:c54dad4717d48ab8f9c2b93c4d7d71eaab69e250
     pristine_git_object: 23f56cb8ea784ce49aae63f3467833b41c1ae1f8
+  docs/models/operatorimagereport.md:
+    last_write_checksum: sha1:417556c4c34d94adb2818ee1ccf02dbb5734555e
+  docs/models/operatorimagesource.md:
+    last_write_checksum: sha1:06e9794676026af6f957ca983fd9f4f5b8722333
   docs/models/platformenum.md:
     id: efff9c6da466
     last_write_checksum: sha1:83b0565d0c770b56d57f723137deccb03acae3ac
@@ -2176,7 +2180,7 @@ trackedFiles:
     pristine_git_object: 527b09d208ea1581c8121ebc76bee3ddac579de3
   src/models/agentsyncrequest.ts:
     id: 93dab2db2f49
-    last_write_checksum: sha1:01aca012806d024f8d3df1517bc2dad8dd47db0c
+    last_write_checksum: sha1:f56df98503b35f47b403a2eff9d802191b098826
     pristine_git_object: a7babeb990a2b73bbed8d3b9185e2d51f9350151
   src/models/agentsyncresponse.ts:
     id: 69387c9ee6e5
@@ -2604,7 +2608,7 @@ trackedFiles:
     pristine_git_object: 89518bfb8678ec100b59d9fba96fa46b7c1bc524
   src/models/index.ts:
     id: f93644b0f37e
-    last_write_checksum: sha1:221d72a9d0ca5abd8ecc573eea8437ac27cb27f7
+    last_write_checksum: sha1:60cd4f67852b70d4180b9907d7e8287cf58e2e0f
     pristine_git_object: f8e288433f7f7abac9e38058621449cb87a19529
   src/models/initialdesiredrelease.ts:
     id: 02797165f21e
@@ -2926,6 +2930,10 @@ trackedFiles:
     id: 15470d41d437
     last_write_checksum: sha1:63479fdb0047a973a22b1e14f09a4937f4f8da04
     pristine_git_object: cca446551470f8aa086864997537b367d7c313fa
+  src/models/operatorimagereport.ts:
+    last_write_checksum: sha1:6f1122b6e3267a6d1386a519a0c5181728fa870d
+  src/models/operatorimagesource.ts:
+    last_write_checksum: sha1:48d32c65ea36069f0d9f8df74caf801ece598634
   src/models/platformenum.ts:
     id: 03f9c4caf240
     last_write_checksum: sha1:0cf7a1a35a345ee1b6362833334882d4d66972ce
