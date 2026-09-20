@@ -336,19 +336,28 @@ pub async fn cleanup_deleted_registry_access(
     let Some(artifact_registry) =
         load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
     else {
-        // Not `Ok` on an unset marker: the grant lands before the marker is persisted, so a false
-        // one still covers a live grant, and the only revoke path is through this binding.
-        return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
-            deployment_id: deployment_id.to_string(),
-            reason: format!("artifact registry binding for '{platform}' is unavailable"),
-        }));
+        // A recorded grant was made through this binding, so its absence leaves a live grant with
+        // no revoke path and the delete has to keep failing. Without one, no grant could have been
+        // made through it either, and erroring would park the deployment at `deleting` forever.
+        if registry_access_granted {
+            return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+                deployment_id: deployment_id.to_string(),
+                reason: format!("artifact registry binding for '{platform}' is unavailable"),
+            }));
+        }
+        warn!(
+            deployment_id = %deployment_id,
+            platform = %platform,
+            "No artifact registry binding to revoke through, and no grant was recorded"
+        );
+        return Ok(());
     };
 
     let mut repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
-    // A release that drops `privateBaseImage` would otherwise leave the grant it earned with
-    // nothing naming it. A sandbox is only ever granted this one repository, so a deployment that
-    // still declares one can revoke it without the field.
-    if registry_access_granted && matches!(platform, Platform::Aws) && declares_sandbox(state) {
+    // A release that drops `privateBaseImage`, or the sandbox itself, would otherwise leave the
+    // grant it earned with nothing naming it. A sandbox is only ever granted this one repository,
+    // so any recorded grant here can revoke it without reading the stack at all.
+    if registry_access_granted && matches!(platform, Platform::Aws) {
         if let Some(own_repository) = project_repository(artifact_registry.as_ref(), project_id) {
             // Only a repository that exists: a worker-only grant on the shared repository would
             // otherwise send cleanup at a project repository nobody ever created. A lookup that
@@ -522,33 +531,16 @@ fn project_repository(
     (!prefix.is_empty()).then(|| format!("{prefix}-{project_id}"))
 }
 
-fn declares_sandbox(state: &DeploymentState) -> bool {
-    let has_sandbox = |stack: &Stack| {
-        stack
-            .resources()
-            .any(|(_id, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
-    };
-    state
-        .current_release
-        .as_ref()
-        .is_some_and(|release| has_sandbox(&release.stack))
-        || state
-            .target_release
-            .as_ref()
-            .is_some_and(|release| has_sandbox(&release.stack))
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(has_sandbox)
-}
-
 /// The account and region a `{account}.dkr.ecr.{region}.amazonaws.com` host names.
 fn ecr_registry_identity(host: &str) -> Option<(&str, &str)> {
     let host = alien_core::image_rewrite::strip_url_scheme(host);
     let host = host.split('/').next()?;
     let (account, rest) = host.split_once(".dkr.ecr.")?;
-    let region = rest.strip_suffix(".amazonaws.com")?;
+    // `.com.cn` first: a China host ends with the shorter suffix too, and stripping that one
+    // would leave `.cn` on the region and refuse an image the build can pull.
+    let region = rest
+        .strip_suffix(".amazonaws.com.cn")
+        .or_else(|| rest.strip_suffix(".amazonaws.com"))?;
     Some((account, region))
 }
 
@@ -1647,11 +1639,47 @@ mod tests {
             repository_ids_for_access(&registry, &dropped, PROJECT).is_empty(),
             "nothing in the stack names a repository once the field is gone"
         );
-        assert!(declares_sandbox(&dropped));
+
         assert_eq!(
             project_repository(&registry, PROJECT),
             Some("alien-artifacts-prj_test".to_string())
         );
+    }
+
+    /// The grant is written on one registry, so the reference has to name that one: same account,
+    /// and the same region unless it still carries the token a stored reference keeps.
+    #[test]
+    fn a_reference_is_served_by_the_registry_only_in_its_own_account_and_region() {
+        let registry = "https://123456789012.dkr.ecr.us-east-2.amazonaws.com";
+        for served in [
+            "123456789012.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:v1",
+            "123456789012.dkr.ecr.{region}.amazonaws.com/alien-artifacts-prj_test:v1",
+        ] {
+            assert!(served_by_registry(served, registry), "{served}");
+        }
+        for elsewhere in [
+            "210987654321.dkr.ecr.us-east-2.amazonaws.com/alien-artifacts-prj_test:v1",
+            "123456789012.dkr.ecr.eu-west-1.amazonaws.com/alien-artifacts-prj_test:v1",
+            "ghcr.io/acme/base:v1",
+        ] {
+            assert!(!served_by_registry(elsewhere, registry), "{elsewhere}");
+        }
+
+        // A China registry answers on `.amazonaws.com.cn`; stripping the shorter suffix would
+        // leave `.cn` on the region and refuse an image the build can pull.
+        let china = "https://123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn";
+        assert!(served_by_registry(
+            "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/alien-artifacts-prj_test:v1",
+            china
+        ));
+        assert!(served_by_registry(
+            "123456789012.dkr.ecr.{region}.amazonaws.com.cn/alien-artifacts-prj_test:v1",
+            china
+        ));
+        assert!(!served_by_registry(
+            "123456789012.dkr.ecr.cn-northwest-1.amazonaws.com.cn/alien-artifacts-prj_test:v1",
+            china
+        ));
     }
 
     #[test]
