@@ -471,17 +471,36 @@ pub async fn cleanup_deleted_registry_access(
         return Ok(());
     }
 
-    let Some(artifact_registry) =
-        load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
-    else {
-        // Reaching here means a grant was recorded or the deployment names an image in Alien's
-        // registry, and the IAM write lands before the state that records it. The binding cannot
-        // tell "never configured" from "unreachable right now", so completing the delete here
-        // would drop a live cross-account read with nothing left to retry it.
-        return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
-            deployment_id: deployment_id.to_string(),
-            reason: format!("artifact registry binding for '{platform}' is unavailable"),
-        }));
+    let artifact_registry = match find_artifact_registry(
+        bindings_provider,
+        target_bindings_providers,
+        &platform,
+    )
+    .await
+    {
+        RegistryLookup::Loaded(registry) => registry,
+        // The IAM write lands before the state that records it, so a binding that exists and
+        // will not answer may be hiding a grant this delete is the last chance to revoke.
+        RegistryLookup::Unavailable => {
+            return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+                deployment_id: deployment_id.to_string(),
+                reason: format!("artifact registry binding for '{platform}' is unavailable"),
+            }))
+        }
+        // No binding was ever configured, so no grant was ever written through one. The
+        // deployment reached here only because `has_registry_backed_image` cannot tell an
+        // image in Alien's registry from a public one without the prefix that binding carries.
+        RegistryLookup::NotConfigured => {
+            if recorded_grant {
+                return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+                        deployment_id: deployment_id.to_string(),
+                        reason: format!(
+                            "artifact registry binding for '{platform}' is not configured, so a recorded grant cannot be revoked"
+                        ),
+                    }));
+            }
+            return Ok(());
+        }
     };
 
     // What the grant recorded, not what the stack says now: a release that dropped the base image
@@ -993,23 +1012,63 @@ pub async fn load_artifact_registry(
     target_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
     platform: &Platform,
 ) -> Option<Arc<dyn ArtifactRegistry>> {
+    match find_artifact_registry(primary_provider, target_providers, platform).await {
+        RegistryLookup::Loaded(registry) => Some(registry),
+        _ => None,
+    }
+}
+
+/// What the probe for a registry binding found.
+///
+/// The delete turns on the difference: a manager that never had a binding could never have
+/// granted anything, while one whose binding is unreachable may be hiding a live grant.
+enum RegistryLookup {
+    Loaded(Arc<dyn ArtifactRegistry>),
+    NotConfigured,
+    Unavailable,
+}
+
+async fn find_artifact_registry(
+    primary_provider: &Option<Arc<dyn BindingsProviderApi>>,
+    target_providers: &HashMap<Platform, Arc<dyn BindingsProviderApi>>,
+    platform: &Platform,
+) -> RegistryLookup {
+    let mut unavailable = false;
+    let mut probe = |result: alien_bindings::error::Result<Arc<dyn ArtifactRegistry>>| match result
+    {
+        Ok(registry) => Some(registry),
+        Err(error) => {
+            // `BindingNotConfigured` is the contract for "no such binding"; anything else means
+            // one is configured and did not answer.
+            unavailable |= !matches!(
+                error.error,
+                Some(alien_bindings::error::ErrorData::BindingNotConfigured { .. })
+            );
+            None
+        }
+    };
+
     if let Some(target) = target_providers.get(platform) {
         for binding_name in ["artifacts", "artifact-registry"] {
-            if let Ok(ar) = target.load_artifact_registry(binding_name).await {
-                return Some(ar);
+            if let Some(registry) = probe(target.load_artifact_registry(binding_name).await) {
+                return RegistryLookup::Loaded(registry);
             }
         }
     }
 
     if let Some(ref primary) = primary_provider {
         for binding_name in ["artifact-registry", "artifacts"] {
-            if let Ok(ar) = primary.load_artifact_registry(binding_name).await {
-                return Some(ar);
+            if let Some(registry) = probe(primary.load_artifact_registry(binding_name).await) {
+                return RegistryLookup::Loaded(registry);
             }
         }
     }
 
-    None
+    if unavailable {
+        return RegistryLookup::Unavailable;
+    }
+
+    RegistryLookup::NotConfigured
 }
 
 #[cfg(test)]
@@ -1113,11 +1172,24 @@ mod tests {
         registry: Arc<dyn ArtifactRegistry>,
     }
 
+    /// The contract for "no such binding", which is what the delete reads to tell a manager that
+    /// never had a registry from one whose registry will not answer.
     fn missing_binding(binding_name: &str) -> alien_bindings::error::Error {
+        AlienError::new(BindingErrorData::BindingNotConfigured {
+            binding_name: binding_name.to_string(),
+            env_var: alien_core::bindings::binding_env_var_name(binding_name),
+        })
+    }
+
+    /// Marks a provider whose binding exists but cannot be loaded.
+    const UNREACHABLE_BINDING: &str = "unreachable";
+
+    /// A binding that exists and will not answer, as opposed to one that was never configured.
+    fn unreachable_binding(binding_name: &str) -> alien_bindings::error::Error {
         AlienError::new(BindingErrorData::BindingConfigInvalid {
             binding_name: binding_name.to_string(),
             env_var: alien_core::bindings::binding_env_var_name(binding_name),
-            reason: "not found".to_string(),
+            reason: "credentials could not be resolved".to_string(),
         })
     }
 
@@ -1127,6 +1199,9 @@ mod tests {
             &self,
             binding_name: &str,
         ) -> BindingResult<Arc<dyn ArtifactRegistry>> {
+            if self.binding_name == UNREACHABLE_BINDING {
+                return Err(unreachable_binding(binding_name));
+            }
             if binding_name == self.binding_name {
                 Ok(self.registry.clone())
             } else {
@@ -2024,6 +2099,35 @@ mod tests {
             vec!["test-project/alien-artifacts".to_string()],
             "a GCP sandbox pulls its container from Alien's registry, so it earns the grant"
         );
+    }
+
+    /// A manager that never had a registry binding could not have granted anything, so its delete
+    /// completes; one whose binding exists and will not load may be hiding a grant, so it fails.
+    /// `has_registry_backed_image` cannot tell the two apart — it has no prefix to match against.
+    #[tokio::test]
+    async fn a_binding_that_was_never_configured_does_not_block_a_delete() {
+        let registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
+            prefix: "test-project/alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: false,
+        });
+        let absent: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: "something-else",
+            registry: registry.clone(),
+        });
+        let unreachable: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
+            binding_name: UNREACHABLE_BINDING,
+            registry,
+        });
+
+        assert!(matches!(
+            find_artifact_registry(&Some(absent), &HashMap::new(), &Platform::Gcp).await,
+            RegistryLookup::NotConfigured
+        ));
+        assert!(matches!(
+            find_artifact_registry(&Some(unreachable), &HashMap::new(), &Platform::Gcp).await,
+            RegistryLookup::Unavailable
+        ));
     }
 
     /// Pins `gcp_service_types`: the sandbox agent is named only where a release declares one.
