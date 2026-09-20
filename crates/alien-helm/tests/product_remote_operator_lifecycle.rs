@@ -1,12 +1,14 @@
 use alien_core::{Stack, StackSettings};
 use alien_helm::{
-    generate_product_helm_chart, HelmChart, HelmOptions, HelmRegistry, OperatorManifestOptions,
-    OperatorOutputFormat, OperatorPermission, OperatorScope, ProductOperatorManifestOptions,
+    generate_product_helm_chart, HelmChart, HelmOptions, HelmRegistry, OperatorLogCollectorOptions,
+    OperatorManifestOptions, OperatorOutputFormat, OperatorPermission, OperatorScope,
+    ProductOperatorManifestOptions,
 };
 use alien_terraform::{
     generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
     TerraformRegistration, TerraformTarget, TfRegistry,
 };
+use sha2::{Digest, Sha256};
 use std::{
     ffi::OsStr,
     fs,
@@ -16,16 +18,22 @@ use std::{
 
 const CLUSTER_CONTEXT: &str = "kind-alien-product-lifecycle";
 const CRD_NAME: &str = "alienaccessrequests.accessrequests.alien";
+const TERRAFORM_RELEASE: &str = "terraform.product-lifecycle-long";
+const TERRAFORM_RENAMED_RELEASE: &str = "terraform.product-lifecycle-renamed";
 const ENCRYPTION_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 const ENCRYPTION_KEY_BASE64: &str =
     "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmMDEyMzQ1Njc4OWFiY2RlZg==";
+const COLLECTOR_TOKEN_BASE64: &str = "Y29sbGVjdG9yLXRlcnJhZm9ybQ==";
 const ENCRYPTION_KEY_SHA256: &str =
     "a8ae6e6ee929abea3afcfc5258c8ccd6f85273e0d4626d26c7279f3250f77c8e";
 const GOOD_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator:local";
 const NOT_READY_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator-not-ready:local";
-const OPERATOR_FIXTURE_BASE_IMAGE: &str = "busybox:1.36.1";
-const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "registry.k8s.io/pause";
-const GOOD_RUNTIME_IMAGE_TAG: &str = "3.10.1";
+const OPERATOR_FIXTURE_BASE_IMAGE: &str = "alpine/k8s:1.32.0";
+const LOG_COLLECTOR_BASE_IMAGE: &str = "fluent/fluent-bit:3.2";
+const LOG_COLLECTOR_IMAGE: &str = "alien-product-lifecycle-collector:local";
+const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "alien-product-lifecycle-runtime";
+const GOOD_RUNTIME_IMAGE_TAG: &str = "local";
+const GOOD_RUNTIME_IMAGE: &str = "alien-product-lifecycle-runtime:local";
 
 struct TestClusterCleanup {
     helm_namespace: String,
@@ -78,24 +86,68 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let legacy_chart_dir = temp.path().join("legacy-chart");
     let cluster_chart_dir = temp.path().join("cluster-chart");
     let bad_chart_dir = temp.path().join("bad-chart");
+    let terraform_failure_chart_dir = temp.path().join("terraform-failure-chart");
     let operator_fixture_dir = temp.path().join("operator-fixture");
     let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
+    let log_collector_fixture_dir = temp.path().join("log-collector-fixture");
+    let runtime_fixture_dir = temp.path().join("runtime-fixture");
     fs::create_dir_all(&operator_fixture_dir).expect("create Operator fixture directory");
     fs::create_dir_all(&not_ready_operator_fixture_dir)
         .expect("create not-ready Operator fixture directory");
+    fs::create_dir_all(&log_collector_fixture_dir).expect("create log-collector fixture directory");
+    fs::create_dir_all(&runtime_fixture_dir).expect("create runtime fixture directory");
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
-        format!(
-            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nRUN mkdir -p /www && printf ready > /www/ready\nUSER 1000:1000\nCMD [\"httpd\", \"-f\", \"-p\", \"8081\", \"-h\", \"/www\"]\n"
-        ),
+        r#"FROM __OPERATOR_FIXTURE_BASE_IMAGE__
+RUN mkdir -p /www && printf ready > /www/ready && chmod -R a+rX /www
+USER 1000:1000
+ENTRYPOINT []
+CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch configmap \"$OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP\" --type=merge -p '{\"metadata\":{\"labels\":{\"alien.dev/remote-operator-identity-phase\":\"initialized\"}},\"immutable\":true}' && python3 -m http.server 8081 --directory /www"]
+"#
+        .replace("__OPERATOR_FIXTURE_BASE_IMAGE__", OPERATOR_FIXTURE_BASE_IMAGE),
     )
     .expect("write Operator readiness fixture Dockerfile");
     fs::write(
         not_ready_operator_fixture_dir.join("Dockerfile"),
-        format!("FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nCMD [\"sleep\", \"3600\"]\n"),
+        format!("FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT []\nCMD [\"sleep\", \"3600\"]\n"),
     )
     .expect("write not-ready Operator fixture Dockerfile");
+    fs::write(
+        runtime_fixture_dir.join("Dockerfile"),
+        format!(
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT []\nCMD [\"sleep\", \"3600\"]\n"
+        ),
+    )
+    .expect("write runtime fixture Dockerfile");
+    fs::write(
+        log_collector_fixture_dir.join("Dockerfile"),
+        format!("FROM {LOG_COLLECTOR_BASE_IMAGE}\nCOPY marker /alien-e2e-marker\n"),
+    )
+    .expect("write log-collector fixture Dockerfile");
+    fs::write(log_collector_fixture_dir.join("marker"), "lifecycle-e2e\n")
+        .expect("write log-collector fixture marker");
     run_ok("docker", ["pull", OPERATOR_FIXTURE_BASE_IMAGE], None);
+    run_ok("docker", ["pull", LOG_COLLECTOR_BASE_IMAGE], None);
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            LOG_COLLECTOR_IMAGE,
+            path_str(&log_collector_fixture_dir),
+        ],
+        None,
+    );
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            GOOD_RUNTIME_IMAGE,
+            path_str(&runtime_fixture_dir),
+        ],
+        None,
+    );
     run_ok(
         "docker",
         [
@@ -132,6 +184,28 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         [
             "load",
             "docker-image",
+            GOOD_RUNTIME_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            LOG_COLLECTOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
             NOT_READY_OPERATOR_IMAGE,
             "--name",
             "alien-product-lifecycle",
@@ -157,6 +231,32 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
         &product_chart_with_scope(GOOD_OPERATOR_IMAGE, OperatorScope::Cluster),
     );
     write_chart(&bad_chart_dir, &product_chart(NOT_READY_OPERATOR_IMAGE));
+    let mut terraform_failure_chart = product_chart(GOOD_OPERATOR_IMAGE);
+    terraform_failure_chart.files.insert(
+        "templates/e2e-fail-after-identity.yaml".to_string(),
+        r#"{{- if .Values.remoteOperator.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ .Release.Name }}-e2e-fail-after-identity
+  annotations:
+    "helm.sh/hook": post-upgrade
+    "helm.sh/hook-weight": "95"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-failed
+spec:
+  backoffLimit: 0
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: fail
+          image: alpine/k8s:1.32.0
+          command: ["/bin/sh", "-ec", "exit 1"]
+{{- end }}
+"#
+        .to_string(),
+    );
+    write_chart(&terraform_failure_chart_dir, &terraform_failure_chart);
 
     let helm_namespace = "alien-product-helm-lifecycle".to_string();
     let helm_release = "alien-product".to_string();
@@ -200,6 +300,105 @@ rules:
             &helm_namespace,
             "--role=product-installer",
             "--user=product-installer",
+        ],
+        None,
+    );
+
+    let disabled_failure_release = "alien-product-disabled-failure";
+    let disabled_failure_capability = format!(
+        "{}-lifecycle-v2",
+        remote_operator_record_name(&helm_namespace, disabled_failure_release, "remote-operator")
+    );
+    run_fails(
+        "helm",
+        [
+            "install",
+            disabled_failure_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            helm_rollback_on_failure_flag(),
+            "--timeout=20s",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            "--set-string=runtime.image.repository=registry.invalid/alien-product-lifecycle-missing",
+            "--set-string=runtime.image.tag=latest",
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+        "an atomic disabled install with an unavailable product runtime must fail",
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            &disabled_failure_capability,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+        "atomic disabled-install cleanup must delete its retained lifecycle capability",
+    );
+    // Helm 4 `--rollback-on-failure` cannot roll a first install back to a
+    // previous revision, so a failed install can still occupy the release name.
+    // Skip hooks and waiting: a failed first install can leave a cleanup Job
+    // that Helm 4 `--wait` treats as uninstall failure.
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            disabled_failure_release,
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found",
+            "--no-hooks",
+        ],
+        None,
+    );
+    // `--no-hooks` leaves that Failed pre-delete Job in the namespace. Delete
+    // it before retrying the same release name, or the next `--wait` uninstall
+    // treats the leftover Job as the current hook.
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "job",
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found=true",
+            "--wait=true",
+            &format!("--selector=app.kubernetes.io/instance={disabled_failure_release}"),
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            disabled_failure_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            disabled_failure_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
         ],
         None,
     );
@@ -249,6 +448,116 @@ rules:
         "disabled install must not create the cluster-scoped CRD",
     );
 
+    let failed_bridge_release = "alien-product-failed-bridge";
+    let failed_bridge_capability = format!(
+        "{}-lifecycle-v2",
+        remote_operator_record_name(&helm_namespace, failed_bridge_release, "remote-operator")
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            failed_bridge_release,
+            path_str(&legacy_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    run_fails(
+        "helm",
+        [
+            "upgrade",
+            failed_bridge_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            helm_rollback_on_failure_flag(),
+            "--timeout=20s",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            "--set-string=runtime.image.repository=registry.invalid/alien-product-lifecycle-missing",
+            "--set-string=runtime.image.tag=latest",
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+        "a failed disabled bridge upgrade must roll back to the legacy release",
+    );
+    assert_output_contains(
+        &run_ok(
+            "helm",
+            [
+                "status",
+                failed_bridge_release,
+                "--namespace",
+                &helm_namespace,
+            ],
+            None,
+        ),
+        "STATUS: deployed",
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            &failed_bridge_capability,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+        "rollback to a legacy chart must remove the non-identity capability latch",
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            failed_bridge_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            failed_bridge_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            failed_bridge_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+
     let bridge_release = "alien-product-legacy-bridge";
     run_ok(
         "helm",
@@ -280,6 +589,7 @@ rules:
             &helm_namespace,
             "--from-literal=sync-token=sync-bridge",
             &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+            "--from-literal=collector-token=collector-bridge",
         ],
         None,
     );
@@ -432,6 +742,357 @@ rules:
         None,
     );
 
+    let history_mismatch_release = "alien-product-history-mismatch";
+    let history_mismatch_credentials = format!("{history_mismatch_release}-remote");
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "secret",
+            "generic",
+            &history_mismatch_credentials,
+            "--namespace",
+            &helm_namespace,
+            "--from-literal=sync-token=sync-history-mismatch",
+            &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+            "--from-literal=collector-token=collector-history-mismatch",
+        ],
+        None,
+    );
+    let mut history_mismatch_install = helm_install_args(
+        history_mismatch_release,
+        &helm_namespace,
+        &good_chart_dir,
+        false,
+        "2m",
+    );
+    for argument in &mut history_mismatch_install {
+        if argument == "--set=remoteOperator.enabled=true" {
+            *argument = "--set=remoteOperator.enabled=false".to_string();
+        }
+    }
+    history_mismatch_install.push("--set=remoteOperator.helmHistoryBackend=configmap".to_string());
+    run_ok(
+        "helm",
+        history_mismatch_install.iter().map(String::as_str),
+        None,
+    );
+    let owned_runtime_sentinel = "history-mismatch-owned-runtime";
+    let foreign_runtime_sentinel = "history-mismatch-foreign-runtime";
+    for (name, deployment) in [
+        (owned_runtime_sentinel, history_mismatch_release),
+        (foreign_runtime_sentinel, "another-deployment"),
+    ] {
+        run_ok(
+            "kubectl",
+            ["create", "configmap", name, "--namespace", &helm_namespace],
+            None,
+        );
+        run_ok(
+            "kubectl",
+            [
+                "label",
+                "configmap",
+                name,
+                "--namespace",
+                &helm_namespace,
+                "managed-by=runtime",
+                &format!("alien.dev/deployment={deployment}"),
+            ],
+            None,
+        );
+    }
+    let stale_history_record = format!("sh.helm.release.v1.{history_mismatch_release}.v2");
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "configmap",
+            &stale_history_record,
+            "--namespace",
+            &helm_namespace,
+            "--from-literal=release=stale-history-record",
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "label",
+            "configmap",
+            &stale_history_record,
+            "--namespace",
+            &helm_namespace,
+            "owner=helm",
+            &format!("name={history_mismatch_release}"),
+            "version=2",
+            "status=deployed",
+        ],
+        None,
+    );
+    let mut history_mismatch_enable = helm_upgrade_args(
+        history_mismatch_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        0,
+        "30s",
+    );
+    history_mismatch_enable.push("--set=remoteOperator.helmHistoryBackend=configmap".to_string());
+    run_fails(
+        "helm",
+        history_mismatch_enable.iter().map(String::as_str),
+        None,
+        "stale records in the configured backend must not authorize a current upgrade stored elsewhere",
+    );
+    assert_output_contains(
+        &run_ok(
+            "helm",
+            [
+                "status",
+                history_mismatch_release,
+                "--namespace",
+                &helm_namespace,
+            ],
+            None,
+        ),
+        "STATUS: deployed",
+    );
+    let rejected_history_identity = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            "--namespace",
+            &helm_namespace,
+            "--selector=alien.dev/remote-operator-identity-record=true",
+            "--output=name",
+        ],
+        None,
+    );
+    assert!(
+        rejected_history_identity.stdout.trim().is_empty(),
+        "history-backend rejection must happen before identity preparation: {rejected_history_identity:?}"
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "configmap",
+            &stale_history_record,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            history_mismatch_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            owned_runtime_sentinel,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+        "uninstall cleanup must delete runtime resources owned by this deployment",
+    );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            foreign_runtime_sentinel,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "configmap",
+            foreign_runtime_sentinel,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "secret",
+            &history_mismatch_credentials,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+
+    let failed_release = "alien-product-failed-upgrade";
+    let failed_credentials = format!("{failed_release}-remote");
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "secret",
+            "generic",
+            &failed_credentials,
+            "--namespace",
+            &helm_namespace,
+            "--from-literal=sync-token=sync-failed-upgrade",
+            &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+            "--from-literal=collector-token=collector-failed-upgrade",
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            failed_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    let mut failed_non_atomic_upgrade = helm_upgrade_args(
+        failed_release,
+        &helm_namespace,
+        &terraform_failure_chart_dir,
+        true,
+        0,
+        "2m",
+    );
+    let rollback_on_failure = helm_rollback_on_failure_flag();
+    failed_non_atomic_upgrade.retain(|argument| argument != rollback_on_failure);
+    run_fails(
+        "helm",
+        failed_non_atomic_upgrade.iter().map(String::as_str),
+        None,
+        "a non-atomic post-identity failure must leave an explicitly uninstallable failed release",
+    );
+    assert_output_contains(
+        &run_ok(
+            "helm",
+            ["status", failed_release, "--namespace", &helm_namespace],
+            None,
+        ),
+        "STATUS: failed",
+    );
+    let failed_resource_name =
+        remote_operator_record_name(&helm_namespace, failed_release, "remote-operator");
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            &format!("{failed_resource_name}-initialized"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{failed_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            failed_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    for retained_name in [
+        failed_resource_name.clone(),
+        format!("{failed_resource_name}-initialized"),
+        format!("{failed_resource_name}-complete"),
+        format!("{failed_resource_name}-lifecycle-v2"),
+    ] {
+        run_fails(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                &retained_name,
+                "--namespace",
+                &helm_namespace,
+            ],
+            None,
+            "explicit uninstall of a failed enabled upgrade must clean every retained record",
+        );
+    }
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{failed_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=30s",
+        ],
+        None,
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{failed_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+        "explicit uninstall of a failed enabled upgrade must clean the retained identity PVC",
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "secret",
+            &failed_credentials,
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+
     let atomic_release = "alien-product-atomic";
     let atomic_credentials = format!("{atomic_release}-remote");
     run_ok(
@@ -445,6 +1106,7 @@ rules:
             &helm_namespace,
             "--from-literal=sync-token=sync-atomic",
             &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+            "--from-literal=collector-token=collector-atomic",
         ],
         None,
     );
@@ -455,17 +1117,65 @@ rules:
         true,
         "30s",
     );
-    run_fails(
+    let rejected_initial_enable = run_fails(
         "helm",
         failed_initial_install.iter().map(String::as_str),
         None,
-        "an unrelated unready workload must trigger atomic initial-install cleanup",
+        "a fresh install must establish a disabled rollback-guarded revision before enablement",
+    );
+    assert!(
+        rejected_initial_enable
+            .diagnostic
+            .contains("cannot be enabled on the initial Helm install"),
+        "{}",
+        rejected_initial_enable.diagnostic
     );
     run_fails(
         "helm",
         ["status", atomic_release, "--namespace", &helm_namespace],
         None,
-        "atomic initial-install failure must remove the Helm release",
+        "rejected initial enablement must not create a Helm release",
+    );
+    run_ok(
+        "helm",
+        [
+            "install",
+            atomic_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
+    );
+    let mut failed_enable = helm_upgrade_args(
+        atomic_release,
+        &helm_namespace,
+        &good_chart_dir,
+        true,
+        0,
+        "30s",
+    );
+    failed_enable.push("--set=runtime.probes.readiness.enabled=true".to_string());
+    run_fails(
+        "helm",
+        failed_enable.iter().map(String::as_str),
+        None,
+        "an unrelated unready workload must trigger atomic upgrade rollback after identity initialization",
+    );
+    assert_output_contains(
+        &run_ok(
+            "helm",
+            ["status", atomic_release, "--namespace", &helm_namespace],
+            None,
+        ),
+        "STATUS: deployed",
     );
     let retained_prepared = run_ok(
         "kubectl",
@@ -482,7 +1192,7 @@ rules:
     assert_eq!(
         retained_prepared.stdout.lines().count(),
         1,
-        "atomic cleanup must retain the prepared identity after initialization starts: {retained_prepared:?}"
+        "atomic rollback must retain the prepared identity after initialization starts: {retained_prepared:?}"
     );
     let retained_initialization = run_ok(
         "kubectl",
@@ -499,7 +1209,7 @@ rules:
     assert_eq!(
         retained_initialization.stdout.lines().count(),
         1,
-        "atomic cleanup must retain the durable initialization record after the pod is gone: {retained_initialization:?}"
+        "atomic rollback must retain the durable initialization record after the pod is gone: {retained_initialization:?}"
     );
     let retained_identity = run_ok(
         "kubectl",
@@ -516,36 +1226,10 @@ rules:
     assert_eq!(
         retained_identity.stdout.lines().count(),
         1,
-        "atomic cleanup must retain the initialized identity volume: {retained_identity:?}"
+        "atomic rollback must retain the initialized identity volume: {retained_identity:?}"
     );
-
-    let retry_initial_install = helm_install_args(
-        atomic_release,
-        &helm_namespace,
-        &good_chart_dir,
-        false,
-        "2m",
-    );
-    run_ok(
-        "helm",
-        retry_initial_install.iter().map(String::as_str),
-        None,
-    );
-    assert_output_contains(
-        &run_ok(
-            "kubectl",
-            [
-                "get",
-                "configmap",
-                "--namespace",
-                &helm_namespace,
-                "--selector=alien.dev/remote-operator-identity-phase=complete",
-                "--output=name",
-            ],
-            None,
-        ),
-        "configmap/",
-    );
+    let atomic_resource_name =
+        remote_operator_record_name(&helm_namespace, atomic_release, "remote-operator");
     run_ok(
         "helm",
         [
@@ -557,6 +1241,49 @@ rules:
             "--timeout=2m",
         ],
         None,
+    );
+    for retained_name in [
+        atomic_resource_name.clone(),
+        format!("{atomic_resource_name}-initialized"),
+        format!("{atomic_resource_name}-complete"),
+        format!("{atomic_resource_name}-lifecycle-v2"),
+    ] {
+        run_fails(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                &retained_name,
+                "--namespace",
+                &helm_namespace,
+            ],
+            None,
+            "uninstall of the preserved disabled release must clean retained lifecycle records",
+        );
+    }
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{atomic_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=30s",
+        ],
+        None,
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{atomic_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+        "uninstall of the preserved disabled release must clean the retained identity PVC",
     );
     run_ok(
         "kubectl",
@@ -588,9 +1315,9 @@ rules:
     let cleanup_job_name = cleanup_job["metadata"]["name"]
         .as_str()
         .expect("cleanup Job name");
-    let remote_operator_resource_name = cleanup_job_name
-        .strip_suffix("-cleanup")
-        .expect("cleanup Job name must identify the Remote Operator");
+    assert!(cleanup_job_name.contains("-cleanup-"));
+    let remote_operator_resource_name =
+        remote_operator_record_name(&helm_namespace, &helm_release, "remote-operator");
     let foreign_pvc = temp.path().join("foreign-identity-pvc.yaml");
     fs::write(
         &foreign_pvc,
@@ -680,6 +1407,7 @@ spec:
             &helm_namespace,
             "--from-literal=sync-token=sync-v1",
             &format!("--from-literal=encryption-key={ENCRYPTION_KEY}"),
+            "--from-literal=collector-token=collector-v1",
         ],
         None,
     );
@@ -750,8 +1478,93 @@ spec:
     );
     assert_eq!(
         initialized.stdout.lines().count(),
+        0,
+        "an Operator that never opens its identity must not claim initialization: {initialized:?}"
+    );
+    let pending = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            "--namespace",
+            &helm_namespace,
+            "--selector=alien.dev/remote-operator-identity-phase=pending",
+            "--output=name",
+        ],
+        None,
+    );
+    assert_eq!(
+        pending.stdout.lines().count(),
         1,
-        "failed enable must retain a durable initialization record independently of live pods: {initialized:?}"
+        "a failed enable must leave only the exact pending marker for explicit cleanup: {pending:?}"
+    );
+
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            &helm_release,
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=2m",
+        ],
+        None,
+    );
+    for selector in [
+        "alien.dev/remote-operator-identity-record=true",
+        "alien.dev/remote-operator-identity-phase=pending",
+        "alien.dev/remote-operator-identity-phase=initialized",
+        "alien.dev/remote-operator-identity-phase=complete",
+    ] {
+        let retained = run_ok(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                "--namespace",
+                &helm_namespace,
+                &format!("--selector={selector}"),
+                "--output=name",
+            ],
+            None,
+        );
+        assert!(
+            retained.stdout.trim().is_empty(),
+            "explicit uninstall after a failed enable must retire the prepared identity: {retained:?}"
+        );
+    }
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=30s",
+        ],
+        None,
+    );
+
+    run_ok(
+        "helm",
+        [
+            "install",
+            &helm_release,
+            path_str(&good_chart_dir),
+            "--namespace",
+            &helm_namespace,
+            "--kube-as-user=product-installer",
+            "--wait",
+            "--timeout=2m",
+            "--set=heartbeat.collection.nodes.enabled=false",
+            &format!("--set-string=runtime.image.repository={GOOD_RUNTIME_IMAGE_REPOSITORY}"),
+            &format!("--set-string=runtime.image.tag={GOOD_RUNTIME_IMAGE_TAG}"),
+            "--set=runtime.probes.liveness.enabled=false",
+            "--set=runtime.probes.readiness.enabled=false",
+        ],
+        None,
     );
 
     let retry = helm_upgrade_args(
@@ -778,6 +1591,66 @@ spec:
         ),
         "configmap/",
     );
+
+    run_ok(
+        "helm",
+        [
+            "uninstall",
+            &helm_release,
+            "--namespace",
+            &helm_namespace,
+            "--no-hooks",
+        ],
+        None,
+    );
+    let mut disabled_reinstall = helm_install_args(
+        &helm_release,
+        &helm_namespace,
+        &good_chart_dir,
+        false,
+        "30s",
+    );
+    for argument in &mut disabled_reinstall {
+        if argument == "--set=remoteOperator.enabled=true" {
+            *argument = "--set=remoteOperator.enabled=false".to_string();
+        }
+    }
+    run_fails(
+        "helm",
+        disabled_reinstall.iter().map(String::as_str),
+        None,
+        "a disabled same-name reinstall must reject lifecycle records retained by --no-hooks",
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "configmap",
+            remote_operator_resource_name.as_str(),
+            &format!("{remote_operator_resource_name}-initialized"),
+            &format!("{remote_operator_resource_name}-complete"),
+            &format!("{remote_operator_resource_name}-lifecycle-v2"),
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found",
+        ],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "delete",
+            "persistentvolumeclaim",
+            &format!("{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--ignore-not-found",
+            "--wait=true",
+        ],
+        None,
+    );
+    run_ok("helm", disabled_reinstall.iter().map(String::as_str), None);
+    run_ok("helm", retry.iter().map(String::as_str), None);
 
     run_ok(
         "kubectl",
@@ -882,13 +1755,14 @@ spec:
     run_ok("kubectl", ["delete", "namespace", &helm_namespace], None);
 
     let terraform_namespace = "alien-product-terraform-lifecycle";
+    let terraform_credentials_name = format!("{TERRAFORM_RELEASE}-remote");
     let kubeconfig = temp.path().join("kind-kubeconfig");
     let config = run_ok(
         "kubectl",
         ["config", "view", "--raw", "--flatten", "--minify"],
         None,
     );
-    fs::write(&kubeconfig, config.stdout).expect("write dedicated Kind kubeconfig");
+    fs::write(&kubeconfig, &config.stdout).expect("write dedicated Kind kubeconfig");
     write_terraform_lifecycle_module(
         &terraform_dir,
         &good_chart_dir,
@@ -899,6 +1773,201 @@ spec:
         "terraform",
         ["init", "-backend=false", "-input=false", "-no-color"],
         Some(&terraform_dir),
+    );
+
+    run_ok(
+        "kubectl",
+        ["create", "namespace", terraform_namespace],
+        None,
+    );
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        true,
+        false,
+        false,
+        false,
+        false,
+    );
+    run_ok(
+        "terraform",
+        [
+            "plan",
+            "-input=false",
+            "-no-color",
+            "-out=initial-disabled.tfplan",
+        ],
+        Some(&terraform_dir),
+    );
+    run_ok(
+        "terraform",
+        [
+            "apply",
+            "-input=false",
+            "-no-color",
+            "initial-disabled.tfplan",
+        ],
+        Some(&terraform_dir),
+    );
+    write_terraform_lifecycle_variables_with_release(
+        &terraform_dir,
+        &terraform_failure_chart_dir,
+        terraform_namespace,
+        TERRAFORM_RELEASE,
+        true,
+        false,
+        true,
+        true,
+        true,
+        true,
+    );
+    let failed_post_identity_upgrade = run_fails(
+        "terraform",
+        [
+            "apply",
+            "-input=false",
+            "-no-color",
+            "-auto-approve",
+            "-replace=terraform_data.remote_operator_ownership",
+        ],
+        Some(&terraform_dir),
+        "a post-initialization hook failure must roll back to the cleanup-capable disabled release",
+    );
+    assert!(
+        failed_post_identity_upgrade
+            .diagnostic
+            .contains("post-upgrade hooks failed"),
+        "{}",
+        failed_post_identity_upgrade.diagnostic
+    );
+    assert_output_contains(
+        &run_ok(
+            "helm",
+            [
+                "status",
+                TERRAFORM_RELEASE,
+                "--namespace",
+                terraform_namespace,
+            ],
+            None,
+        ),
+        "STATUS: deployed",
+    );
+    let terraform_identity_name =
+        remote_operator_record_name(terraform_namespace, TERRAFORM_RELEASE, "remote-operator");
+    let retained_initialization = run_ok(
+        "kubectl",
+        [
+            "get",
+            "configmap",
+            &format!("{terraform_identity_name}-initialized"),
+            "--namespace",
+            terraform_namespace,
+            r#"--output=jsonpath={.metadata.labels.alien\.dev/remote-operator-identity-phase},{.immutable}"#,
+        ],
+        None,
+    );
+    assert_eq!(retained_initialization.stdout, "initialized,true");
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{terraform_identity_name}-identity"),
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "terraform",
+        ["destroy", "-input=false", "-no-color", "-auto-approve"],
+        Some(&terraform_dir),
+    );
+    run_ok("kubectl", ["get", "namespace", terraform_namespace], None);
+    for retained_name in [
+        terraform_identity_name.clone(),
+        format!("{terraform_identity_name}-initialized"),
+        format!("{terraform_identity_name}-complete"),
+        format!("{terraform_identity_name}-lifecycle-v2"),
+    ] {
+        run_fails(
+            "kubectl",
+            [
+                "get",
+                "configmap",
+                &retained_name,
+                "--namespace",
+                terraform_namespace,
+            ],
+            None,
+            "Terraform destroy must clean retained lifecycle records in an externally owned namespace",
+        );
+    }
+    run_ok(
+        "kubectl",
+        [
+            "wait",
+            "--for=delete",
+            &format!("persistentvolumeclaim/{terraform_identity_name}-identity"),
+            "--namespace",
+            terraform_namespace,
+            "--timeout=30s",
+        ],
+        None,
+    );
+    run_fails(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{terraform_identity_name}-identity"),
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+        "Terraform destroy must clean the retained identity PVC in an externally owned namespace",
+    );
+    run_ok(
+        "kubectl",
+        ["delete", "namespace", terraform_namespace],
+        None,
+    );
+
+    fs::write(
+        &kubeconfig,
+        format!(
+            r#"apiVersion: v1
+kind: Config
+clusters:
+  - name: unreachable
+    cluster:
+      server: https://127.0.0.1:9
+      insecure-skip-tls-verify: true
+contexts:
+  - name: {CLUSTER_CONTEXT}
+    context:
+      cluster: unreachable
+      user: unreachable
+current-context: {CLUSTER_CONTEXT}
+users:
+  - name: unreachable
+    user:
+      token: unreachable
+"#
+        ),
+    )
+    .expect("write unreachable kubeconfig for zero-read assertion");
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        false,
+        false,
+        false,
+        false,
+        false,
     );
     run_ok(
         "terraform",
@@ -916,17 +1985,67 @@ spec:
         ],
         Some(&terraform_dir),
     );
+    fs::write(&kubeconfig, config.stdout).expect("restore dedicated Kind kubeconfig");
+    run_fails(
+        "kubectl",
+        ["get", "namespace", terraform_namespace],
+        None,
+        "an infrastructure-only first apply must not require or create the Helm namespace",
+    );
     run_fails(
         "kubectl",
         [
             "get",
             "secret",
-            "terraform-product-remote",
+            &terraform_credentials_name,
             "--namespace",
             terraform_namespace,
         ],
         None,
         "a disabled first apply must not create empty Remote Operator credentials",
+    );
+    let external_identity_name =
+        remote_operator_record_name(terraform_namespace, TERRAFORM_RELEASE, "remote-operator");
+    run_ok(
+        "kubectl",
+        ["create", "namespace", terraform_namespace],
+        None,
+    );
+    run_ok(
+        "kubectl",
+        [
+            "create",
+            "configmap",
+            &external_identity_name,
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+    );
+    run_ok(
+        "terraform",
+        ["apply", "-input=false", "-no-color", "-auto-approve"],
+        Some(&terraform_dir),
+    );
+    run_ok(
+        "kubectl",
+        ["delete", "namespace", terraform_namespace],
+        None,
+    );
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        true,
+        true,
+        false,
+        false,
+        false,
+    );
+    run_ok(
+        "terraform",
+        ["apply", "-input=false", "-no-color", "-auto-approve"],
+        Some(&terraform_dir),
     );
     write_terraform_lifecycle_variables(
         &terraform_dir,
@@ -936,11 +2055,23 @@ spec:
         true,
         true,
         true,
+        true,
     );
-    run_ok(
+    let unarmed_enable = run_fails(
         "terraform",
-        ["plan", "-input=false", "-no-color", "-out=enabled.tfplan"],
+        ["plan", "-input=false", "-no-color"],
         Some(&terraform_dir),
+        "first enable after a disabled apply must explicitly arm the ownership latch",
+    );
+    assert!(
+        unarmed_enable
+            .diagnostic
+            .contains("Remote Operator ownership is pinned in Terraform state")
+            && unarmed_enable
+                .diagnostic
+                .contains("-replace=terraform_data.remote_operator_ownership"),
+        "{}",
+        unarmed_enable.diagnostic
     );
     run_ok(
         "terraform",
@@ -949,7 +2080,7 @@ spec:
             "-input=false",
             "-no-color",
             "-auto-approve",
-            "enabled.tfplan",
+            "-replace=terraform_data.remote_operator_ownership",
         ],
         Some(&terraform_dir),
     );
@@ -958,7 +2089,7 @@ spec:
         [
             "get",
             "secret",
-            "terraform-product-remote",
+            &terraform_credentials_name,
             "--namespace",
             terraform_namespace,
             "--output=jsonpath={.data.encryption-key}",
@@ -966,10 +2097,112 @@ spec:
         None,
     );
     assert_eq!(installed_encryption_key.stdout, ENCRYPTION_KEY_BASE64);
+    write_terraform_lifecycle_variables_with_release(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        TERRAFORM_RELEASE,
+        true,
+        true,
+        true,
+        false,
+        true,
+        false,
+    );
+    let rejected_collector_clear = run_fails(
+        "terraform",
+        ["apply", "-input=false", "-no-color", "-auto-approve"],
+        Some(&terraform_dir),
+        "clearing a required collector token must fail before mutating the credentials Secret",
+    );
+    assert!(
+        rejected_collector_clear
+            .diagnostic
+            .contains("remote_operator_collector_token is required")
+            && rejected_collector_clear
+                .diagnostic
+                .contains("Operator log collector is enabled"),
+        "{}",
+        rejected_collector_clear.diagnostic
+    );
+    let retained_collector_token = run_ok(
+        "kubectl",
+        [
+            "get",
+            "secret",
+            &terraform_credentials_name,
+            "--namespace",
+            terraform_namespace,
+            "--output=jsonpath={.data.collector-token}",
+        ],
+        None,
+    );
+    assert_eq!(retained_collector_token.stdout, COLLECTOR_TOKEN_BASE64);
     write_terraform_lifecycle_variables(
         &terraform_dir,
         &good_chart_dir,
         terraform_namespace,
+        true,
+        true,
+        true,
+        false,
+        true,
+    );
+    write_terraform_lifecycle_variables_with_release(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        TERRAFORM_RENAMED_RELEASE,
+        true,
+        true,
+        true,
+        false,
+        true,
+        true,
+    );
+    let rejected_release_move = run_fails(
+        "terraform",
+        ["plan", "-input=false", "-no-color"],
+        Some(&terraform_dir),
+        "a managed Remote Operator release name must remain pinned",
+    );
+    assert!(
+        rejected_release_move
+            .diagnostic
+            .contains("Remote Operator ownership is pinned in Terraform state"),
+        "{}",
+        rejected_release_move.diagnostic
+    );
+    write_terraform_lifecycle_variables_with_release(
+        &terraform_dir,
+        &good_chart_dir,
+        "alien-product-terraform-moved",
+        TERRAFORM_RELEASE,
+        true,
+        false,
+        true,
+        false,
+        true,
+        true,
+    );
+    let rejected_namespace_move = run_fails(
+        "terraform",
+        ["plan", "-input=false", "-no-color"],
+        Some(&terraform_dir),
+        "a managed Remote Operator namespace must remain pinned",
+    );
+    assert!(
+        rejected_namespace_move
+            .diagnostic
+            .contains("Remote Operator ownership is pinned in Terraform state"),
+        "{}",
+        rejected_namespace_move.diagnostic
+    );
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        true,
         true,
         true,
         false,
@@ -985,7 +2218,43 @@ spec:
         [
             "get",
             "secret",
-            "terraform-product-remote",
+            &terraform_credentials_name,
+            "--namespace",
+            terraform_namespace,
+        ],
+        None,
+    );
+
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        false,
+        true,
+        false,
+        false,
+        false,
+    );
+    let rejected_disable = run_fails(
+        "terraform",
+        ["plan", "-input=false", "-no-color"],
+        Some(&terraform_dir),
+        "an in-place Helm disable must not retire a retained Remote Operator identity",
+    );
+    assert!(
+        rejected_disable
+            .diagnostic
+            .contains("Remote Operator ownership is pinned in Terraform state"),
+        "{}",
+        rejected_disable.diagnostic
+    );
+    run_ok("kubectl", ["get", "namespace", terraform_namespace], None);
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "secret",
+            &terraform_credentials_name,
             "--namespace",
             terraform_namespace,
         ],
@@ -1000,19 +2269,20 @@ spec:
         false,
         false,
         false,
+        false,
     );
-    let rejected_disable = run_fails(
+    let rejected_cleared_disable = run_fails(
         "terraform",
         ["plan", "-input=false", "-no-color"],
         Some(&terraform_dir),
-        "an in-place Helm disable must not retire a retained Remote Operator identity",
+        "clearing every new input must not bypass retained identity detection",
     );
     assert!(
-        rejected_disable
+        rejected_cleared_disable
             .diagnostic
-            .contains("Disabling the product Helm release or Remote Operator in place"),
+            .contains("Remote Operator ownership is pinned in Terraform state"),
         "{}",
-        rejected_disable.diagnostic
+        rejected_cleared_disable.diagnostic
     );
     run_ok("kubectl", ["get", "namespace", terraform_namespace], None);
     run_ok(
@@ -1020,13 +2290,23 @@ spec:
         [
             "get",
             "secret",
-            "terraform-product-remote",
+            &terraform_credentials_name,
             "--namespace",
             terraform_namespace,
         ],
         None,
     );
 
+    write_terraform_lifecycle_variables(
+        &terraform_dir,
+        &good_chart_dir,
+        terraform_namespace,
+        false,
+        true,
+        false,
+        false,
+        false,
+    );
     let destroy = run_ok(
         "terraform",
         ["destroy", "-input=false", "-no-color", "-auto-approve"],
@@ -1091,7 +2371,10 @@ fn product_chart_with_scope(image: &str, scope: OperatorScope) -> HelmChart {
                 group_token: "",
                 encryption_key: "",
                 image,
-                log_collector: None,
+                log_collector: Some(OperatorLogCollectorOptions {
+                    image: LOG_COLLECTOR_IMAGE,
+                    token: "",
+                }),
                 stack_settings: None,
                 project_name: "product-lifecycle",
                 environment_name: None,
@@ -1127,7 +2410,7 @@ fn helm_upgrade_args(
         path_str(chart).to_string(),
         "--namespace".to_string(),
         namespace.to_string(),
-        "--atomic".to_string(),
+        helm_rollback_on_failure_flag().to_string(),
         format!("--timeout={timeout}"),
         "--set-string=management.url=https://management.example.test".to_string(),
         "--set=remoteOperator.enabled=true".to_string(),
@@ -1157,7 +2440,7 @@ fn helm_install_args(
         path_str(chart).to_string(),
         "--namespace".to_string(),
         namespace.to_string(),
-        "--atomic".to_string(),
+        helm_rollback_on_failure_flag().to_string(),
         format!("--timeout={timeout}"),
         "--set-string=management.url=https://management.example.test".to_string(),
         "--set=remoteOperator.enabled=true".to_string(),
@@ -1171,6 +2454,23 @@ fn helm_install_args(
         "--set=runtime.probes.liveness.enabled=false".to_string(),
         format!("--set=runtime.probes.readiness.enabled={runtime_readiness_enabled}"),
     ]
+}
+
+fn helm_rollback_on_failure_flag() -> &'static str {
+    let version = run_ok("helm", ["version", "--short"], None);
+    let major = version
+        .stdout
+        .trim()
+        .trim_start_matches('v')
+        .split('.')
+        .next()
+        .and_then(|value| value.parse::<u32>().ok())
+        .expect("Helm must report a semantic major version");
+    if major >= 4 {
+        "--rollback-on-failure"
+    } else {
+        "--atomic"
+    }
 }
 
 fn write_terraform_lifecycle_module(
@@ -1205,6 +2505,7 @@ fn write_terraform_lifecycle_module(
             }),
             supported_aws_regions: Vec::new(),
         },
+        true,
     )
     .expect("product Terraform lifecycle module");
     let generated_helm = module.get("helm.tf").expect("generated helm.tf");
@@ -1222,7 +2523,7 @@ fn write_terraform_lifecycle_module(
         .lines()
         .filter(|line| line.trim() == "acme_app_deployment.this,")
         .count();
-    assert_eq!(registration_dependencies, 2);
+    assert_eq!(registration_dependencies, 1);
     let generated_helm = generated_helm
         .lines()
         .filter(|line| line.trim() != "acme_app_deployment.this,")
@@ -1308,7 +2609,9 @@ variable "remote_operator_collector_token" {{
         ),
     )
     .expect("write Terraform lifecycle provider configuration");
-    write_terraform_lifecycle_variables(directory, chart, namespace, true, false, false, false);
+    write_terraform_lifecycle_variables(
+        directory, chart, namespace, false, false, false, false, false,
+    );
 }
 
 fn write_terraform_lifecycle_variables(
@@ -1316,9 +2619,37 @@ fn write_terraform_lifecycle_variables(
     chart: &Path,
     namespace: &str,
     helm_install_enabled: bool,
+    kubernetes_namespace_create: bool,
     remote_operator_enabled: bool,
     remote_operator_bootstrap_identity: bool,
     include_credentials: bool,
+) {
+    write_terraform_lifecycle_variables_with_release(
+        directory,
+        chart,
+        namespace,
+        TERRAFORM_RELEASE,
+        helm_install_enabled,
+        kubernetes_namespace_create,
+        remote_operator_enabled,
+        remote_operator_bootstrap_identity,
+        include_credentials,
+        include_credentials,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn write_terraform_lifecycle_variables_with_release(
+    directory: &Path,
+    chart: &Path,
+    namespace: &str,
+    release_name: &str,
+    helm_install_enabled: bool,
+    kubernetes_namespace_create: bool,
+    remote_operator_enabled: bool,
+    remote_operator_bootstrap_identity: bool,
+    include_credentials: bool,
+    include_collector_token: bool,
 ) {
     let sync_token = if include_credentials {
         "\"sync-terraform\"".to_string()
@@ -1330,24 +2661,30 @@ fn write_terraform_lifecycle_variables(
     } else {
         "null".to_string()
     };
+    let collector_token = if include_collector_token {
+        "\"collector-terraform\"".to_string()
+    } else {
+        "null".to_string()
+    };
     fs::write(
         directory.join("terraform.tfvars"),
         format!(
             r#"helm_install_enabled                = {helm_install_enabled}
-helm_release_name                   = "terraform-product"
+helm_release_name                   = {release_name:?}
 helm_chart                          = {chart:?}
 kubernetes_namespace                = {namespace:?}
-kubernetes_namespace_create         = true
+kubernetes_namespace_create         = {kubernetes_namespace_create}
 remote_operator_enabled             = {remote_operator_enabled}
 remote_operator_bootstrap_identity  = {remote_operator_bootstrap_identity}
 remote_operator_sync_token_revision = 0
 remote_operator_sync_token          = {sync_token}
 remote_operator_encryption_key      = {encryption_key}
+remote_operator_collector_token     = {collector_token}
 "#,
             chart = path_str(chart),
         ),
     )
-    .expect("write Terraform lifecycle variables without a collector token");
+    .expect("write Terraform lifecycle variables");
 }
 
 fn write_chart(directory: &Path, chart: &HelmChart) {
@@ -1358,6 +2695,31 @@ fn write_chart(directory: &Path, chart: &HelmChart) {
         }
         fs::write(path, contents).expect("write generated chart file");
     }
+}
+
+fn remote_operator_record_name(namespace: &str, release: &str, record: &str) -> String {
+    let digest = format!(
+        "{:x}",
+        Sha256::digest(format!("{namespace}/{release}").as_bytes())
+    );
+    let mut normalized_release = String::with_capacity(release.len());
+    let mut replacing = false;
+    for character in release.to_ascii_lowercase().chars() {
+        if character.is_ascii_lowercase() || character.is_ascii_digit() || character == '-' {
+            normalized_release.push(character);
+            replacing = false;
+        } else if !replacing {
+            normalized_release.push('-');
+            replacing = true;
+        }
+    }
+    let release_prefix = normalized_release
+        .chars()
+        .take(21)
+        .collect::<String>()
+        .trim_matches('-')
+        .to_string();
+    format!("{release_prefix}-{record}-{}", &digest[..16])
 }
 
 fn path_str(path: &Path) -> &str {

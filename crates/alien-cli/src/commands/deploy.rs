@@ -18,7 +18,9 @@ use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
 use crate::ui::{command, contextual_heading, dim_label, success_line, FixedSteps};
 use alien_cli_common::network::{self, NetworkArgs, NetworkMode};
-use alien_core::{ClientConfig, DeploymentState, DeploymentStatus, NetworkSettings, Platform};
+use alien_core::{
+    ClientConfig, ComputeSettings, DeploymentState, DeploymentStatus, NetworkSettings, Platform,
+};
 use alien_deployment::loop_contract::{LoopOperation, LoopOutcome, LoopStopReason};
 use alien_deployment::manager_api_transport::{
     acquire_deployment_with_payload, acquire_setup_run_deployment,
@@ -26,6 +28,7 @@ use alien_deployment::manager_api_transport::{
 };
 use alien_deployment::runner::{RunnerPolicy, RunnerResult};
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_infra::ClientConfigExt;
 use alien_platform_api::Client as SdkClient;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use clap::Parser;
@@ -87,6 +90,10 @@ pub struct DeployArgs {
     #[arg(long)]
     pub config: Option<PathBuf>,
 
+    /// Validate the config locally without authentication, API calls, or deployment tracking.
+    #[arg(long, requires = "config")]
+    pub validate_only: bool,
+
     /// Stack input value for setup (id=value).
     #[arg(long = "input")]
     pub input_values: Vec<String>,
@@ -142,6 +149,7 @@ struct ResolvedDeployArgs {
     platform: String,
     platform_enum: Platform,
     network_settings: Option<NetworkSettings>,
+    compute_settings: Option<ComputeSettings>,
     input_values: HashMap<String, serde_json::Value>,
     public_subdomain: Option<String>,
 }
@@ -152,6 +160,7 @@ struct DeployConfigFile {
     name: Option<String>,
     platform: Option<String>,
     network: Option<DeployConfigNetwork>,
+    compute: Option<ComputeSettings>,
     inputs: Option<HashMap<String, String>>,
     secret_inputs: Option<HashMap<String, String>>,
 }
@@ -274,6 +283,18 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         })?;
 
     let network_settings = resolve_network_settings(args, config.as_ref(), &platform)?;
+    if let Some(settings) = network_settings.as_ref() {
+        network::validate_network_settings_for_platform(settings, platform_enum).map_err(
+            |message| {
+                AlienError::new(ErrorData::ValidationError {
+                    field: "network".to_string(),
+                    message,
+                })
+            },
+        )?;
+    }
+    let compute_settings = config.as_ref().and_then(|config| config.compute.clone());
+    validate_compute_settings(compute_settings.as_ref())?;
     let input_values = collect_raw_input_values(
         config.as_ref(),
         &args.input_values,
@@ -293,9 +314,44 @@ fn resolve_deploy_args(args: &DeployArgs) -> Result<ResolvedDeployArgs> {
         platform,
         platform_enum,
         network_settings,
+        compute_settings,
         input_values,
         public_subdomain: args.public_subdomain.clone(),
     })
+}
+
+fn validate_compute_settings(compute: Option<&ComputeSettings>) -> Result<()> {
+    let Some(compute) = compute else {
+        return Ok(());
+    };
+    for (pool, selection) in &compute.pools {
+        selection.validate().map_err(|message| {
+            AlienError::new(ErrorData::ValidationError {
+                field: format!("compute.pools.{pool}"),
+                message,
+            })
+        })?;
+    }
+    Ok(())
+}
+
+fn to_sdk_compute_settings(
+    compute: Option<ComputeSettings>,
+) -> Result<Option<alien_platform_api::types::NewDeploymentRequestStackSettingsCompute>> {
+    compute
+        .map(|compute_settings| {
+            let json = serde_json::to_value(&compute_settings)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to serialize compute settings".to_string(),
+                })?;
+            serde_json::from_value(json)
+                .into_alien_error()
+                .context(ErrorData::ConfigurationError {
+                    message: "Failed to convert compute settings to SDK type".to_string(),
+                })
+        })
+        .transpose()
 }
 
 fn read_deploy_config(path: &Path) -> Result<DeployConfigFile> {
@@ -612,6 +668,7 @@ async fn create_self_deployment(
             &session.token,
             &resolved_args.platform,
             &resolved_args.input_values,
+            &args.channel,
         )
         .await?;
     }
@@ -777,15 +834,17 @@ async fn set_first_party_deployment_inputs(
     session_token: &str,
     platform: &str,
     input_values: &HashMap<String, serde_json::Value>,
+    release_channel: &str,
 ) -> Result<()> {
     let http_client = create_platform_http_client(session_token)?;
     let url = api_url(base_url, "/v1/deployments/first-party-inputs", None)?;
     let response = http_client
         .put(url)
-        .json(&serde_json::json!({
-            "platform": platform,
-            "inputValues": input_values,
-        }))
+        .json(&first_party_inputs_request_body(
+            platform,
+            input_values,
+            release_channel,
+        ))
         .send()
         .await
         .into_alien_error()
@@ -793,6 +852,18 @@ async fn set_first_party_deployment_inputs(
             message: "Failed to set first-party deployment inputs".to_string(),
         })?;
     parse_empty_api_response(response, "Failed to set first-party deployment inputs").await
+}
+
+fn first_party_inputs_request_body(
+    platform: &str,
+    input_values: &HashMap<String, serde_json::Value>,
+    release_channel: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "platform": platform,
+        "inputValues": input_values,
+        "releaseChannel": release_channel,
+    })
 }
 
 async fn create_deployment_with_group_session(
@@ -803,22 +874,7 @@ async fn create_deployment_with_group_session(
     project_id: &str,
 ) -> Result<CreateDeploymentApiResponse> {
     let http_client = create_platform_http_client(session_token)?;
-    let stack_settings = deployment_stack_settings_json(resolved_args, args)?;
-    let mut body = serde_json::json!({
-        "name": resolved_args.name,
-        "project": project_id,
-        "platform": resolved_args.platform,
-        "stackSettings": stack_settings,
-        "inputValues": {},
-        "setupMethod": "cli",
-    });
-
-    if let Some(resource_prefix) = args.resource_prefix.as_ref() {
-        body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
-    }
-    if let Some(public_subdomain) = resolved_args.public_subdomain.as_ref() {
-        body["publicSubdomain"] = serde_json::Value::String(public_subdomain.clone());
-    }
+    let body = deployment_create_request_body(resolved_args, args, project_id)?;
 
     let url = api_url(base_url, "/v1/deployments", None)?;
     let response = http_client
@@ -831,6 +887,42 @@ async fn create_deployment_with_group_session(
             message: "Failed to create deployment".to_string(),
         })?;
     parse_api_response(response, "Failed to create deployment").await
+}
+
+fn deployment_manager_http_client(
+    deployment_token: &str,
+    workspace: Option<&str>,
+) -> Result<reqwest::Client> {
+    let deployment_auth = format!("Bearer {deployment_token}");
+    match workspace {
+        Some(workspace) => crate::auth::client_with_auth_and_workspace(&deployment_auth, workspace),
+        None => crate::auth::client_with_header(&deployment_auth),
+    }
+}
+
+fn deployment_create_request_body(
+    resolved_args: &ResolvedDeployArgs,
+    args: &DeployArgs,
+    project_id: &str,
+) -> Result<serde_json::Value> {
+    let stack_settings = deployment_stack_settings_json(resolved_args, args)?;
+    let mut body = serde_json::json!({
+        "name": resolved_args.name,
+        "project": project_id,
+        "platform": resolved_args.platform,
+        "stackSettings": stack_settings,
+        "inputValues": {},
+        "releaseChannel": args.channel,
+        "setupMethod": "cli",
+    });
+
+    if let Some(resource_prefix) = args.resource_prefix.as_ref() {
+        body["resourcePrefix"] = serde_json::Value::String(resource_prefix.clone());
+    }
+    if let Some(public_subdomain) = resolved_args.public_subdomain.as_ref() {
+        body["publicSubdomain"] = serde_json::Value::String(public_subdomain.clone());
+    }
+    Ok(body)
 }
 
 fn deployment_stack_settings_json(
@@ -856,6 +948,14 @@ fn deployment_stack_settings_json(
             .into_alien_error()
             .context(ErrorData::ConfigurationError {
                 message: "Failed to serialize network settings".to_string(),
+            })?;
+    }
+
+    if let Some(compute_settings) = resolved_args.compute_settings.as_ref() {
+        settings["compute"] = serde_json::to_value(compute_settings)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: "Failed to serialize compute settings".to_string(),
             })?;
     }
 
@@ -1091,6 +1191,15 @@ async fn parse_empty_api_response(response: reqwest::Response, message: &str) ->
 
 /// Main entry point for deploy command
 pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
+    let environment = std::env::vars().collect();
+    deploy_task_with_environment(args, ctx, &environment).await
+}
+
+async fn deploy_task_with_environment(
+    args: DeployArgs,
+    ctx: ExecutionMode,
+    environment: &HashMap<String, String>,
+) -> Result<()> {
     #[cfg(not(feature = "platform"))]
     if args.channel != "production" {
         return Err(AlienError::new(ErrorData::ConfigurationError {
@@ -1099,6 +1208,11 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     }
 
     let resolved_args = resolve_deploy_args(&args)?;
+
+    if args.validate_only {
+        println!("Deployment config is valid.");
+        return Ok(());
+    }
 
     if let ExecutionMode::Dev { port } = ctx {
         return deploy_local_dev_task(resolved_args, port).await;
@@ -1126,6 +1240,19 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
     steps.activate(0, Some(resolved_args.name.clone()));
 
     let platform = resolved_args.platform_enum;
+
+    // Validate runner-local provider configuration before creating any durable
+    // deployment record or token. Machines does not use a local cloud client.
+    let client_config =
+        if platform == Platform::Machines {
+            None
+        } else {
+            Some(ClientConfig::from_env(platform, environment).await.context(
+                ErrorData::ConfigurationError {
+                    message: format!("Failed to build client config for platform {:?}", platform),
+                },
+            )?)
+        };
 
     let base_url = ctx.base_url();
 
@@ -1232,6 +1359,9 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             })
                             .transpose()?;
 
+                        let sdk_compute =
+                            to_sdk_compute_settings(resolved_args.compute_settings.clone())?;
+
                         let deployment_model = if uses_push_deployment_model(
                             resolved_args.platform_enum,
                         ) {
@@ -1240,7 +1370,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsDeploymentModel::Pull
                         };
                         let stack_settings = alien_platform_api::types::NewDeploymentRequestStackSettings {
-                        compute: None,
+                        compute: sdk_compute,
                         deployment_model: Some(deployment_model),
                         heartbeats: Some(if args.no_heartbeat {
                             alien_platform_api::types::NewDeploymentRequestStackSettingsHeartbeats::Off
@@ -1421,18 +1551,14 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         .resolve_manager(&tracked_deployment.project_id, &resolved_args.platform)
         .await?;
     // Provisioning calls the manager's sync endpoints, which require
-    // `managers.sync` — held by the deployment's own token, not the install
-    // token that resolved the manager. In platform mode (workspace is set),
-    // re-authenticate as the deployment for these calls.
-    let manager_client = if let Some(workspace) = manager_ctx.workspace.clone() {
-        let http_client = crate::auth::client_with_auth_and_workspace(
-            &format!("Bearer {}", tracked_deployment.api_key),
-            &workspace,
-        )?;
-        alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, http_client)
-    } else {
-        manager_ctx.client
-    };
+    // deployment-scoped authorization. Manager discovery may use a user or
+    // project credential, but that credential must never leak into setup.
+    let manager_http_client = deployment_manager_http_client(
+        &tracked_deployment.api_key,
+        manager_ctx.workspace.as_deref(),
+    )?;
+    let manager_client =
+        alien_manager_api::Client::new_with_client(&manager_ctx.manager_url, manager_http_client);
 
     steps.complete(1, Some(format!("Manager: {}", manager_ctx.manager_url)));
 
@@ -1461,14 +1587,7 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
                 message: format!("Unknown deployment status: {}", deployment.status),
             })?;
 
-    // Get cloud credentials from environment
-    use alien_infra::ClientConfigExt;
-    let client_config =
-        ClientConfig::from_std_env(platform)
-            .await
-            .context(ErrorData::ConfigurationError {
-                message: format!("Failed to build client config for platform {:?}", platform),
-            })?;
+    let client_config = client_config.expect("non-Machines deploys validate client config");
 
     // Build deployment state
     let mut current = DeploymentState {
@@ -1569,6 +1688,15 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
             message: "Failed to deserialize stack_settings".to_string(),
         })?
         .unwrap_or_default();
+
+    if let Some(requested_compute) = resolved_args.compute_settings.as_ref() {
+        if stack_settings.compute.as_ref() != Some(requested_compute) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "compute".to_string(),
+                message: "Compute settings cannot be changed while resuming an existing deployment. Use the deployment setup flow to change compute, or retry with the deployment's current compute settings.".to_string(),
+            }));
+        }
+    }
 
     let mut config: alien_core::DeploymentConfig = serde_json::from_value(serde_json::json!({
         "stackSettings": serde_json::to_value(&stack_settings).unwrap_or_default(),
@@ -1703,10 +1831,14 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         None,
     )
     .await;
+    let semantic_failure_status = runner_result.as_ref().ok().and_then(|result| {
+        (result.loop_result.outcome == LoopOutcome::Failure)
+            .then(|| result.loop_result.final_status.clone())
+    });
 
     // Always reconcile + release, even on error
     let runner_result = combine_operation_and_finalization(
-        runner_result,
+        alien_deployment::runner::preserve_semantic_failure(runner_result, &current),
         final_reconcile(
             &manager_client,
             &tracked_deployment.deployment_id,
@@ -1716,6 +1848,13 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         )
         .await,
     );
+
+    // Semantic failures are checkpointed as a successful runner return. Mark
+    // the visible step failed after finalization, but before converting that
+    // outcome back into the detailed operation error returned to the caller.
+    if let Some(status) = semantic_failure_status {
+        steps.fail(2, Some(format!("{status:?}")));
+    }
 
     let RunnerResult {
         loop_result,
@@ -1779,6 +1918,24 @@ pub async fn deploy_task(args: DeployArgs, ctx: ExecutionMode) -> Result<()> {
         ))
     );
 
+    Ok(())
+}
+
+/// Validate a deployment file without constructing an authenticated execution context.
+///
+/// This is deliberately separate from [`deploy_task`]: callers of `--validate-only`
+/// must not need manager credentials, a platform session, or network access merely to
+/// parse and validate a local file.
+pub fn validate_deploy_config(args: &DeployArgs) -> Result<()> {
+    #[cfg(not(feature = "platform"))]
+    if args.channel != "production" {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: "Named release channels require platform mode.".to_string(),
+        }));
+    }
+
+    resolve_deploy_args(args)?;
+    println!("Deployment config is valid.");
     Ok(())
 }
 
@@ -1962,6 +2119,9 @@ fn target_release_from_json(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn deployment_group_selector_is_available_without_a_token() {
@@ -1993,6 +2153,63 @@ mod tests {
             "aws",
         ])
         .expect_err("deployment-group selector and scoped token must conflict");
+    }
+
+    #[tokio::test]
+    async fn invalid_provider_config_fails_before_any_deployment_api_request() {
+        let listener = TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind test API listener");
+        let server_url = format!(
+            "http://{}",
+            listener.local_addr().expect("read listener address")
+        );
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "must-not-be-created",
+            "--platform",
+            "azure",
+            "--token",
+            "deployment-token-must-not-be-sent",
+        ])
+        .expect("valid deploy arguments");
+
+        let error = deploy_task_with_environment(
+            args,
+            ExecutionMode::Standalone {
+                server_url,
+                api_key: "deployment-token-must-not-be-sent".to_string(),
+            },
+            &HashMap::new(),
+        )
+        .await
+        .expect_err("unsupported provider configuration must fail preflight");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(
+            error.message.contains("Azure"),
+            "unexpected provider error: {error:?}"
+        );
+        assert!(
+            timeout(Duration::from_millis(100), listener.accept())
+                .await
+                .is_err(),
+            "provider preflight failure must not contact the deployment API"
+        );
+    }
+
+    #[test]
+    fn validate_only_requires_a_config_file() {
+        DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "production",
+            "--platform",
+            "aws",
+            "--validate-only",
+        ])
+        .expect_err("validation must name the config being validated");
     }
 
     #[test]
@@ -2037,6 +2254,94 @@ mod tests {
 
         assert!(!uses_push_deployment_model(Platform::Kubernetes));
         assert!(!uses_push_deployment_model(Platform::Local));
+    }
+
+    #[test]
+    fn deploy_config_accepts_and_serializes_compute_selection() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+name = "production"
+platform = "aws"
+
+[compute.pools.preview]
+mode = "fixed"
+machines = 1
+machine = "m8i.2xlarge"
+"#,
+        )
+        .expect("compute selection should be part of the public deploy config");
+        validate_compute_settings(config.compute.as_ref()).expect("selection should be valid");
+
+        let resolved = ResolvedDeployArgs {
+            name: config.name.expect("name"),
+            platform: config.platform.expect("platform"),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            compute_settings: config.compute,
+            input_values: HashMap::new(),
+            public_subdomain: None,
+        };
+        let args =
+            DeployArgs::try_parse_from(["deploy", "--name", "production", "--platform", "aws"])
+                .expect("minimal deploy args should parse");
+        let settings = deployment_stack_settings_json(&resolved, &args)
+            .expect("compute settings should serialize");
+
+        assert_eq!(
+            settings["compute"]["pools"]["preview"],
+            serde_json::json!({
+                "mode": "fixed",
+                "machines": 1,
+                "machine": "m8i.2xlarge"
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_compute_bounds_fail_before_deployment_creation() {
+        let config: DeployConfigFile = toml::from_str(
+            r#"
+[compute.pools.workers]
+mode = "autoscale"
+min = 3
+max = 1
+"#,
+        )
+        .expect("compute syntax should parse");
+
+        let error = validate_compute_settings(config.compute.as_ref())
+            .expect_err("invalid bounds must fail locally");
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("minimum"));
+    }
+
+    #[test]
+    fn fixed_and_autoscale_compute_convert_to_generated_sdk_contract() {
+        let compute: ComputeSettings = serde_json::from_value(serde_json::json!({
+            "pools": {
+                "fixed": {
+                    "mode": "fixed",
+                    "machines": 2,
+                    "machine": "m8i.2xlarge"
+                },
+                "elastic": {
+                    "mode": "autoscale",
+                    "min": 1,
+                    "max": 4,
+                    "machine": "n2-standard-8"
+                }
+            }
+        }))
+        .expect("core compute settings should parse");
+
+        let sdk = to_sdk_compute_settings(Some(compute))
+            .expect("core settings must match the generated SDK schema")
+            .expect("compute should be present");
+        let json = serde_json::to_value(sdk).expect("SDK compute should serialize");
+
+        assert_eq!(json["pools"]["fixed"]["machines"], 2);
+        assert_eq!(json["pools"]["elastic"]["min"], 1);
+        assert_eq!(json["pools"]["elastic"]["max"], 4);
     }
 
     #[test]
@@ -2094,5 +2399,101 @@ mod tests {
         let error = to_sdk_stack_input_values(&invalid)
             .expect_err("object-valued stack inputs should be rejected");
         assert_eq!(error.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn first_party_creation_preserves_requested_release_channel() {
+        let resolved_args = ResolvedDeployArgs {
+            name: "preview".to_string(),
+            platform: "aws".to_string(),
+            platform_enum: Platform::Aws,
+            network_settings: None,
+            compute_settings: None,
+            input_values: HashMap::new(),
+            public_subdomain: None,
+        };
+        let args = DeployArgs::try_parse_from([
+            "deploy",
+            "--name",
+            "preview",
+            "--platform",
+            "aws",
+            "--channel",
+            "staging",
+        ])
+        .expect("deployment arguments should parse");
+
+        let body = deployment_create_request_body(&resolved_args, &args, "proj_test")
+            .expect("deployment request should serialize");
+        assert_eq!(body["releaseChannel"], "staging");
+
+        let input_body = first_party_inputs_request_body(
+            "aws",
+            &HashMap::from([("endpoint".to_string(), serde_json::json!("staging.example"))]),
+            "staging",
+        );
+        assert_eq!(input_body["releaseChannel"], "staging");
+    }
+
+    #[tokio::test]
+    async fn provisioning_always_uses_deployment_bearer_with_optional_workspace_routing() {
+        for workspace in [None, Some("acme")] {
+            let listener = TcpListener::bind("127.0.0.1:0")
+                .await
+                .expect("bind manager test server");
+            let address = listener.local_addr().expect("read manager test address");
+            let server = tokio::spawn(async move {
+                let (mut stream, _) = listener.accept().await.expect("accept manager request");
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = stream
+                        .read(&mut buffer)
+                        .await
+                        .expect("read manager request");
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let body = r#"{"id":"dep_test","name":"test","platform":"aws","status":"pending","deploymentGroupId":"dg_test","deploymentProtocolVersion":1,"projectId":"proj_test","workspaceId":"ws_test","retryRequested":false,"createdAt":"2026-09-17T00:00:00Z"}"#;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream
+                    .write_all(response.as_bytes())
+                    .await
+                    .expect("write manager response");
+                String::from_utf8(request).expect("manager request is HTTP text")
+            });
+
+            let http_client = deployment_manager_http_client("deployment-secret", workspace)
+                .expect("manager client should build");
+            let client = alien_manager_api::Client::new_with_client(
+                &format!("http://{address}"),
+                http_client,
+            );
+            client
+                .get_deployment()
+                .id("dep_test")
+                .send()
+                .await
+                .expect("manager request should succeed");
+            let request = server.await.expect("manager test server task");
+            let request_lower = request.to_ascii_lowercase();
+
+            assert!(request_lower.contains("authorization: bearer deployment-secret\r\n"));
+            match workspace {
+                Some(workspace) => {
+                    assert!(request_lower.contains(&format!("x-alien-workspace: {workspace}\r\n")))
+                }
+                None => assert!(!request_lower.contains("x-alien-workspace:")),
+            }
+        }
     }
 }

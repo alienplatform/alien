@@ -3,12 +3,12 @@
 
 ## Supported Types
 
-### `models.Memory8`
+### `models.SyncReconcileRequestMemory8`
 
 ```typescript
-const value: models.Memory8 = {
-  unit: "bytes",
-  value: 9015.62,
+const value: models.SyncReconcileRequestMemory8 = {
+  unit: "milliseconds",
+  value: 4399.65,
 };
 ```
 

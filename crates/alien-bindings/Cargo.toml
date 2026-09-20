@@ -11,10 +11,10 @@ crate-type = ["rlib"]
 [features]
 default = ["all-platforms"]
 all-platforms = ["aws", "gcp", "azure", "kubernetes", "local", "test"]  # Convenience feature for all providers
-aws = ["alien-core/sandbox-process", "object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
-gcp = ["alien-core/sandbox-process", "tokio/process", "object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
+aws = ["object_store/aws", "dep:base64", "dep:alien-aws-clients", "alien-client-config/aws"]
+gcp = ["tokio/process", "object_store/gcp", "dep:base64", "dep:alien-gcp-clients", "alien-client-config/gcp"]
 azure = ["object_store/azure", "dep:base64", "dep:alien-azure-clients", "alien-client-config/azure"]
-kubernetes = ["alien-core/sandbox-process", "dep:alien-k8s-clients", "dep:k8s-openapi", "dep:base64", "alien-client-config/kubernetes"]
+kubernetes = ["dep:alien-k8s-clients", "dep:k8s-openapi", "dep:base64", "alien-client-config/kubernetes"]
 local = ["object_store/fs", "dep:base64", "dep:oci-client", "dep:turso", "tokio/fs", "tokio/process", "alien-core/local"]
 test = []  # Test platform support - fast mock implementations without real cloud APIs
 openapi = ["dep:utoipa"]

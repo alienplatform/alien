@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+#
+# Stand-in for docker, on PATH only while smoke-sandbox-agent.test.sh runs. It
+# answers every probe the smoke test makes, and injects the one failure named by
+# SMOKE_STUB_MODE.
+#
+# Injection is scoped to linux/amd64, the platform the smoke test reaches first,
+# so a failing mode fails on a predictable half of the manifest.
+set -uo pipefail
+
+mode="${SMOKE_STUB_MODE:-happy}"
+state="$SMOKE_STUB_DIR"
+
+command=${1:-}
+shift || true
+args=("$@")
+all="$*"
+
+platform=""
+detached=0
+i=0
+while [ "$i" -lt "${#args[@]}" ]; do
+  case "${args[$i]}" in
+    --platform) i=$((i + 1)); platform="${args[$i]:-}" ;;
+    -d) detached=1 ;;
+  esac
+  i=$((i + 1))
+done
+
+inject() {
+  [ "$platform" = linux/amd64 ] || return 0
+  case "$mode" in
+    "$1-124") exit 124 ;;
+    "$1-137") exit 137 ;;
+    "$1-error") echo "stub: the $1 probe failed" >&2; exit 7 ;;
+    "$1-silent") exit 7 ;;
+  esac
+}
+
+case "$command" in
+  pull)
+    echo "$platform" >> "$state/platforms"
+    inject pull
+    ;;
+
+  run)
+    echo "$platform" >> "$state/platforms"
+    if [ "$detached" -eq 1 ]; then
+      inject detached
+      [ "$mode" = detached-warning ] &&
+        echo "WARNING: The requested image's platform does not match the detected host platform" >&2
+      container="c0ffee$(date +%s)$$"
+      printf '%s' "$container" > "$state/container"
+      date +%s > "$state/started"
+      echo "$container"
+      exit 0
+    fi
+    case "$all" in
+      *"-j18 -N2"*)
+        inject header
+        [ "$mode" = header-mismatch ] && [ "$platform" = linux/amd64 ] && { echo " b7 00"; exit 0; }
+        case "$platform" in
+          linux/amd64) echo " 3e 00" ;;
+          linux/arm64) echo " b7 00" ;;
+        esac
+        ;;
+      *"uid=1000(sandbox)"*)
+        inject identity
+        ;;
+      *"/sandbox/probe"*)
+        inject unlink
+        ;;
+      *ALIEN_SANDBOX_AUTHORIZATION=nonsense*)
+        inject reject
+        [ "$mode" = reject-accepted ] && [ "$platform" = linux/amd64 ] && exit 0
+        case "$mode" in
+          reject-unnamed-code) echo "the sandbox agent refused: ALIEN_SANDBOX_AUTHORIZATION 'nonsense'" >&2 ;;
+          reject-unnamed-variable) echo "AGENT_CONFIG_INVALID: 'nonsense' is not a known mode" >&2 ;;
+          *) echo "AGENT_CONFIG_INVALID: ALIEN_SANDBOX_AUTHORIZATION 'nonsense' is not a known mode" >&2 ;;
+        esac
+        exit 1
+        ;;
+      *)
+        echo "stub docker: unrecognised run: $all" >&2
+        exit 125
+        ;;
+    esac
+    ;;
+
+  logs)
+    # Strict on purpose. A container id carrying a captured stderr warning, or
+    # split into several words, must read as a container that does not exist.
+    if [ "${#args[@]}" -ne 1 ] || [ "${args[0]}" != "$(cat "$state/container")" ]; then
+      echo "Error response from daemon: No such container: $all" >&2
+      exit 1
+    fi
+    [ "$mode" = listener-never ] && { echo "sandbox agent starting"; exit 0; }
+    echo "sandbox agent listening on 0.0.0.0:8080"
+    ;;
+
+  inspect)
+    [ "$mode" = inspect-unreadable ] &&
+      { echo "Error response from daemon: No such object: ${args[${#args[@]} - 1]}" >&2; exit 1; }
+    if [ "$mode" = listener-then-exit ] && [ $(($(date +%s) - $(cat "$state/started"))) -ge 2 ]; then
+      echo false
+    else
+      echo true
+    fi
+    ;;
+
+  rm) ;;
+
+  *)
+    echo "stub docker: unrecognised command: $command $all" >&2
+    exit 125
+    ;;
+esac

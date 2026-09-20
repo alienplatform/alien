@@ -480,6 +480,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &mut final_state,
     )
     .await;
@@ -534,6 +535,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &final_state,
     )
     .await
@@ -1406,6 +1408,7 @@ async fn agent_sync(
                         &state.bindings_provider,
                         &state.target_bindings_providers,
                         &req.deployment_id,
+                        &deployment.project_id,
                         &mut agent_state,
                     )
                     .await;
@@ -1440,15 +1443,15 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
-                            if let Err(error) =
-                                crate::registry_access::cleanup_deleted_registry_access(
-                                    state.deployment_store.as_ref(),
-                                    &state.bindings_provider,
-                                    &state.target_bindings_providers,
-                                    &req.deployment_id,
-                                    &agent_state,
-                                )
-                                .await
+                            if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
+                                state.deployment_store.as_ref(),
+                                &state.bindings_provider,
+                                &state.target_bindings_providers,
+                                &req.deployment_id,
+                                &deployment.project_id,
+                                &agent_state,
+                            )
+                            .await
                             {
                                 return error.into_response();
                             }

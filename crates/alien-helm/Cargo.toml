@@ -11,7 +11,7 @@ default = []
 test-utils = ["dep:tempfile"]
 
 [dependencies]
-alien-core = { workspace = true, features = ["sandbox-process"] }
+alien-core = { workspace = true }
 alien-error = { workspace = true }
 alien-operations-sdk = { workspace = true }
 indexmap = { workspace = true }
@@ -23,4 +23,5 @@ tempfile = { workspace = true, optional = true }
 [dev-dependencies]
 alien-terraform = { workspace = true }
 insta = { workspace = true }
+sha2 = { workspace = true }
 tempfile = { workspace = true }

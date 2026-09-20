@@ -126,6 +126,20 @@ pub enum ErrorData {
     )]
     CredentialMaterializationFailed { platform: Platform, purpose: String },
 
+    /// A cloud registry refused or failed to create a project's image repository.
+    #[error(
+        code = "IMAGE_REPOSITORY_PROVISIONING_FAILED",
+        message = "Failed to provision the {platform} image repository for project '{project_id}'",
+        retryable = "inherit",
+        internal = "inherit",
+        http_status_code = "inherit",
+        human = "transparent"
+    )]
+    ImageRepositoryProvisioningFailed {
+        project_id: String,
+        platform: Platform,
+    },
+
     /// Registry permissions could not be removed during deployment cleanup.
     #[error(
         code = "REGISTRY_ACCESS_CLEANUP_FAILED",

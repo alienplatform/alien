@@ -5,7 +5,7 @@ use tracing::{debug, info};
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
 use crate::core::{
     delete_environment_secret, direct_monitoring_auth_headers, kubernetes_branded_resource_labels,
-    kubernetes_runtime_pod_labels, projected_env_vars,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, projected_env_vars,
     reconcile_environment_secret_with_additional_secrets, EnvSecretRotationTracker,
     EnvironmentVariableBuilder, KubernetesEnvSecretPlan, ResourceControllerContext,
 };
@@ -20,9 +20,8 @@ use crate::kubernetes_workload_heartbeat::{
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::{
-    branded_tag_key, kubernetes_resource_name, kubernetes_service_account_name, public_url_host,
-    Daemon, DaemonCode, DaemonOutputs, PublicEndpointOutput, ResourceOutputs, ResourceStatus,
-    ALIEN_MANAGED_BY_TAG_KEY, ALIEN_MANAGED_BY_TAG_VALUE, DEFAULT_ALIEN_LABEL_DOMAIN,
+    kubernetes_resource_name, kubernetes_service_account_name, public_url_host, Daemon, DaemonCode,
+    DaemonOutputs, PublicEndpointOutput, ResourceOutputs, ResourceStatus,
     ENV_ALIEN_RUNTIME_SECRETS,
 };
 use alien_error::{AlienError, Context, ContextError};
@@ -66,6 +65,63 @@ impl KubernetesDaemonController {
         let namespace = self.get_kubernetes_namespace(ctx)?;
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
+        let registry_secret_name = format!("{}-registry", daemon_set_name);
+        let environment_secret_name = format!("{}-env", daemon_set_name);
+        let workload_client = ctx
+            .service_provider
+            .get_kubernetes_deployment_client(kubernetes_config)
+            .await?;
+        let (legacy_registry_owner_proven, legacy_environment_owner_proven) = match workload_client
+            .get_daemonset(&namespace, &daemon_set_name)
+            .await
+        {
+            Ok(existing) => {
+                if !self.is_managed_daemonset(
+                    ctx,
+                    existing.metadata.labels.as_ref(),
+                    &daemon_set_name,
+                    &config.id,
+                ) {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Refusing to create Daemon '{}' because DaemonSet '{daemon_set_name}' is not owned by this deployment",
+                            config.id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                let pod_spec = existing
+                    .spec
+                    .as_ref()
+                    .and_then(|spec| spec.template.spec.as_ref());
+                (
+                    crate::kubernetes_registry::pod_spec_references_image_pull_secret(
+                        pod_spec,
+                        &registry_secret_name,
+                    ),
+                    crate::core::pod_spec_references_environment_secret(
+                        pod_spec,
+                        &environment_secret_name,
+                    ),
+                )
+            }
+            Err(error)
+                if matches!(
+                    error.error,
+                    Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                ) =>
+            {
+                (false, false)
+            }
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to inspect DaemonSet '{daemon_set_name}' before Daemon creation"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+        };
 
         let image_pull_secret_name = if let DaemonCode::Image { image } = &config.code {
             let token = ctx.deployment_config.deployment_token.as_ref().ok_or_else(|| {
@@ -74,22 +130,26 @@ impl KubernetesDaemonController {
                     resource_id: Some(config.id.clone()),
                 })
             })?;
-            let secret_name = format!("{}-registry", daemon_set_name);
+            let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
-                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                &namespace,
+                &secret_name,
+                image,
+                token,
+                &config.id,
+                ctx,
+                legacy_registry_owner_proven,
+            )
+            .await?;
             Some(secret_name)
         } else {
             None
         };
-
-        let workload_client = ctx
-            .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
-            .await?;
 
         // Reconcile the per-resource env Secret (creates/updates `{daemon}-env`)
         // for any Secret-kind env var scoped to this Daemon — notably the
@@ -102,6 +162,7 @@ impl KubernetesDaemonController {
             &daemon_set_name,
             &namespace,
             &monitoring_headers,
+            legacy_environment_owner_proven,
             ctx,
         )
         .await?;
@@ -143,6 +204,7 @@ impl KubernetesDaemonController {
                     ctx,
                     existing.metadata.labels.as_ref(),
                     &daemon_set_name,
+                    &config.id,
                 ) {
                     return Err(err.context(ErrorData::CloudPlatformError {
                         message: format!(
@@ -276,6 +338,56 @@ impl KubernetesDaemonController {
             });
         }
 
+        if let (Some(daemon_set_name), Some(namespace)) = (&self.daemon_set_name, &self.namespace) {
+            let workload_client = ctx
+                .service_provider
+                .get_kubernetes_deployment_client(kubernetes_config)
+                .await?;
+            let desired_labels =
+                self.workload_labels(ctx, &config.id, self.build_labels(daemon_set_name));
+            let mut existing = workload_client
+                .get_daemonset(namespace, daemon_set_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to inspect DaemonSet '{daemon_set_name}' for ownership migration"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            if !crate::core::kubernetes_labels_match_current_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                if !self.is_managed_daemonset(
+                    ctx,
+                    existing.metadata.labels.as_ref(),
+                    daemon_set_name,
+                    &config.id,
+                ) {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Refusing to migrate foreign DaemonSet '{daemon_set_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                existing
+                    .metadata
+                    .labels
+                    .get_or_insert_default()
+                    .extend(desired_labels);
+                workload_client
+                    .update_daemonset(namespace, daemon_set_name, &existing)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to migrate cleanup ownership for DaemonSet '{daemon_set_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+            }
+        }
+
         Ok(HandlerAction::Continue {
             state: Ready,
             suggested_delay: Some(Duration::from_secs(30)),
@@ -318,7 +430,34 @@ impl KubernetesDaemonController {
                 ),
                 resource_id: Some(config.id.clone()),
             })?;
+        if !self.is_managed_daemonset(
+            ctx,
+            existing.metadata.labels.as_ref(),
+            daemon_set_name,
+            &config.id,
+        ) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Refusing to update DaemonSet '{daemon_set_name}' because it is not owned by Daemon '{}' in this deployment",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
         let resource_version = existing.metadata.resource_version.clone();
+        let registry_secret_name = format!("{}-registry", daemon_set_name);
+        let environment_secret_name = format!("{}-env", daemon_set_name);
+        let pod_spec = existing
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.spec.as_ref());
+        let legacy_registry_owner_proven =
+            crate::kubernetes_registry::pod_spec_references_image_pull_secret(
+                pod_spec,
+                &registry_secret_name,
+            );
+        let legacy_environment_owner_proven =
+            crate::core::pod_spec_references_environment_secret(pod_spec, &environment_secret_name);
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
@@ -329,13 +468,22 @@ impl KubernetesDaemonController {
                     resource_id: Some(config.id.clone()),
                 })
             })?;
-            let secret_name = format!("{}-registry", daemon_set_name);
+            let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
-                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                namespace,
+                &secret_name,
+                image,
+                token,
+                &config.id,
+                ctx,
+                legacy_registry_owner_proven,
+            )
+            .await?;
             Some(secret_name)
         } else {
             None
@@ -350,6 +498,7 @@ impl KubernetesDaemonController {
             daemon_set_name,
             namespace,
             &monitoring_headers,
+            legacy_environment_owner_proven,
             ctx,
         )
         .await?;
@@ -441,6 +590,53 @@ impl KubernetesDaemonController {
             })
         })?;
 
+        let legacy_owner_proven = if let Some(daemon_set_name) = self.daemon_set_name.as_deref() {
+            let workload_client = ctx
+                .service_provider
+                .get_kubernetes_deployment_client(kubernetes_config)
+                .await?;
+            match workload_client
+                .get_daemonset(namespace, daemon_set_name)
+                .await
+            {
+                Ok(existing) => {
+                    if !self.is_managed_daemonset(
+                        ctx,
+                        existing.metadata.labels.as_ref(),
+                        daemon_set_name,
+                        &config.id,
+                    ) {
+                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: format!(
+                                "Refusing to delete DaemonSet '{daemon_set_name}' because it is not owned by Daemon '{}' in this deployment",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                    true
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    false
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to inspect DaemonSet '{daemon_set_name}' before deletion"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+            }
+        } else {
+            false
+        };
+
         // Tear down the public endpoint (Service/route) before the workload,
         // mirroring the container controller's delete order.
         let namespace_owned = namespace.clone();
@@ -448,15 +644,85 @@ impl KubernetesDaemonController {
             ctx,
             &config.id,
             &namespace_owned,
+            self.daemon_set_name.as_deref().unwrap_or_default(),
+            "daemon",
+            legacy_owner_proven,
             &mut self.public_endpoint,
         )
         .await?;
+
+        if let Some(daemon_set_name) = self.daemon_set_name.as_deref() {
+            delete_environment_secret(
+                "daemon",
+                &config.id,
+                daemon_set_name,
+                namespace,
+                ctx,
+                legacy_owner_proven,
+            )
+            .await?;
+        }
 
         if let Some(daemon_set_name) = &self.daemon_set_name {
             let workload_client = ctx
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
+            let existing = match workload_client
+                .get_daemonset(namespace, daemon_set_name)
+                .await
+            {
+                Ok(existing) => existing,
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    delete_environment_secret(
+                        "daemon",
+                        &config.id,
+                        daemon_set_name,
+                        namespace,
+                        ctx,
+                        false,
+                    )
+                    .await?;
+                    self.daemon_set_name = None;
+                    self.namespace = None;
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to inspect DaemonSet '{daemon_set_name}' before deletion"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+            let desired_labels =
+                self.workload_labels(ctx, &config.id, self.build_labels(daemon_set_name));
+            if !self.is_managed_daemonset(
+                ctx,
+                existing.metadata.labels.as_ref(),
+                daemon_set_name,
+                &config.id,
+            ) || !crate::core::kubernetes_labels_have_compatible_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to delete DaemonSet '{daemon_set_name}' because it is not owned by Daemon '{}' in this deployment",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
             match workload_client
                 .delete_daemonset(namespace, daemon_set_name)
                 .await
@@ -474,6 +740,7 @@ impl KubernetesDaemonController {
                         daemon_set_name,
                         namespace,
                         ctx,
+                        false,
                     )
                     .await?;
                     self.daemon_set_name = None;
@@ -540,6 +807,7 @@ impl KubernetesDaemonController {
                         daemon_set_name,
                         namespace,
                         ctx,
+                        false,
                     )
                     .await?;
                     self.daemon_set_name = None;
@@ -877,23 +1145,14 @@ impl KubernetesDaemonController {
         ctx: &ResourceControllerContext<'_>,
         labels: Option<&BTreeMap<String, String>>,
         daemon_set_name: &str,
+        resource_id: &str,
     ) -> bool {
-        let label_domain = ctx
-            .deployment_config
-            .label_domain
-            .as_deref()
-            .unwrap_or(DEFAULT_ALIEN_LABEL_DOMAIN);
-        let managed_by_key = branded_tag_key(label_domain, ALIEN_MANAGED_BY_TAG_KEY);
-        let default_managed_by_key =
-            branded_tag_key(DEFAULT_ALIEN_LABEL_DOMAIN, ALIEN_MANAGED_BY_TAG_KEY);
-        labels.is_some_and(|labels| {
-            labels.get(&managed_by_key).map(String::as_str) == Some(ALIEN_MANAGED_BY_TAG_VALUE)
-                || labels.get(&default_managed_by_key).map(String::as_str)
-                    == Some(ALIEN_MANAGED_BY_TAG_VALUE)
-                || (labels.get("managed-by").map(String::as_str) == Some("runtime")
-                    && labels.get("component").map(String::as_str) == Some("daemon")
-                    && labels.get("app").map(String::as_str) == Some(daemon_set_name))
-        })
+        let desired = self.workload_labels(ctx, resource_id, self.build_labels(daemon_set_name));
+        crate::core::kubernetes_labels_match_identity(
+            labels,
+            &desired,
+            &["managed-by", "component", "app"],
+        ) && crate::core::kubernetes_labels_have_compatible_scope(labels, &desired)
     }
 
     fn get_kubernetes_namespace(&self, ctx: &ResourceControllerContext<'_>) -> Result<String> {
@@ -919,6 +1178,9 @@ async fn create_registry_pull_secret(
     secret_name: &str,
     proxy_host: &str,
     deployment_token: &str,
+    resource_id: &str,
+    ctx: &ResourceControllerContext<'_>,
+    legacy_owner_proven: bool,
 ) -> Result<()> {
     crate::kubernetes_registry::ensure_registry_pull_secret(
         secrets_client,
@@ -926,6 +1188,8 @@ async fn create_registry_pull_secret(
         secret_name,
         proxy_host,
         deployment_token,
+        kubernetes_cleanup_resource_labels(ctx, resource_id),
+        legacy_owner_proven,
     )
     .await
 }

@@ -7,6 +7,7 @@ pub mod credentials;
 pub mod deployment_groups;
 pub mod deployments;
 pub mod health;
+pub mod image_repositories;
 pub mod install;
 pub mod platforms;
 pub mod registry_proxy;
@@ -190,6 +191,7 @@ pub fn create_router_inner(state: AppState, options: RouterOptions) -> Router {
         .merge(registry_proxy::router())
         // Build configuration (repo prefix discovery for CLI).
         .merge(build_config::router())
+        .merge(image_repositories::router())
         // Configured platforms discovery.
         .merge(platforms::router());
 

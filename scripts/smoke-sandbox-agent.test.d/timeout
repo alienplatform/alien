@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+#
+# Stand-in for coreutils timeout, on PATH only while smoke-sandbox-agent.test.sh
+# runs. It shortens every budget so the listener poll, whose only exit is the
+# timeout firing, ends in seconds instead of a minute.
+#
+# The real timeout is resolved by the driver before the stub shadows it; a bare
+# `timeout` here would recurse.
+set -euo pipefail
+
+if [ "${1:-}" != -k ]; then
+  echo "stub timeout: expected '-k <kill-after> <duration> <command>', got: $*" >&2
+  exit 64
+fi
+shift 3
+
+exec "$SMOKE_REAL_TIMEOUT" -k 1 "${SMOKE_STUB_TIMEOUT:-3}" "$@"

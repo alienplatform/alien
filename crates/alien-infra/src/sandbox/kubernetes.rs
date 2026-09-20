@@ -12,13 +12,17 @@ use std::time::Duration;
 
 use tracing::{debug, info, warn};
 
-use crate::core::ResourceControllerContext;
+use crate::core::{
+    kubernetes_cleanup_resource_labels, kubernetes_deployment_scope_label,
+    ResourceControllerContext,
+};
 use crate::error::{ErrorData, Result};
 use crate::sandbox::{
-    idle_pool_pod, idle_selector, pool_deficit, require_sandboxed_runtime_class, LABEL_SANDBOX,
+    idle_pool_pod_with_labels, idle_selector, pool_deficit, require_sandboxed_runtime_class,
+    LABEL_SANDBOX,
 };
 use alien_core::{ResourceOutputs as CoreResourceOutputs, ResourceStatus, Sandbox, SandboxOutputs};
-use alien_error::{AlienError, Context, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
 
 /// Runtime class a sandbox pod runs under when the operator has not chosen one.
@@ -41,6 +45,11 @@ pub struct KubernetesSandboxController {
     /// Where the application reaches the session broker. Set from the operator's own service
     /// address, because the broker is served by the operator.
     pub(crate) broker_url: Option<String>,
+    /// Deployment ownership selector used by the broker and deletion paths.
+    #[serde(default)]
+    pub(crate) deployment_label_key: Option<String>,
+    #[serde(default)]
+    pub(crate) deployment_label_value: Option<String>,
 }
 
 #[controller]
@@ -91,6 +100,9 @@ impl KubernetesSandboxController {
         // all, and the sandbox comes up Running with nothing able to reach it.
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
         self.namespace = Some(namespace.clone());
+        let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
+        self.deployment_label_key = Some(deployment_label_key);
+        self.deployment_label_value = Some(deployment_label_value);
 
         if self.capability_public_key.is_none() {
             self.capability_public_key =
@@ -114,6 +126,11 @@ impl KubernetesSandboxController {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
         let namespace = deployment_namespace(ctx.get_kubernetes_config()?)?;
+        let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
+        self.deployment_label_key = Some(deployment_label_key);
+        self.deployment_label_value = Some(deployment_label_value);
+        self.capability_public_key =
+            Some(ensure_capability_keypair(ctx, &config.id, &namespace).await?);
         let sessions = list_session_pods(ctx, &namespace, &config.id).await?;
 
         let pool = replenish_warm_pool(
@@ -202,10 +219,14 @@ impl KubernetesSandboxController {
             .get_kubernetes_pod_client(kubernetes_config)
             .await?;
 
+        let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
         let pods = client
             .list_pods(
                 &namespace,
-                Some(format!("{LABEL_SANDBOX}={}", config.id)),
+                Some(format!(
+                    "{LABEL_SANDBOX}={},{}={}",
+                    config.id, deployment_label_key, deployment_label_value
+                )),
                 None,
             )
             .await
@@ -250,9 +271,40 @@ impl KubernetesSandboxController {
             .service_provider
             .get_kubernetes_secrets_client(ctx.get_kubernetes_config()?)
             .await?;
-        let _ = secrets
-            .delete_secret(&namespace, &capability_secret_name(&config.id))
-            .await;
+        let capability_name = capability_secret_name(&config.id);
+        match secrets.get_secret(&namespace, &capability_name).await {
+            Ok(secret) => {
+                let is_owned = secret.metadata.labels.as_ref().is_some_and(|labels| {
+                    labels.get(&deployment_label_key) == Some(&deployment_label_value)
+                });
+                if !is_owned {
+                    return Err(AlienError::new(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "refusing to delete ambiguous sandbox capability Secret '{capability_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                secrets
+                    .delete_secret(&namespace, &capability_name)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "failed to delete sandbox capability Secret '{capability_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+            }
+            Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => {}
+            Err(error) => {
+                return Err(error.context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "failed to inspect sandbox capability Secret '{capability_name}' before deletion"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }))
+            }
+        }
 
         info!(sandbox_id = %config.id, removed, "Removed Kubernetes sandbox pods and capability key");
 
@@ -267,19 +319,34 @@ impl KubernetesSandboxController {
 
         // Nothing to publish until the broker has an address and the pool has a key: a binding
         // pointing at neither would fail on first use rather than fail to appear.
-        let (Some(sandbox_id), Some(namespace), Some(runtime_class), Some(broker_url)) = (
+        let (
+            Some(sandbox_id),
+            Some(namespace),
+            Some(runtime_class),
+            Some(broker_url),
+            Some(deployment_label_key),
+            Some(deployment_label_value),
+        ) = (
             self.sandbox_id.clone(),
             self.namespace.clone(),
             self.runtime_class.clone(),
             self.broker_url.clone(),
-        ) else {
+            self.deployment_label_key.clone(),
+            self.deployment_label_value.clone(),
+        )
+        else {
             return Ok(None);
         };
 
         let binding = SandboxBinding::kubernetes(
             BindingValue::value(namespace),
             BindingValue::value(runtime_class),
-            BindingValue::value(idle_selector(&sandbox_id)),
+            BindingValue::value(format!(
+                "{},{}={}",
+                idle_selector(&sandbox_id),
+                deployment_label_key,
+                deployment_label_value
+            )),
             BindingValue::value(broker_url),
             BindingValue::value(capability_secret_name(&sandbox_id)),
             BindingValue::value(SERVICE_ACCOUNT_TOKEN_PATH.to_string()),
@@ -352,8 +419,18 @@ async fn replenish_warm_pool(
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
 
+    let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
     let idle = client
-        .list_pods(namespace, Some(idle_selector(&sandbox.id)), None)
+        .list_pods(
+            namespace,
+            Some(format!(
+                "{},{}={}",
+                idle_selector(&sandbox.id),
+                deployment_label_key,
+                deployment_label_value
+            )),
+            None,
+        )
         .await
         .context(ErrorData::CloudPlatformError {
             message: "Failed to list idle sandbox pods".to_string(),
@@ -365,12 +442,13 @@ async fn replenish_warm_pool(
     let mut created = 0;
 
     for _ in 0..deficit {
-        let pod = idle_pool_pod(
+        let pod = idle_pool_pod_with_labels(
             sandbox,
             namespace,
             runtime_class,
             None,
             capability_public_key,
+            kubernetes_cleanup_resource_labels(ctx, &sandbox.id),
         );
 
         // Best effort per pod: a pool that is one short is slower, not broken, and failing the
@@ -432,10 +510,13 @@ async fn list_session_pods(
         .get_kubernetes_pod_client(kubernetes_config)
         .await?;
 
+    let (deployment_label_key, deployment_label_value) = kubernetes_deployment_scope_label(ctx);
     let pods = client
         .list_pods(
             namespace,
-            Some(format!("{LABEL_SANDBOX}={sandbox_id}")),
+            Some(format!(
+                "{LABEL_SANDBOX}={sandbox_id},{deployment_label_key}={deployment_label_value}"
+            )),
             None,
         )
         .await
@@ -463,6 +544,8 @@ mod tests {
             warm_pool_size: None,
             capability_public_key: Some("cHVibGlj".to_string()),
             broker_url: None,
+            deployment_label_key: Some("alien.dev/deployment".to_string()),
+            deployment_label_value: Some("release-a".to_string()),
             _internal_stay_count: None,
         };
 
@@ -476,6 +559,10 @@ mod tests {
 
         assert_eq!(params["brokerUrl"], "http://alien-operator.alien:8080");
         assert_eq!(params["keyName"], "alien-sandbox-sbx-capability");
+        assert_eq!(
+            params["selector"],
+            "alien.dev/sandbox=sbx,alien.dev/sandbox-pool=idle,alien.dev/deployment=release-a"
+        );
         assert_eq!(
             params["tokenPath"],
             "/var/run/secrets/kubernetes.io/serviceaccount/token"
@@ -517,6 +604,52 @@ mod tests {
             .expect("Kubernetes must have a registered Sandbox controller");
         assert_eq!(controller.controller_type(), "KubernetesSandboxController");
     }
+
+    #[cfg(feature = "kubernetes")]
+    fn expected_capability_labels() -> std::collections::BTreeMap<String, String> {
+        std::collections::BTreeMap::from([
+            ("alien.dev/label-domain".to_string(), "acme".to_string()),
+            (
+                "alien.dev/legacy-label-domain-0".to_string(),
+                "acme.example".to_string(),
+            ),
+            ("acme/deployment".to_string(), "release-a".to_string()),
+            ("acme/resource".to_string(), "sbx".to_string()),
+            (LABEL_SANDBOX.to_string(), "sbx".to_string()),
+        ])
+    }
+
+    #[cfg(feature = "kubernetes")]
+    #[test]
+    fn capability_secret_with_the_explicit_legacy_scope_can_be_migrated() {
+        let labels = std::collections::BTreeMap::from([
+            (
+                "acme.example/deployment".to_string(),
+                "release-a".to_string(),
+            ),
+            ("acme.example/resource".to_string(), "sbx".to_string()),
+            (LABEL_SANDBOX.to_string(), "sbx".to_string()),
+        ]);
+
+        assert!(capability_secret_labels_match_deployment(
+            Some(&labels),
+            &expected_capability_labels(),
+            "sbx",
+        ));
+    }
+
+    #[cfg(feature = "kubernetes")]
+    #[test]
+    fn unscoped_capability_secret_is_not_adopted() {
+        let labels =
+            std::collections::BTreeMap::from([(LABEL_SANDBOX.to_string(), "sbx".to_string())]);
+
+        assert!(!capability_secret_labels_match_deployment(
+            Some(&labels),
+            &expected_capability_labels(),
+            "sbx",
+        ));
+    }
 }
 
 /// Name of the Secret holding a sandbox's capability signing key.
@@ -526,6 +659,20 @@ pub fn capability_secret_name(sandbox_id: &str) -> String {
 
 /// Key within that Secret.
 const CAPABILITY_SECRET_KEY: &str = "signingKey";
+
+#[cfg(feature = "kubernetes")]
+fn capability_secret_labels_match_deployment(
+    labels: Option<&std::collections::BTreeMap<String, String>>,
+    expected_labels: &std::collections::BTreeMap<String, String>,
+    sandbox_id: &str,
+) -> bool {
+    labels
+        .and_then(|labels| labels.get(LABEL_SANDBOX))
+        .map(String::as_str)
+        == Some(sandbox_id)
+        && crate::core::kubernetes_labels_have_recognized_scope(labels, expected_labels)
+        && crate::core::kubernetes_labels_have_compatible_scope(labels, expected_labels)
+}
 
 /// Creates the sandbox's capability keypair if it has none, returning the public half.
 ///
@@ -554,7 +701,17 @@ async fn ensure_capability_keypair(
 
     let name = capability_secret_name(sandbox_id);
 
-    if let Ok(existing) = client.get_secret(namespace, &name).await {
+    let existing = match client.get_secret(namespace, &name).await {
+        Ok(existing) => Some(existing),
+        Err(error) if error.code == "REMOTE_RESOURCE_NOT_FOUND" => None,
+        Err(error) => {
+            return Err(error.context(ErrorData::CloudPlatformError {
+                message: format!("failed to inspect capability Secret '{name}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            }))
+        }
+    };
+    if let Some(mut existing) = existing {
         if let Some(encoded) = existing
             .data
             .as_ref()
@@ -566,20 +723,42 @@ async fn ensure_capability_keypair(
                     resource_id: Some(sandbox_id.to_string()),
                 })
             })?;
+            let mut expected_labels = kubernetes_cleanup_resource_labels(ctx, sandbox_id);
+            expected_labels.insert(LABEL_SANDBOX.to_string(), sandbox_id.to_string());
+            let labels = existing.metadata.labels.as_ref();
+            if !capability_secret_labels_match_deployment(labels, &expected_labels, sandbox_id) {
+                return Err(AlienError::new(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "the capability Secret for '{sandbox_id}' lacks this deployment's cleanup ownership labels; refusing to adopt an ambiguous signing key"
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                }));
+            }
+            if labels != Some(&expected_labels) {
+                existing.metadata.labels = Some(expected_labels);
+                client
+                    .update_secret(namespace, &name, &existing)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "failed to migrate cleanup ownership for capability Secret '{name}'"
+                        ),
+                        resource_id: Some(sandbox_id.to_string()),
+                    })?;
+            }
             return Ok(BASE64.encode(pair.pk.as_ref()));
         }
     }
 
     let pair = ed25519_compact::KeyPair::generate();
 
+    let mut labels = kubernetes_cleanup_resource_labels(ctx, sandbox_id);
+    labels.insert(LABEL_SANDBOX.to_string(), sandbox_id.to_string());
     let secret = Secret {
         metadata: ObjectMeta {
             name: Some(name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(std::collections::BTreeMap::from([(
-                LABEL_SANDBOX.to_string(),
-                sandbox_id.to_string(),
-            )])),
+            labels: Some(labels),
             ..Default::default()
         },
         data: Some(std::collections::BTreeMap::from([(
@@ -593,7 +772,7 @@ async fn ensure_capability_keypair(
         // Losing this write means somebody else created the key first, which is the outcome the
         // read above is for — adopt theirs. Propagating instead would put a sandbox whose key is
         // live and usable into a terminal ProvisionFailed, for a race that already resolved.
-        let existing =
+        let mut existing =
             client
                 .get_secret(namespace, &name)
                 .await
@@ -601,6 +780,30 @@ async fn ensure_capability_keypair(
                     message: format!("failed to store the capability key for '{sandbox_id}'"),
                     resource_id: Some(sandbox_id.to_string()),
                 })?;
+
+        let mut expected_labels = kubernetes_cleanup_resource_labels(ctx, sandbox_id);
+        expected_labels.insert(LABEL_SANDBOX.to_string(), sandbox_id.to_string());
+        let labels = existing.metadata.labels.as_ref();
+        if !capability_secret_labels_match_deployment(labels, &expected_labels, sandbox_id) {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "the capability Secret for '{sandbox_id}' is not owned by this deployment"
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            }));
+        }
+        if labels != Some(&expected_labels) {
+            existing.metadata.labels = Some(expected_labels);
+            client
+                .update_secret(namespace, &name, &existing)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "failed to migrate cleanup ownership for capability Secret '{name}'"
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                })?;
+        }
 
         let encoded = existing
             .data

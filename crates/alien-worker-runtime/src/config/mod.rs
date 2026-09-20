@@ -164,6 +164,25 @@ impl RuntimeConfig {
 
     /// Validate the configuration
     pub fn validate(&self) -> Result<()> {
+        let unavailable_transport_feature: Option<&str> = match self.transport {
+            #[cfg(not(feature = "aws"))]
+            TransportType::Lambda => Some("aws"),
+            #[cfg(not(feature = "gcp"))]
+            TransportType::CloudRun => Some("gcp"),
+            #[cfg(not(feature = "azure"))]
+            TransportType::ContainerApp => Some("azure"),
+            _ => None,
+        };
+        if let Some(feature) = unavailable_transport_feature {
+            return Err(AlienError::new(ErrorData::ConfigurationInvalid {
+                message: format!(
+                    "{:?} transport requires '{feature}' feature",
+                    self.transport
+                ),
+                field: Some("transport".to_string()),
+            }));
+        }
+
         if self.command.is_empty() {
             return Err(AlienError::new(ErrorData::ConfigurationInvalid {
                 message: "Application command is required".to_string(),
@@ -283,6 +302,40 @@ fn otlp_headers_from_env_vars(env_vars: &HashMap<String, String>) -> HashMap<Str
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn local_transport_is_available_in_narrow_builds() {
+        RuntimeConfig::builder()
+            .transport(TransportType::Local)
+            .command(vec!["app".to_string()])
+            .build()
+            .validate()
+            .unwrap();
+    }
+
+    #[cfg(not(feature = "gcp"))]
+    #[test]
+    fn cloud_run_requires_gcp_feature() {
+        let error = RuntimeConfig::builder()
+            .transport(TransportType::CloudRun)
+            .command(vec!["app".to_string()])
+            .build()
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("requires 'gcp' feature"));
+    }
+
+    #[cfg(not(feature = "azure"))]
+    #[test]
+    fn container_apps_requires_azure_feature() {
+        let error = RuntimeConfig::builder()
+            .transport(TransportType::ContainerApp)
+            .command(vec!["app".to_string()])
+            .build()
+            .validate()
+            .unwrap_err();
+        assert!(error.to_string().contains("requires 'azure' feature"));
+    }
 
     fn clear_otlp_env_vars() {
         std::env::remove_var("OTEL_EXPORTER_OTLP_LOGS_ENDPOINT");

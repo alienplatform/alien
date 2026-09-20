@@ -13,6 +13,7 @@ use k8s_openapi::api::core::v1::{
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
 
+use alien_core::sandbox_image::Authorization;
 use alien_core::{Sandbox, SandboxCode};
 
 /// Label carrying the sandbox a pod belongs to; the enumeration scope for reaping.
@@ -40,6 +41,27 @@ pub fn sandbox_pod(
     node_selector: Option<BTreeMap<String, String>>,
     capability_public_key: Option<&str>,
 ) -> Pod {
+    sandbox_pod_with_labels(
+        sandbox,
+        session_id,
+        namespace,
+        runtime_class,
+        node_selector,
+        capability_public_key,
+        BTreeMap::new(),
+    )
+}
+
+/// Builds a sandbox pod and stamps deployment-scoped cleanup ownership.
+pub(crate) fn sandbox_pod_with_labels(
+    sandbox: &Sandbox,
+    session_id: &str,
+    namespace: &str,
+    runtime_class: &str,
+    node_selector: Option<BTreeMap<String, String>>,
+    capability_public_key: Option<&str>,
+    deployment_labels: BTreeMap<String, String>,
+) -> Pod {
     let image = match &sandbox.code {
         SandboxCode::Image { image } => image.clone(),
         // Unreachable through any supported path: `Sandbox::validate_for_platform` refuses
@@ -49,10 +71,11 @@ pub fn sandbox_pod(
         SandboxCode::Source { .. } => String::new(),
     };
 
-    let labels = BTreeMap::from([
+    let mut labels = BTreeMap::from([
         (LABEL_SANDBOX.to_string(), sandbox.id.clone()),
         (LABEL_SESSION.to_string(), session_id.to_string()),
     ]);
+    labels.extend(deployment_labels);
 
     let declared = sandbox.resolved_limits();
     let limits = BTreeMap::from([
@@ -134,17 +157,38 @@ pub fn idle_pool_pod(
     node_selector: Option<BTreeMap<String, String>>,
     capability_public_key: Option<&str>,
 ) -> Pod {
-    let mut pod = sandbox_pod(
+    idle_pool_pod_with_labels(
+        sandbox,
+        namespace,
+        runtime_class,
+        node_selector,
+        capability_public_key,
+        BTreeMap::new(),
+    )
+}
+
+pub(crate) fn idle_pool_pod_with_labels(
+    sandbox: &Sandbox,
+    namespace: &str,
+    runtime_class: &str,
+    node_selector: Option<BTreeMap<String, String>>,
+    capability_public_key: Option<&str>,
+    deployment_labels: BTreeMap<String, String>,
+) -> Pod {
+    let mut pod = sandbox_pod_with_labels(
         sandbox,
         "pool",
         namespace,
         runtime_class,
         node_selector,
         capability_public_key,
+        deployment_labels.clone(),
     );
     pod.metadata.name = None;
     pod.metadata.generate_name = Some(format!("{}-", pod_name(&sandbox.id, "pool")));
-    pod.metadata.labels = Some(crate::sandbox::idle_pod_labels(&sandbox.id));
+    let mut labels = crate::sandbox::idle_pod_labels(&sandbox.id);
+    labels.extend(deployment_labels);
+    pod.metadata.labels = Some(labels);
     pod
 }
 
@@ -158,7 +202,7 @@ pub fn capability_environment(public_key_base64: &str) -> Vec<EnvVar> {
     vec![
         EnvVar {
             name: "ALIEN_SANDBOX_AUTHORIZATION".to_string(),
-            value: Some("capability".to_string()),
+            value: Some(Authorization::Capability.env_value().to_string()),
             value_from: None,
         },
         EnvVar {
@@ -209,6 +253,34 @@ mod tests {
         let spec = pod.spec.expect("a spec");
 
         assert_eq!(spec.runtime_class_name.as_deref(), Some("gvisor"));
+    }
+
+    #[test]
+    fn operator_pool_pod_carries_deployment_cleanup_ownership() {
+        let pod = idle_pool_pod_with_labels(
+            &sandbox(SandboxEgress::Deny),
+            "sbx",
+            "gvisor",
+            None,
+            None,
+            BTreeMap::from([
+                ("managed-by".to_string(), "runtime".to_string()),
+                (
+                    "alien.dev/deployment".to_string(),
+                    "test-release".to_string(),
+                ),
+            ]),
+        );
+        let labels = pod.metadata.labels.expect("labels");
+        assert_eq!(
+            labels.get("managed-by").map(String::as_str),
+            Some("runtime")
+        );
+        assert_eq!(
+            labels.get("alien.dev/deployment").map(String::as_str),
+            Some("test-release")
+        );
+        assert_eq!(labels.get(LABEL_SANDBOX).map(String::as_str), Some("agent"));
     }
 
     /// A mounted token is the workload's credential, readable by the untrusted code beside it.

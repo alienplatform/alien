@@ -6,7 +6,6 @@
 import { machinesCancelMachineDrain } from "../funcs/machinesCancelMachineDrain.js";
 import { machinesCreateJoinToken } from "../funcs/machinesCreateJoinToken.js";
 import { machinesDrainMachine } from "../funcs/machinesDrainMachine.js";
-import { machinesListInventory } from "../funcs/machinesListInventory.js";
 import { machinesListJoinTokens } from "../funcs/machinesListJoinTokens.js";
 import { machinesRemoveMachine } from "../funcs/machinesRemoveMachine.js";
 import { machinesRevokeJoinToken } from "../funcs/machinesRevokeJoinToken.js";
@@ -55,17 +54,6 @@ export class Machines extends ClientSDK {
     options?: RequestOptions,
   ): Promise<models.RevokeMachinesJoinTokenResponse> {
     return unwrapAsync(machinesRevokeJoinToken(
-      this,
-      request,
-      options,
-    ));
-  }
-
-  async listInventory(
-    request: operations.ListMachinesInventoryRequest,
-    options?: RequestOptions,
-  ): Promise<models.ListMachinesInventoryResponse> {
-    return unwrapAsync(machinesListInventory(
       this,
       request,
       options,

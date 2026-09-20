@@ -40,7 +40,7 @@ use alien_bindings::BindingsProviderApi;
 use alien_core::Platform;
 
 use super::AppState;
-use crate::auth::{Scope, Subject};
+use crate::auth::{Role, Scope, Subject};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -111,10 +111,11 @@ impl RegistryRoutingTable {
 
     /// Get the repo prefix for a given platform.
     pub fn prefix_for_platform(&self, platform: Platform) -> Option<&str> {
-        self.routes
-            .iter()
-            .find(|r| r.platform == platform)
-            .map(|r| r.prefix.as_str())
+        self.route_for_platform(platform).map(|r| r.prefix.as_str())
+    }
+
+    pub fn route_for_platform(&self, platform: Platform) -> Option<&RegistryRoute> {
+        self.routes.iter().find(|r| r.platform == platform)
     }
 
     /// Return the list of explicitly configured (non-fallback) platforms.
@@ -1088,6 +1089,19 @@ fn require_push_auth(state: &AppState, subject: &Subject, repo_name: &str) -> Re
     }
 }
 
+/// A project-scoped capability shares the scope whose pulls skip repo validation below, so it is
+/// refused before that match.
+fn refuse_capability_pull(subject: &Subject) -> Result<(), Response> {
+    if subject.role == Role::ImageRepositoryProvisioner {
+        return Err(oci_error(
+            StatusCode::FORBIDDEN,
+            "DENIED",
+            "Image repository provisioning credentials cannot pull images",
+        ));
+    }
+    Ok(())
+}
+
 /// Validate that a deployment token can access the requested repo.
 ///
 /// Uses the pull validation cache to avoid repeated DB lookups. Workspace-
@@ -1098,6 +1112,7 @@ async fn validate_pull_access(
     subject: &Subject,
     repo_name: &str,
 ) -> Result<(), Response> {
+    refuse_capability_pull(subject)?;
     let deployment_id = match &subject.scope {
         Scope::Workspace | Scope::Project { .. } => return Ok(()),
         Scope::DeploymentGroup { .. } => {
@@ -1472,6 +1487,26 @@ mod tests {
     use alien_core::image_rewrite::strip_registry_host;
     use alien_core::{Daemon, DaemonCode, ResourceLifecycle, Stack};
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn the_image_repository_provisioner_cannot_pull() {
+        let subject = |role| Subject {
+            kind: crate::auth::SubjectKind::ServiceAccount {
+                id: "platform".to_string(),
+            },
+            workspace_id: "default".to_string(),
+            scope: Scope::Project {
+                project_id: "default".to_string(),
+            },
+            role,
+            bearer_token: String::new(),
+        };
+
+        let refused = refuse_capability_pull(&subject(Role::ImageRepositoryProvisioner))
+            .expect_err("the provisioner must not reach the project-scope pull bypass");
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        assert!(refuse_capability_pull(&subject(Role::ProjectDeveloper)).is_ok());
+    }
 
     #[test]
     fn test_strip_registry_host_gar() {

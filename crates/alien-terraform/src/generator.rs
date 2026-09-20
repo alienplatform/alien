@@ -175,7 +175,7 @@ pub fn generate_terraform_module(
     target: TerraformTarget,
     options: TerraformOptions<'_>,
 ) -> Result<ModuleFiles> {
-    generate_terraform_module_internal(stack, target, options, false)
+    generate_terraform_module_internal(stack, target, options, false, false)
 }
 
 /// Generate a product module that can enable the embedded Remote Operator.
@@ -183,8 +183,15 @@ pub fn generate_product_terraform_module(
     stack: &Stack,
     target: TerraformTarget,
     options: TerraformOptions<'_>,
+    requires_remote_operator_collector_token: bool,
 ) -> Result<ModuleFiles> {
-    generate_terraform_module_internal(stack, target, options, true)
+    generate_terraform_module_internal(
+        stack,
+        target,
+        options,
+        true,
+        requires_remote_operator_collector_token,
+    )
 }
 
 fn generate_terraform_module_internal(
@@ -192,6 +199,7 @@ fn generate_terraform_module_internal(
     target: TerraformTarget,
     options: TerraformOptions<'_>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> Result<ModuleFiles> {
     let labels = resource_labels(stack)?;
     let platform = target.cloud_platform();
@@ -491,17 +499,18 @@ fn generate_terraform_module_internal(
             terraform_input_values_expression(&stack_inputs),
         ))?,
     );
-    if let Some(helm_install) = options
+    if options
         .helm_install
         .as_ref()
         .filter(|_| target.is_kubernetes() && options.registration.is_some())
+        .is_some()
     {
         files.insert(
             "helm.tf".to_string(),
             render_body(helm_install_body(
                 options.registration.as_ref().expect("checked above"),
-                helm_install,
                 product_remote_operator,
+                requires_remote_operator_collector_token,
             ))?,
         );
     }
@@ -530,6 +539,7 @@ fn generate_terraform_module_internal(
             &stack_settings,
             options.helm_install.as_ref(),
             product_remote_operator,
+            requires_remote_operator_collector_token,
             &stack_inputs,
             retained_key_detach.is_some(),
             emits_azapi_resource,
@@ -1767,7 +1777,7 @@ fn variables_body(
             )));
             blocks.push(nested(bool_variable_block(
                 "remote_operator_bootstrap_identity",
-                "One-time acknowledgement for first enabling Remote Operator in an existing product release. Set true for the first apply only, then immediately persist false.",
+                "One-time acknowledgement for first enabling Remote Operator after the required disabled install. Set true for the first apply only, then immediately persist false.",
                 Some(false),
             )));
             blocks.push(nested(non_negative_integer_variable_block(
@@ -3204,8 +3214,8 @@ fn expression_is_empty_object(expression: &Expression) -> bool {
 
 fn helm_install_body(
     registration: &TerraformRegistration,
-    _helm_install: &TerraformHelmInstall,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> Body {
     let provider_resource = registration.provider_resource_type();
     let mut resources = Vec::new();
@@ -3224,23 +3234,68 @@ fn helm_install_body(
                 )),
             ],
         )));
-        resources.push(Structure::Block(data_block(
-            "kubernetes_resources",
-            "remote_operator_identity_records",
+        resources.push(Structure::Block(block(
+            "locals",
+            [attr(
+                "remote_operator_requested_managed",
+                expr::raw("var.helm_install_enabled && var.remote_operator_enabled"),
+            )],
+        )));
+        resources.push(Structure::Block(resource_block(
+            "terraform_data",
+            "remote_operator_ownership",
             [
-                attr("api_version", Expression::String("v1".to_string())),
-                attr("kind", Expression::String("ConfigMap".to_string())),
-                attr("namespace", expr::raw("var.kubernetes_namespace")),
                 attr(
-                    "field_selector",
-                    expr::raw("\"metadata.name=${local.remote_operator_identity_record_name}\""),
+                    "input",
+                    expr::object([
+                        (
+                            "managed",
+                            expr::raw("local.remote_operator_requested_managed"),
+                        ),
+                        ("namespace", expr::raw("var.kubernetes_namespace")),
+                        ("release", expr::raw("var.helm_release_name")),
+                    ]),
+                ),
+                nested(block(
+                    "lifecycle",
+                    [attr("ignore_changes", expr::raw("[input]"))],
+                )),
+            ],
+        )));
+        resources.push(Structure::Block(block(
+            "locals",
+            [
+                attr(
+                    "remote_operator_pinned_ownership",
+                    expr::raw("terraform_data.remote_operator_ownership.input"),
                 ),
                 attr(
-                    "depends_on",
-                    Expression::Array(vec![
-                        expr::raw(format!("{provider_resource}.this")),
-                        expr::raw("kubernetes_namespace_v1.runtime"),
-                    ]),
+                    "remote_operator_inspect_lifecycle",
+                    expr::raw("local.remote_operator_requested_managed || local.remote_operator_pinned_ownership.managed"),
+                ),
+                attr(
+                    "remote_operator_lifecycle_namespace",
+                    expr::raw("local.remote_operator_pinned_ownership.managed ? local.remote_operator_pinned_ownership.namespace : var.kubernetes_namespace"),
+                ),
+                attr(
+                    "remote_operator_lifecycle_release",
+                    expr::raw("local.remote_operator_pinned_ownership.managed ? local.remote_operator_pinned_ownership.release : var.helm_release_name"),
+                ),
+            ],
+        )));
+        resources.push(Structure::Block(data_block(
+            "kubernetes_resources",
+            "remote_operator_namespace",
+            [
+                attr(
+                    "count",
+                    expr::raw("local.remote_operator_inspect_lifecycle ? 1 : 0"),
+                ),
+                attr("api_version", Expression::String("v1".to_string())),
+                attr("kind", Expression::String("Namespace".to_string())),
+                attr(
+                    "field_selector",
+                    expr::raw("\"metadata.name=${local.remote_operator_lifecycle_namespace}\""),
                 ),
             ],
         )));
@@ -3250,19 +3305,87 @@ fn helm_install_body(
                 attr(
                     "remote_operator_release_prefix",
                     expr::raw(
-                        "trim(substr(replace(lower(var.helm_release_name), \"/[^a-z0-9-]+/\", \"-\"), 0, min(30, length(replace(lower(var.helm_release_name), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")",
+                        "trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(21, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")",
                     ),
                 ),
                 attr(
                     "remote_operator_identity_record_name",
                     expr::raw(
-                        "\"${local.remote_operator_release_prefix}-remote-operator-${substr(sha256(\"${var.kubernetes_namespace}/${var.helm_release_name}\"), 0, 16)}\"",
+                        "\"${local.remote_operator_release_prefix}-remote-operator-${substr(sha256(\"${local.remote_operator_lifecycle_namespace}/${local.remote_operator_lifecycle_release}\"), 0, 16)}\"",
                     ),
                 ),
                 attr(
-                    "remote_operator_identity_record_count",
+                    "remote_operator_namespace_exists",
                     expr::raw(
-                        "length(data.kubernetes_resources.remote_operator_identity_records.objects)",
+                        "local.remote_operator_inspect_lifecycle && length(data.kubernetes_resources.remote_operator_namespace[0].objects) != 0",
+                    ),
+                ),
+            ],
+        )));
+        resources.push(Structure::Block(data_block(
+            "kubernetes_resources",
+            "remote_operator_identity_records",
+            [
+                attr(
+                    "count",
+                    expr::raw("local.remote_operator_inspect_lifecycle ? 1 : 0"),
+                ),
+                attr("api_version", Expression::String("v1".to_string())),
+                attr(
+                    "kind",
+                    expr::raw(
+                        "local.remote_operator_namespace_exists ? \"ConfigMap\" : \"Namespace\"",
+                    ),
+                ),
+                attr(
+                    "namespace",
+                    expr::raw(
+                        "local.remote_operator_namespace_exists ? local.remote_operator_lifecycle_namespace : null",
+                    ),
+                ),
+                attr(
+                    "field_selector",
+                    expr::raw(
+                        "local.remote_operator_namespace_exists ? \"metadata.name=${local.remote_operator_identity_record_name}\" : \"metadata.name=${local.remote_operator_lifecycle_namespace}\"",
+                    ),
+                ),
+            ],
+        )));
+        resources.push(Structure::Block(data_block(
+            "kubernetes_resources",
+            "remote_operator_credentials",
+            [
+                attr(
+                    "count",
+                    expr::raw(
+                        "local.remote_operator_inspect_lifecycle && local.remote_operator_namespace_exists ? 1 : 0",
+                    ),
+                ),
+                attr("api_version", Expression::String("v1".to_string())),
+                attr("kind", Expression::String("Secret".to_string())),
+                attr(
+                    "namespace",
+                    expr::raw("local.remote_operator_lifecycle_namespace"),
+                ),
+                attr(
+                    "field_selector",
+                    expr::raw(
+                        "\"metadata.name=${local.remote_operator_lifecycle_release}-remote\"",
+                    ),
+                ),
+            ],
+        )));
+        resources.push(Structure::Block(block(
+            "locals",
+            [
+                attr(
+                    "remote_operator_identity_record_count",
+                    expr::raw("local.remote_operator_inspect_lifecycle ? length(data.kubernetes_resources.remote_operator_identity_records[0].objects) : 0"),
+                ),
+                attr(
+                    "remote_operator_persisted_sync_token_revision",
+                    expr::raw(
+                        "local.remote_operator_namespace_exists && length(data.kubernetes_resources.remote_operator_credentials[0].objects) != 0 ? try(tonumber(data.kubernetes_resources.remote_operator_credentials[0].objects[0].metadata.annotations[\"alien.dev/sync-token-revision\"]), 0) : 0",
                     ),
                 ),
             ],
@@ -3273,16 +3396,7 @@ fn helm_install_body(
             [
                 attr(
                     "input",
-                    expr::object([
-                        (
-                            "helm_install_enabled",
-                            expr::raw("var.helm_install_enabled"),
-                        ),
-                        (
-                            "remote_operator_enabled",
-                            expr::raw("var.remote_operator_enabled"),
-                        ),
-                    ]),
+                    Expression::String("remote-operator-lifecycle".to_string()),
                 ),
                 nested(block(
                     "lifecycle",
@@ -3291,11 +3405,11 @@ fn helm_install_body(
                         [
                             attr(
                                 "condition",
-                                expr::raw("(var.helm_install_enabled && var.remote_operator_enabled) || local.remote_operator_identity_record_count == 0"),
+                                expr::raw("local.remote_operator_pinned_ownership.managed ? (local.remote_operator_requested_managed && var.kubernetes_namespace == local.remote_operator_pinned_ownership.namespace && var.helm_release_name == local.remote_operator_pinned_ownership.release) : !local.remote_operator_requested_managed"),
                             ),
                             attr(
                                 "error_message",
-                                Expression::String("Disabling the product Helm release or Remote Operator in place would retire a retained identity. Keep both enabled, or use terraform destroy for explicit retirement.".to_string()),
+                                Expression::String("Remote Operator ownership is pinned in Terraform state. Before first enable from an existing disabled state, arm it with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Afterward keep both enabled at those coordinates, or use terraform destroy for explicit retirement.".to_string()),
                             ),
                         ],
                     ))],
@@ -3320,6 +3434,12 @@ fn helm_install_body(
                             expr::raw("\"${var.helm_release_name}-remote\""),
                         ),
                         attr("namespace", expr::raw("var.kubernetes_namespace")),
+                        attr(
+                            "annotations",
+                            expr::raw(
+                                "{ \"alien.dev/sync-token-revision\" = tostring(var.remote_operator_sync_token_revision) }",
+                            ),
+                        ),
                     ],
                 )),
                 attr(
@@ -3360,13 +3480,49 @@ fn helm_install_body(
                                 ),
                             ],
                         )),
-                    ],
+                        nested(block(
+                            "precondition",
+                            [
+                                attr(
+                                    "condition",
+                                    expr::raw("var.remote_operator_sync_token_revision >= local.remote_operator_persisted_sync_token_revision"),
+                                ),
+                                attr(
+                                    "error_message",
+                                    Expression::String(
+                                        "remote_operator_sync_token_revision must not decrease from the revision persisted in the Remote Operator credentials Secret."
+                                            .to_string(),
+                                    ),
+                                ),
+                            ],
+                        )),
+                    ]
+                    .into_iter()
+                    .chain(requires_remote_operator_collector_token.then(|| {
+                        nested(block(
+                            "precondition",
+                            [
+                                attr(
+                                    "condition",
+                                    expr::raw("var.remote_operator_collector_token != null"),
+                                ),
+                                attr(
+                                    "error_message",
+                                    Expression::String(
+                                        "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled."
+                                            .to_string(),
+                                    ),
+                                ),
+                            ],
+                        ))
+                    })),
                 )),
                 attr(
                     "depends_on",
                     Expression::Array(vec![
                         expr::raw(format!("{provider_resource}.this")),
                         expr::raw("kubernetes_namespace_v1.runtime"),
+                        expr::raw("terraform_data.remote_operator_lifecycle_guard"),
                     ]),
                 ),
             ],
@@ -3404,8 +3560,16 @@ fn helm_install_body(
     if product_remote_operator {
         helm_body.extend([
             attr("atomic", Expression::Bool(true)),
-            attr("cleanup_on_fail", Expression::Bool(true)),
-            attr("max_history", Expression::Number(1.into())),
+            // Do not enable cleanup_on_fail: an enabled upgrade can create
+            // durable identity proof that must survive the atomic rollback
+            // for the disabled release's uninstall hook to retire safely.
+            // A disabled bridge must prune every older, pre-guard revision
+            // before first enable. Once enabled, retain the guarded previous
+            // revision for Helm's atomic rollback.
+            attr(
+                "max_history",
+                expr::raw("var.remote_operator_enabled ? 2 : 1"),
+            ),
             attr("wait", Expression::Bool(true)),
             attr("timeout", Expression::Number(300.into())),
         ]);
@@ -3413,9 +3577,10 @@ fn helm_install_body(
     helm_body.push(attr(
         "depends_on",
         Expression::Array(if product_remote_operator {
-            vec![expr::raw(
-                "kubernetes_secret_v1.remote_operator_credentials",
-            )]
+            vec![
+                expr::raw("kubernetes_secret_v1.remote_operator_credentials"),
+                expr::raw("terraform_data.remote_operator_lifecycle_guard"),
+            ]
         } else {
             vec![expr::raw(format!("{provider_resource}.this"))]
         }),
@@ -3599,6 +3764,7 @@ fn readme_md(
     stack_settings: &StackSettings,
     helm_install: Option<&TerraformHelmInstall>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
     stack_inputs: &[StackInputDefinition],
     has_retained_keys: bool,
     emits_azapi_resource: bool,
@@ -3691,6 +3857,7 @@ fn readme_md(
             registration.is_some(),
             helm_install,
             product_remote_operator,
+            requires_remote_operator_collector_token,
         ));
     }
     if !stack_inputs.is_empty() {
@@ -3821,6 +3988,7 @@ fn readme_kubernetes_inputs(
     has_registration: bool,
     helm_install: Option<&TerraformHelmInstall>,
     product_remote_operator: bool,
+    requires_remote_operator_collector_token: bool,
 ) -> String {
     let cluster_name = match target {
         TerraformTarget::Eks => "\n- `eks_cluster_name`: existing EKS cluster name when `kubernetes_cluster_mode = \"existing\"`.",
@@ -3830,12 +3998,19 @@ fn readme_kubernetes_inputs(
     };
     let helm = if has_registration && helm_install.is_some() {
         if product_remote_operator {
-            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. Once the embedded Remote Operator has been enabled, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform installs the product chart; its embedded Remote Operator stays disabled by default. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. Supply `remote_operator_collector_token` only when the product chart includes log collection. Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: when first enabling Remote Operator in an existing product release, first apply the new chart once with `remote_operator_enabled = false`; this records a guard-capable disabled revision and prunes older rollback targets. Then set this to `true` and enable the Operator for one apply before setting it back to `false`. Leave it `false` for a new release. The Helm resource is atomic, so a failed first enable removes partial workload changes while retaining the prepared identity and any exact-release identity PVC already created, which pin an exact-key retry.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and PVC, then Terraform removes the release, credentials Secret, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
+            let collector_token_requirement = if requires_remote_operator_collector_token {
+                "`remote_operator_collector_token` is required before Terraform can create or update the enabled Remote Operator credentials Secret because this chart includes log collection."
+            } else {
+                "Supply `remote_operator_collector_token` only when the product chart includes log collection."
+            };
+            format!(
+                "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately. A separately managed Helm release can keep its Remote Operator identity without blocking later infrastructure-only applies. Once Terraform has enabled the embedded Remote Operator, keep this and `remote_operator_enabled` set to `true` until explicit retirement with `terraform destroy`; disabling it in place is unsupported.\n- `helm_release_name`, `helm_chart`: exact product release and chart reference. Terraform pins the namespace and release name in its state when it first manages Remote Operator, preventing an in-place move from abandoning the retained identity. Terraform retains only the newest Helm revision so a pre-guard historical rollback target cannot survive first enable.\n- `remote_operator_enabled`: set to `true` only with `remote_operator_sync_token` and `remote_operator_encryption_key` from a separate Remote Operator setup registration. {collector_token_requirement} Never reuse the product deployment token; the two controllers must have distinct deployment identities. Terraform stores these credentials in a separate Kubernetes Secret before enabling the Remote workload. Retained prepared/completed identity records keep that Secret present during a rejected disable attempt. Keep the credentials required by the chart populated until `terraform destroy`; generated variable files already persist them. First apply the module once with Remote Operator disabled. On first enable, arm the state latch with `terraform apply -replace=terraform_data.remote_operator_ownership` while both enable flags and the final namespace/release are set. Never replace that state resource after it is armed.\n- `remote_operator_encryption_key`: establishes the durable Operator identity on first enable. Terraform ignores later in-place changes to this Secret field; changing the input cannot silently replace the installed identity. Retire the installation instead of replacing this key.\n- `remote_operator_bootstrap_identity`: every release must first apply the chart with `remote_operator_enabled = false`; this records a guard-capable Kubernetes history revision and prunes older rollback targets. Then set this to `true`, arm the state latch as described above, and enable the Operator for one apply before setting it back to `false`. The Helm resource is atomic, and an Operator that never opens its durable identity cannot mark initialization complete. If an enabled upgrade fails after identity initialization, atomic rollback preserves the disabled release so `terraform destroy` can run its exact cleanup hook.\n- `remote_operator_sync_token_revision`: starts at `0`; increment it with every sync-token rotation and apply the new token and revision together. This is a rollout marker, not an anti-rollback store: stale Terraform input can restore an older token and revision, so protect the authoritative variable state with the same controls as the credential. Terraform separately derives the collector rollout marker from `remote_operator_collector_token`, so changing only that token restarts collector pods without coupling it to the sync-token revision.\n- `kubernetes_namespace_create`: defaults to `false`, which is safe for `default`, another existing namespace, and upgrades of older modules. Set it to `true` only for a non-default namespace that does not exist and that Terraform should own. `terraform destroy` permanently retires the setup: Helm first deletes this release's exact identity records and identity PVC, then Terraform removes the release, credentials Secret, state latch, setup registration, and any Terraform-owned namespace. The shared access-request CRD remains available to other releases."
+            )
         } else {
-            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration."
+            "\n- `helm_install_enabled`: set to `false` to use Terraform only for infrastructure and install the Helm chart separately.\n- `helm_release_name`, `helm_chart`: Helm release and chart reference used when Terraform installs the Operator chart. On `terraform destroy`, Terraform uninstalls this Helm release before removing the setup registration.".to_string()
         }
     } else {
-        ""
+        String::new()
     };
     let exposure = if target == TerraformTarget::Eks {
         "\n- `custom_domain_name`, `custom_domain_certificate_arn`: optional EKS public route hostname and ACM certificate ARN. Leave empty to use the generated load balancer hostname."
@@ -3867,6 +4042,44 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 mod tests {
     use super::*;
     use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    fn product_registration() -> TerraformRegistration {
+        TerraformRegistration {
+            provider_name: "acme_app".to_string(),
+            provider_source: "pkg.example.test/acme/app".to_string(),
+            provider_version: "1.0.0".to_string(),
+            resource_type: "deployment".to_string(),
+            release_id: Some("product-test".to_string()),
+            setup_target: "kubernetes".to_string(),
+            setup_fingerprint: "product-test".to_string(),
+            setup_fingerprint_version: 1,
+        }
+    }
+
+    fn product_module(requires_remote_operator_collector_token: bool) -> ModuleFiles {
+        let registry = TfRegistry::built_in();
+        generate_product_terraform_module(
+            &Stack::new("product-terraform-test".to_string()).build(),
+            TerraformTarget::Eks,
+            TerraformOptions {
+                display_name: None,
+                registry: &registry,
+                stack_settings: StackSettings::default(),
+                registration: Some(product_registration()),
+                helm_install: Some(TerraformHelmInstall {
+                    chart_ref: "oci://pkg.example.test/acme/app/helm".to_string(),
+                    release_name: "product-test".to_string(),
+                }),
+                supported_aws_regions: Vec::new(),
+            },
+            requires_remote_operator_collector_token,
+        )
+        .expect("product module should render")
+    }
+
+    fn compact(contents: &str) -> String {
+        contents.split_whitespace().collect::<Vec<_>>().join(" ")
+    }
 
     fn block_has_depends_on(block: &Block) -> bool {
         block.body.0.iter().any(|structure| {
@@ -3932,6 +4145,92 @@ mod tests {
         assert!(variables.contains("^[a-z][a-z0-9-]{1,38}[a-z0-9]$"));
         assert!(variables.contains("length(regexall(\"--\", var.resource_prefix)) == 0"));
         assert!(!variables.contains("(?="));
+    }
+
+    #[test]
+    fn product_lifecycle_configures_kubernetes_provider_without_stack_manifests() {
+        let module = product_module(false);
+
+        assert!(module
+            .get("versions.tf")
+            .expect("versions should render")
+            .contains("kubernetes = {"));
+        assert!(module
+            .get("providers.tf")
+            .expect("providers should render")
+            .contains("provider \"kubernetes\""));
+    }
+
+    #[test]
+    fn product_lifecycle_reads_only_for_terraform_owned_releases() {
+        let helm = product_module(false)
+            .get("helm.tf")
+            .expect("helm should render")
+            .to_string();
+        let lifecycle_reads = helm
+            .split("resource \"terraform_data\" \"remote_operator_lifecycle_guard\"")
+            .next()
+            .expect("lifecycle data should precede the guard");
+        let helm = compact(&helm);
+
+        assert!(helm.contains(
+            "remote_operator_requested_managed = var.helm_install_enabled && var.remote_operator_enabled"
+        ));
+        assert!(helm.contains(
+            "remote_operator_inspect_lifecycle = local.remote_operator_requested_managed || local.remote_operator_pinned_ownership.managed"
+        ));
+        assert!(helm.contains("count = local.remote_operator_inspect_lifecycle ? 1 : 0"));
+        assert!(helm.contains(
+            "local.remote_operator_pinned_ownership.managed ? (local.remote_operator_requested_managed && var.kubernetes_namespace == local.remote_operator_pinned_ownership.namespace && var.helm_release_name == local.remote_operator_pinned_ownership.release) : !local.remote_operator_requested_managed"
+        ));
+        assert!(!lifecycle_reads.contains("depends_on"));
+    }
+
+    #[test]
+    fn product_credentials_are_created_on_enable_and_reject_stale_revisions() {
+        let helm = compact(
+            product_module(false)
+                .get("helm.tf")
+                .expect("helm should render"),
+        );
+
+        assert!(helm
+            .contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0"));
+        assert!(helm.contains(
+            "\"alien.dev/sync-token-revision\" = tostring(var.remote_operator_sync_token_revision)"
+        ));
+        assert!(helm.contains(
+            "var.remote_operator_sync_token_revision >= local.remote_operator_persisted_sync_token_revision"
+        ));
+    }
+
+    #[test]
+    fn product_collector_token_is_required_only_for_collecting_charts() {
+        let optional_collector = product_module(false);
+        let required_collector = product_module(true);
+        let requirement =
+            "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled.";
+
+        assert!(!optional_collector
+            .get("helm.tf")
+            .expect("helm should render")
+            .contains(requirement));
+        assert!(required_collector
+            .get("helm.tf")
+            .expect("helm should render")
+            .contains(requirement));
+    }
+
+    #[test]
+    fn product_lifecycle_prunes_before_enable_and_retains_atomic_rollback_history() {
+        let helm = compact(
+            product_module(false)
+                .get("helm.tf")
+                .expect("helm should render"),
+        );
+
+        assert!(helm.contains("atomic = true"));
+        assert!(helm.contains("max_history = var.remote_operator_enabled ? 2 : 1"));
     }
 
     #[test]

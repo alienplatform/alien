@@ -28,13 +28,15 @@ use tokio::{
 };
 use tracing::{debug, error, info, warn};
 
+#[cfg(feature = "gcp")]
+use crate::transports::cloudrun::CloudRunTransport;
+#[cfg(feature = "azure")]
+use crate::transports::containerapp::ContainerAppTransport;
 use crate::{
     config::{RuntimeConfig, TransportType},
     error::{ErrorData, Result},
     otlp::{flush_otlp_logs, init_otlp_logging_from_config, shutdown_otlp_logs},
-    transports::{
-        cloudrun::CloudRunTransport, containerapp::ContainerAppTransport, local::LocalTransport,
-    },
+    transports::local::LocalTransport,
 };
 
 const ENV_ALIEN_BINDINGS_GRPC_ADDRESS: &str = "ALIEN_BINDINGS_GRPC_ADDRESS";
@@ -402,7 +404,11 @@ fn spawn_transport(
     command_push: Option<CommandPushConfig>,
     shutdown_rx: broadcast::Receiver<()>,
 ) -> Result<JoinHandle<Result<()>>> {
+    #[cfg(not(feature = "aws"))]
+    let _ = lambda_mode;
+
     match transport_type {
+        #[cfg(feature = "gcp")]
         TransportType::CloudRun => {
             let mut transport = CloudRunTransport::new(transport_port, control_server, shutdown_rx)
                 .with_command_timeout(command_timeout);
@@ -412,6 +418,13 @@ fn spawn_transport(
             Ok(tokio::spawn(async move { transport.run().await }))
         }
 
+        #[cfg(not(feature = "gcp"))]
+        TransportType::CloudRun => Err(AlienError::new(ErrorData::ConfigurationInvalid {
+            message: "Cloud Run transport requires 'gcp' feature".to_string(),
+            field: Some("transport".to_string()),
+        })),
+
+        #[cfg(feature = "azure")]
         TransportType::ContainerApp => {
             let mut transport =
                 ContainerAppTransport::new(transport_port, control_server, shutdown_rx)
@@ -421,6 +434,12 @@ fn spawn_transport(
             }
             Ok(tokio::spawn(async move { transport.run().await }))
         }
+
+        #[cfg(not(feature = "azure"))]
+        TransportType::ContainerApp => Err(AlienError::new(ErrorData::ConfigurationInvalid {
+            message: "Container Apps transport requires 'azure' feature".to_string(),
+            field: Some("transport".to_string()),
+        })),
 
         TransportType::Http => {
             let mut transport =

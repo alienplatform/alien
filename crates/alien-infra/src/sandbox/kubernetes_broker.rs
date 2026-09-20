@@ -18,12 +18,10 @@ use crate::error::{ErrorData, Result};
 use crate::sandbox::{claim_idle_pod, idle_selector};
 use alien_core::sandbox_capability::{SandboxCapabilityClaims, SandboxOperationClass};
 use alien_core::sandbox_capability_token;
+use alien_core::sandbox_image::AGENT_PORT;
 use alien_error::{AlienError, Context};
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
-
-/// Port the agent serves inside a sandbox pod.
-const AGENT_PORT: u16 = 8971;
 
 /// How long a minted capability lives.
 ///
@@ -58,15 +56,69 @@ pub async fn claim_session(
     secret_name: &str,
     now_unix: i64,
 ) -> Result<ClaimedSession> {
+    claim_session_with_scope(
+        pods,
+        secrets,
+        sandbox_id,
+        namespace,
+        session_id,
+        secret_name,
+        now_unix,
+        None,
+    )
+    .await
+}
+
+pub(crate) async fn claim_session_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<ClaimedSession> {
+    claim_session_with_scope(
+        pods,
+        secrets,
+        sandbox_id,
+        namespace,
+        session_id,
+        secret_name,
+        now_unix,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn claim_session_with_scope(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    sandbox_id: &str,
+    namespace: &str,
+    session_id: &str,
+    secret_name: &str,
+    now_unix: i64,
+    expected_scope: Option<(&str, &str)>,
+) -> Result<ClaimedSession> {
+    let (signing_key, deployment_label_key, deployment_label_value) =
+        signing_key(secrets, namespace, secret_name, sandbox_id, expected_scope).await?;
+    let selector = format!(
+        "{},{}={}",
+        idle_selector(sandbox_id),
+        deployment_label_key,
+        deployment_label_value
+    );
     let idle = pods
-        .list_pods(namespace, Some(idle_selector(sandbox_id)), None)
+        .list_pods(namespace, Some(selector), None)
         .await
         .context(ErrorData::CloudPlatformError {
             message: "failed to list idle sandbox pods".to_string(),
             resource_id: Some(sandbox_id.to_string()),
         })?;
-
-    let signing_key = signing_key(secrets, namespace, secret_name, sandbox_id).await?;
 
     for pod in idle.items {
         let Some(name) = pod.metadata.name.clone() else {
@@ -155,13 +207,44 @@ async fn signing_key(
     namespace: &str,
     secret_name: &str,
     sandbox_id: &str,
-) -> Result<ed25519_compact::SecretKey> {
+    expected_scope: Option<(&str, &str)>,
+) -> Result<(ed25519_compact::SecretKey, String, String)> {
     let secret = secrets.get_secret(namespace, secret_name).await.context(
         ErrorData::CloudPlatformError {
             message: format!("the capability key for '{sandbox_id}' is unreadable"),
             resource_id: Some(sandbox_id.to_string()),
         },
     )?;
+
+    let labels = secret.metadata.labels.as_ref();
+    let owner_matches = labels
+        .and_then(|labels| labels.get(crate::sandbox::LABEL_SANDBOX))
+        .map(String::as_str)
+        == Some(sandbox_id);
+    let scopes = labels
+        .into_iter()
+        .flat_map(|labels| labels.iter())
+        .filter(|(key, _)| key.ends_with("/deployment"))
+        .collect::<Vec<_>>();
+    let scope = match scopes.as_slice() {
+        [(key, value)]
+            if owner_matches
+                && !value.is_empty()
+                && expected_scope.is_none_or(|(expected_key, expected_value)| {
+                    key.as_str() == expected_key && value.as_str() == expected_value
+                }) =>
+        {
+            ((*key).clone(), (*value).clone())
+        }
+        _ => {
+            return Err(AlienError::new(ErrorData::CloudPlatformError {
+                message: format!(
+                    "the capability Secret for '{sandbox_id}' is not owned by this deployment"
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            }));
+        }
+    };
 
     let bytes = secret
         .data
@@ -189,7 +272,7 @@ async fn signing_key(
         })
     })?;
 
-    Ok(pair.sk)
+    Ok((pair.sk, scope.0, scope.1))
 }
 
 /// Releases a claimed session by deleting its pod.
@@ -211,9 +294,44 @@ pub async fn release_session(
     let selector = format!(
         "{}={sandbox_id},{}={session_id}",
         crate::sandbox::LABEL_SANDBOX,
-        crate::sandbox::LABEL_SESSION
+        crate::sandbox::LABEL_SESSION,
     );
+    release_matching_session(pods, namespace, session_id, selector).await
+}
 
+pub(crate) async fn release_session_for_deployment(
+    pods: &Arc<dyn PodApi>,
+    secrets: &Arc<dyn SecretsApi>,
+    namespace: &str,
+    sandbox_id: &str,
+    session_id: &str,
+    secret_name: &str,
+    deployment_label_key: &str,
+    deployment_label_value: &str,
+) -> Result<()> {
+    let (_, deployment_label_key, deployment_label_value) = signing_key(
+        secrets,
+        namespace,
+        secret_name,
+        sandbox_id,
+        Some((deployment_label_key, deployment_label_value)),
+    )
+    .await?;
+    let selector = format!(
+        "{}={sandbox_id},{}={session_id},{}={deployment_label_value}",
+        crate::sandbox::LABEL_SANDBOX,
+        crate::sandbox::LABEL_SESSION,
+        deployment_label_key
+    );
+    release_matching_session(pods, namespace, session_id, selector).await
+}
+
+async fn release_matching_session(
+    pods: &Arc<dyn PodApi>,
+    namespace: &str,
+    session_id: &str,
+    selector: String,
+) -> Result<()> {
     let claimed = pods
         .list_pods(namespace, Some(selector), None)
         .await
@@ -257,11 +375,23 @@ mod tests {
     use k8s_openapi::List;
     use std::collections::BTreeMap;
 
+    const DEPLOYMENT_LABEL_KEY: &str = "alien.dev/deployment";
+    const DEPLOYMENT_LABEL_VALUE: &str = "release-a";
+
+    fn sandbox_labels() -> BTreeMap<String, String> {
+        let mut labels = crate::sandbox::idle_pod_labels("sbx");
+        labels.insert(
+            DEPLOYMENT_LABEL_KEY.to_string(),
+            DEPLOYMENT_LABEL_VALUE.to_string(),
+        );
+        labels
+    }
+
     fn idle_pod(name: &str, ip: &str) -> Pod {
         Pod {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
-                labels: Some(crate::sandbox::idle_pod_labels("sbx")),
+                labels: Some(sandbox_labels()),
                 ..Default::default()
             },
             status: Some(PodStatus {
@@ -277,7 +407,7 @@ mod tests {
         Pod {
             metadata: ObjectMeta {
                 name: Some(name.to_string()),
-                labels: Some(crate::sandbox::idle_pod_labels("sbx")),
+                labels: Some(sandbox_labels()),
                 ..Default::default()
             },
             status: None,
@@ -288,6 +418,16 @@ mod tests {
     fn key_secret() -> Secret {
         let pair = ed25519_compact::KeyPair::generate();
         Secret {
+            metadata: ObjectMeta {
+                labels: Some(BTreeMap::from([
+                    (
+                        DEPLOYMENT_LABEL_KEY.to_string(),
+                        DEPLOYMENT_LABEL_VALUE.to_string(),
+                    ),
+                    (crate::sandbox::LABEL_SANDBOX.to_string(), "sbx".to_string()),
+                ])),
+                ..Default::default()
+            },
             data: Some(BTreeMap::from([(
                 "signingKey".to_string(),
                 k8s_openapi::ByteString(pair.as_ref().to_vec()),
@@ -298,7 +438,13 @@ mod tests {
 
     fn pods_returning(items: Vec<Pod>) -> MockPodApi {
         let mut pods = MockPodApi::new();
-        pods.expect_list_pods().returning(move |_, _, _| {
+        pods.expect_list_pods().returning(move |_, selector, _| {
+            assert_eq!(
+                selector.as_deref(),
+                Some(
+                    "alien.dev/sandbox=sbx,alien.dev/sandbox-pool=idle,alien.dev/deployment=release-a"
+                )
+            );
             Ok(List {
                 items: items.clone(),
                 metadata: Default::default(),
@@ -416,6 +562,16 @@ mod tests {
         let mut secrets = MockSecretsApi::new();
         secrets.expect_get_secret().returning(move |_, _| {
             Ok(Secret {
+                metadata: ObjectMeta {
+                    labels: Some(BTreeMap::from([
+                        (
+                            DEPLOYMENT_LABEL_KEY.to_string(),
+                            DEPLOYMENT_LABEL_VALUE.to_string(),
+                        ),
+                        (crate::sandbox::LABEL_SANDBOX.to_string(), "sbx".to_string()),
+                    ])),
+                    ..Default::default()
+                },
                 data: Some(BTreeMap::from([(
                     "signingKey".to_string(),
                     k8s_openapi::ByteString(stored.clone()),
@@ -474,7 +630,8 @@ mod tests {
             let selector = selector.expect("release must select by label");
             assert!(
                 selector.contains("alien.dev/sandbox=sbx")
-                    && selector.contains("alien.dev/sandbox-session=session-7"),
+                    && selector.contains("alien.dev/sandbox-session=session-7")
+                    && selector.contains("alien.dev/deployment=release-a"),
                 "both the sandbox and the session must be in the selector: {selector}"
             );
             let mut labels = crate::sandbox::idle_pod_labels("sbx");
@@ -500,9 +657,22 @@ mod tests {
             .returning(|_, _| Ok(()));
 
         let pods: Arc<dyn PodApi> = Arc::new(pods);
-        release_session(&pods, "alien-sandbox-sbx", "sbx", "session-7")
-            .await
-            .expect("the claimed pod is released");
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
+        release_session_for_deployment(
+            &pods,
+            &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+            "alien-sandbox-sbx",
+            "sbx",
+            "session-7",
+            "alien-sandbox-sbx-capability",
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await
+        .expect("the claimed pod is released");
     }
 
     /// A session that matches nothing is already in the desired end state.
@@ -514,9 +684,22 @@ mod tests {
         pods.expect_delete_pod().never().returning(|_, _| Ok(()));
 
         let pods: Arc<dyn PodApi> = Arc::new(pods);
-        release_session(&pods, "alien-sandbox-sbx", "sbx", "never-claimed")
-            .await
-            .expect("an unknown session is not an error");
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(key_secret()));
+        release_session_for_deployment(
+            &pods,
+            &(Arc::new(secrets) as Arc<dyn SecretsApi>),
+            "alien-sandbox-sbx",
+            "sbx",
+            "never-claimed",
+            "alien-sandbox-sbx-capability",
+            DEPLOYMENT_LABEL_KEY,
+            DEPLOYMENT_LABEL_VALUE,
+        )
+        .await
+        .expect("an unknown session is not an error");
     }
 
     /// A pod claimed before the kubelet gave it an address is put back, not abandoned.

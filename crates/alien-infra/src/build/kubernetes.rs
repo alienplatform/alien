@@ -3,7 +3,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    kubernetes_runtime_pod_labels, EnvironmentVariableBuilder, ResourceControllerContext,
+    kubernetes_cleanup_resource_labels, kubernetes_runtime_pod_labels, EnvironmentVariableBuilder,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use alien_client_core::ErrorData as CloudClientErrorData;
@@ -191,12 +192,47 @@ impl KubernetesBuildController {
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
 
-            let job = job_client.get_job(namespace, job_name).await.context(
+            let mut job = job_client.get_job(namespace, job_name).await.context(
                 ErrorData::CloudPlatformError {
                     message: format!("Failed to get job '{}'", job_name),
                     resource_id: Some(config.id.clone()),
                 },
             )?;
+
+            if !self.job_has_compatible_identity(
+                ctx,
+                job.metadata.labels.as_ref(),
+                job_name,
+                &config.id,
+            ) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to adopt Job '{job_name}' because it is not owned by Build '{}' in this deployment",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
+            let mut desired_labels = self.build_labels(job_name);
+            desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+            if !crate::core::kubernetes_labels_match_current_scope(
+                job.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                job.metadata
+                    .labels
+                    .get_or_insert_with(BTreeMap::new)
+                    .extend(desired_labels);
+                job = job_client
+                    .update_job(namespace, job_name, &job)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to migrate cleanup ownership for Build Job '{job_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+            }
 
             if let Some(status) = &job.status {
                 if let Some(succeeded) = status.succeeded {
@@ -250,6 +286,37 @@ impl KubernetesBuildController {
                 .service_provider
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
+            let existing = match job_client.get_job(namespace, job_name).await {
+                Ok(existing) => existing,
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    self.job_name = None;
+                    self.image_digest = None;
+                    return Ok(HandlerAction::Continue {
+                        state: RecreatingJob,
+                        suggested_delay: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to inspect old Job '{job_name}' before deletion"),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+            if !self.job_is_owned(ctx, existing.metadata.labels.as_ref(), job_name, &config.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to delete Job '{job_name}' because it is not owned by Build '{}' in this deployment",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
 
             match job_client.delete_job(namespace, job_name).await {
                 Ok(_) => {
@@ -509,6 +576,38 @@ impl KubernetesBuildController {
                 .service_provider
                 .get_kubernetes_job_client(kubernetes_config)
                 .await?;
+            let existing = match job_client.get_job(namespace, job_name).await {
+                Ok(existing) => existing,
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    self.job_name = None;
+                    self.namespace = None;
+                    self.image_digest = None;
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!("Failed to inspect Job '{job_name}' before deletion"),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+            if !self.job_is_owned(ctx, existing.metadata.labels.as_ref(), job_name, &config.id) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to delete Job '{job_name}' because it is not owned by Build '{}' in this deployment",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
 
             match job_client.delete_job(namespace, job_name).await {
                 Ok(_) => {
@@ -664,7 +763,8 @@ impl KubernetesBuildController {
         service_account_name: &str,
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<Job> {
-        let labels = self.build_labels(job_name);
+        let mut labels = self.build_labels(job_name);
+        labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
 
         let env_builder = EnvironmentVariableBuilder::try_new(&config.environment)?
             .add_standard_alien_env_vars(ctx)?
@@ -774,6 +874,35 @@ impl KubernetesBuildController {
         labels.insert("managed-by".to_string(), "runtime".to_string());
         labels.insert("component".to_string(), "build".to_string());
         labels
+    }
+
+    fn job_is_owned(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        labels: Option<&BTreeMap<String, String>>,
+        job_name: &str,
+        resource_id: &str,
+    ) -> bool {
+        let mut desired = self.build_labels(job_name);
+        desired.extend(kubernetes_cleanup_resource_labels(ctx, resource_id));
+        self.job_has_compatible_identity(ctx, labels, job_name, resource_id)
+            && crate::core::kubernetes_labels_have_recognized_scope(labels, &desired)
+    }
+
+    fn job_has_compatible_identity(
+        &self,
+        ctx: &ResourceControllerContext<'_>,
+        labels: Option<&BTreeMap<String, String>>,
+        job_name: &str,
+        resource_id: &str,
+    ) -> bool {
+        let mut desired = self.build_labels(job_name);
+        desired.extend(kubernetes_cleanup_resource_labels(ctx, resource_id));
+        crate::core::kubernetes_labels_match_identity(
+            labels,
+            &desired,
+            &["managed-by", "component", "app"],
+        ) && crate::core::kubernetes_labels_have_compatible_scope(labels, &desired)
     }
 
     /// Gets the Kubernetes namespace from KubernetesClientConfig

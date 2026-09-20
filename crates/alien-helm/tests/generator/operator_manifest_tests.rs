@@ -604,6 +604,12 @@ fn operator_template_can_reference_setup_owned_credentials() {
 
     let rendered = test_utils::helm_template(&chart.files, None);
     rendered.assert_ok("existing credential Secret helm template");
+    assert!(
+        !rendered
+            .stdout
+            .contains("OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP"),
+        "the reusable product-operator template must not reference host-chart lifecycle helpers"
+    );
     let documents = parse_manifest(&rendered.stdout);
     assert!(
         documents

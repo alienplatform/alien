@@ -69,8 +69,18 @@ jobs:
               - 'tests/e2e/test-apps/**'
               - '.github/actions/setup-rust/**'
               - '.github/workflows/ci-fast.yml'
+              - '.github/workflows/ci-fork.yml'
+              # The image contract tests read the Dockerfiles as text, so a change
+              # to one of those is a change this job has to see.
+              - 'docker/**'
+              # The smoke test qualifies the published image, and its own harness
+              # is what proves it fails loudly. Both run in this job.
+              - 'scripts/smoke-sandbox-agent*'
             product_lifecycle:
+              - 'crates/alien-core/**'
               - 'crates/alien-helm/**'
+              - 'crates/alien-infra/**'
+              - 'crates/alien-operator/**'
               - 'crates/alien-terraform/**'
               - '.github/workflows/ci-fast.yml'
             typescript:
@@ -107,18 +117,21 @@ jobs:
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.product_lifecycle == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
     env:
       CARGO_INCREMENTAL: "0"
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-      # Bound the build/test memory peak: this job's recurring failure mode
-      # is the runner agent being starved for memory mid Rust-tests (GitHub
-      # reports "runner lost communication" with no logs). Full-width
-      # parallelism (16 rustc jobs, then 16 concurrent test binaries — many
-      # of which spawn servers and embedded databases) is what spikes it.
-      CARGO_BUILD_JOBS: "8"
+      # Leave 25% of the 16-core runner available for large rustc processes.
+      # Full-width parallelism previously starved the runner, but the generated
+      # client graph is now smaller and Azure models compile in five shards.
+      CARGO_BUILD_JOBS: "12"
+      # Keep runtime test concurrency unchanged so this experiment measures
+      # compiler parallelism without increasing database/server test pressure.
       NEXTEST_TEST_THREADS: "8"
 
     steps:
@@ -246,7 +259,11 @@ jobs:
             'and not binary_id(alien-ai-gateway::live_foundry_claude)'
             'and not binary_id(alien-ai-gateway::live_vertex_claude)'
           )
-          cargo nextest run --workspace --filter-expr "${FILTER_CLAUSES[*]}"
+          # Compile non-default feature coverage in the same unified graph. Running
+          # these as later `cargo test` commands adds two serial recompilation tails.
+          cargo nextest run --workspace \
+            --features alien-manager/openapi,alien-bindings/platform-sdk \
+            --filter-expr "${FILTER_CLAUSES[*]}"
 
       - name: Start disposable Kubernetes cluster
         if: needs.changes.outputs.product_lifecycle == 'true'
@@ -262,12 +279,6 @@ jobs:
           cargo test -p alien-helm --locked --test product_remote_operator_lifecycle -- \
             --ignored --nocapture --test-threads=1
 
-      # The steps below cover code behind non-default cargo features, which the
-      # workspace run above compiles with default features only.
-      - name: Manager OpenAPI security contract
-        run: |
-          cargo test -p alien-manager --features openapi --lib api::tests::openapi_declares_http_bearer_security_without_dropping_schemas
-
       - name: Sandbox agent privileged tests
         # The agent runs as root and drops to a different uid before every spawn.
         # The sandbox's file and working-directory handling turns on those two
@@ -281,12 +292,18 @@ jobs:
           test -x "$binary"
           sudo "$binary" --ignored
 
-      - name: Remote bindings tests (non-cloud)
-        # `platform-sdk` is not a default feature, so `remote::` is cfg'd out of
-        # the workspace run. The cloud client crates' unit tests already run
-        # there via the `kind(test)`-only filters.
+      - name: Sandbox agent image contract
+        # The committed GCP Dockerfile is generated from the contract, and this
+        # compares the two. Named here so a Dockerfile-only change still fails
+        # visibly rather than inside the workspace run.
         run: |
-          cargo test -p alien-bindings --features platform-sdk --lib remote::
+          cargo test -p alien-core --lib sandbox_image
+
+      - name: Sandbox agent smoke test harness
+        # Drives the release smoke test against a stub docker, once per failure
+        # mode, asserting each exits nonzero AND annotates. Needs no daemon.
+        run: |
+          ./scripts/smoke-sandbox-agent.test.sh
 
   typescript:
     name: TypeScript packages and CLIs
@@ -309,6 +326,10 @@ jobs:
             examples:
               - 'examples/**'
               - 'packages/**'
+              # Changes to the generated Platform client can break the ordinary
+              # filtered CLI graph while the workspace's all-features Rust job
+              # still succeeds with the full API enabled.
+              - 'client-sdks/platform/rust/**'
               - 'crates/alien-cli/**'
               - 'crates/alien-deploy-cli/**'
               - 'crates/alien-operator/**'
@@ -389,6 +410,10 @@ jobs:
         working-directory: crates/alien-bindings-node
         run: ../../packages/package-layout/node_modules/.bin/napi build --platform
 
+      - name: Build all CLIs and package gateway
+        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
+        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator -p alien-ai-gateway
+
       - name: Build package-layout dependencies
         run: pnpm --filter @alienplatform/sdk... build
 
@@ -400,10 +425,6 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=8192"
         run: |
           pnpm --filter @alienplatform/core --filter @alienplatform/bindings --filter @alienplatform/commands --filter @alienplatform/ai-gateway test
-
-      - name: Build all CLIs
-        if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'
-        run: cargo build -p alien-cli -p alien-deploy-cli -p alien-operator
 
       - name: Build TypeScript packages
         if: steps.changes.outcome != 'success' || steps.changes.outputs.examples == 'true' || github.event_name == 'workflow_dispatch'

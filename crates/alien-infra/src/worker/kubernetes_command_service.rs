@@ -9,7 +9,7 @@ use k8s_openapi::apimachinery::pkg::util::intstr::IntOrString;
 use tracing::debug;
 
 use crate::core::kubernetes_errors::is_remote_resource_conflict;
-use crate::core::ResourceControllerContext;
+use crate::core::{kubernetes_cleanup_resource_labels, ResourceControllerContext};
 use crate::error::{ErrorData, Result};
 
 pub(super) async fn reconcile_ready_command_service(
@@ -45,8 +45,11 @@ pub(super) async fn reconcile_command_service(
         .service_provider
         .get_kubernetes_service_client(kubernetes_config)
         .await?;
-    let Some(mut service) = build_command_service(config, service_name, namespace) else {
-        return delete_command_service(namespace, service_name, &config.id, ctx).await;
+    let deployment_labels = kubernetes_cleanup_resource_labels(ctx, &config.id);
+    let Some(mut service) =
+        build_command_service(config, service_name, namespace, &deployment_labels)
+    else {
+        return delete_command_service(namespace, service_name, &config.id, ctx, true).await;
     };
 
     match service_client.create_service(namespace, &service).await {
@@ -62,6 +65,23 @@ pub(super) async fn reconcile_command_service(
                     ),
                     resource_id: Some(config.id.clone()),
                 })?;
+            let desired_labels = service
+                .metadata
+                .labels
+                .as_ref()
+                .cloned()
+                .unwrap_or_default();
+            if !crate::core::kubernetes_labels_have_compatible_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to mutate Kubernetes Service '{service_name}' because it belongs to another deployment"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
             if command_service_is_compatible_shared_worker_service(
                 &existing,
                 service_name,
@@ -111,6 +131,7 @@ pub(super) async fn delete_command_service(
     service_name: &str,
     resource_id: &str,
     ctx: &ResourceControllerContext<'_>,
+    legacy_owner_proven: bool,
 ) -> Result<()> {
     let kubernetes_config = ctx.get_kubernetes_config()?;
     let service_client = ctx
@@ -138,7 +159,19 @@ pub(super) async fn delete_command_service(
             }));
         }
     };
-    if !command_service_is_owned(&existing, service_name, resource_id) {
+    let mut desired_labels = command_service_selector(service_name);
+    desired_labels.insert("resource-id".to_string(), resource_id.to_string());
+    desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, resource_id));
+    if !command_service_is_owned(&existing, service_name, resource_id)
+        || !(crate::core::kubernetes_labels_match_current_scope(
+            existing.metadata.labels.as_ref(),
+            &desired_labels,
+        ) || (legacy_owner_proven
+            && crate::core::kubernetes_labels_have_compatible_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            )))
+    {
         debug!(
             service_name = %service_name,
             resource_id = %resource_id,
@@ -167,13 +200,19 @@ pub(super) async fn delete_command_service(
     }
 }
 
-fn build_command_service(config: &Worker, service_name: &str, namespace: &str) -> Option<Service> {
+fn build_command_service(
+    config: &Worker,
+    service_name: &str,
+    namespace: &str,
+    deployment_labels: &BTreeMap<String, String>,
+) -> Option<Service> {
     if !config.commands_enabled {
         return None;
     }
     let selector = command_service_selector(service_name);
     let mut labels = selector.clone();
     labels.insert("resource-id".to_string(), config.id.clone());
+    labels.extend(deployment_labels.clone());
     Some(Service {
         metadata: ObjectMeta {
             name: Some(service_name.to_string()),
@@ -384,10 +423,25 @@ mod tests {
     fn internal_command_service_only_exists_when_commands_are_enabled() {
         let disabled = worker(false);
         let enabled = worker(true);
+        let deployment_labels = BTreeMap::from([(
+            "alien.dev/deployment".to_string(),
+            "test-release".to_string(),
+        )]);
 
-        assert!(build_command_service(&disabled, "test-worker", "test-namespace").is_none());
-        let service = build_command_service(&enabled, "test-worker", "test-namespace")
-            .expect("commands-enabled Worker needs an internal push Service");
+        assert!(build_command_service(
+            &disabled,
+            "test-worker",
+            "test-namespace",
+            &deployment_labels,
+        )
+        .is_none());
+        let service = build_command_service(
+            &enabled,
+            "test-worker",
+            "test-namespace",
+            &deployment_labels,
+        )
+        .expect("commands-enabled Worker needs an internal push Service");
         let spec = service.spec.expect("Service spec");
         assert_eq!(spec.type_.as_deref(), Some("ClusterIP"));
         assert!(spec.health_check_node_port.is_none());
@@ -402,6 +456,15 @@ mod tests {
                 .and_then(|labels| labels.get("resource-id"))
                 .map(String::as_str),
             Some("worker")
+        );
+        assert_eq!(
+            service
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("alien.dev/deployment"))
+                .map(String::as_str),
+            Some("test-release")
         );
         assert_eq!(
             spec.selector
@@ -681,8 +744,10 @@ mod tests {
     #[tokio::test]
     async fn reconcile_unchanged_owned_service_skips_update() {
         let config = worker(true);
+        let deployment_labels = BTreeMap::new();
         let mut existing =
-            build_command_service(&config, "test-worker", "test-ns").expect("Service");
+            build_command_service(&config, "test-worker", "test-ns", &deployment_labels)
+                .expect("Service");
         existing.metadata.resource_version = Some("42".to_string());
         let spec = existing.spec.as_mut().expect("Service spec");
         spec.cluster_ip = Some("10.96.12.34".to_string());
@@ -737,7 +802,7 @@ mod tests {
         let harness = KubernetesManifestTestHarness::new(alien_core::Resource::new(config), vec![])
             .with_service_provider(provider_with_service_client(services));
 
-        delete_command_service("test-ns", "test-worker", "worker", &harness.ctx())
+        delete_command_service("test-ns", "test-worker", "worker", &harness.ctx(), false)
             .await
             .expect("foreign Service is preserved");
     }

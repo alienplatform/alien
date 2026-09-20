@@ -3,7 +3,7 @@
 //! Provides [`NetworkArgs`] (a clap `Args` struct) and [`parse_network_settings`] to convert
 //! CLI flags into [`alien_core::NetworkSettings`].
 
-use alien_core::NetworkSettings;
+use alien_core::{NetworkSettings, Platform};
 use clap::Args;
 
 /// Network mode for the `--network` flag.
@@ -137,6 +137,32 @@ pub fn parse_network_settings(
             reject_create_flags(args, "byo")?;
             parse_byo_settings(args, platform)
         }
+    }
+}
+
+/// Validate that a typed network config belongs to the selected provider.
+pub fn validate_network_settings_for_platform(
+    settings: &NetworkSettings,
+    platform: Platform,
+) -> std::result::Result<(), String> {
+    let compatible = matches!(
+        (settings, platform),
+        (
+            NetworkSettings::UseDefault,
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) | (
+            NetworkSettings::Create { .. },
+            Platform::Aws | Platform::Gcp | Platform::Azure
+        ) | (NetworkSettings::ByoVpcAws { .. }, Platform::Aws)
+            | (NetworkSettings::ByoVpcGcp { .. }, Platform::Gcp)
+            | (NetworkSettings::ByoVnetAzure { .. }, Platform::Azure)
+    );
+    if compatible {
+        Ok(())
+    } else {
+        Err(format!(
+            "network configuration is not compatible with platform {platform}"
+        ))
     }
 }
 
@@ -418,5 +444,20 @@ mod tests {
         args.network_mode = NetworkMode::Byo;
         let err = parse_network_settings(&args, "kubernetes").unwrap_err();
         assert!(err.contains("not supported on platform 'kubernetes'"));
+    }
+
+    #[test]
+    fn typed_byo_network_must_match_selected_platform() {
+        let aws = NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-123".to_string(),
+            public_subnet_ids: vec!["subnet-public".to_string()],
+            private_subnet_ids: vec!["subnet-private".to_string()],
+            security_group_ids: vec![],
+        };
+
+        validate_network_settings_for_platform(&aws, Platform::Aws)
+            .expect("AWS config should match AWS");
+        validate_network_settings_for_platform(&aws, Platform::Gcp)
+            .expect_err("AWS config must not validate for GCP");
     }
 }

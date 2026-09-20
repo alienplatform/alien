@@ -13,6 +13,7 @@
 //! `credential_source` states the rule this follows: managed workloads use their
 //! platform-projected identity and do not receive Alien bearer tokens.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use axum::extract::{Path, State};
@@ -22,7 +23,7 @@ use axum::{Json, Router};
 use serde::{Deserialize, Serialize};
 
 use crate::sandbox::kubernetes::capability_secret_name;
-use crate::sandbox::kubernetes_broker::{claim_session, release_session};
+use crate::sandbox::kubernetes_broker::claim_session_for_deployment;
 use alien_error::Context;
 use alien_k8s_clients::kubernetes::pods::PodApi;
 use alien_k8s_clients::kubernetes::secrets::SecretsApi;
@@ -41,6 +42,71 @@ pub struct BrokerState {
     pub token_reviews: Arc<dyn TokenReviewsApi>,
     /// Namespace the sandbox pods live in, and the only namespace a caller may come from
     pub namespace: String,
+}
+
+/// The exact deployment scope and callers the broker may operate for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BrokerDeploymentAuthorization {
+    /// Kubernetes label key that identifies this deployment's runtime objects.
+    pub deployment_label_key: String,
+    /// Exact value for this deployment's runtime objects.
+    pub deployment_label_value: String,
+    /// Exact ServiceAccount names created for workloads in this deployment.
+    pub service_accounts: BTreeSet<String>,
+}
+
+/// Supplies the broker's current authorization boundary.
+///
+/// Remote operators learn their resource prefix only after their first sync, so the provider is
+/// consulted per request instead of freezing an empty scope at process startup.
+#[async_trait::async_trait]
+pub trait BrokerAuthorizationProvider: Send + Sync {
+    /// Returns the current exact deployment authorization, or fails closed while unavailable.
+    async fn authorization(&self) -> crate::error::Result<BrokerDeploymentAuthorization>;
+}
+
+#[derive(Clone)]
+struct BrokerRouteState {
+    broker: BrokerState,
+    authorization: Arc<dyn BrokerAuthorizationProvider>,
+}
+
+struct EnvironmentBrokerAuthorization;
+
+#[async_trait::async_trait]
+impl BrokerAuthorizationProvider for EnvironmentBrokerAuthorization {
+    async fn authorization(&self) -> crate::error::Result<BrokerDeploymentAuthorization> {
+        let configuration_error = |message: &str| {
+            alien_error::AlienError::new(crate::error::ErrorData::ResourceConfigInvalid {
+                resource_id: Some("sandbox-broker".to_string()),
+                message: message.to_string(),
+            })
+        };
+        let deployment_label_key = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY")
+            .map_err(|_| configuration_error("runtime deployment label key is unavailable"))?;
+        let deployment_label_value = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE")
+            .map_err(|_| configuration_error("runtime deployment label value is unavailable"))?;
+        let service_accounts = std::env::var("ALIEN_SANDBOX_BROKER_SERVICE_ACCOUNTS")
+            .map_err(|_| configuration_error("sandbox broker ServiceAccounts are unavailable"))?
+            .split(',')
+            .map(str::trim)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+            .collect::<BTreeSet<_>>();
+        if deployment_label_key.is_empty()
+            || deployment_label_value.is_empty()
+            || service_accounts.is_empty()
+        {
+            return Err(configuration_error(
+                "sandbox broker deployment authorization is incomplete",
+            ));
+        }
+        Ok(BrokerDeploymentAuthorization {
+            deployment_label_key,
+            deployment_label_value,
+            service_accounts,
+        })
+    }
 }
 
 /// A request for a session.
@@ -102,21 +168,45 @@ impl BrokerState {
 }
 
 /// The broker's routes, for the operator to mount.
+///
+/// This compatibility constructor reads its authorization boundary for every
+/// request from `ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY`,
+/// `ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE`, and the comma-separated
+/// `ALIEN_SANDBOX_BROKER_SERVICE_ACCOUNTS`. Missing or empty values fail closed
+/// with HTTP 503. New embedders should pass an explicit, dynamically refreshed
+/// provider to [`broker_router_with_authorization`] instead.
+#[deprecated(
+    since = "3.3.22",
+    note = "use broker_router_with_authorization with an explicit authorization provider"
+)]
 pub fn broker_router(state: BrokerState) -> Router {
+    broker_router_with_authorization(state, Arc::new(EnvironmentBrokerAuthorization))
+}
+
+/// The broker's routes with an authorization provider owned by the embedding operator.
+pub fn broker_router_with_authorization(
+    state: BrokerState,
+    authorization: Arc<dyn BrokerAuthorizationProvider>,
+) -> Router {
     Router::new()
         .route("/v1/sandbox/sessions", post(claim))
         .route(
             "/v1/sandbox/{sandbox}/sessions/{session}",
             axum::routing::delete(release),
         )
-        .with_state(state)
+        .with_state(BrokerRouteState {
+            broker: state,
+            authorization,
+        })
 }
 
-/// Verifies the caller is a ServiceAccount in this deployment's namespace.
+/// Verifies the caller is a ServiceAccount owned by this deployment.
 ///
-/// The namespace check is the authorization: any pod on the cluster network can reach this port,
-/// and a valid token from another tenant's namespace is a valid token for the wrong sandbox.
-async fn authorize(state: &BrokerState, headers: &HeaderMap) -> Result<String, StatusCode> {
+/// Namespace alone is not an ownership boundary because multiple product releases may share it.
+async fn authorize(
+    state: &BrokerRouteState,
+    headers: &HeaderMap,
+) -> Result<BrokerDeploymentAuthorization, StatusCode> {
     let token = headers
         .get(axum::http::header::AUTHORIZATION)
         .and_then(|value| value.to_str().ok())
@@ -124,6 +214,7 @@ async fn authorize(state: &BrokerState, headers: &HeaderMap) -> Result<String, S
         .ok_or(StatusCode::UNAUTHORIZED)?;
 
     let verdict = state
+        .broker
         .token_reviews
         .create_token_review(&review_for(token))
         .await
@@ -133,28 +224,46 @@ async fn authorize(state: &BrokerState, headers: &HeaderMap) -> Result<String, S
     // than the status code.
     let user = authenticated_user(&verdict).ok_or(StatusCode::UNAUTHORIZED)?;
 
-    if !is_service_account_in(&user, &state.namespace) {
+    if !is_service_account_in(&user, &state.broker.namespace) {
         return Err(StatusCode::FORBIDDEN);
     }
 
-    Ok(user)
+    let username_prefix = format!("system:serviceaccount:{}:", state.broker.namespace);
+    let service_account_name = user
+        .strip_prefix(&username_prefix)
+        .ok_or(StatusCode::FORBIDDEN)?;
+    let authorization = state
+        .authorization
+        .authorization()
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    if !authorization
+        .service_accounts
+        .contains(service_account_name)
+    {
+        return Err(StatusCode::FORBIDDEN);
+    }
+
+    Ok(authorization)
 }
 
 async fn claim(
-    State(state): State<BrokerState>,
+    State(state): State<BrokerRouteState>,
     headers: HeaderMap,
     Json(request): Json<ClaimRequest>,
 ) -> Result<Json<ClaimResponse>, StatusCode> {
-    authorize(&state, &headers).await?;
+    let authorization = authorize(&state, &headers).await?;
 
-    let claimed = claim_session(
-        &state.pods,
-        &state.secrets,
+    let claimed = claim_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
         &request.sandbox_id,
-        &state.namespace,
+        &state.broker.namespace,
         &request.session_id,
         &capability_secret_name(&request.sandbox_id),
         chrono::Utc::now().timestamp(),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
     )
     .await
     // Retryable rather than fatal: an empty pool refills on the controller's next health tick,
@@ -170,17 +279,26 @@ async fn claim(
 }
 
 async fn release(
-    State(state): State<BrokerState>,
+    State(state): State<BrokerRouteState>,
     headers: HeaderMap,
     Path((sandbox_id, session)): Path<(String, String)>,
 ) -> Result<StatusCode, StatusCode> {
-    authorize(&state, &headers).await?;
+    let authorization = authorize(&state, &headers).await?;
 
     // A pod that is not a claimed session of this sandbox is refused rather than deleted, so the
     // route cannot be used to reach anything else sharing the namespace.
-    release_session(&state.pods, &state.namespace, &sandbox_id, &session)
-        .await
-        .map_err(|_| StatusCode::FORBIDDEN)?;
+    crate::sandbox::kubernetes_broker::release_session_for_deployment(
+        &state.broker.pods,
+        &state.broker.secrets,
+        &state.broker.namespace,
+        &sandbox_id,
+        &session,
+        &capability_secret_name(&sandbox_id),
+        &authorization.deployment_label_key,
+        &authorization.deployment_label_value,
+    )
+    .await
+    .map_err(|_| StatusCode::FORBIDDEN)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -192,6 +310,18 @@ mod tests {
     use alien_k8s_clients::kubernetes::secrets::MockSecretsApi;
     use alien_k8s_clients::kubernetes::token_reviews::MockTokenReviewsApi;
     use k8s_openapi::api::authentication::v1::{TokenReview, TokenReviewStatus, UserInfo};
+    use k8s_openapi::api::core::v1::Secret;
+    use k8s_openapi::apimachinery::pkg::apis::meta::v1::ObjectMeta;
+    use std::collections::BTreeMap;
+
+    struct FixedAuthorization(BrokerDeploymentAuthorization);
+
+    #[async_trait::async_trait]
+    impl BrokerAuthorizationProvider for FixedAuthorization {
+        async fn authorization(&self) -> crate::error::Result<BrokerDeploymentAuthorization> {
+            Ok(self.0.clone())
+        }
+    }
 
     fn verdict(authenticated: bool, username: &str) -> TokenReview {
         TokenReview {
@@ -207,12 +337,26 @@ mod tests {
         }
     }
 
-    fn state_with(reviews: MockTokenReviewsApi) -> BrokerState {
-        BrokerState {
-            pods: Arc::new(MockPodApi::new()),
-            secrets: Arc::new(MockSecretsApi::new()),
-            token_reviews: Arc::new(reviews),
-            namespace: "alien-sandbox-sbx".to_string(),
+    fn state_with(reviews: MockTokenReviewsApi) -> BrokerRouteState {
+        state_with_allowed_accounts(reviews, ["worker"])
+    }
+
+    fn state_with_allowed_accounts(
+        reviews: MockTokenReviewsApi,
+        accounts: impl IntoIterator<Item = &'static str>,
+    ) -> BrokerRouteState {
+        BrokerRouteState {
+            broker: BrokerState {
+                pods: Arc::new(MockPodApi::new()),
+                secrets: Arc::new(MockSecretsApi::new()),
+                token_reviews: Arc::new(reviews),
+                namespace: "alien-sandbox-sbx".to_string(),
+            },
+            authorization: Arc::new(FixedAuthorization(BrokerDeploymentAuthorization {
+                deployment_label_key: "alien.dev/deployment".to_string(),
+                deployment_label_value: "release-a".to_string(),
+                service_accounts: accounts.into_iter().map(str::to_string).collect(),
+            })),
         }
     }
 
@@ -223,6 +367,44 @@ mod tests {
             format!("Bearer {token}").parse().expect("valid header"),
         );
         headers
+    }
+
+    fn scoped_state(
+        pods: MockPodApi,
+        secrets: MockSecretsApi,
+        reviews: MockTokenReviewsApi,
+    ) -> BrokerRouteState {
+        BrokerRouteState {
+            broker: BrokerState {
+                pods: Arc::new(pods),
+                secrets: Arc::new(secrets),
+                token_reviews: Arc::new(reviews),
+                namespace: "shared".to_string(),
+            },
+            authorization: Arc::new(FixedAuthorization(BrokerDeploymentAuthorization {
+                deployment_label_key: "alien.dev/deployment".to_string(),
+                deployment_label_value: "release-a".to_string(),
+                service_accounts: BTreeSet::from(["release-a-manager-sa".to_string()]),
+            })),
+        }
+    }
+
+    fn capability_secret_for(scope: &str) -> Secret {
+        let pair = ed25519_compact::KeyPair::generate();
+        Secret {
+            metadata: ObjectMeta {
+                labels: Some(BTreeMap::from([
+                    ("alien.dev/deployment".to_string(), scope.to_string()),
+                    ("alien.dev/sandbox".to_string(), "sbx".to_string()),
+                ])),
+                ..Default::default()
+            },
+            data: Some(BTreeMap::from([(
+                "signingKey".to_string(),
+                k8s_openapi::ByteString(pair.as_ref().to_vec()),
+            )])),
+            ..Default::default()
+        }
     }
 
     /// The signing key is what makes a capability valid for a pod. If a caller could name it, a
@@ -301,9 +483,104 @@ mod tests {
             ))
         });
 
-        let user = authorize(&state_with(reviews), &bearer("valid"))
+        let authorization = authorize(&state_with(reviews), &bearer("valid"))
             .await
             .expect("the deployment's own ServiceAccount is allowed");
-        assert_eq!(user, "system:serviceaccount:alien-sandbox-sbx:worker");
+        assert_eq!(
+            authorization.service_accounts,
+            BTreeSet::from(["worker".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_overlapping_service_account_prefix_does_not_authorize_a_sibling_release() {
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:alien-sandbox-sbx:release-a-evil-worker-sa",
+            ))
+        });
+
+        let error = authorize(&state_with(reviews), &bearer("sibling"))
+            .await
+            .expect_err("a sibling ServiceAccount needs an exact allow-list entry");
+        assert_eq!(error, StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn a_truncated_long_service_account_name_is_authorized_by_its_exact_scope_label() {
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:alien-sandbox-sbx:release-a-extraordinarily-long-permission-profile-name-truncated",
+            ))
+        });
+
+        authorize(
+            &state_with_allowed_accounts(
+                reviews,
+                ["release-a-extraordinarily-long-permission-profile-name-truncated"],
+            ),
+            &bearer("long-name"),
+        )
+        .await
+        .expect("the exact generated ServiceAccount name is authorized");
+    }
+
+    #[tokio::test]
+    async fn release_a_cannot_claim_release_b_sandbox_in_a_shared_namespace() {
+        let mut pods = MockPodApi::new();
+        pods.expect_list_pods().never();
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(capability_secret_for("release-b")));
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:shared:release-a-manager-sa",
+            ))
+        });
+
+        let error = claim(
+            State(scoped_state(pods, secrets, reviews)),
+            bearer("release-a"),
+            Json(ClaimRequest {
+                sandbox_id: "sbx".to_string(),
+                session_id: "session".to_string(),
+            }),
+        )
+        .await
+        .expect_err("a foreign deployment Secret must not authorize a claim");
+        assert_eq!(error, StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn release_a_cannot_release_release_b_sandbox_in_a_shared_namespace() {
+        let mut pods = MockPodApi::new();
+        pods.expect_list_pods().never();
+        let mut secrets = MockSecretsApi::new();
+        secrets
+            .expect_get_secret()
+            .returning(|_, _| Ok(capability_secret_for("release-b")));
+        let mut reviews = MockTokenReviewsApi::new();
+        reviews.expect_create_token_review().returning(|_| {
+            Ok(verdict(
+                true,
+                "system:serviceaccount:shared:release-a-manager-sa",
+            ))
+        });
+
+        let error = release(
+            State(scoped_state(pods, secrets, reviews)),
+            bearer("release-a"),
+            Path(("sbx".to_string(), "session".to_string())),
+        )
+        .await
+        .expect_err("a foreign deployment Secret must not authorize a release");
+        assert_eq!(error, StatusCode::FORBIDDEN);
     }
 }

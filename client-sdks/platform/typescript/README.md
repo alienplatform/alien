@@ -285,6 +285,7 @@ run();
 * [updateCompute](docs/sdks/deployments/README.md#updatecompute) - Update deployment-time compute pool selections and request reconciliation by the hosted manager.
 * [updateEnvironmentVariables](docs/sdks/deployments/README.md#updateenvironmentvariables) - Replace a deployment's advanced environment variables. Stack-input-backed variables are write-only through the input endpoint. If the deployment is running and not locked, the status will be changed to update-pending to trigger a deployment.
 * [createToken](docs/sdks/deployments/README.md#createtoken) - Create a deployment token (deployment-scoped API key). The deployment must exist before creating a token.
+* [listMachines](docs/sdks/deployments/README.md#listmachines)
 
 ### [Domains](docs/sdks/domains/README.md)
 
@@ -310,7 +311,6 @@ run();
 * [createJoinToken](docs/sdks/machines/README.md#createjointoken)
 * [rotateJoinToken](docs/sdks/machines/README.md#rotatejointoken)
 * [revokeJoinToken](docs/sdks/machines/README.md#revokejointoken)
-* [listInventory](docs/sdks/machines/README.md#listinventory)
 * [cancelMachineDrain](docs/sdks/machines/README.md#cancelmachinedrain)
 * [drainMachine](docs/sdks/machines/README.md#drainmachine)
 * [removeMachine](docs/sdks/machines/README.md#removemachine)
@@ -572,6 +572,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`deploymentsList`](docs/sdks/deployments/README.md#list) - Retrieve all deployments.
 - [`deploymentsListFilterDeploymentGroups`](docs/sdks/deployments/README.md#listfilterdeploymentgroups) - List deployment groups with deployment counts. Used for filter dropdowns.
 - [`deploymentsListFilterEnvironments`](docs/sdks/deployments/README.md#listfilterenvironments) - List distinct effective environments used by deployments. Used for filter dropdowns.
+- [`deploymentsListMachines`](docs/sdks/deployments/README.md#listmachines)
 - [`deploymentsPinRelease`](docs/sdks/deployments/README.md#pinrelease) - Pin or unpin a running or runtime-failed deployment. Running deployments start an update; failed deployments retry toward the selected release.
 - [`deploymentsRedeploy`](docs/sdks/deployments/README.md#redeploy) - Redeploy a running deployment with the same release and fresh environment variables. Sets status to update-pending.
 - [`deploymentsRetry`](docs/sdks/deployments/README.md#retry) - Retry a failed deployment operation. Uses alien-infra's retry mechanisms to resume from exact failure point.
@@ -600,7 +601,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`machinesCancelMachineDrain`](docs/sdks/machines/README.md#cancelmachinedrain)
 - [`machinesCreateJoinToken`](docs/sdks/machines/README.md#createjointoken)
 - [`machinesDrainMachine`](docs/sdks/machines/README.md#drainmachine)
-- [`machinesListInventory`](docs/sdks/machines/README.md#listinventory)
 - [`machinesListJoinTokens`](docs/sdks/machines/README.md#listjointokens)
 - [`machinesRemoveMachine`](docs/sdks/machines/README.md#removemachine)
 - [`machinesRevokeJoinToken`](docs/sdks/machines/README.md#revokejointoken)

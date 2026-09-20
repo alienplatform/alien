@@ -28,6 +28,14 @@ function parseJobs(source) {
   return jobs
 }
 
+function jobBlock(name) {
+  const start = workflow.indexOf(`  ${name}:\n`)
+  assert.notEqual(start, -1, `release workflow has ${name}`)
+  const remainder = workflow.slice(start + 1)
+  const next = remainder.search(/^ {2}[a-z0-9_-]+:$/m)
+  return next === -1 ? workflow.slice(start) : workflow.slice(start, start + 1 + next)
+}
+
 test("stable remains the default release mode", () => {
   assert.match(
     workflow,
@@ -62,4 +70,40 @@ test("dev mode can reach only the reusable npm dev workflow", () => {
     if (name === "publish-npm-dev") continue
     assert.match(job.if, /inputs\.mode == 'stable'/, `${name} must be unreachable in dev mode`)
   }
+})
+
+test("stable binary releases publish the pinned Platform composition as alien", () => {
+  assert.match(workflow, /ref=\$\(tr -d '\[:space:\]' < \.github\/official-cli-platform-revision\)/)
+  const targets = new Map([
+    ["build-binaries-linux-x86_64", ["x86_64-unknown-linux-musl", "alien"]],
+    ["build-binaries-linux-aarch64", ["aarch64-unknown-linux-musl", "alien"]],
+    ["build-binaries-darwin", ["aarch64-apple-darwin", "alien"]],
+    ["build-binaries-windows", ["x86_64-pc-windows-msvc", "alien.exe"]],
+  ])
+
+  for (const [job, [target, binary]] of targets) {
+    const block = jobBlock(job)
+    assert.match(block, /repository: alienplatform\/platform/)
+    assert.match(block, /ref: \$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/)
+    assert.match(
+      block,
+      /key: .*\$\{\{ needs\.prepare\.outputs\.source_ref \}\}.*\$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/,
+    )
+    assert.match(
+      block,
+      new RegExp(
+        `manifest-path platform/crates/alien-clix/Cargo\\.toml[\\s\\S]{0,160}--bin alien --target ${target}`,
+      ),
+    )
+    assert.match(
+      block,
+      new RegExp(`cp platform/crates/alien-clix/target/${target}/release/${binary} `),
+    )
+    assert.match(
+      block,
+      new RegExp(`staged/${target}/${binary.replace(".", "\\.")} --help >/dev/null`),
+    )
+  }
+
+  assert.doesNotMatch(workflow, /-p alien-cli -p alien-deploy-cli/)
 })
