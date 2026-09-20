@@ -15,9 +15,7 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::{
-        OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet,
-    },
+    sync::{OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet},
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };

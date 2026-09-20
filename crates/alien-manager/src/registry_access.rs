@@ -16,8 +16,8 @@ use alien_bindings::{
 };
 use alien_core::{
     AwsEnvironmentInfo, DeploymentState, DeploymentStatus, EnvironmentInfo, GcpEnvironmentInfo,
-    Platform, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata, Sandbox, SandboxCode,
-    Stack, StackState, Worker, WorkerCode,
+    Platform, RegistryAccess, RemoteStackManagementOutputs, ResourceEntry, RuntimeMetadata,
+    Sandbox, SandboxCode, Stack, StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context};
 use tracing::{debug, info, warn};
@@ -27,24 +27,41 @@ use crate::error::{ErrorData, Result};
 use crate::traits::deployment_store::{DeploymentFilter, DeploymentRecord};
 use crate::traits::DeploymentStore;
 
-/// Ensures cross-account registry access is granted for a deployment.
-///
-/// Returns `true` if access was fully granted — including the management
-/// service account when available. Returns `false` if the grant failed or
-/// the management SA was not yet available (so the caller will re-try on
-/// the next reconcile iteration).
+/// What one grant attempt left behind. `written` marks that a write was attempted, so cleanup
+/// still has something to revoke even from a partial failure. `complete` marks that the grant
+/// covers everything needed, which is what lets reconcile stop retrying.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct GrantOutcome {
+    written: bool,
+    complete: bool,
+}
+
+/// Grants cross-account registry access on one repository for a deployment.
 async fn ensure_registry_access(
     artifact_registry: &dyn ArtifactRegistry,
     repo_id: &str,
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
-) -> bool {
+    declares_sandbox: bool,
+) -> GrantOutcome {
     let rsm_access = extract_rsm_access_configuration(stack_state);
+    // The project number is what names the compute agents, and an import predating that field
+    // leaves it empty — the write then carries the management identity alone and would seal a
+    // grant no agent is on, which nothing the record compares could ever reopen.
+    let names_compute_agents = !matches!(
+        environment_info,
+        EnvironmentInfo::Gcp(GcpEnvironmentInfo { project_number, .. }) if project_number.is_empty()
+    );
     let has_management_sa = rsm_access.is_some();
 
-    let access = match build_cross_account_access(environment_info, stack_state) {
+    let access = match build_cross_account_access(environment_info, stack_state, declares_sandbox) {
         Some(a) => a,
-        None => return false,
+        None => {
+            return GrantOutcome {
+                written: false,
+                complete: false,
+            }
+        }
     };
 
     match artifact_registry
@@ -58,12 +75,14 @@ async fn ensure_registry_access(
                 has_management_sa = %has_management_sa,
                 "Registry cross-account access granted"
             );
-            // Only consider fully granted when the management SA was included.
-            // Cloud Run (GCP) and Lambda (AWS) require the management SA to have
-            // artifact registry access when updating services with cross-project images.
-            // If RSM outputs aren't available yet, return false so the next reconcile
-            // iteration will re-grant with the management SA included.
-            has_management_sa
+            // The policy now holds this deployment's members either way, so cleanup must revoke
+            // it. It is only complete once the management SA is on it: Cloud Run and Lambda need
+            // that identity to update a service from a cross-project image, and the RSM outputs
+            // naming it can arrive after the first grant.
+            GrantOutcome {
+                written: true,
+                complete: has_management_sa && names_compute_agents,
+            }
         }
         Err(e) => {
             warn!(
@@ -72,7 +91,10 @@ async fn ensure_registry_access(
                 error = %e,
                 "Failed to grant registry cross-account access"
             );
-            false
+            GrantOutcome {
+                written: true,
+                complete: false,
+            }
         }
     }
 }
@@ -142,9 +164,10 @@ async fn revoke_registry_access(
             environment_info,
             CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                // The same list the grant names: removal is a `retain`, so a type this deployment
-                // never added is a no-op, while one the revoke omits stays on the policy forever.
-                allowed_service_types: gcp_service_types(),
+                // Every type, not this deployment's: the member names the project, and the guard
+                // above has already proved no deployment is left in it. Removal is a `retain`, so
+                // naming one this deployment never added removes nothing.
+                allowed_service_types: all_gcp_service_types(),
                 service_account_emails: Vec::new(),
             }),
             "last project consumer's shared registry access",
@@ -154,7 +177,8 @@ async fn revoke_registry_access(
         return Ok(());
     }
 
-    let Some(access) = build_cross_account_access(environment_info, stack_state) else {
+    // The AWS arm names its own principal, so the sandbox flag does not reach it.
+    let Some(access) = build_cross_account_access(environment_info, stack_state, false) else {
         return Ok(());
     };
     remove_registry_access(
@@ -176,13 +200,30 @@ async fn remove_registry_access(
     access_kind: &str,
     deployment_id: &str,
 ) -> Result<()> {
-    artifact_registry
+    // Read before the wrap: `RegistryAccessCleanupFailed` answers 500 for every source, so a
+    // repository that is already gone is only visible here. It carries no grant, and a delete
+    // that keeps failing on it never completes.
+    match artifact_registry
         .remove_cross_account_access(repo_id, access)
         .await
-        .context(ErrorData::RegistryAccessCleanupFailed {
-            deployment_id: deployment_id.to_string(),
-            reason: format!("failed to revoke {access_kind} for repository '{repo_id}'"),
-        })?;
+    {
+        Ok(()) => {}
+        Err(error) if error.http_status_code == Some(404) => {
+            info!(
+                repo_id = %repo_id,
+                platform = %environment_info.platform(),
+                access_kind = %access_kind,
+                "Repository is already gone, so its access is too"
+            );
+            return Ok(());
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::RegistryAccessCleanupFailed {
+                deployment_id: deployment_id.to_string(),
+                reason: format!("failed to revoke {access_kind} for repository '{repo_id}'"),
+            })
+        }
+    }
 
     info!(
         repo_id = %repo_id,
@@ -212,9 +253,10 @@ fn is_other_active_gcp_project_consumer(
 /// Loads the artifact registry from the bindings provider and applies the
 /// appropriate grant or revoke based on deployment status.
 ///
-/// On successful grant, sets `registry_access_granted` on the deployment state
-/// so subsequent reconcile calls skip the (expensive) cloud API call.
-/// The caller is responsible for persisting the updated state.
+/// Records what the grant opened, and grants again whenever that record differs from what the
+/// deployment needs now — a repository it gained, a compute service that pulls as another
+/// principal — or when the last attempt did not finish. A repository it stopped needing stays in
+/// the record so the delete still revokes it. The caller persists the updated state.
 ///
 /// Returns without error if the bindings provider is unavailable or the
 /// artifact registry cannot be loaded — registry access is best-effort.
@@ -244,14 +286,10 @@ pub async fn reconcile_registry_access(
         return;
     }
 
-    // Already granted — nothing to do.
-    let already_granted = state
+    let recorded = state
         .runtime_metadata
         .as_ref()
-        .map_or(false, |rm| rm.registry_access_granted);
-    if already_granted {
-        return;
-    }
+        .and_then(|metadata| metadata.registry_access.clone());
 
     let artifact_registry = match load_artifact_registry(
         bindings_provider,
@@ -274,26 +312,129 @@ pub async fn reconcile_registry_access(
     if repo_ids.is_empty() {
         return;
     }
+    let sandbox_declared = declares_sandbox(state);
+    let needed = RegistryAccess {
+        repositories: repo_ids.clone(),
+        service_types: service_type_names(environment_info, sandbox_declared),
+    };
 
-    // AWS/GCP: grant IAM-based cross-account access.
-    let mut granted = true;
-    for repo_id in repo_ids {
-        granted &= ensure_registry_access(
-            artifact_registry.as_ref(),
-            &repo_id,
-            environment_info,
-            state.stack_state.as_ref(),
-        )
-        .await;
+    // What the policy already says, not merely that something was once written: a deployment that
+    // gained a resource pulling as another principal, or a repository it did not have, needs the
+    // policy rewritten, and re-writing an unchanged one costs a call every tick.
+    let complete = state
+        .runtime_metadata
+        .as_ref()
+        .is_some_and(|metadata| metadata.registry_access_granted);
+    if !needs_regrant(recorded.as_ref(), &needed, complete) {
+        return;
     }
 
-    // A refused reference keeps the grant incomplete, so the refusal is logged every cycle
-    // instead of hidden behind a flag that stops reconciliation.
-    if granted && !refused_any {
-        let rm = state
-            .runtime_metadata
-            .get_or_insert_with(RuntimeMetadata::default);
-        rm.registry_access_granted = true;
+    // Each repository joins the record as it is proved, so a grant that fails halfway still names
+    // what it opened. Assembling the whole list first would leave a live grant unrecorded.
+    let mut opened: Vec<String> = Vec::new();
+    let mut all_complete = true;
+    for repo_id in &repo_ids {
+        let outcome = ensure_registry_access(
+            artifact_registry.as_ref(),
+            repo_id,
+            environment_info,
+            state.stack_state.as_ref(),
+            sandbox_declared,
+        )
+        .await;
+        if outcome.written {
+            opened.push(repo_id.clone());
+        }
+        all_complete &= outcome.complete;
+    }
+
+    // A repository the deployment stopped naming keeps its grant, recorded so the delete revokes
+    // it. Revoking it here would cut a sibling deployment off a policy it still pulls through.
+    opened.extend(previously_opened(recorded.as_ref(), &repo_ids));
+
+    opened.sort();
+    opened.dedup();
+    let granted_everything =
+        all_complete && !refused_any && repo_ids.iter().all(|repo_id| opened.contains(repo_id));
+    let rm = state
+        .runtime_metadata
+        .get_or_insert_with(RuntimeMetadata::default);
+    // The record says what the policy now holds, so an unchanged one is not rewritten every tick.
+    // The marker says the deployment has everything it asked for, which a refused reference denies
+    // until a later release names a repository this project owns — and that release changes what
+    // is needed, so the comparison above grants it.
+    rm.registry_access = Some(RegistryAccess {
+        repositories: opened,
+        service_types: needed.service_types,
+    });
+    rm.registry_access_granted = granted_everything;
+}
+
+/// Whether the policy has to be written again.
+///
+/// Repositories compare by containment — the record may be a superset, since a dropped one stays
+/// for the delete to revoke. Service types must match exactly, since any change needs the policy
+/// rewritten. An unfinished write (`complete` false) is retried regardless of either.
+fn needs_regrant(
+    recorded: Option<&RegistryAccess>,
+    needed: &RegistryAccess,
+    complete: bool,
+) -> bool {
+    let Some(recorded) = recorded else {
+        return true;
+    };
+    !complete
+        || recorded.service_types != needed.service_types
+        || !needed
+            .repositories
+            .iter()
+            .all(|repository| recorded.repositories.contains(repository))
+}
+
+/// Repositories the record names that the deployment no longer needs.
+fn previously_opened(recorded: Option<&RegistryAccess>, needed: &[String]) -> Vec<String> {
+    recorded
+        .map(|access| {
+            access
+                .repositories
+                .iter()
+                .filter(|repository| !needed.contains(repository))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The compute services a grant admits on this platform, as the record stores them.
+///
+/// Read through `build_cross_account_access`, the same call the grant itself makes — a record
+/// derived any other way could disagree with the policy it describes, and the comparison that
+/// stops the retry would never settle.
+fn service_type_names(environment_info: &EnvironmentInfo, declares_sandbox: bool) -> Vec<String> {
+    let mut names: Vec<String> =
+        match build_cross_account_access(environment_info, None, declares_sandbox) {
+            Some(CrossAccountAccess::Aws(access)) => access
+                .allowed_service_types
+                .iter()
+                .map(service_type_name)
+                .collect(),
+            Some(CrossAccountAccess::Gcp(access)) => access
+                .allowed_service_types
+                .iter()
+                .map(service_type_name)
+                .collect(),
+            _ => Vec::new(),
+        };
+    names.sort();
+    names
+}
+
+/// These strings are persisted in `RegistryAccess::service_types` and compared by `needs_regrant`,
+/// so renaming one re-grants every existing deployment on its next reconcile.
+fn service_type_name(service_type: &ComputeServiceType) -> String {
+    match service_type {
+        ComputeServiceType::Worker => "worker".to_string(),
+        ComputeServiceType::Sandbox => "sandbox".to_string(),
     }
 }
 
@@ -321,79 +462,94 @@ pub async fn cleanup_deleted_registry_access(
     if !matches!(platform, Platform::Aws | Platform::Gcp) {
         return Ok(());
     }
-    let registry_access_granted = state
-        .runtime_metadata
-        .as_ref()
-        .is_some_and(|metadata| metadata.registry_access_granted);
-    // A successful initial grant can precede the remote-management identity
-    // becoming available, in which case `registry_access_granted` remains
-    // false so reconciliation retries the complete grant. Still clean up that
-    // partial grant when the deployment is deleted.
-    if !registry_access_granted && !has_registry_backed_image(state, &platform) {
+    // A record names a live grant even when the marker is false: an incomplete grant is still a
+    // grant. Reading the marker alone would walk past one and leave the customer's read in place.
+    let recorded_grant = state.runtime_metadata.as_ref().is_some_and(|metadata| {
+        metadata.registry_access_granted || metadata.registry_access.is_some()
+    });
+    if !recorded_grant && !has_registry_backed_image(state, &platform) {
         return Ok(());
     }
 
     let Some(artifact_registry) =
         load_artifact_registry(bindings_provider, target_bindings_providers, &platform).await
     else {
-        // A recorded grant was made through this binding, so its absence leaves a live grant with
-        // no revoke path and the delete has to keep failing. Without one, no grant could have been
-        // made through it either, and erroring would park the deployment at `deleting` forever.
-        if registry_access_granted {
-            return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
-                deployment_id: deployment_id.to_string(),
-                reason: format!("artifact registry binding for '{platform}' is unavailable"),
-            }));
-        }
-        warn!(
-            deployment_id = %deployment_id,
-            platform = %platform,
-            "No artifact registry binding to revoke through, and no grant was recorded"
-        );
-        return Ok(());
+        // Reaching here means a grant was recorded or the deployment names an image in Alien's
+        // registry, and the IAM write lands before the state that records it. The binding cannot
+        // tell "never configured" from "unreachable right now", so completing the delete here
+        // would drop a live cross-account read with nothing left to retry it.
+        return Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
+            deployment_id: deployment_id.to_string(),
+            reason: format!("artifact registry binding for '{platform}' is unavailable"),
+        }));
     };
 
-    let mut repo_ids = repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
-    // A release that drops `privateBaseImage`, or the sandbox itself, would otherwise leave the
-    // grant it earned with nothing naming it. A sandbox is only ever granted this one repository,
-    // so any recorded grant here can revoke it without reading the stack at all.
-    if registry_access_granted && matches!(platform, Platform::Aws) {
-        if let Some(own_repository) = project_repository(artifact_registry.as_ref(), project_id) {
-            // Only a repository that exists: a worker-only grant on the shared repository would
-            // otherwise send cleanup at a project repository nobody ever created. A lookup that
-            // fails for any other reason is not an answer — revoking nothing would leave the
-            // customer's read in place with nothing left to retry it.
-            if !repo_ids.contains(&own_repository) {
-                match artifact_registry.get_repository(&own_repository).await {
-                    Ok(_) => {
-                        repo_ids.push(own_repository);
-                        repo_ids.sort();
-                    }
-                    Err(error) if error.http_status_code == Some(404) => {}
-                    Err(error) => {
-                        return Err(error).context(ErrorData::RegistryAccessCleanupFailed {
-                            deployment_id: deployment_id.to_string(),
-                            reason: format!(
-                            "repository '{own_repository}' could not be read to revoke its grant"
-                        ),
-                        })
+    // What the grant recorded, not what the stack says now: a release that dropped the base image
+    // or the sandbox itself would otherwise leave the grant named nowhere. A grant recorded before
+    // the record existed still derives from the stack, which is all it ever had.
+    let recorded = state
+        .runtime_metadata
+        .as_ref()
+        .and_then(|metadata| metadata.registry_access.as_ref());
+    // Both, not either: the IAM write lands before the state that records it is persisted, so a
+    // grant made and then lost to a failed save is named only by the stack it was derived from.
+    let mut repo_ids = recorded
+        .map(|access| access.repositories.clone())
+        .unwrap_or_default();
+    repo_ids.extend({
+        {
+            // A sandbox is only ever granted its own project's repository, so that one is revoked
+            // when the registry has it; a lookup that fails for any other reason is not an answer.
+            let mut derived =
+                repository_ids_for_access(artifact_registry.as_ref(), state, project_id);
+            if recorded_grant && matches!(platform, Platform::Aws) && declares_sandbox(state) {
+                if let Some(own) = project_repository(artifact_registry.as_ref(), project_id) {
+                    if !derived.contains(&own) {
+                        match artifact_registry.get_repository(&own).await {
+                            Ok(_) => derived.push(own),
+                            Err(error) if error.http_status_code == Some(404) => {}
+                            Err(error) => {
+                                return Err(error).context(ErrorData::RegistryAccessCleanupFailed {
+                                    deployment_id: deployment_id.to_string(),
+                                    reason: format!(
+                                        "repository '{own}' could not be read to revoke its grant"
+                                    ),
+                                })
+                            }
+                        }
                     }
                 }
             }
+            derived
+        }
+    });
+    // GAR binds IAM on the registry itself and ignores the repository, so a GCP grant is always
+    // named by the prefix even when nothing else names it.
+    if repo_ids.is_empty() && recorded_grant && matches!(platform, Platform::Gcp) {
+        let prefix = artifact_registry.upstream_repository_prefix();
+        if !prefix.is_empty() {
+            repo_ids.push(prefix);
         }
     }
+    repo_ids.sort();
+    repo_ids.dedup();
     if repo_ids.is_empty() {
-        return if registry_access_granted {
-            Err(AlienError::new(ErrorData::RegistryAccessCleanupFailed {
-                deployment_id: deployment_id.to_string(),
-                reason: "repository identifiers for the recorded registry grant are unavailable"
-                    .to_string(),
-            }))
-        } else {
-            Ok(())
-        };
+        if recorded_grant {
+            // Only a grant recorded before the record existed reaches this: nothing names the
+            // repository any more, and failing the delete forever would not recover it either.
+            warn!(
+                deployment_id = %deployment_id,
+                platform = %platform,
+                service_types = ?state
+                    .runtime_metadata
+                    .as_ref()
+                    .and_then(|metadata| metadata.registry_access.as_ref())
+                    .map(|access| access.service_types.clone()),
+                "A recorded grant names no repository to revoke, so it is left for a human"
+            );
+        }
+        return Ok(());
     }
-
     for repo_id in repo_ids {
         revoke_registry_access(
             artifact_registry.as_ref(),
@@ -449,6 +605,9 @@ fn repository_access(
         return (repo_ids, refused);
     }
 
+    // No per-project path to hold a sandbox to here: a GCP sandbox pulls the agents image Alien
+    // publishes under the shared prefix, and GAR binds IAM at the repository, so every grant on
+    // this platform opens the same shared repository. AWS narrows its own grant per project.
     if !has_image_in_repository_prefix(state, &prefix, sandbox_source) {
         return (Vec::new(), false);
     }
@@ -459,18 +618,77 @@ fn repository_access(
     (repo_ids, false)
 }
 
-/// The GCP service types a grant names, read by both the grant and the revoke path.
+fn has_image_in_repository_prefix(
+    state: &DeploymentState,
+    prefix: &str,
+    sandbox_source: SandboxImageSource,
+) -> bool {
+    let stack_matches = |stack: &Stack| {
+        stack.resources().any(|(_id, entry)| {
+            resource_image_reference(entry, sandbox_source)
+                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
+        })
+    };
+
+    state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| stack_matches(&release.stack))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| stack_matches(&release.stack))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
+            .is_some_and(stack_matches)
+}
+
+/// The principals a GCP grant names: Cloud Run always, and the sandbox agent when a release
+/// declares one.
 ///
-/// Every type whatever the stack declares, because the grant runs once per deployment and never
-/// re-runs: gating on today's stack would leave a deployment that adds a sandbox later with no
-/// member and a 403 at its first session. One definition because a type the revoke does not name
-/// stays on the repository policy with nothing left to remove it.
+/// Naming the sandbox agent unconditionally would leave every worker-only deployment asking for a
+/// principal its project will never have, and Google refuses a binding it cannot resolve (see the
+/// two-write split in `gar.rs`'s `add_cross_account_access`), so the grant would never settle.
+fn gcp_service_types(declares_sandbox: bool) -> Vec<ComputeServiceType> {
+    ComputeServiceType::ALL
+        .iter()
+        .filter(|service_type| match service_type {
+            ComputeServiceType::Worker => true,
+            ComputeServiceType::Sandbox => declares_sandbox,
+        })
+        .cloned()
+        .collect()
+}
+
+/// Every type a GCP grant can name, for a revoke with no record to go on.
 ///
-/// The sandbox agent does not exist until a project's first session, so this names a principal
-/// that may not exist yet. The binding is accepted; that it becomes effective when the agent
-/// materialises is measured by the cross-project pull test, not by anything here.
-fn gcp_service_types() -> Vec<ComputeServiceType> {
-    vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+/// Removal is a `retain`, so naming a type this deployment never added removes nothing, while
+/// omitting one it did add strands that member on the policy.
+fn all_gcp_service_types() -> Vec<ComputeServiceType> {
+    ComputeServiceType::ALL.to_vec()
+}
+
+fn declares_sandbox(state: &DeploymentState) -> bool {
+    let has_sandbox = |stack: &Stack| {
+        stack
+            .resources()
+            .any(|(_id, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+    };
+    state
+        .current_release
+        .as_ref()
+        .is_some_and(|release| has_sandbox(&release.stack))
+        || state
+            .target_release
+            .as_ref()
+            .is_some_and(|release| has_sandbox(&release.stack))
+        || state
+            .runtime_metadata
+            .as_ref()
+            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
+            .is_some_and(has_sandbox)
 }
 
 /// Whether this platform's sandbox takes its root filesystem from an image Alien hosts.
@@ -610,33 +828,6 @@ fn collect_image_repositories(
     refused
 }
 
-fn has_image_in_repository_prefix(
-    state: &DeploymentState,
-    prefix: &str,
-    sandbox_source: SandboxImageSource,
-) -> bool {
-    let stack_matches = |stack: &Stack| {
-        stack.resources().any(|(_id, entry)| {
-            resource_image_reference(entry, sandbox_source)
-                .is_some_and(|image| image_repository_matches_prefix(image, prefix))
-        })
-    };
-
-    state
-        .current_release
-        .as_ref()
-        .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .target_release
-            .as_ref()
-            .is_some_and(|release| stack_matches(&release.stack))
-        || state
-            .runtime_metadata
-            .as_ref()
-            .and_then(|runtime_metadata| runtime_metadata.prepared_stack.as_ref())
-            .is_some_and(stack_matches)
-}
-
 /// Whether the deployment declares any image that could have earned a registry grant.
 ///
 /// Deliberately over-inclusive: the repository prefix is only known once the registry binding
@@ -729,6 +920,7 @@ fn extract_rsm_access_configuration(stack_state: Option<&StackState>) -> Option<
 fn build_cross_account_access(
     environment_info: &EnvironmentInfo,
     stack_state: Option<&StackState>,
+    declares_sandbox: bool,
 ) -> Option<CrossAccountAccess> {
     let rsm_access = extract_rsm_access_configuration(stack_state);
 
@@ -753,7 +945,7 @@ fn build_cross_account_access(
             };
             Some(CrossAccountAccess::Gcp(GcpCrossAccountAccess {
                 project_numbers,
-                allowed_service_types: gcp_service_types(),
+                allowed_service_types: gcp_service_types(declares_sandbox),
                 service_account_emails,
             }))
         }
@@ -840,6 +1032,7 @@ mod tests {
     struct TestArtifactRegistry {
         prefix: String,
         fail_remove: bool,
+        removed_repository_is_gone: bool,
     }
 
     impl alien_bindings::traits::Binding for TestArtifactRegistry {}
@@ -877,6 +1070,13 @@ mod tests {
             _repo_id: &str,
             _access: CrossAccountAccess,
         ) -> BindingResult<()> {
+            if self.removed_repository_is_gone {
+                return Err(AlienError::new(BindingErrorData::RemoteResourceNotFound {
+                    operation_context: "removing cross-account access".to_string(),
+                    resource_type: "repository".to_string(),
+                    resource_name: _repo_id.to_string(),
+                }));
+            }
             if self.fail_remove {
                 Err(AlienError::new(BindingErrorData::Other {
                     message: "simulated registry IAM failure".to_string(),
@@ -1168,10 +1368,12 @@ mod tests {
         let primary_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
             prefix: "artifacts/default".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         });
         let target_registry: Arc<dyn ArtifactRegistry> = Arc::new(TestArtifactRegistry {
             prefix: "alien-e2e".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         });
         let primary_provider: Arc<dyn BindingsProviderApi> = Arc::new(TestBindingsProvider {
             binding_name: "artifact-registry",
@@ -1202,6 +1404,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts-prj_test".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let state = aws_state_with_stack(Stack::new("test-stack".to_string()).build());
 
@@ -1213,6 +1416,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts-prj_test".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let state = aws_state_with_stack(worker_stack(
             "manager.example.com/alien-artifacts-prj_test:test-worker-abc123",
@@ -1229,6 +1433,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: String::new(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(worker_stack(
             "manager.example.com/prj_test/test-worker:abc123",
@@ -1242,6 +1447,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(worker_stack(
             "manager.example.com/test-project/alien-artifacts/test-worker:abc123",
@@ -1288,12 +1494,13 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts-prj_test".to_string(),
             fail_remove: true,
+            removed_repository_is_gone: false,
         };
         let environment_info = EnvironmentInfo::Aws(AwsEnvironmentInfo {
             account_id: "123456789012".to_string(),
             region: "us-east-2".to_string(),
         });
-        let access = build_cross_account_access(&environment_info, None)
+        let access = build_cross_account_access(&environment_info, None, false)
             .expect("AWS registry access should be configured");
 
         let error = remove_registry_access(
@@ -1321,6 +1528,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         // A stored reference: resolved onto the release registry and still
         // region-templated, because one bundle key serves every regional store and the host
@@ -1342,6 +1550,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
 
         for image in [
@@ -1371,6 +1580,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let role_arn = "arn:aws:iam::123456789012:role/alien-rsm-role";
         let mut state = aws_state_with_stack(sandbox_stack(Some(
@@ -1386,6 +1596,7 @@ mod tests {
         let access = build_cross_account_access(
             state.environment_info.as_ref().expect("AWS environment"),
             state.stack_state.as_ref(),
+            declares_sandbox(&state),
         )
         .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
@@ -1432,7 +1643,7 @@ mod tests {
             region: "us-east-2".to_string(),
         });
 
-        let access = build_cross_account_access(&environment_info, Some(&stack_state))
+        let access = build_cross_account_access(&environment_info, Some(&stack_state), false)
             .expect("AWS cross-account access should be configured");
         let CrossAccountAccess::Aws(aws_access) = access else {
             panic!("AWS environment must produce AWS cross-account access");
@@ -1526,6 +1737,7 @@ mod tests {
                 &TestArtifactRegistry {
                     prefix: "alien-artifacts-prj_test".to_string(),
                     fail_remove: false,
+                    removed_repository_is_gone: false,
                 },
                 &state,
                 PROJECT
@@ -1540,6 +1752,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let stack = Stack::new("test-stack".to_string())
             .add(
@@ -1584,6 +1797,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let stack = Stack::new("test-stack".to_string())
             .add(
@@ -1625,13 +1839,14 @@ mod tests {
         );
     }
 
-    /// A release that drops `privateBaseImage` leaves the grant it earned named nowhere, so
-    /// cleanup falls back to the one repository a sandbox is ever granted.
+    /// The fallback a grant recorded before the record existed still depends on: the stack no
+    /// longer names the repository, and the one a sandbox is ever granted is derived instead.
     #[test]
     fn a_dropped_base_image_still_names_the_repository_cleanup_must_revoke() {
         let registry = TestArtifactRegistry {
             prefix: "alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let dropped = aws_state_with_stack(sandbox_stack(None));
 
@@ -1643,6 +1858,117 @@ mod tests {
         assert_eq!(
             project_repository(&registry, PROJECT),
             Some("alien-artifacts-prj_test".to_string())
+        );
+    }
+
+    /// A repository joins the record when its write is attempted, so the record alone cannot say
+    /// the grant is finished: a failed one, or one still missing the management identity, would
+    /// otherwise be sealed on the first tick and never retried.
+    #[test]
+    fn an_unfinished_grant_is_granted_again() {
+        let needed = RegistryAccess {
+            repositories: vec!["alien-artifacts-prj_test".to_string()],
+            service_types: vec!["worker".to_string()],
+        };
+
+        assert!(needs_regrant(None, &needed, false));
+        assert!(
+            needs_regrant(Some(&needed), &needed, false),
+            "the same repositories, recorded but not finished, are granted again"
+        );
+        assert!(
+            !needs_regrant(Some(&needed), &needed, true),
+            "a finished grant of the same shape is not rewritten every tick"
+        );
+        let gained = RegistryAccess {
+            service_types: vec!["sandbox".to_string(), "worker".to_string()],
+            ..needed.clone()
+        };
+        assert!(
+            needs_regrant(Some(&needed), &gained, true),
+            "a deployment that pulls as another principal needs the policy rewritten"
+        );
+    }
+
+    /// Exercises the 404 branch in `remove_registry_access`: a repository gone before the
+    /// deployment must not fail the delete.
+    #[tokio::test]
+    async fn revoking_a_repository_that_is_already_gone_completes() {
+        let registry = TestArtifactRegistry {
+            prefix: "alien-artifacts".to_string(),
+            fail_remove: false,
+            removed_repository_is_gone: true,
+        };
+        let environment_info = EnvironmentInfo::Aws(AwsEnvironmentInfo {
+            account_id: "123456789012".to_string(),
+            region: "us-east-2".to_string(),
+        });
+        let access = build_cross_account_access(&environment_info, None, false)
+            .expect("AWS registry access should be configured");
+
+        remove_registry_access(
+            &registry,
+            "alien-artifacts-prj_test",
+            &environment_info,
+            access,
+            "registry cross-account access",
+            "dep_test",
+        )
+        .await
+        .expect("a repository that is gone leaves nothing to revoke");
+    }
+
+    /// A repository the deployment stopped needing keeps its grant until something revokes it, and
+    /// after the reconcile that drops it nothing else would: the delete reads the record.
+    #[test]
+    fn a_repository_the_record_names_and_the_deployment_dropped_is_revoked() {
+        let recorded = RegistryAccess {
+            repositories: vec![
+                "alien-artifacts-prj_test".to_string(),
+                "alien-artifacts-prj_test/api".to_string(),
+            ],
+            service_types: vec!["worker".to_string()],
+        };
+
+        assert_eq!(
+            previously_opened(Some(&recorded), &["alien-artifacts-prj_test".to_string()]),
+            vec!["alien-artifacts-prj_test/api".to_string()]
+        );
+        assert!(previously_opened(Some(&recorded), &recorded.repositories).is_empty());
+        assert!(previously_opened(None, &["alien-artifacts-prj_test".to_string()]).is_empty());
+    }
+
+    /// The record is what a later reconcile compares against, so a grant made before a resource
+    /// existed is completed rather than skipped: a GCP deployment granted for workers alone asks
+    /// for the sandbox agent as soon as it declares one.
+    #[test]
+    fn a_grant_recorded_without_the_sandbox_agent_is_not_taken_as_complete() {
+        let granted_for_workers = RegistryAccess {
+            repositories: vec!["test-project/alien-artifacts".to_string()],
+            service_types: vec!["worker".to_string()],
+        };
+        let gcp = EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+            project_number: "123456789012".to_string(),
+            project_id: "test-project".to_string(),
+            region: "us-central1".to_string(),
+        });
+        let needed = RegistryAccess {
+            repositories: granted_for_workers.repositories.clone(),
+            service_types: service_type_names(&gcp, true),
+        };
+
+        assert_eq!(needed.service_types, vec!["sandbox", "worker"]);
+        assert_ne!(
+            granted_for_workers, needed,
+            "a policy naming one principal is not what a deployment pulling as two needs"
+        );
+        assert_eq!(
+            needed,
+            RegistryAccess {
+                repositories: needed.repositories.clone(),
+                service_types: service_type_names(&gcp, true),
+            },
+            "and an unchanged one compares equal, so the policy is not rewritten every tick"
         );
     }
 
@@ -1665,8 +1991,7 @@ mod tests {
             assert!(!served_by_registry(elsewhere, registry), "{elsewhere}");
         }
 
-        // A China registry answers on `.amazonaws.com.cn`; stripping the shorter suffix would
-        // leave `.cn` on the region and refuse an image the build can pull.
+        // Mirrors `ecr_registry_identity`: `.com.cn` must be tried before the shorter suffix.
         let china = "https://123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn";
         assert!(served_by_registry(
             "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/alien-artifacts-prj_test:v1",
@@ -1687,6 +2012,7 @@ mod tests {
         let registry = TestArtifactRegistry {
             prefix: "test-project/alien-artifacts".to_string(),
             fail_remove: false,
+            removed_repository_is_gone: false,
         };
         let state = gcp_state_with_stack(sandbox_stack_with_code(
             "manager.example.com/test-project/alien-artifacts/agents:abc123",
@@ -1700,26 +2026,84 @@ mod tests {
         );
     }
 
-    /// The grant names both service types whatever the stack declares, so a deployment that adds a
-    /// sandbox after its one-shot grant still has a member. The agent domains are `gar.rs`'s.
+    /// Pins `gcp_service_types`: the sandbox agent is named only where a release declares one.
     #[test]
-    fn the_gcp_grant_names_both_service_types() {
-        let access = build_cross_account_access(
-            &EnvironmentInfo::Gcp(GcpEnvironmentInfo {
-                project_number: "123456789012".to_string(),
-                project_id: "test-project".to_string(),
-                region: "us-central1".to_string(),
-            }),
-            None,
-        )
-        .expect("a GCP environment builds a cross-account access");
-
-        let CrossAccountAccess::Gcp(gcp) = access else {
-            panic!("a GCP environment must build GCP cross-account access");
+    fn the_gcp_grant_names_the_sandbox_agent_only_where_a_sandbox_is_declared() {
+        let gcp_access = |declares_sandbox| {
+            let access = build_cross_account_access(
+                &EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+                    project_number: "123456789012".to_string(),
+                    project_id: "test-project".to_string(),
+                    region: "us-central1".to_string(),
+                }),
+                None,
+                declares_sandbox,
+            )
+            .expect("a GCP environment builds a cross-account access");
+            let CrossAccountAccess::Gcp(gcp) = access else {
+                panic!("a GCP environment must build GCP cross-account access");
+            };
+            gcp.allowed_service_types
         };
+
+        assert_eq!(gcp_access(false), vec![ComputeServiceType::Worker]);
         assert_eq!(
-            gcp.allowed_service_types,
+            gcp_access(true),
             vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox]
+        );
+    }
+
+    /// Pins `service_type_names`: the record's sandbox principal follows the same declaration flag.
+    #[test]
+    fn a_declared_sandbox_is_what_names_the_agent_in_the_record() {
+        let gcp = EnvironmentInfo::Gcp(GcpEnvironmentInfo {
+            project_number: "123456789012".to_string(),
+            project_id: "test-project".to_string(),
+            region: "us-central1".to_string(),
+        });
+
+        assert_eq!(service_type_names(&gcp, false), vec!["worker"]);
+        assert_eq!(service_type_names(&gcp, true), vec!["sandbox", "worker"]);
+    }
+
+    /// Pins `needs_regrant`'s containment check: a record that is a superset of what's needed does
+    /// not trigger a regrant, but a missing repository or a changed principal does.
+    #[test]
+    fn a_record_carrying_a_dropped_repository_is_not_granted_again() {
+        let needed = RegistryAccess {
+            repositories: vec!["alien-artifacts-prj_test".to_string()],
+            service_types: vec!["worker".to_string()],
+        };
+        let with_dropped = RegistryAccess {
+            repositories: vec![
+                "alien-artifacts-prj_gone".to_string(),
+                "alien-artifacts-prj_test".to_string(),
+            ],
+            service_types: needed.service_types.clone(),
+        };
+
+        assert!(!needs_regrant(Some(&with_dropped), &needed, true));
+        assert!(
+            needs_regrant(Some(&with_dropped), &needed, false),
+            "an unfinished grant is still retried"
+        );
+
+        let missing_one = RegistryAccess {
+            repositories: vec!["alien-artifacts-prj_gone".to_string()],
+            service_types: needed.service_types.clone(),
+        };
+        assert!(
+            needs_regrant(Some(&missing_one), &needed, true),
+            "a repository the record does not name has no grant to reuse"
+        );
+
+        let other_principals = RegistryAccess {
+            repositories: with_dropped.repositories.clone(),
+            service_types: vec!["sandbox".to_string(), "worker".to_string()],
+        };
+        assert!(
+            needs_regrant(Some(&other_principals), &needed, true),
+            "a change of principal rewrites every repository"
         );
     }
 }

@@ -19,10 +19,8 @@ use tracing::{debug, info, warn};
 
 /// The Google-managed service agent a compute service pulls as.
 ///
-/// Google grants the sandbox agent `roles/aiplatform.agentSandboxServiceAgent` on its own project,
-/// which already carries `artifactregistry.repositories.downloadArtifacts`. That covers a
-/// same-project pull; a binding naming this agent is what reaches a repository Alien owns in
-/// another project. Three adjacent Vertex agents exist, and naming one is a 403 on the pull.
+/// Google's default grant covers a same-project pull; naming this agent is what reaches a
+/// repository in another project. Three adjacent Vertex agents exist, so naming the wrong one 403s.
 fn agent_domain(service_type: &ComputeServiceType) -> &'static str {
     match service_type {
         ComputeServiceType::Worker => "serverless-robot-prod",
@@ -30,11 +28,33 @@ fn agent_domain(service_type: &ComputeServiceType) -> &'static str {
     }
 }
 
+/// Whether Google creates this service agent only once the service first runs, so a binding
+/// naming it is refused until then and its member has to go on in a write of its own.
+fn is_agent_created_on_first_use(service_type: &ComputeServiceType) -> bool {
+    match service_type {
+        ComputeServiceType::Sandbox => true,
+        ComputeServiceType::Worker => false,
+    }
+}
+
+/// The service type and project a member names, if the write path emitted it.
+///
+/// Reads through the same table the write used, so a sandbox agent doesn't decode as an ordinary
+/// service account and report no grant while its member still sits on the policy.
+fn agent_member(service_account: &str) -> Option<(ComputeServiceType, &str)> {
+    ComputeServiceType::ALL.iter().find_map(|service_type| {
+        let suffix = format!("@{}.iam.gserviceaccount.com", agent_domain(service_type));
+        service_account
+            .strip_prefix("service-")
+            .and_then(|rest| rest.strip_suffix(&suffix))
+            .map(|project_number| (service_type.clone(), project_number))
+    })
+}
+
 /// The IAM members a cross-account grant names, for both the add and the remove path.
 ///
-/// Each compute service pulls as its own Google-managed service agent, so the project number alone
-/// does not say who may pull. Granting and revoking read this one list, since a member the revoke
-/// misses stays on the repository policy with nothing left to remove it.
+/// Each compute service pulls as its own service agent, so the project number alone doesn't say
+/// who may pull; grant and revoke share this list so a member the revoke misses doesn't strand.
 fn cross_account_members(access: &GcpCrossAccountAccess) -> Vec<String> {
     let mut members = Vec::new();
     for service_type in &access.allowed_service_types {
@@ -167,7 +187,7 @@ impl GarArtifactRegistry {
         mut current_policy: IamPolicy,
         members: Vec<String>,
         add_members: bool, // true to add, false to remove
-    ) -> Result<()> {
+    ) -> Result<IamPolicy> {
         let reader_role = "roles/artifactregistry.reader";
 
         // Find or create the artifactregistry.reader binding
@@ -183,7 +203,7 @@ impl GarArtifactRegistry {
             // Add members
             if members.is_empty() {
                 info!(repo_name = %repo_name, "No new members to add");
-                return Ok(());
+                return Ok(current_policy);
             }
 
             match binding_index {
@@ -222,7 +242,7 @@ impl GarArtifactRegistry {
         }
 
         // Set the updated policy with the original etag for optimistic concurrency control
-        self.client.set_repository_iam_policy(
+        let updated = self.client.set_repository_iam_policy(
             self.project_id.clone(),
             self.location.clone(),
             repo_name.to_string(),
@@ -240,7 +260,7 @@ impl GarArtifactRegistry {
             action = %action,
             "GCP Artifact Registry repository cross-account access updated successfully"
         );
-        Ok(())
+        Ok(updated)
     }
 }
 
@@ -318,32 +338,86 @@ impl ArtifactRegistry for GarArtifactRegistry {
             "Adding GCP Artifact Registry repository cross-account access"
         );
 
-        // Get current policy with etag
-        let current_policy = self.client.get_repository_iam_policy(
-            self.project_id.clone(),
-            self.location.clone(),
-            repo_name.clone(),
-        ).await
-            .map_err(|e| {
-                warn!(
-                    repo_name = %repo_name,
-                    error = %e,
-                    "Failed to get current GCP Artifact Registry repository IAM policy, creating new policy"
-                );
-                e
-            })
-            .unwrap_or_else(|_| IamPolicy {
+        // Only a repository that is gone has no policy. Any other failure read as an empty one
+        // writes back a policy holding this deployment's members alone, with no etag to lose the
+        // race on — dropping every other binding on a repository all deployments share.
+        let current_policy = match self
+            .client
+            .get_repository_iam_policy(
+                self.project_id.clone(),
+                self.location.clone(),
+                repo_name.clone(),
+            )
+            .await
+        {
+            Ok(policy) => policy,
+            Err(error) if error.http_status_code == Some(404) => IamPolicy {
                 version: Some(1),
                 kind: None,
                 resource_id: None,
                 bindings: vec![],
                 etag: None,
-            });
+            },
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    format!(
+                        "Failed to read the IAM policy of GCP Artifact Registry repository '{repo_name}' to grant access"
+                    ),
+                    Some(repo_name.to_string()),
+                ))
+            }
+        };
 
-        let new_members = cross_account_members(&gcp_access);
+        // Two writes, not one: a sandbox agent that has never run doesn't exist yet, and Google
+        // refuses a binding naming an unresolvable principal. One update naming both would lose
+        // the worker grant to the sandbox agent's absence; splitting keeps a refusal there off it.
+        let (deferred, present): (Vec<ComputeServiceType>, Vec<ComputeServiceType>) = gcp_access
+            .allowed_service_types
+            .iter()
+            .cloned()
+            .partition(is_agent_created_on_first_use);
 
-        self.update_policy_members(&repo_name, current_policy, new_members, true)
-            .await
+        let policy = self
+            .update_policy_members(
+                &repo_name,
+                current_policy,
+                cross_account_members(&GcpCrossAccountAccess {
+                    allowed_service_types: present,
+                    ..gcp_access.clone()
+                }),
+                true,
+            )
+            .await?;
+
+        if deferred.is_empty() {
+            return Ok(());
+        }
+        // The second write is only safe behind the etag the first one returned. Without it the
+        // write carries no concurrency check and replaces a policy every deployment shares, so the
+        // reconcile retries instead.
+        if policy.etag.is_none() {
+            return Err(AlienError::new(ErrorData::RemoteResourceConflict {
+                operation_context: "adding cross-account access".to_string(),
+                resource_type: "repository".to_string(),
+                resource_name: repo_name.clone(),
+                conflict_reason:
+                    "the updated IAM policy carries no etag, so the sandbox agent's member cannot be added without replacing the policy"
+                        .to_string(),
+            }));
+        }
+        self.update_policy_members(
+            &repo_name,
+            policy,
+            cross_account_members(&GcpCrossAccountAccess {
+                allowed_service_types: deferred,
+                service_account_emails: Vec::new(),
+                ..gcp_access
+            }),
+            true,
+        )
+        .await?;
+        Ok(())
     }
 
     async fn remove_cross_account_access(
@@ -385,16 +459,28 @@ impl ArtifactRegistry for GarArtifactRegistry {
             .await
         {
             Ok(policy) => policy,
-            Err(_) => {
-                // No existing policy, nothing to remove
+            // Only a repository that is gone carries no members. Reading a 403 or a timeout as
+            // "nothing to remove" reports the revoke as done and strands every member on it, with
+            // the state that named them deleted right after.
+            Err(error) if error.http_status_code == Some(404) => {
                 info!(repo_name = %repo_name, "No existing GCP IAM policy to remove permissions from");
                 return Ok(());
+            }
+            Err(error) => {
+                return Err(map_cloud_client_error(
+                    error,
+                    format!(
+                        "Failed to read the IAM policy of GCP Artifact Registry repository '{repo_name}' to revoke access"
+                    ),
+                    Some(repo_name.to_string()),
+                ))
             }
         };
 
         let members_to_remove = cross_account_members(&gcp_access);
         self.update_policy_members(&repo_name, current_policy, members_to_remove, false)
-            .await
+            .await?;
+        Ok(())
     }
 
     async fn get_cross_account_access(&self, repo_id: &str) -> Result<CrossAccountPermissions> {
@@ -445,23 +531,7 @@ impl ArtifactRegistry for GarArtifactRegistry {
                 for member in binding.members {
                     // Parse service account members only
                     if let Some(service_account) = member.strip_prefix("serviceAccount:") {
-                        // Every domain the write path can emit, so a member this reads back
-                        // carries the service type that produced it rather than passing as an
-                        // ordinary account.
-                        let agent = [ComputeServiceType::Worker, ComputeServiceType::Sandbox]
-                            .into_iter()
-                            .find_map(|service_type| {
-                                let suffix = format!(
-                                    "@{}.iam.gserviceaccount.com",
-                                    agent_domain(&service_type)
-                                );
-                                service_account
-                                    .strip_prefix("service-")
-                                    .and_then(|rest| rest.strip_suffix(&suffix))
-                                    .map(|project_number| (service_type, project_number))
-                            });
-
-                        match agent {
+                        match agent_member(service_account) {
                             Some((service_type, project_number)) => {
                                 project_numbers.push(project_number.to_string());
                                 if !allowed_service_types.contains(&service_type) {
@@ -663,7 +733,7 @@ mod tests {
         );
     }
 
-    /// Granting and revoking read one list, so a service type that names no project contributes no
+    /// Granting and revoking read one list, so every service type survives a write then a read.
     /// The read path reports what the write path emitted. Without this a sandbox member decodes as
     /// an ordinary service account, so a caller reading current permissions is told the sandbox has
     /// no grant while its member sits on the policy.
@@ -681,19 +751,52 @@ mod tests {
             let account = member
                 .strip_prefix("serviceAccount:")
                 .expect("members carry the IAM principal prefix");
-            let suffix = format!("@{}.iam.gserviceaccount.com", agent_domain(&service_type));
-
+            // Through the parser the read path uses, so dropping a type there fails this.
             assert_eq!(
-                account
-                    .strip_prefix("service-")
-                    .and_then(|rest| rest.strip_suffix(&suffix)),
-                Some("123456789012"),
+                agent_member(account),
+                Some((service_type.clone(), "123456789012")),
                 "{service_type:?} must decode back to the project that earned it"
             );
         }
     }
 
-    /// member to either.
+    /// The sandbox agent does not exist until a project's first session, and Google refuses a
+    /// binding naming a principal it cannot resolve. The two writes keep that refusal off the
+    /// worker's grant, so the member sets must not overlap.
+    #[test]
+    fn the_worker_and_sandbox_members_are_written_apart() {
+        let access = GcpCrossAccountAccess {
+            project_numbers: vec!["123456789012".to_string()],
+            allowed_service_types: vec![ComputeServiceType::Worker, ComputeServiceType::Sandbox],
+            service_account_emails: vec![
+                "management@test-project.iam.gserviceaccount.com".to_string()
+            ],
+        };
+        let first = cross_account_members(&GcpCrossAccountAccess {
+            allowed_service_types: vec![ComputeServiceType::Worker],
+            ..access.clone()
+        });
+        let second = cross_account_members(&GcpCrossAccountAccess {
+            allowed_service_types: vec![ComputeServiceType::Sandbox],
+            service_account_emails: Vec::new(),
+            ..access.clone()
+        });
+
+        assert!(second
+            .iter()
+            .all(|member| member.contains("gcp-sa-vertex-sandbox")));
+        assert!(first
+            .iter()
+            .all(|member| !member.contains("gcp-sa-vertex-sandbox")));
+        // Together they are the whole grant, so splitting the write loses no member.
+        let mut both = [first, second].concat();
+        both.sort();
+        let mut whole = cross_account_members(&access);
+        whole.sort();
+        assert_eq!(both, whole);
+    }
+
+    /// A service type that names no project contributes no member to either list.
     #[test]
     fn a_service_type_grants_nothing_for_a_project_it_does_not_name() {
         // The service account is what separates this from the whole function returning nothing:

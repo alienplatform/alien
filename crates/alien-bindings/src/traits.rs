@@ -231,11 +231,25 @@ pub enum ComputeServiceType {
     Worker,
     /// Sandbox sessions.
     ///
-    /// Separate from `Worker` because a cloud may pull each compute service as a different
-    /// principal, as GCP does with its per-service agents; where one principal covers both, the
-    /// provider is free to grant nothing further for this variant.
+    /// Separate from `Worker` because a cloud may pull each as a different principal (GCP's
+    /// per-service agents); a provider is free to grant nothing further if one principal covers both.
     Sandbox,
     // In the future, we could add Container, VirtualMachine, Kubernetes, etc.
+}
+
+impl ComputeServiceType {
+    /// Every variant, for the callers that have to name one principal per compute service with no
+    /// value to match on: a revoke with no record to go on, and the table reading a member back.
+    pub const ALL: &'static [Self] = &[Self::Worker, Self::Sandbox];
+
+    /// Adding a variant fails to compile here, beside the list it also has to join — a compute
+    /// service missing from `ALL` is granted a pull that nothing revokes.
+    #[allow(dead_code)]
+    fn all_is_exhaustive(self) {
+        match self {
+            Self::Worker | Self::Sandbox => {}
+        }
+    }
 }
 
 /// Cross-account access configuration for AWS artifact registries.
