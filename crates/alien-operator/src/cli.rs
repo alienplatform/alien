@@ -1453,6 +1453,22 @@ mod tests {
     }
 
     #[test]
+    fn installer_operator_image_override_is_not_an_image_receipt() {
+        temp_env::with_var(
+            "ALIEN_OPERATOR_IMAGE",
+            Some("registry.example.com/operator:installer-override"),
+            || {
+                let args = Args::try_parse_from(["operator", "--platform", "kubernetes"])
+                    .expect("operator arguments should parse");
+
+                assert!(parse_operator_image_report(&args)
+                    .expect("installer override must not parse as a receipt")
+                    .is_none());
+            },
+        );
+    }
+
+    #[test]
     fn configured_operator_image_identity_rejects_package_fields() {
         let digest = format!("sha256:{}", "a".repeat(64));
         let args = Args::try_parse_from([

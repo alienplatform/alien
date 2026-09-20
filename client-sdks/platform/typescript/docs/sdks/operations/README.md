@@ -8,7 +8,7 @@
 * [publishPlugin](#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 * [setBuiltinPlugins](#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
 * [createBundleUploadUrl](#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-* [setPluginEnabled](#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked.
+* [setPluginEnabled](#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 * [getPolicy](#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
@@ -331,7 +331,7 @@ run();
 
 ## setPluginEnabled
 
-Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked.
+Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 
 ### Example Usage
 
@@ -404,7 +404,7 @@ run();
 
 | Error Type               | Status Code              | Content Type             |
 | ------------------------ | ------------------------ | ------------------------ |
-| errors.APIError          | 404, 409                 | application/json         |
+| errors.APIError          | 404                      | application/json         |
 | errors.APIError          | 500                      | application/json         |
 | errors.AlienDefaultError | 4XX, 5XX                 | \*/\*                    |
 

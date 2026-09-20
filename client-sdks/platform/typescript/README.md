@@ -342,7 +342,7 @@ run();
 * [publishPlugin](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 * [setBuiltinPlugins](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
 * [createBundleUploadUrl](docs/sdks/operations/README.md#createbundleuploadurl) - Get a presigned S3 URL to upload a custom operations plugin bundle ZIP. Upload the ZIP with a PUT to the returned url (sending the given Content-Type), then call POST /plugins to register it.
-* [setPluginEnabled](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked.
+* [setPluginEnabled](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 * [getPolicy](docs/sdks/operations/README.md#getpolicy) - Get a project's per-command approval policy. Mirrors what the operator enforces: `plugin/operation` / `plugin/*` / `*` patterns → auto | manual.
 * [updatePolicy](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 * [invoke](docs/sdks/operations/README.md#invoke) - Invoke a plugin operation against a deployment. Honors the project's per-command approval policy.
@@ -394,7 +394,6 @@ run();
 * [configureRegistry](docs/sdks/projects/README.md#configureregistry) - Enable customer-owned container registries without requiring an application Release.
 * [configureRemoteSandbox](docs/sdks/projects/README.md#configureremotesandbox) - Enable a customer-owned sandbox a hosted caller can drive through Remote Bindings. The clouds it publishes to follow the sources configured: an AWS bundle, an Azure catalog image, or both.
 * [getCapabilityOverview](docs/sdks/projects/README.md#getcapabilityoverview) - Get safe, server-derived capability status for a Project.
-* [getRemoteOperatorSummary](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 * [getAiUsage](docs/sdks/projects/README.md#getaiusage)
 * [getEncryptionUsage](docs/sdks/projects/README.md#getencryptionusage)
 * [getSandboxMetrics](docs/sdks/projects/README.md#getsandboxmetrics)
@@ -636,7 +635,7 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`operationsPublishPlugin`](docs/sdks/operations/README.md#publishplugin) - Register a custom operations plugin whose bundle ZIP has already been uploaded to S3 (see POST /plugins/upload-url). Replaces any existing plugin of the same name in that project. New custom plugins are enabled by default.
 - [`operationsQueueAccessRequest`](docs/sdks/operations/README.md#queueaccessrequest) - Engineer gate — approve a pending access request, queuing it for the operator to materialize. Records who queued it.
 - [`operationsSetBuiltinPlugins`](docs/sdks/operations/README.md#setbuiltinplugins) - Replace the complete set of enabled built-in operations plugins for a project.
-- [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are distributed to Operators and can be invoked.
+- [`operationsSetPluginEnabled`](docs/sdks/operations/README.md#setpluginenabled) - Enable or disable an operations plugin (builtin or custom) for a project. Only enabled plugins are baked into the operator image and can be invoked.
 - [`operationsUpdatePolicy`](docs/sdks/operations/README.md#updatepolicy) - Replace a project's per-command approval policy (full rule set). Patterns are `plugin/operation`, `plugin/*`, or `*`; each maps to auto | manual.
 - [`operationsVerifyCheck`](docs/sdks/operations/README.md#verifycheck) - One verification poll cycle for an original operation command. Loads that command's authoritative stored result and dispatch-time verification contract, dispatches the frozen read-only poll operation once, and evaluates its frozen success condition. Callers poll this repeatedly per the returned policy.
 - [`operatorManifestsPrepareOperatorManifestPackage`](docs/sdks/operatormanifests/README.md#prepareoperatormanifestpackage) - Prepare the white-labeled Operator image for an Operate install
@@ -667,7 +666,6 @@ To read more about standalone functions, check [FUNCTIONS.md](./FUNCTIONS.md).
 - [`projectsGetDeploymentPortalDomain`](docs/sdks/projects/README.md#getdeploymentportaldomain) - Get the deployment portal domain binding for a project.
 - [`projectsGetEncryptionUsage`](docs/sdks/projects/README.md#getencryptionusage)
 - [`projectsGetGcpOAuthProvider`](docs/sdks/projects/README.md#getgcpoauthprovider) - Retrieve redacted project-level Google Cloud OAuth provider settings.
-- [`projectsGetRemoteOperatorSummary`](docs/sdks/projects/README.md#getremoteoperatorsummary) - Get the authoritative Remote Operator project summary
 - [`projectsGetSandboxMetrics`](docs/sdks/projects/README.md#getsandboxmetrics)
 - [`projectsGetTemplateUrls`](docs/sdks/projects/README.md#gettemplateurls) - Get template URLs for deploying setup stacks in this project.
 - [`projectsList`](docs/sdks/projects/README.md#list) - Retrieve all projects.

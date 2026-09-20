@@ -86,3 +86,4 @@ fs2 = "0.4"
 
 [dev-dependencies]
 tempfile = { workspace = true }
+temp-env = { workspace = true }

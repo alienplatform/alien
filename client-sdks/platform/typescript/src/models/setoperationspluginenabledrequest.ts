@@ -7,7 +7,7 @@ import * as z from "zod/v4";
 
 export type SetOperationsPluginEnabledRequest = {
   /**
-   * Whether the plugin is distributed to this project's Operators.
+   * Whether the plugin should be baked into the operator image.
    */
   enabled: boolean;
 };

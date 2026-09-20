@@ -14,7 +14,6 @@ let value: PrepareOperatorManifestPackageResponse = {
     status: "pending",
     version: "<value>",
     sourceReleaseId: "rel_WbhQgksrawSKIpEN0NAssHX9",
-    dependsOnPackageId: "pkg_jebo2o5jmm7raefl2m1pe3cz",
     setupFingerprints: {
       "key": {
         target: "<value>",

@@ -12,6 +12,6 @@ let value: SetOperationsPluginEnabledRequest = {
 
 ## Fields
 
-| Field                                                          | Type                                                           | Required                                                       | Description                                                    |
-| -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- | -------------------------------------------------------------- |
-| `enabled`                                                      | *boolean*                                                      | :heavy_check_mark:                                             | Whether the plugin is distributed to this project's Operators. |
+| Field                                                       | Type                                                        | Required                                                    | Description                                                 |
+| ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- | ----------------------------------------------------------- |
+| `enabled`                                                   | *boolean*                                                   | :heavy_check_mark:                                          | Whether the plugin should be baked into the operator image. |
