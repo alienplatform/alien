@@ -47,7 +47,21 @@ struct OperatorCliArgs {
     operator_image: OperatorImageArgs,
 }
 
-#[derive(clap::Args, Debug)]
+#[derive(Parser, Debug)]
+#[command(
+    name = "operator",
+    about = "Operator - Continuous deployment service (pull model)",
+    long_about = "Run the Operator for continuous deployment using the pull model.
+
+The Operator:
+- Syncs with the manager every 30 seconds
+- Runs the deployment step locally when updates are available
+- Collects and forwards telemetry to the manager
+- Supports offline/airgapped operation with state persistence",
+    after_help = "Secrets are loaded from files or environment variables only — \
+                  CLI flags for tokens and encryption keys were removed because \
+                  argv is visible in `ps` / `/proc/<pid>/cmdline`."
+)]
 pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
@@ -1236,7 +1250,7 @@ mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
         parse_operator_image_report, persist_initialized_manager_identity, run_operator_cli,
-        select_startup_deployment_id, InitialDesiredReleaseArg, OperatorCliArgs,
+        select_startup_deployment_id, Args, InitialDesiredReleaseArg, OperatorCliArgs,
         StartupDeploymentId, NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
         NOOP_OPERATIONS_EXEC_LOOP_HOOK, NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
@@ -1373,7 +1387,7 @@ mod tests {
 
     #[test]
     fn initial_release_selection_is_independent_from_permission() {
-        let args = OperatorCliArgs::try_parse_from([
+        let args = Args::try_parse_from([
             "operator",
             "--platform",
             "kubernetes",
@@ -1382,8 +1396,7 @@ mod tests {
             "--initial-desired-release",
             "active",
         ])
-        .expect("operator arguments should parse")
-        .args;
+        .expect("public operator arguments should parse");
 
         assert_eq!(
             args.initial_desired_release,
