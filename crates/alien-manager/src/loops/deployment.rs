@@ -775,6 +775,7 @@ impl DeploymentLoop {
             self.deployment_store.clone(),
             self.server_bindings.bindings_provider.clone(),
             self.server_bindings.target_bindings_providers.clone(),
+            deployment.project_id.clone(),
             session.to_string(),
             execution_claim,
         );

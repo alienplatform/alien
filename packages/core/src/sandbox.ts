@@ -63,6 +63,15 @@ export class Sandbox extends ResourceBuilder {
   }
 
   /**
+   * Names a private ECR base image the AWS build pulls. Add the sandbox as `"live"`: the registry
+   * opens the repository to the customer's account only once the deployment registers.
+   */
+  public privateBaseImage(image: string): this {
+    this._config.privateBaseImage = image
+    return this
+  }
+
+  /**
    * Sets the enforced cpu, memory, disk and process ceilings.
    */
   public limits(limits: SandboxLimits): this {

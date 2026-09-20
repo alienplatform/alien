@@ -473,6 +473,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &mut final_state,
     )
     .await;
@@ -527,6 +528,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &final_state,
     )
     .await
@@ -1351,6 +1353,7 @@ async fn agent_sync(
                         &state.bindings_provider,
                         &state.target_bindings_providers,
                         &req.deployment_id,
+                        &deployment.project_id,
                         &mut agent_state,
                     )
                     .await;
@@ -1388,6 +1391,7 @@ async fn agent_sync(
                                 &state.bindings_provider,
                                 &state.target_bindings_providers,
                                 &req.deployment_id,
+                                &deployment.project_id,
                                 &agent_state,
                             )
                             .await

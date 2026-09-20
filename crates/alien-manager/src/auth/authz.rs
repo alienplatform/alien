@@ -106,6 +106,11 @@ pub trait Authz: Send + Sync {
     // -- Registry proxy ----------------------------------------------------
     /// Push: caller has write access on the project carrying the repo.
     fn can_push_image(&self, subject: &Subject, project_id: &str, repo_name: &str) -> bool;
+    /// Create the project's repository in a cloud registry so a later push can
+    /// land in it. Defaults to deny so an embedder decides explicitly.
+    fn can_provision_image_repository(&self, _subject: &Subject, _project_id: &str) -> bool {
+        false
+    }
     /// Generic "can act on deployment" — used by registry-proxy pull after a
     /// structural "is this repo in this deployment's stack" check done by the
     /// handler.
