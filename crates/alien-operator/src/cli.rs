@@ -40,6 +40,14 @@ The Operator:
                   CLI flags for tokens and encryption keys were removed because \
                   argv is visible in `ps` / `/proc/<pid>/cmdline`."
 )]
+struct OperatorCliArgs {
+    #[command(flatten)]
+    args: Args,
+    #[command(flatten)]
+    operator_image: OperatorImageArgs,
+}
+
+#[derive(clap::Args, Debug)]
 pub struct Args {
     #[arg(long, env = "PLATFORM", value_parser = parse_platform)]
     pub platform: Platform,
@@ -98,26 +106,6 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_SETUP_METHOD")]
     pub operator_setup_method: Option<String>,
 
-    /// Origin of the immutable image receipt: `package` or `configured`.
-    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_SOURCE")]
-    pub operator_image_source: Option<String>,
-
-    /// Exact running image in `repository@sha256:digest` form.
-    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_RECEIPT")]
-    pub operator_image: Option<String>,
-
-    /// Exact lowercase OCI image digest.
-    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_DIGEST")]
-    pub operator_image_digest: Option<String>,
-
-    /// Package ID for a package-sourced image.
-    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_ID")]
-    pub operator_image_package_id: Option<String>,
-
-    /// Package version for a package-sourced image.
-    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION")]
-    pub operator_image_package_version: Option<String>,
-
     #[arg(long, env = "DATA_DIR")]
     pub data_dir: Option<String>,
 
@@ -165,6 +153,29 @@ pub struct Args {
 
     #[arg(long, hide = true)]
     pub service: bool,
+}
+
+#[derive(clap::Args, Debug, Default)]
+struct OperatorImageArgs {
+    /// Origin of the immutable image receipt: `package` or `configured`.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_SOURCE")]
+    operator_image_source: Option<String>,
+
+    /// Exact running image in `repository@sha256:digest` form.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_RECEIPT")]
+    operator_image: Option<String>,
+
+    /// Exact lowercase OCI image digest.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_DIGEST")]
+    operator_image_digest: Option<String>,
+
+    /// Package ID for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_ID")]
+    operator_image_package_id: Option<String>,
+
+    /// Package version for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION")]
+    operator_image_package_version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -258,7 +269,10 @@ pub fn cli_main_with_all_loops(
     // Ignoring `Err` makes this idempotent across re-invocations in tests.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let args = Args::parse();
+    let OperatorCliArgs {
+        args,
+        operator_image,
+    } = OperatorCliArgs::parse();
 
     #[cfg(windows)]
     if args.service {
@@ -278,6 +292,7 @@ pub fn cli_main_with_all_loops(
 
     if let Err(e) = rt.block_on(run(
         args,
+        operator_image,
         init_hook,
         debug_loop_hook,
         access_request_loop_hook,
@@ -296,6 +311,7 @@ pub fn cli_main() {
 
 async fn run(
     args: Args,
+    operator_image: OperatorImageArgs,
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
     access_request_loop_hook: AccessRequestSyncLoopHook,
@@ -304,6 +320,7 @@ async fn run(
 ) -> Result<()> {
     run_operator_cli(
         args,
+        operator_image,
         init_hook,
         debug_loop_hook,
         access_request_loop_hook,
@@ -316,6 +333,7 @@ async fn run(
 #[allow(clippy::too_many_arguments)]
 async fn run_operator_cli(
     mut args: Args,
+    operator_image_args: OperatorImageArgs,
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
     access_request_loop_hook: AccessRequestSyncLoopHook,
@@ -334,7 +352,7 @@ async fn run_operator_cli(
 
     setup_tracing(args.verbose);
 
-    let operator_image = parse_operator_image_report(&args)?;
+    let operator_image = parse_operator_image_report(&operator_image_args)?;
 
     // Run the extension hook before any operator state is touched. Idempotent.
     init_hook();
@@ -844,7 +862,10 @@ mod windows_entry {
             .lock()
             .expect("operations-sync handler hook lock")
             .unwrap_or(super::NOOP_OPERATIONS_SYNC_HANDLER_HOOK);
-        let args = Args::parse();
+        let OperatorCliArgs {
+            args,
+            operator_image,
+        } = OperatorCliArgs::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
 
@@ -860,6 +881,7 @@ mod windows_entry {
 
         let exit_code = match rt.block_on(super::run(
             args,
+            operator_image,
             init_hook,
             debug_loop_hook,
             access_request_loop_hook,
@@ -1121,7 +1143,7 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env_string(name).map(PathBuf::from)
 }
 
-fn parse_operator_image_report(args: &Args) -> Result<Option<OperatorImageReport>> {
+fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<OperatorImageReport>> {
     let optional_value = |value: &Option<String>| {
         value
             .as_deref()
@@ -1214,8 +1236,8 @@ mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
         parse_operator_image_report, persist_initialized_manager_identity, run_operator_cli,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, StartupDeploymentId,
-        NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
+        select_startup_deployment_id, InitialDesiredReleaseArg, OperatorCliArgs,
+        StartupDeploymentId, NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
         NOOP_OPERATIONS_EXEC_LOOP_HOOK, NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
@@ -1351,7 +1373,7 @@ mod tests {
 
     #[test]
     fn initial_release_selection_is_independent_from_permission() {
-        let args = Args::try_parse_from([
+        let args = OperatorCliArgs::try_parse_from([
             "operator",
             "--platform",
             "kubernetes",
@@ -1360,7 +1382,8 @@ mod tests {
             "--initial-desired-release",
             "active",
         ])
-        .expect("operator arguments should parse");
+        .expect("operator arguments should parse")
+        .args;
 
         assert_eq!(
             args.initial_desired_release,
@@ -1381,7 +1404,10 @@ mod tests {
             .expect("restrict test encryption key");
         std::fs::set_permissions(&sync_token_file, std::fs::Permissions::from_mode(0o600))
             .expect("restrict test setup credential");
-        let args = Args::try_parse_from([
+        let OperatorCliArgs {
+            args,
+            operator_image,
+        } = OperatorCliArgs::try_parse_from([
             "operator",
             "--platform",
             "kubernetes",
@@ -1405,6 +1431,7 @@ mod tests {
         .expect("parse operator test arguments");
         let error = run_operator_cli(
             args,
+            operator_image,
             NOOP_INIT,
             NOOP_DEBUG_LOOP_HOOK,
             NOOP_ACCESS_REQUEST_LOOP_HOOK,
@@ -1427,7 +1454,7 @@ mod tests {
     #[test]
     fn package_operator_image_identity_is_strict_and_complete() {
         let digest = format!("sha256:{}", "a".repeat(64));
-        let args = Args::try_parse_from([
+        let args = OperatorCliArgs::try_parse_from([
             "operator",
             "--platform",
             "kubernetes",
@@ -1444,7 +1471,7 @@ mod tests {
         ])
         .expect("operator image arguments should parse");
 
-        let report = parse_operator_image_report(&args)
+        let report = parse_operator_image_report(&args.operator_image)
             .expect("package identity should validate")
             .expect("identity should be present");
         assert_eq!(report.source, OperatorImageSource::Package);
@@ -1458,10 +1485,10 @@ mod tests {
             "ALIEN_OPERATOR_IMAGE",
             Some("registry.example.com/operator:installer-override"),
             || {
-                let args = Args::try_parse_from(["operator", "--platform", "kubernetes"])
+                let args = OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
                     .expect("operator arguments should parse");
 
-                assert!(parse_operator_image_report(&args)
+                assert!(parse_operator_image_report(&args.operator_image)
                     .expect("installer override must not parse as a receipt")
                     .is_none());
             },
@@ -1471,7 +1498,7 @@ mod tests {
     #[test]
     fn configured_operator_image_identity_rejects_package_fields() {
         let digest = format!("sha256:{}", "a".repeat(64));
-        let args = Args::try_parse_from([
+        let args = OperatorCliArgs::try_parse_from([
             "operator",
             "--platform",
             "aws",
@@ -1486,7 +1513,7 @@ mod tests {
         ])
         .expect("operator image arguments should parse");
 
-        let error = parse_operator_image_report(&args)
+        let error = parse_operator_image_report(&args.operator_image)
             .expect_err("configured image must not carry package fields");
         assert_eq!(error.code, "CONFIGURATION_ERROR");
         assert!(error.message.contains("must not include package identity"));
@@ -1494,8 +1521,10 @@ mod tests {
 
     #[test]
     fn operator_image_identity_is_optional_for_older_installations() {
-        let args = Args::try_parse_from(["operator", "--platform", "kubernetes"])
+        let args = OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
             .expect("operator arguments should parse");
-        assert!(parse_operator_image_report(&args).unwrap().is_none());
+        assert!(parse_operator_image_report(&args.operator_image)
+            .unwrap()
+            .is_none());
     }
 }

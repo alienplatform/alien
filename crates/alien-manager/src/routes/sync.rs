@@ -155,14 +155,23 @@ pub struct AgentSyncRequest {
     pub capabilities: Vec<OperatorCapabilityReport>,
     #[serde(default, rename = "operatorVersion")]
     pub operator_version: Option<String>,
-    /// Exact immutable Operator image identity reported by the running process.
-    /// Opaque to OSS beyond forwarding it to `reconcile()`.
-    #[serde(default)]
-    pub operator_image: Option<OperatorImageReport>,
     /// The Operator's self-reported operations-plugin catalog and loaded
     /// bundle hash. Opaque to OSS beyond forwarding it to `reconcile()`.
     #[serde(default)]
     pub operations_report: Option<OperationsReport>,
+}
+
+/// Inbound sync payload that adds optional receipts without expanding the
+/// public [`AgentSyncRequest`] struct literal.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+struct AgentSyncWireRequest {
+    #[serde(flatten)]
+    request: AgentSyncRequest,
+    /// Exact immutable Operator image identity reported by the running process.
+    #[serde(default)]
+    operator_image: Option<OperatorImageReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -637,8 +646,8 @@ mod tests {
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
-        InitializeRequest, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        InitialDesiredRelease, InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -748,13 +757,12 @@ mod tests {
         assert!(req.observed_inventory_batches.is_empty());
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
-        assert!(req.operator_image.is_none());
         assert!(!req.supports_execution_claims);
     }
 
     #[test]
-    fn agent_sync_request_accepts_operator_image_receipt() {
-        let req: AgentSyncRequest = serde_json::from_value(json!({
+    fn agent_sync_wire_request_accepts_operator_image_receipt() {
+        let req: AgentSyncWireRequest = serde_json::from_value(json!({
             "deploymentId": "dep_test",
             "operatorImage": {
                 "source": "package",
@@ -764,12 +772,13 @@ mod tests {
                 "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
             }
         }))
-        .expect("agent sync request should accept an immutable Operator image receipt");
+        .expect("agent sync wire request should accept an immutable Operator image receipt");
 
         req.operator_image
             .expect("operator image receipt should be present")
             .validate()
             .expect("operator image receipt should be valid");
+        assert_eq!(req.request.deployment_id, "dep_test");
     }
 
     #[test]
@@ -1317,7 +1326,7 @@ async fn reconcile_agent_report(
     post,
     path = "/v1/sync",
     tag = "sync",
-    request_body = AgentSyncRequest,
+    request_body = AgentSyncWireRequest,
     responses(
         (status = 200, description = "Agent sync response with optional target state", body = AgentSyncResponse)
     ),
@@ -1328,7 +1337,10 @@ async fn reconcile_agent_report(
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<AgentSyncRequest>,
+    Json(AgentSyncWireRequest {
+        request: req,
+        operator_image,
+    }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -1350,7 +1362,7 @@ async fn agent_sync(
         return ErrorData::forbidden("Access denied").into_response();
     }
 
-    if let Some(operator_image) = &req.operator_image {
+    if let Some(operator_image) = &operator_image {
         if let Err(reason) = operator_image.validate() {
             return ErrorData::bad_request(reason).into_response();
         }
@@ -1430,7 +1442,7 @@ async fn agent_sync(
                         state.deployment_store.as_ref(),
                         &subject,
                         reconcile_data,
-                        req.operator_image.clone(),
+                        operator_image.clone(),
                     )
                     .await;
 
@@ -1704,7 +1716,7 @@ async fn agent_sync(
                         || !req.observed_inventory_batches.is_empty()
                         || !req.capabilities.is_empty()
                         || req.operator_version.is_some()
-                        || req.operator_image.is_some()
+                        || operator_image.is_some()
                         || req.operations_report.is_some())
                 {
                     let reconcile_data = ReconcileData {
@@ -1724,7 +1736,7 @@ async fn agent_sync(
                         state.deployment_store.as_ref(),
                         &subject,
                         reconcile_data,
-                        req.operator_image.clone(),
+                        operator_image.clone(),
                     )
                     .await;
 
