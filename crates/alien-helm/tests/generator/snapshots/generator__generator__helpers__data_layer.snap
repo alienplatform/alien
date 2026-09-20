@@ -1,6 +1,5 @@
 ---
 source: crates/alien-helm/tests/generator/helpers.rs
-assertion_line: 41
 expression: buf
 ---
 === Chart.yaml ===
@@ -830,7 +829,6 @@ metadata:
 {{- end }}
 
 === templates/role.yaml ===
-{{- $hasRemoteOperator := hasKey .Values "remoteOperator" -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
@@ -844,20 +842,6 @@ rules:
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get"]
-  {{- if $hasRemoteOperator }}
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    resourceNames:
-      - {{ include "deployment.remoteOperatorCleanupName" . }}
-      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
-    verbs: ["get", "delete"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings"]
-    resourceNames:
-      - {{ include "deployment.remoteOperatorCleanupName" . }}
-      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
-    verbs: ["get", "delete"]
-  {{- end }}
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
