@@ -1034,9 +1034,15 @@ spec:
                   echo "Refusing cleanup: completion record $namespace/$identity_completion exists without its identity record." >&2
                   exit 1
                 fi
-                if resource_exists deployment "$resource_name" && owned_by_this_release deployment "$resource_name" "$resource_name"; then
-                  echo "Refusing cleanup: Remote Operator workload or identity storage remains without its identity record." >&2
-                  exit 1
+                if resource_exists deployment "$resource_name"; then
+                  if [ "$remote_operator_enabled" = "true" ] && ! owned_by_this_release deployment "$resource_name" "$resource_name"; then
+                    echo "Refusing cleanup: Deployment $namespace/$resource_name is not owned by this exact Helm release." >&2
+                    exit 1
+                  fi
+                  if owned_by_this_release deployment "$resource_name" "$resource_name"; then
+                    echo "Refusing cleanup: Remote Operator workload or identity storage remains without its identity record." >&2
+                    exit 1
+                  fi
                 fi
                 if resource_exists persistentvolumeclaim "$identity_pvc" && owned_by_this_release persistentvolumeclaim "$identity_pvc" "$resource_name"; then
                   echo "Refusing cleanup: Remote Operator workload or identity storage remains without its identity record." >&2
@@ -8054,6 +8060,25 @@ remoteOperator:
                 "and $preparedRetry (not (get $identityState \"managedResourceExists\"))"
             ),
             "a prepared retry must remain live when the pre-hook succeeded before any managed resource was created"
+        );
+    }
+
+    #[test]
+    fn product_chart_uninstall_rejects_a_foreign_remote_operator_deployment() {
+        let cleanup = remote_operator_cleanup_job_tpl();
+
+        assert!(
+            cleanup
+                .contains("remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}"),
+            "cleanup must distinguish enabled from disabled revisions"
+        );
+        assert!(
+            cleanup.contains(
+                "if [ \"$remote_operator_enabled\" = \"true\" ] && ! owned_by_this_release deployment \"$resource_name\" \"$resource_name\"; then"
+            ) && cleanup.contains(
+                "Deployment $namespace/$resource_name is not owned by this exact Helm release."
+            ),
+            "an enabled release must reject a same-name foreign Deployment before Helm deletes it"
         );
     }
 
