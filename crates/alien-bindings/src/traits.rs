@@ -229,6 +229,12 @@ pub struct ArtifactRegistryCredentials {
 pub enum ComputeServiceType {
     /// Serverless functions
     Worker,
+    /// Sandbox sessions.
+    ///
+    /// Separate from `Worker` because a cloud may pull each compute service as a different
+    /// principal, as GCP does with its per-service agents; where one principal covers both, the
+    /// provider is free to grant nothing further for this variant.
+    Sandbox,
     // In the future, we could add Container, VirtualMachine, Kubernetes, etc.
 }
 
