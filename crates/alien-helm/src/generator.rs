@@ -455,6 +455,10 @@ fn add_remote_operator_files(
         remote_operator_lifecycle_capability_tpl(),
     );
     files.insert(
+        "templates/remote-operator-cleanup-rbac.yaml".to_string(),
+        remote_operator_cleanup_rbac_tpl(),
+    );
+    files.insert(
         "templates/remote-operator-identity-initialized.yaml".to_string(),
         remote_operator_identity_initialized_tpl(),
     );
@@ -598,11 +602,6 @@ fn remote_operator_identity_record_tpl(
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
 {{{{- printf "%s-identity-init-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
 {{{{- end -}}}}
-{{{{- define "deployment.remoteOperatorLifecycleCheckName" -}}}}
-{{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
-{{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
-{{{{- printf "%s-lifecycle-check-%s" $releasePrefix $releaseIdentity | trunc 63 | trimSuffix "-" -}}}}
-{{{{- end -}}}}
 {{{{- define "deployment.remoteOperatorHistoryBackendCheckName" -}}}}
 {{{{- $releasePrefix := regexReplaceAll "[^a-z0-9-]+" (lower .Release.Name) "-" | trunc 30 | trimAll "-" -}}}}
 {{{{- $releaseIdentity := include "deployment.remoteOperatorReleaseIdentity" . -}}}}
@@ -689,6 +688,75 @@ immutable: true
 data:
   version: "2"
   firstGuardRevision: {{ $firstGuardRevision | quote }}
+"#
+    .to_string()
+}
+
+fn remote_operator_cleanup_rbac_tpl() -> String {
+    r#"{{- $cleanupName := include "deployment.remoteOperatorCleanupName" . -}}
+{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames:
+      - {{ $identityRecordName }}
+      - {{ $identityInitializedName }}
+      - {{ $identityCompletionName }}
+      - {{ $lifecycleCapabilityName }}
+    verbs: ["get", "delete"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    resourceNames:
+      - {{ printf "%s-identity" $identityRecordName }}
+    verbs: ["get", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames:
+      - {{ $identityRecordName }}
+    verbs: ["get", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $cleanupName }}
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    meta.helm.sh/release-name: {{ .Release.Name | quote }}
+    meta.helm.sh/release-namespace: {{ .Release.Namespace | quote }}
+  labels:
+    {{- include "deployment.labels" . | nindent 4 }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $cleanupName }}
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $cleanupName }}
 "#
     .to_string()
 }
@@ -906,7 +974,16 @@ spec:
 }
 
 fn remote_operator_cleanup_job_tpl() -> String {
-    r#"apiVersion: batch/v1
+    r#"{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+{{- $identityRecord := lookup "v1" "ConfigMap" .Release.Namespace $identityRecordName -}}
+{{- $identityInitialized := lookup "v1" "ConfigMap" .Release.Namespace $identityInitializedName -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace $identityCompletionName -}}
+{{- $lifecycleCapability := lookup "v1" "ConfigMap" .Release.Namespace $lifecycleCapabilityName -}}
+{{- if or (not .Values.remoteOperator.enabled) $lifecycleCapability }}
+apiVersion: batch/v1
 kind: Job
 metadata:
   name: {{ include "deployment.remoteOperatorCleanupName" . }}
@@ -924,7 +1001,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
     spec:
-      serviceAccountName: {{ include "deployment.managerServiceAccountName" . }}
+      serviceAccountName: {{ include "deployment.remoteOperatorCleanupName" . }}
       restartPolicy: Never
       containers:
         - name: cleanup
@@ -935,25 +1012,16 @@ spec:
             - -ec
             - |
               resource_name={{ include "deployment.remoteOperatorResourceName" . | quote }}
+              identity_record={{ $identityRecordName | quote }}
+              identity_initialized={{ $identityInitializedName | quote }}
+              identity_completion={{ $identityCompletionName | quote }}
+              identity_pvc={{ printf "%s-identity" $identityRecordName | quote }}
+              lifecycle_capability={{ $lifecycleCapabilityName | quote }}
+              remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}
               namespace={{ .Release.Namespace | quote }}
               release_name={{ .Release.Name | quote }}
               release_service={{ .Release.Service | quote }}
               release_id={{ include "deployment.remoteOperatorReleaseIdentity" . | quote }}
-              lifecycle_check_name={{ include "deployment.remoteOperatorLifecycleCheckName" . | quote }}
-              identity_record="$resource_name"
-              identity_initialized={{ include "deployment.remoteOperatorIdentityInitializedName" . | quote }}
-              identity_completion="$resource_name-complete"
-              lifecycle_capability={{ include "deployment.remoteOperatorLifecycleCapabilityName" . | quote }}
-              identity_pvc="$resource_name-identity"
-              remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}
-
-              delete_lifecycle_check_rbac() {
-                kubectl -n "$namespace" delete \
-                  "rolebinding.rbac.authorization.k8s.io/$lifecycle_check_name" \
-                  "role.rbac.authorization.k8s.io/$lifecycle_check_name" \
-                  "serviceaccount/$lifecycle_check_name" \
-                  --ignore-not-found=true
-              }
 
               field() {
                 kubectl -n "$namespace" get "$1" "$2" -o "jsonpath=$3"
@@ -1067,7 +1135,6 @@ spec:
                   require_field configmap "$lifecycle_capability" '{.data.version}' 2 version
                   kubectl -n "$namespace" delete configmap "$lifecycle_capability"
                 fi
-                delete_lifecycle_check_rbac
                 echo "No Remote Operator identity record exists for this release; nothing to clean up."
                 exit 0
               fi
@@ -1140,7 +1207,7 @@ spec:
               kubectl -n "$namespace" delete configmap "$identity_initialized" --ignore-not-found=true
               kubectl -n "$namespace" delete configmap "$lifecycle_capability" --ignore-not-found=true
               kubectl -n "$namespace" delete configmap "$identity_record" --ignore-not-found=true
-              delete_lifecycle_check_rbac
+{{- end }}
 "#
     .to_string()
 }
@@ -1309,6 +1376,44 @@ fn remote_operator_checks_tpl(requires_collector_token: bool) -> String {
 {{- $expectedEncryptionKeySha256 := include "deployment.remoteOperatorEncryptionKeySha256" . | trim -}}
 {{- if and .Release.IsInstall .Values.remoteOperator.enabled -}}
   {{- fail "Remote Operator cannot be enabled on the initial Helm install. Install once with remoteOperator.enabled=false so Helm records a rollback-guarded Kubernetes history revision, then enable it in an upgrade with remoteOperator.bootstrapIdentity=true." -}}
+{{- end -}}
+{{- if and .Release.IsUpgrade .Values.remoteOperator.enabled -}}
+{{- $cleanupName := include "deployment.remoteOperatorCleanupName" . -}}
+{{- $identityRecordName := include "deployment.remoteOperatorIdentityRecordName" . -}}
+{{- $identityInitializedName := include "deployment.remoteOperatorIdentityInitializedName" . -}}
+{{- $identityCompletionName := include "deployment.remoteOperatorIdentityCompletionName" . -}}
+{{- $lifecycleCapabilityName := include "deployment.remoteOperatorLifecycleCapabilityName" . -}}
+{{- $cleanupServiceAccount := lookup "v1" "ServiceAccount" .Release.Namespace $cleanupName -}}
+{{- $cleanupRole := lookup "rbac.authorization.k8s.io/v1" "Role" .Release.Namespace $cleanupName -}}
+{{- $cleanupRoleBinding := lookup "rbac.authorization.k8s.io/v1" "RoleBinding" .Release.Namespace $cleanupName -}}
+{{- if not (and $cleanupServiceAccount $cleanupRole $cleanupRoleBinding) -}}
+  {{- fail "Remote Operator cleanup authority is absent or does not match this exact Helm release. Perform one successful disabled bridge upgrade before enabling Remote Operator." -}}
+{{- end -}}
+{{- $cleanupAuthority := dict "valid" true -}}
+{{- range $resource := list $cleanupServiceAccount $cleanupRole $cleanupRoleBinding -}}
+  {{- $annotations := default dict $resource.metadata.annotations -}}
+  {{- $labels := default dict $resource.metadata.labels -}}
+  {{- if or (ne $resource.metadata.name $cleanupName) (ne $resource.metadata.namespace $.Release.Namespace) (ne (index $annotations "meta.helm.sh/release-name") $.Release.Name) (ne (index $annotations "meta.helm.sh/release-namespace") $.Release.Namespace) (ne (index $labels "app.kubernetes.io/managed-by") $.Release.Service) (ne (index $labels "app.kubernetes.io/instance") $.Release.Name) (hasKey $annotations "helm.sh/hook") -}}
+    {{- $_ := set $cleanupAuthority "valid" false -}}
+  {{- end -}}
+{{- end -}}
+{{- $expectedCleanupRoleRules := list
+  (dict "apiGroups" (list "") "resources" (list "configmaps") "resourceNames" (list $identityRecordName $identityInitializedName $identityCompletionName $lifecycleCapabilityName) "verbs" (list "get" "delete"))
+  (dict "apiGroups" (list "") "resources" (list "persistentvolumeclaims") "resourceNames" (list (printf "%s-identity" $identityRecordName)) "verbs" (list "get" "delete"))
+  (dict "apiGroups" (list "apps") "resources" (list "deployments") "resourceNames" (list $identityRecordName) "verbs" (list "get" "delete"))
+-}}
+{{- if or (not (get $cleanupAuthority "valid")) (ne (toJson (default list $cleanupRole.rules)) (toJson $expectedCleanupRoleRules)) -}}
+  {{- fail "Remote Operator cleanup authority is absent or does not match this exact Helm release. Perform one successful disabled bridge upgrade before enabling Remote Operator." -}}
+{{- end -}}
+{{- $cleanupSubjects := default list $cleanupRoleBinding.subjects -}}
+{{- if ne (len $cleanupSubjects) 1 -}}
+  {{- fail "Remote Operator cleanup authority is absent or does not match this exact Helm release. Perform one successful disabled bridge upgrade before enabling Remote Operator." -}}
+{{- end -}}
+{{- $cleanupSubject := index $cleanupSubjects 0 -}}
+{{- $cleanupRoleRef := default dict $cleanupRoleBinding.roleRef -}}
+{{- if or (ne $cleanupSubject.kind "ServiceAccount") (ne $cleanupSubject.name $cleanupName) (ne $cleanupSubject.namespace .Release.Namespace) (ne $cleanupRoleRef.apiGroup "rbac.authorization.k8s.io") (ne $cleanupRoleRef.kind "Role") (ne $cleanupRoleRef.name $cleanupName) -}}
+  {{- fail "Remote Operator cleanup authority is absent or does not match this exact Helm release. Perform one successful disabled bridge upgrade before enabling Remote Operator." -}}
+{{- end -}}
 {{- end -}}
 {{- if .Values.remoteOperator.enabled -}}
 {{- if not .Values.management.url -}}
@@ -4392,8 +4497,7 @@ metadata:
 }
 
 fn role_tpl() -> String {
-    r#"{{- $hasRemoteOperator := hasKey .Values "remoteOperator" -}}
-apiVersion: rbac.authorization.k8s.io/v1
+    r#"apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: {{ include "deployment.fullname" . }}
@@ -4406,20 +4510,6 @@ rules:
   - apiGroups: [""]
     resources: ["serviceaccounts"]
     verbs: ["get"]
-  {{- if $hasRemoteOperator }}
-  - apiGroups: [""]
-    resources: ["serviceaccounts"]
-    resourceNames:
-      - {{ include "deployment.remoteOperatorCleanupName" . }}
-      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
-    verbs: ["get", "delete"]
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["roles", "rolebindings"]
-    resourceNames:
-      - {{ include "deployment.remoteOperatorCleanupName" . }}
-      - {{ include "deployment.remoteOperatorLifecycleCheckName" . }}
-    verbs: ["get", "delete"]
-  {{- end }}
   - apiGroups: [""]
     resources: ["events"]
     verbs: ["get", "list", "watch"]
@@ -7363,19 +7453,30 @@ mod tests {
         assert!(
             lifecycle_capability.contains("firstGuardRevision: {{ $firstGuardRevision | quote }}")
         );
-        assert!(!chart
-            .files
-            .contains_key("templates/remote-operator-cleanup-rbac.yaml"));
-        assert!(!chart
-            .files
-            .contains_key("templates/remote-operator-history-guard.yaml"));
+        let cleanup_rbac = &chart.files["templates/remote-operator-cleanup-rbac.yaml"];
+        assert!(!cleanup_rbac.contains("if .Values.remoteOperator.enabled"));
+        assert!(!cleanup_rbac.contains("helm.sh/hook"));
+        assert!(!cleanup_rbac.contains("before-hook-creation"));
+        assert!(cleanup_rbac.contains("meta.helm.sh/release-name"));
+        assert!(cleanup_rbac.contains("meta.helm.sh/release-namespace"));
+        assert!(cleanup_rbac.contains("resources: [\"persistentvolumeclaims\"]"));
+        assert!(cleanup_rbac.contains("resources: [\"deployments\"]"));
+        assert!(!cleanup_rbac.contains("resources: [\"serviceaccounts\"]"));
+        assert!(!cleanup_rbac.contains("resources: [\"roles\"]"));
+        assert!(!cleanup_rbac.contains("resources: [\"rolebindings\"]"));
+        assert!(!cleanup_rbac.contains("remoteOperatorLifecycleCheckName"));
+        assert!(!cleanup_rbac.contains("helm.sh/resource-policy: keep"));
         let cleanup = &chart.files["templates/remote-operator-cleanup-job.yaml"];
         assert!(cleanup.contains("helm.sh/hook\": pre-delete"));
         assert!(cleanup.contains(
-            "serviceAccountName: {{ include \"deployment.managerServiceAccountName\" . }}"
+            "serviceAccountName: {{ include \"deployment.remoteOperatorCleanupName\" . }}"
         ));
-        assert!(!cleanup.contains("adopt_cleanup_resource"));
-        assert!(cleanup.contains("No Remote Operator identity record exists"));
+        assert!(cleanup.contains("$identityRecord := lookup \"v1\" \"ConfigMap\""));
+        assert!(cleanup.contains("$lifecycleCapability := lookup \"v1\" \"ConfigMap\""));
+        assert!(cleanup.contains("if or (not .Values.remoteOperator.enabled) $lifecycleCapability"));
+        assert!(!cleanup.contains("delete_lifecycle_check_rbac"));
+        assert!(!cleanup.contains("delete_cleanup_rbac"));
+        assert!(!cleanup.contains("lifecycle_check_name"));
         assert!(
             cleanup.contains("owned_by_this_release"),
             "same-name foreign identity storage must not block uninstall"
@@ -7398,9 +7499,23 @@ mod tests {
         assert!(cleanup.contains(
             "delete deployment \"$resource_name\" --ignore-not-found=true --cascade=foreground --wait=false"
         ));
-        assert!(cleanup.contains("$resource_name-complete"));
-        assert!(cleanup.contains("$resource_name-identity"));
-        assert!(cleanup.contains("$lifecycle_capability"));
+        assert!(cleanup.contains(
+            "if resource_exists configmap \"$identity_completion\"; then\n                require_field configmap \"$identity_completion\""
+        ));
+        for assignment in [
+            "resource_name={{ include \"deployment.remoteOperatorResourceName\" . | quote }}",
+            "identity_record={{ $identityRecordName | quote }}",
+            "identity_initialized={{ $identityInitializedName | quote }}",
+            "identity_completion={{ $identityCompletionName | quote }}",
+            "identity_pvc={{ printf \"%s-identity\" $identityRecordName | quote }}",
+            "lifecycle_capability={{ $lifecycleCapabilityName | quote }}",
+            "remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}",
+        ] {
+            assert!(
+                cleanup.contains(assignment),
+                "cleanup script must initialize {assignment}"
+            );
+        }
         assert!(cleanup.contains(
             "delete persistentvolumeclaim \"$identity_pvc\" --ignore-not-found=true --wait=false"
         ));
@@ -7408,6 +7523,10 @@ mod tests {
             "while resource_exists deployment \"$resource_name\" || resource_exists persistentvolumeclaim \"$identity_pvc\"; do"
         ));
         assert!(cleanup.contains("durable_delete_seconds_remaining=75"));
+        assert!(!cleanup.contains("cleanup_name"));
+        assert!(!cleanup.contains("delete serviceaccount"));
+        assert!(!cleanup.contains("delete role \"$cleanup"));
+        assert!(!cleanup.contains("delete rolebinding"));
         let pvc_delete = cleanup
             .rfind("delete persistentvolumeclaim \"$identity_pvc\"")
             .expect("identity PVC deletion");
@@ -7446,6 +7565,10 @@ mod tests {
         assert!(checks.contains("managed resources exist without the retained identity record"));
         assert!(checks.contains("if or .Release.IsInstall .Release.IsUpgrade"));
         assert!(checks.contains("Retained Remote Operator lifecycle records already exist"));
+        assert!(checks.contains("Remote Operator cleanup authority is absent or does not match"));
+        assert!(checks.contains("Perform one successful disabled bridge upgrade"));
+        assert!(checks.contains("$expectedCleanupRoleRules := list"));
+        assert!(checks.contains("$cleanupRoleBinding := lookup"));
         assert!(remote_template.contains("helm.sh/resource-policy: keep"));
         let identity_record = &chart.files["templates/remote-operator-identity-record.yaml"];
         assert!(identity_record.contains("alien.dev/remote-operator-identity-record"));
@@ -7472,8 +7595,8 @@ mod tests {
             .files
             .contains_key("templates/remote-operator-lifecycle-check-rbac.yaml"));
         let manager_role = &chart.files["templates/role.yaml"];
-        assert!(manager_role.contains("deployment.remoteOperatorLifecycleCheckName"));
-        assert!(manager_role.contains("deployment.remoteOperatorCleanupName"));
+        assert!(!manager_role.contains("deployment.remoteOperatorLifecycleCheckName"));
+        assert!(!manager_role.contains("deployment.remoteOperatorCleanupName"));
         let history_backend_check =
             &chart.files["templates/remote-operator-history-backend-check.yaml"];
         assert!(history_backend_check.contains("helm.sh/hook\": pre-upgrade"));
@@ -7527,6 +7650,17 @@ mod tests {
             .find("lookup \"v1\" \"ConfigMap\"")
             .expect("lifecycle checks must perform exact ConfigMap lookups");
         assert!(lifecycle_gate < first_lifecycle_lookup);
+        let cleanup_authority_gate = checks
+            .find("if and .Release.IsUpgrade .Values.remoteOperator.enabled")
+            .expect("enabled upgrades must verify their disabled-baseline cleanup authority");
+        let cleanup_authority_lookup = checks
+            .find("$cleanupServiceAccount := lookup")
+            .expect("enabled upgrades must look up the cleanup ServiceAccount");
+        let identity_retention_lookup = checks
+            .find("$identityRecord := lookup \"v1\" \"ConfigMap\"")
+            .expect("identity checks must look up the retained identity record");
+        assert!(cleanup_authority_gate < cleanup_authority_lookup);
+        assert!(cleanup_authority_lookup < identity_retention_lookup);
         assert!(chart.files["values.yaml"].contains("bootstrapIdentity: false"));
         let schema: serde_json::Value =
             serde_json::from_str(&chart.files["values.schema.json"]).unwrap();
@@ -7578,40 +7712,70 @@ remoteOperator:
             "a namespace-only product install must not submit the cluster-scoped CRD"
         );
         let disabled_documents = parse_manifest_docs(&disabled.stdout);
-        let manager_role = docs_by_kind(&disabled_documents, "Role")
+        let cleanup_service_account = docs_by_kind(&disabled_documents, "ServiceAccount")
             .into_iter()
-            .next()
-            .expect("disabled product chart manager Role");
-        let manager_rules = yaml_path(&manager_role, &["rules"])
+            .find(|document| {
+                yaml_path(document, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.contains("-cleanup-"))
+            })
+            .expect("disabled baseline cleanup ServiceAccount");
+        let cleanup_name = yaml_path(&cleanup_service_account, &["metadata", "name"])
+            .and_then(YamlValue::as_str)
+            .expect("cleanup ServiceAccount name");
+        assert!(yaml_path(
+            &cleanup_service_account,
+            &["metadata", "annotations", "helm.sh/hook"]
+        )
+        .is_none());
+        let cleanup_role = docs_by_kind(&disabled_documents, "Role")
+            .into_iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some(cleanup_name)
+            })
+            .expect("disabled baseline cleanup Role");
+        let cleanup_rules = yaml_path(&cleanup_role, &["rules"])
             .and_then(YamlValue::as_sequence)
-            .expect("manager Role rules");
-        for resources in [
-            ["serviceaccounts"].as_slice(),
-            ["roles", "rolebindings"].as_slice(),
-        ] {
-            assert!(manager_rules.iter().any(|rule| {
-                let listed_resources = yaml_path(rule, &["resources"])
-                    .and_then(YamlValue::as_sequence)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(YamlValue::as_str)
-                    .collect::<Vec<_>>();
-                let verbs = yaml_path(rule, &["verbs"])
-                    .and_then(YamlValue::as_sequence)
-                    .into_iter()
-                    .flatten()
-                    .filter_map(YamlValue::as_str)
-                    .collect::<Vec<_>>();
-                let resource_names = yaml_path(rule, &["resourceNames"])
-                    .and_then(YamlValue::as_sequence)
-                    .map_or(0, Vec::len);
-                resources
-                    .iter()
-                    .all(|resource| listed_resources.contains(resource))
-                    && verbs.contains(&"delete")
-                    && resource_names == 2
-            }), "disabled installs must retain exact-name delete access for legacy lifecycle-check {resources:?}");
-        }
+            .expect("cleanup Role rules");
+        assert_eq!(cleanup_rules.len(), 3);
+        assert!(cleanup_rules.iter().all(|rule| {
+            yaml_path(rule, &["resources"])
+                .and_then(YamlValue::as_sequence)
+                .into_iter()
+                .flatten()
+                .filter_map(YamlValue::as_str)
+                .all(|resource| !matches!(resource, "serviceaccounts" | "roles" | "rolebindings"))
+        }));
+        let cleanup_role_binding = docs_by_kind(&disabled_documents, "RoleBinding")
+            .into_iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some(cleanup_name)
+            })
+            .expect("disabled baseline cleanup RoleBinding");
+        let cleanup_subject_name = yaml_path(&cleanup_role_binding, &["subjects"])
+            .and_then(YamlValue::as_sequence)
+            .and_then(|subjects| subjects.first())
+            .and_then(|subject| yaml_path(subject, &["name"]))
+            .and_then(YamlValue::as_str);
+        assert_eq!(cleanup_subject_name, Some(cleanup_name));
+        assert_eq!(
+            yaml_path(&cleanup_role_binding, &["roleRef", "name"]).and_then(YamlValue::as_str),
+            Some(cleanup_name)
+        );
+        let cleanup_job = docs_by_kind(&disabled_documents, "Job")
+            .into_iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some(cleanup_name)
+            })
+            .expect("disabled baseline cleanup Job");
+        assert_eq!(
+            yaml_path(&cleanup_job, &["metadata", "annotations", "helm.sh/hook"])
+                .and_then(YamlValue::as_str),
+            Some("pre-delete")
+        );
 
         // Client-only rendering cannot satisfy the live Secret and ownership
         // lookups. The Kind lifecycle test exercises this unmodified chart
@@ -7747,6 +7911,65 @@ remoteOperator:
     }
 
     #[test]
+    fn product_chart_omits_cleanup_job_on_first_enabled_render_without_baseline_lifecycle_capability(
+    ) {
+        let mut files = sample_product_chart().files;
+        files.shift_remove("templates/remote-operator-checks.yaml");
+        let rendered = crate::test_utils::helm_template(
+            &files,
+            Some(
+                r#"
+management:
+  url: https://manager.example.com
+remoteOperator:
+  enabled: true
+  existingSecret:
+    name: setup-owned
+    encryptionKeySha256: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+"#,
+            ),
+        );
+        rendered.assert_ok("product chart without retained Remote Operator identity");
+        let documents = parse_manifest_docs(&rendered.stdout);
+        let cleanup_service_account = docs_by_kind(&documents, "ServiceAccount")
+            .into_iter()
+            .find(|document| {
+                yaml_path(document, &["metadata", "name"])
+                    .and_then(YamlValue::as_str)
+                    .is_some_and(|name| name.contains("-cleanup-"))
+            })
+            .expect("ordinary cleanup ServiceAccount");
+        let cleanup_name = yaml_path(&cleanup_service_account, &["metadata", "name"])
+            .and_then(YamlValue::as_str)
+            .expect("cleanup ServiceAccount name");
+        assert!(yaml_path(
+            &cleanup_service_account,
+            &["metadata", "annotations", "helm.sh/hook"]
+        )
+        .is_none());
+        assert!(
+            !docs_by_kind(&documents, "Job").iter().any(|document| {
+                yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
+                    == Some(cleanup_name)
+            }),
+            "the first enabled render must wait for the disabled baseline lifecycle capability before rendering the cleanup Job"
+        );
+        assert!(documents.iter().any(|document| {
+            yaml_str(document, "kind") == Some("ConfigMap")
+                && yaml_path(
+                    document,
+                    &[
+                        "metadata",
+                        "labels",
+                        "alien.dev/remote-operator-identity-record",
+                    ],
+                )
+                .and_then(YamlValue::as_str)
+                    == Some("true")
+        }));
+    }
+
+    #[test]
     fn product_chart_fullname_override_cannot_hide_completed_remote_identity() {
         let chart = sample_product_chart();
         let identity_record = &chart.files["templates/remote-operator-identity-record.yaml"];
@@ -7855,21 +8078,17 @@ remoteOperator:
                 yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
             })
             .expect("Remote Operator ServiceAccount");
-        let jobs = docs_by_kind(&documents, "Job");
-        let cleanup_name = jobs
+        let cleanup_name = service_accounts
             .iter()
             .find(|document| {
-                yaml_path(document, &["metadata", "annotations", "helm.sh/hook"])
+                yaml_path(document, &["metadata", "name"])
                     .and_then(YamlValue::as_str)
-                    .is_some_and(|hook| hook.contains("pre-delete"))
-                    && yaml_path(document, &["metadata", "name"])
-                        .and_then(YamlValue::as_str)
-                        .is_some_and(|name| name.contains("-cleanup-"))
+                    .is_some_and(|name| name.contains("-cleanup-"))
             })
             .and_then(|document| {
                 yaml_path(document, &["metadata", "name"]).and_then(YamlValue::as_str)
             })
-            .expect("Remote Operator cleanup Job");
+            .expect("ordinary Remote Operator cleanup ServiceAccount");
 
         assert_eq!(operator_name.len(), 54);
         assert_eq!(cleanup_name.len(), 55);
@@ -8068,17 +8287,16 @@ remoteOperator:
         let cleanup = remote_operator_cleanup_job_tpl();
 
         assert!(
-            cleanup
-                .contains("remote_operator_enabled={{ .Values.remoteOperator.enabled | quote }}"),
-            "cleanup must distinguish enabled from disabled revisions"
-        );
-        assert!(
             cleanup.contains(
-                "if [ \"$remote_operator_enabled\" = \"true\" ] && ! owned_by_this_release deployment \"$resource_name\" \"$resource_name\"; then"
+                "if resource_exists deployment \"$resource_name\"; then\n                require_field deployment \"$resource_name\" '{.metadata.annotations.meta\\.helm\\.sh/release-name}' \"$release_name\" release-name"
             ) && cleanup.contains(
-                "Deployment $namespace/$resource_name is not owned by this exact Helm release."
+                "require_field deployment \"$resource_name\" '{.metadata.annotations.meta\\.helm\\.sh/release-namespace}' \"$namespace\" release-namespace"
+            ) && cleanup.contains(
+                "require_field deployment \"$resource_name\" '{.metadata.labels.app\\.kubernetes\\.io/managed-by}' \"$release_service\" managed-by"
+            ) && cleanup.contains(
+                "require_field deployment \"$resource_name\" '{.metadata.labels.app\\.kubernetes\\.io/instance}' \"$resource_name\" instance"
             ),
-            "an enabled release must reject a same-name foreign Deployment before Helm deletes it"
+            "the retained identity path must reject a same-name foreign Deployment before Helm deletes it"
         );
     }
 

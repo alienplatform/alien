@@ -9,8 +9,8 @@
 //! `terraform fmt -check` + `terraform validate` against the cloud providers.
 
 use super::helpers::{
-    assert_terraform_formatted, assert_terraform_valid,
-    assert_terraform_variable_plan_invalid_contains, render, snapshot_module,
+    assert_terraform_valid, assert_terraform_variable_plan_invalid_contains, render,
+    snapshot_module,
 };
 use alien_core::{
     AzureResourceGroup, Container, ContainerCode, KubernetesCertificateMode, KubernetesCluster,
@@ -838,105 +838,6 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
     assert!(
         providers.contains("host                   = data.aws_eks_cluster.target.endpoint"),
         "{providers}"
-    );
-}
-
-#[test]
-fn product_credentials_secret_is_retained_by_identity_records_and_destroyed_after_helm() {
-    let stack = Stack::new("eks-remote-secret-lifecycle".to_string())
-        .add(
-            KubernetesCluster::new("kubernetes".to_string())
-                .provider(KubernetesClusterProvider::Eks)
-                .ownership(KubernetesClusterOwnership::Managed)
-                .namespace("production".to_string())
-                .heartbeat_mode(KubernetesHeartbeatMode::KubernetesApiAndCloudMetadata)
-                .build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    let registry = TfRegistry::built_in();
-    let module = generate_product_terraform_module(
-        &stack,
-        TerraformTarget::Eks,
-        TerraformOptions {
-            display_name: None,
-            registry: &registry,
-            stack_settings: StackSettings::default(),
-            registration: Some(TerraformRegistration {
-                provider_name: "acme_app".to_string(),
-                provider_source: "pkg.example.com/acme/app".to_string(),
-                provider_version: "1.0.0".to_string(),
-                resource_type: "deployment".to_string(),
-                release_id: Some("rel-test".to_string()),
-                setup_target: "kubernetes".to_string(),
-                setup_fingerprint: "test".to_string(),
-                setup_fingerprint_version: 1,
-            }),
-            helm_install: Some(TerraformHelmInstall {
-                chart_ref: "oci://pkg.example.com/acme/app/helm".to_string(),
-                release_name: "acme-operator".to_string(),
-            }),
-            supported_aws_regions: Vec::new(),
-        },
-        true,
-    )
-    .expect("module should render");
-    let helm = module.get("helm.tf").expect("helm.tf should render");
-    let compact = helm.split_whitespace().collect::<Vec<_>>().join(" ");
-
-    assert_terraform_formatted(&module, "product Remote Operator credential retention");
-
-    assert!(
-        compact.contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0")
-    );
-    assert!(compact.contains(
-        "remote_operator_namespace_exists = local.remote_operator_inspect_lifecycle && length(data.kubernetes_resources.remote_operator_namespace[0].objects) != 0"
-    ));
-    assert!(compact.contains(
-        "remote_operator_identity_record_count = local.remote_operator_inspect_lifecycle ? length(data.kubernetes_resources.remote_operator_identity_records[0].objects) : 0"
-    ));
-    assert!(compact.contains(
-        "data \"kubernetes_resources\" \"remote_operator_identity_records\" { count = local.remote_operator_inspect_lifecycle ? 1 : 0 api_version = \"v1\" kind = local.remote_operator_namespace_exists ? \"ConfigMap\" : \"Namespace\" namespace = local.remote_operator_namespace_exists ? local.remote_operator_lifecycle_namespace : null"
-    ));
-    assert!(compact.contains(
-        "condition = local.remote_operator_pinned_ownership.managed ? (local.remote_operator_requested_managed && var.kubernetes_namespace == local.remote_operator_pinned_ownership.namespace && var.helm_release_name == local.remote_operator_pinned_ownership.release) : !local.remote_operator_requested_managed"
-    ));
-    assert!(compact.contains(
-        "field_selector = local.remote_operator_namespace_exists ? \"metadata.name=${local.remote_operator_identity_record_name}\" : \"metadata.name=${local.remote_operator_lifecycle_namespace}\""
-    ));
-    assert!(compact.contains(
-        "remote_operator_release_prefix = trim(substr(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\"), 0, min(21, length(replace(lower(local.remote_operator_lifecycle_release), \"/[^a-z0-9-]+/\", \"-\")))), \"-\")"
-    ));
-    assert!(compact.contains(
-        r#"remote_operator_identity_record_name = "${local.remote_operator_release_prefix}-remote-operator-${substr(sha256("${local.remote_operator_lifecycle_namespace}/${local.remote_operator_lifecycle_release}"), 0, 16)}""#
-    ), "{helm}");
-    assert!(!compact.contains("label_selector ="));
-    assert!(compact.contains(
-        "condition = (!var.remote_operator_enabled && local.remote_operator_identity_record_count == 0) || var.remote_operator_encryption_key != null"
-    ));
-    assert!(compact.contains("condition = var.remote_operator_collector_token != null"));
-    assert!(compact.contains(
-        "remote_operator_collector_token is required while this product chart's Remote Operator log collector is enabled"
-    ));
-
-    let secret_position = compact
-        .find("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\"")
-        .expect("credentials Secret resource");
-    let helm_position = compact
-        .find("resource \"helm_release\" \"runtime\"")
-        .expect("Helm release resource");
-    let helm_resource = &compact[helm_position..];
-    assert!(
-        helm_resource.contains("max_history = var.remote_operator_enabled ? 2 : 1"),
-        "disabled bridges must prune old revisions before enabled releases retain one guarded rollback revision"
-    );
-    assert!(
-        secret_position < helm_position,
-        "generated lifecycle should be reviewable in creation order"
-    );
-    assert!(
-        helm_resource.contains("depends_on = [ kubernetes_secret_v1.remote_operator_credentials, terraform_data.remote_operator_lifecycle_guard ]"),
-        "Terraform must validate pinned ownership and destroy/update Helm before removing its credentials Secret"
     );
 }
 

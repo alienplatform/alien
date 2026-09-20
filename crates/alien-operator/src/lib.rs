@@ -632,7 +632,7 @@ async fn await_and_mark_kubernetes_identity_initialized(
 }
 
 async fn patch_kubernetes_identity_initialized(
-    client: &alien_k8s_clients::KubernetesClient,
+    client: &KubernetesClient,
     namespace: &str,
     config_map_name: &str,
 ) -> error::Result<()> {

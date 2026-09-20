@@ -76,7 +76,6 @@ jobs:
               # The smoke test qualifies the published image, and its own harness
               # is what proves it fails loudly. Both run in this job.
               - 'scripts/smoke-sandbox-agent*'
-              - '.github/workflows/ci-fast.yml'
             product_lifecycle:
               - 'crates/alien-core/**'
               - 'crates/alien-helm/**'
@@ -118,7 +117,10 @@ jobs:
   rust:
     name: Rust crates
     needs: [pr-conventions, changes]
-    if: github.event_name == 'workflow_dispatch' || needs.changes.outputs.rust == 'true'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      needs.changes.outputs.rust == 'true' ||
+      needs.changes.outputs.product_lifecycle == 'true'
     runs-on: depot-ubuntu-24.04-arm-16
     timeout-minutes: 120
     env:

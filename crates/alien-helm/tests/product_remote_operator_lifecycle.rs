@@ -31,8 +31,9 @@ const NOT_READY_OPERATOR_IMAGE: &str = "alien-product-lifecycle-operator-not-rea
 const OPERATOR_FIXTURE_BASE_IMAGE: &str = "alpine/k8s:1.32.0";
 const LOG_COLLECTOR_BASE_IMAGE: &str = "fluent/fluent-bit:3.2";
 const LOG_COLLECTOR_IMAGE: &str = "alien-product-lifecycle-collector:local";
-const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "registry.k8s.io/pause";
-const GOOD_RUNTIME_IMAGE_TAG: &str = "3.10.1";
+const GOOD_RUNTIME_IMAGE_REPOSITORY: &str = "alien-product-lifecycle-runtime";
+const GOOD_RUNTIME_IMAGE_TAG: &str = "local";
+const GOOD_RUNTIME_IMAGE: &str = "alien-product-lifecycle-runtime:local";
 
 struct TestClusterCleanup {
     helm_namespace: String,
@@ -89,10 +90,12 @@ fn product_remote_operator_helm_and_terraform_lifecycle() {
     let operator_fixture_dir = temp.path().join("operator-fixture");
     let not_ready_operator_fixture_dir = temp.path().join("operator-fixture-not-ready");
     let log_collector_fixture_dir = temp.path().join("log-collector-fixture");
+    let runtime_fixture_dir = temp.path().join("runtime-fixture");
     fs::create_dir_all(&operator_fixture_dir).expect("create Operator fixture directory");
     fs::create_dir_all(&not_ready_operator_fixture_dir)
         .expect("create not-ready Operator fixture directory");
     fs::create_dir_all(&log_collector_fixture_dir).expect("create log-collector fixture directory");
+    fs::create_dir_all(&runtime_fixture_dir).expect("create runtime fixture directory");
     fs::write(
         operator_fixture_dir.join("Dockerfile"),
         r#"FROM __OPERATOR_FIXTURE_BASE_IMAGE__
@@ -110,6 +113,13 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
     )
     .expect("write not-ready Operator fixture Dockerfile");
     fs::write(
+        runtime_fixture_dir.join("Dockerfile"),
+        format!(
+            "FROM {OPERATOR_FIXTURE_BASE_IMAGE}\nUSER 1000:1000\nENTRYPOINT []\nCMD [\"sleep\", \"3600\"]\n"
+        ),
+    )
+    .expect("write runtime fixture Dockerfile");
+    fs::write(
         log_collector_fixture_dir.join("Dockerfile"),
         format!("FROM {LOG_COLLECTOR_BASE_IMAGE}\nCOPY marker /alien-e2e-marker\n"),
     )
@@ -125,6 +135,16 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
             "--tag",
             LOG_COLLECTOR_IMAGE,
             path_str(&log_collector_fixture_dir),
+        ],
+        None,
+    );
+    run_ok(
+        "docker",
+        [
+            "build",
+            "--tag",
+            GOOD_RUNTIME_IMAGE,
+            path_str(&runtime_fixture_dir),
         ],
         None,
     );
@@ -154,6 +174,17 @@ CMD ["/bin/sh", "-ec", "kubectl --namespace=\"$KUBERNETES_NAMESPACE\" patch conf
             "load",
             "docker-image",
             GOOD_OPERATOR_IMAGE,
+            "--name",
+            "alien-product-lifecycle",
+        ],
+        None,
+    );
+    run_ok(
+        "kind",
+        [
+            "load",
+            "docker-image",
+            GOOD_RUNTIME_IMAGE,
             "--name",
             "alien-product-lifecycle",
         ],
@@ -1761,7 +1792,22 @@ spec:
     );
     run_ok(
         "terraform",
-        ["apply", "-input=false", "-no-color", "-auto-approve"],
+        [
+            "plan",
+            "-input=false",
+            "-no-color",
+            "-out=initial-disabled.tfplan",
+        ],
+        Some(&terraform_dir),
+    );
+    run_ok(
+        "terraform",
+        [
+            "apply",
+            "-input=false",
+            "-no-color",
+            "initial-disabled.tfplan",
+        ],
         Some(&terraform_dir),
     );
     write_terraform_lifecycle_variables_with_release(
