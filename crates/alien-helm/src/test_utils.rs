@@ -73,6 +73,15 @@ pub fn helm_lint(files: &LinterFiles) -> LinterRun {
 
 /// Render a chart with `helm template`, then validate with kubeconform.
 pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRun {
+    helm_template_and_validate_for_release(files, values_yaml, "test-release")
+}
+
+/// Render a chart for an explicit release name, then validate with kubeconform.
+pub fn helm_template_and_validate_for_release(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+) -> LinterRun {
     run_when_enabled("helm template", || {
         let dir = write_files_to_temp_dir(files)?;
         let values_path = if let Some(values) = values_yaml {
@@ -85,7 +94,7 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
 
         let mut args = vec![
             OsStr::new("template").to_os_string(),
-            OsStr::new("test-release").to_os_string(),
+            OsStr::new(release_name).to_os_string(),
             dir.path().as_os_str().to_os_string(),
         ];
         if let Some(path) = &values_path {
@@ -106,6 +115,11 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
             [
                 OsStr::new("-strict"),
                 OsStr::new("-summary"),
+                // kubeconform intentionally has no built-in schema for the CRD
+                // object itself. Helm/Kind lifecycle coverage submits it to the
+                // Kubernetes API; keep validating every namespaced resource here.
+                OsStr::new("-skip"),
+                OsStr::new("CustomResourceDefinition"),
                 OsStr::new("-kubernetes-version"),
                 OsStr::new("1.28.0"),
                 rendered_path.as_os_str(),
@@ -117,6 +131,15 @@ pub fn helm_template_and_validate(files: &LinterFiles, values_yaml: Option<&str>
 
 /// Render a chart with `helm template` and return the rendered manifest.
 pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRun {
+    helm_template_for_release(files, values_yaml, "test-release")
+}
+
+/// Render a chart with `helm template` for an explicit release name.
+pub fn helm_template_for_release(
+    files: &LinterFiles,
+    values_yaml: Option<&str>,
+    release_name: &str,
+) -> LinterRun {
     run_when_enabled("helm template", || {
         let dir = write_files_to_temp_dir(files)?;
         let values_path = if let Some(values) = values_yaml {
@@ -129,7 +152,7 @@ pub fn helm_template(files: &LinterFiles, values_yaml: Option<&str>) -> LinterRu
 
         let mut args = vec![
             OsStr::new("template").to_os_string(),
-            OsStr::new("test-release").to_os_string(),
+            OsStr::new(release_name).to_os_string(),
             dir.path().as_os_str().to_os_string(),
         ];
         if let Some(path) = &values_path {

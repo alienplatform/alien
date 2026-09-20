@@ -144,6 +144,13 @@ pub fn assert_terraform_valid(module: &ModuleFiles, context: &str) {
     test_utils::terraform_validate(&files).assert_ok(format!("{context} terraform validate"));
 }
 
+/// Run `terraform fmt -check` when provider initialization is intentionally
+/// unavailable (for example, a test registry provider with no public binary).
+pub fn assert_terraform_formatted(module: &ModuleFiles, context: &str) {
+    let files = linter_files(module);
+    test_utils::terraform_fmt_check(&files).assert_ok(format!("{context} terraform fmt -check"));
+}
+
 /// Run Terraform planning against the generated variable declarations and
 /// require a specific diagnostic fragment.
 pub fn assert_terraform_variable_plan_invalid_contains(
