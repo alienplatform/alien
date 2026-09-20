@@ -62,10 +62,10 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64
-            wheel_args: --manylinux 2014
+            manylinux: "2014"
           - os: macos-14
             target: aarch64
-            wheel_args: ""
+            manylinux: "off"
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -74,7 +74,8 @@ jobs:
         with:
           command: build
           target: ${{ matrix.target }}
-          args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms ${{ matrix.wheel_args }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms
       - uses: actions/upload-artifact@v4
         with:
           name: alienplatform-${{ matrix.os }}
