@@ -2,7 +2,8 @@
 //!
 //! [`Bindings`] wraps a [`crate::provider::LazyEnvBindingsProvider`], giving application
 //! code a small, stable surface — `storage`, `kv`, `queue`, `vault`, `container`,
-//! `postgres`, `sandbox` — instead of the full [`crate::traits::BindingsProviderApi`] used internally
+//! `worker`, `postgres`, `sandbox` — instead of the full
+//! [`crate::traits::BindingsProviderApi`] used internally
 //! by the manager and controllers.
 
 use crate::error::Result;
@@ -12,7 +13,7 @@ use crate::refreshing::{
 };
 use crate::traits::{
     BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage,
-    Sandbox, Storage, Vault,
+    Sandbox, Storage, Vault, Worker,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -177,6 +178,11 @@ impl Bindings {
     /// Loads a linked container for read-only service discovery.
     pub async fn container(&self, binding_name: &str) -> Result<Arc<dyn Container>> {
         self.provider.load_container(binding_name).await
+    }
+
+    /// Loads a linked worker for direct invocation and public URL discovery.
+    pub async fn worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
+        self.provider.load_worker(binding_name).await
     }
 
     /// Loads the connection details for a linked Postgres database.
