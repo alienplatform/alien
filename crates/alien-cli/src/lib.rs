@@ -450,10 +450,7 @@ fn parse_secret_source(input: &str, flag: &str) -> Result<(String, String, Optio
 
     let (source, targets) = match source_with_targets.rsplit_once(':') {
         Some((source, targets))
-            if !targets.is_empty()
-                && !targets.chars().all(|character| character.is_ascii_digit())
-                && !targets.starts_with('/')
-                && !targets.starts_with('\\') =>
+            if !targets.is_empty() && !targets.starts_with('/') && !targets.starts_with('\\') =>
         {
             let targets = targets
                 .split(',')
@@ -470,6 +467,12 @@ fn parse_secret_source(input: &str, flag: &str) -> Result<(String, String, Optio
         }
         _ => (source_with_targets, None),
     };
+
+    if source.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Invalid {flag} entry for '{name}': key and source must not be empty"),
+        }));
+    }
 
     Ok((name.to_string(), source.to_string(), targets))
 }
@@ -703,6 +706,27 @@ mod tests {
         assert!(!error.to_string().contains(secret));
         assert!(error.to_string().contains("API_TOKEN"));
         assert!(error.to_string().contains("MISSING"));
+    }
+
+    #[test]
+    fn secret_sources_accept_numeric_resource_ids() {
+        let (name, source, targets) =
+            parse_secret_source("API_TOKEN=/run/secrets/token:1234", "--secret-file")
+                .expect("numeric resource ID should be accepted");
+
+        assert_eq!(name, "API_TOKEN");
+        assert_eq!(source, "/run/secrets/token");
+        assert_eq!(targets, Some(vec!["1234".to_string()]));
+    }
+
+    #[test]
+    fn secret_sources_reject_empty_source_before_lookup() {
+        let error = parse_secret_source("API_TOKEN=:api", "--secret-file")
+            .expect_err("empty source should fail validation");
+
+        assert!(error
+            .to_string()
+            .contains("key and source must not be empty"));
     }
 
     #[test]
