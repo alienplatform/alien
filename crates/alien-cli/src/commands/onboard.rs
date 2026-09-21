@@ -439,6 +439,7 @@ fn platform_onboard_deployment_setup_config(
     Ok(types::DeploymentSetupConfigInput {
         metadata: Some(types::DeploymentSetupMetadata(metadata)),
         public_subdomain,
+        validated_release_selection: None,
         policy: Some(types::DeploymentSetupConfigInputPolicy {
             allow_release_pinning: None,
             allowed_ai_providers: Vec::new(),
