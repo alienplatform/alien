@@ -28,7 +28,7 @@ alien-core = { workspace = true }
 alien-error = { workspace = true }
 futures = { workspace = true }
 object_store = { workspace = true }
-pyo3 = { workspace = true, features = ["extension-module", "abi3-py310"] }
+pyo3 = { workspace = true, features = ["abi3-py310"] }
 pyo3-async-runtimes = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }

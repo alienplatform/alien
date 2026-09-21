@@ -249,15 +249,23 @@ async def test_ai_connection_retains_managed_gateway_owner(
             return handles[name]
 
     monkeypatch.setattr(bindings_module._native, "BindingsHandle", FakeBindingsHandle)
-    connection = await bindings_module.Ai("assistant").connection()
+    resource = bindings_module.Ai("assistant")
+    connection = await resource.connection()
+    assert connection._owner is handle
+
+    # Remove the resource factory and its completed lazy-resolution task. The connection must
+    # independently keep the native gateway alive for as long as callers retain it.
+    del resource
     del handle
     handles.clear()
+    await asyncio.sleep(0)
     gc.collect()
     assert handle_ref() is not None
     assert connection == AiConnection("http://127.0.0.1:1234", "secret", "managed")
     assert "secret" not in repr(connection)
 
     del connection
+    await asyncio.sleep(0)
     gc.collect()
     assert handle_ref() is None
 
