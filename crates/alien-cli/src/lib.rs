@@ -292,6 +292,14 @@ pub struct DevCommand {
     #[arg(long = "secret")]
     pub secret_vars: Vec<String>,
 
+    /// Secret environment variables read from files (KEY=PATH or KEY=PATH:target1,target2)
+    #[arg(long = "secret-file")]
+    pub secret_files: Vec<String>,
+
+    /// Secret environment variables inherited from the CLI environment (KEY=SOURCE_ENV or KEY=SOURCE_ENV:target1,target2)
+    #[arg(long = "secret-env")]
+    pub secret_env_vars: Vec<String>,
+
     #[command(subcommand)]
     pub subcommand: Option<DevSubcommand>,
 }
@@ -400,6 +408,15 @@ pub(crate) fn parse_env_and_secret_vars(
     env_vars: &[String],
     secret_vars: &[String],
 ) -> Result<Vec<CliEnvVar>> {
+    parse_dev_env_and_secret_vars(env_vars, secret_vars, &[], &[])
+}
+
+fn parse_dev_env_and_secret_vars(
+    env_vars: &[String],
+    secret_vars: &[String],
+    secret_files: &[String],
+    secret_env_vars: &[String],
+) -> Result<Vec<CliEnvVar>> {
     let mut parsed = Vec::new();
     for env in env_vars {
         parsed.push(parse_single_env_var(env, false)?);
@@ -407,7 +424,103 @@ pub(crate) fn parse_env_and_secret_vars(
     for secret in secret_vars {
         parsed.push(parse_single_env_var(secret, true)?);
     }
+    for secret_file in secret_files {
+        parsed.push(parse_secret_file(secret_file)?);
+    }
+    for secret_env_var in secret_env_vars {
+        parsed.push(parse_secret_env_var(secret_env_var)?);
+    }
     Ok(parsed)
+}
+
+fn parse_secret_source(input: &str, flag: &str) -> Result<(String, String, Option<Vec<String>>)> {
+    let (name, source_with_targets) = input.split_once('=').ok_or_else(|| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Invalid {flag} format. Expected KEY=SOURCE or KEY=SOURCE:target1,target2"
+            ),
+        })
+    })?;
+
+    if name.is_empty() || source_with_targets.is_empty() {
+        return Err(AlienError::new(ErrorData::ConfigurationError {
+            message: format!("Invalid {flag} entry for '{name}': key and source must not be empty"),
+        }));
+    }
+
+    let (source, targets) = match source_with_targets.rsplit_once(':') {
+        Some((source, targets))
+            if !targets.is_empty()
+                && !targets.chars().all(|character| character.is_ascii_digit())
+                && !targets.starts_with('/')
+                && !targets.starts_with('\\') =>
+        {
+            let targets = targets
+                .split(',')
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>();
+            if targets.is_empty() {
+                return Err(AlienError::new(ErrorData::ConfigurationError {
+                    message: format!("Invalid {flag} targets for '{name}'"),
+                }));
+            }
+            (source, Some(targets))
+        }
+        _ => (source_with_targets, None),
+    };
+
+    Ok((name.to_string(), source.to_string(), targets))
+}
+
+fn parse_secret_file(input: &str) -> Result<CliEnvVar> {
+    let (name, path, target_resources) = parse_secret_source(input, "--secret-file")?;
+    let mut value = std::fs::read_to_string(&path).into_alien_error().context(
+        ErrorData::FileOperationFailed {
+            operation: "read secret file".to_string(),
+            file_path: path,
+            reason: format!("could not load value for '{name}'"),
+        },
+    )?;
+    if value.ends_with('\n') {
+        value.pop();
+        if value.ends_with('\r') {
+            value.pop();
+        }
+    }
+
+    Ok(CliEnvVar {
+        name,
+        value,
+        is_secret: true,
+        target_resources,
+    })
+}
+
+fn parse_secret_env_var(input: &str) -> Result<CliEnvVar> {
+    parse_secret_env_var_with(input, |source| std::env::var(source))
+}
+
+fn parse_secret_env_var_with(
+    input: &str,
+    read_env: impl FnOnce(&str) -> std::result::Result<String, std::env::VarError>,
+) -> Result<CliEnvVar> {
+    let (name, source_env, target_resources) = parse_secret_source(input, "--secret-env")?;
+    let value = read_env(&source_env).map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "Could not load value for '{name}' from environment variable '{source_env}'"
+            ),
+        })
+    })?;
+
+    Ok(CliEnvVar {
+        name,
+        value,
+        is_secret: true,
+        target_resources,
+    })
 }
 
 pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEnvVar> {
@@ -439,10 +552,11 @@ pub(crate) fn parse_single_env_var(input: &str, is_secret: bool) -> Result<CliEn
 
             if targets.is_empty() {
                 return Err(AlienError::new(ErrorData::ConfigurationError {
-                    message: format!(
-                        "Invalid {} format: '{input}'. Targets list is empty after ':'.",
-                        if is_secret { "--secret" } else { "--env" }
-                    ),
+                    message: if is_secret {
+                        format!("Invalid --secret targets for '{name}'")
+                    } else {
+                        format!("Invalid --env format: '{input}'. Targets list is empty after ':'.")
+                    },
                 }));
             }
 
@@ -533,6 +647,94 @@ mod tests {
     fn parse_single_env_var_rejects_invalid_input() {
         let err = parse_single_env_var("MISSING_EQUALS", false).unwrap_err();
         assert!(err.to_string().contains("Invalid --env format"));
+    }
+
+    #[test]
+    fn secret_file_reads_value_without_putting_it_in_the_argument() {
+        let secret = "file-secret-that-must-not-appear-in-argv";
+        let path = std::env::temp_dir().join(format!(
+            "alien-secret-file-{}-{}",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        std::fs::write(&path, format!("{secret}\n")).expect("secret fixture should be writable");
+
+        let argument = format!("API_TOKEN={}:api,worker", path.display());
+        assert!(!argument.contains(secret));
+        let parsed = parse_secret_file(&argument).expect("secret file should be accepted");
+
+        assert_eq!(parsed.name, "API_TOKEN");
+        assert_eq!(parsed.value, secret);
+        assert!(parsed.is_secret);
+        assert!(!format!("{parsed:?}").contains(secret));
+        assert_eq!(
+            parsed.target_resources,
+            Some(vec!["api".to_string(), "worker".to_string()])
+        );
+        std::fs::remove_file(path).expect("secret fixture should be removable");
+    }
+
+    #[test]
+    fn secret_env_reads_inherited_value_and_preserves_targets() {
+        let secret = "inherited-secret-that-must-not-appear-in-argv";
+        let argument = "API_TOKEN=ALIEN_TEST_API_TOKEN:worker";
+        assert!(!argument.contains(secret));
+
+        let parsed = parse_secret_env_var_with(argument, |source| {
+            assert_eq!(source, "ALIEN_TEST_API_TOKEN");
+            Ok(secret.to_string())
+        })
+        .expect("inherited secret should be accepted");
+
+        assert_eq!(parsed.name, "API_TOKEN");
+        assert_eq!(parsed.value, secret);
+        assert!(parsed.is_secret);
+        assert!(!format!("{parsed:?}").contains(secret));
+        assert_eq!(parsed.target_resources, Some(vec!["worker".to_string()]));
+    }
+
+    #[test]
+    fn secret_source_errors_never_include_loaded_values() {
+        let secret = "secret-that-errors-must-not-render";
+        let error =
+            parse_secret_env_var_with("API_TOKEN=MISSING", |_| Err(std::env::VarError::NotPresent))
+                .expect_err("missing inherited variable should fail");
+
+        assert!(!error.to_string().contains(secret));
+        assert!(error.to_string().contains("API_TOKEN"));
+        assert!(error.to_string().contains("MISSING"));
+    }
+
+    #[test]
+    fn dev_cli_accepts_non_argument_secret_sources() {
+        let matches = Cli::command()
+            .try_get_matches_from([
+                "alien",
+                "dev",
+                "--secret-file",
+                "FILE_TOKEN=/run/secrets/token:api",
+                "--secret-env",
+                "ENV_TOKEN=SOURCE_TOKEN:worker",
+            ])
+            .expect("secure secret source flags should parse");
+        let (_, dev_matches) = matches.subcommand().expect("dev subcommand should exist");
+
+        assert_eq!(
+            dev_matches
+                .get_many::<String>("secret_files")
+                .expect("secret file should be captured")
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["FILE_TOKEN=/run/secrets/token:api"]
+        );
+        assert_eq!(
+            dev_matches
+                .get_many::<String>("secret_env_vars")
+                .expect("secret env should be captured")
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec!["ENV_TOKEN=SOURCE_TOKEN:worker"]
+        );
     }
 
     #[test]
@@ -1024,7 +1226,12 @@ fn deployment_record_to_card(
 async fn handle_dev_command(dev_cmd: DevCommand) -> Result<()> {
     let port = dev_cmd.port;
     let ctx = ExecutionMode::Dev { port };
-    let parsed_env_vars = parse_env_and_secret_vars(&dev_cmd.env_vars, &dev_cmd.secret_vars)?;
+    let parsed_env_vars = parse_dev_env_and_secret_vars(
+        &dev_cmd.env_vars,
+        &dev_cmd.secret_vars,
+        &dev_cmd.secret_files,
+        &dev_cmd.secret_env_vars,
+    )?;
 
     match dev_cmd.subcommand {
         None => {

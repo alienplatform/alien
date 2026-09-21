@@ -37,12 +37,31 @@ use tokio::time::Duration;
 use tracing::info;
 
 /// Parsed CLI environment variable.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CliEnvVar {
     pub name: String,
     pub value: String,
     pub is_secret: bool,
     pub target_resources: Option<Vec<String>>,
+}
+
+impl std::fmt::Debug for CliEnvVar {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CliEnvVar")
+            .field("name", &self.name)
+            .field(
+                "value",
+                if self.is_secret {
+                    &"[REDACTED]" as &dyn std::fmt::Debug
+                } else {
+                    &self.value
+                },
+            )
+            .field("is_secret", &self.is_secret)
+            .field("target_resources", &self.target_resources)
+            .finish()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
