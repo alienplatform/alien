@@ -1406,6 +1406,10 @@ jobs:
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: platform
 
+      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
+        with:
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+
       - name: Restore binaries from cache
         id: binary-cache
         uses: actions/cache@v6
@@ -1474,6 +1478,10 @@ jobs:
           ref: ${{ needs.prepare.outputs.platform_ref }}
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: platform
+
+      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
+        with:
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -1545,6 +1553,10 @@ jobs:
           ref: ${{ needs.prepare.outputs.platform_ref }}
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: platform
+
+      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
+        with:
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Restore binaries from cache
         id: binary-cache
@@ -1627,6 +1639,10 @@ jobs:
           ref: ${{ needs.prepare.outputs.platform_ref }}
           token: ${{ secrets.REPO_ACCESS_TOKEN }}
           path: platform
+
+      - uses: ./platform/.github/actions/setup-composed-cli-dependencies
+        with:
+          repo-access-token: ${{ secrets.REPO_ACCESS_TOKEN }}
 
       - name: Restore binaries from cache
         id: binary-cache
