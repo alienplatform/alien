@@ -96,6 +96,14 @@ pub struct DebugArgs {
     #[arg(long = "access-duration", default_value = "30m")]
     pub access_duration: String,
 
+    /// Scope the `--request-access` grant to a specific cloud account/project/
+    /// subscription, e.g. `123456789012/prod-readonly`. Only meaningful for
+    /// aws/gcloud/az (kubectl scopes by namespace, derived automatically from
+    /// the debugged command). Omit for an unscoped grant covering the whole
+    /// deployment's cloud identity.
+    #[arg(long = "access-cloud-scope")]
+    pub access_cloud_scope: Option<String>,
+
     /// Emit errors as JSON. The spawned command's stdout/stderr are always passed
     /// through unchanged.
     #[arg(long)]
@@ -229,6 +237,7 @@ pub async fn debug_task(args: DebugArgs, ctx: ExecutionMode) -> Result<()> {
                 &tool,
                 &args.cmd,
                 &args.access_duration,
+                args.access_cloud_scope.as_deref(),
                 args.json,
             )
             .await?,
@@ -268,12 +277,13 @@ async fn request_debug_access_then_wait(
     tool: &str,
     cmd: &[String],
     access_duration: &str,
+    access_cloud_scope: Option<&str>,
     json: bool,
 ) -> Result<String> {
     let debug_tool = crate::commands::access_requests::parse_debug_tool(tool)?;
-    let debug_namespace = (debug_tool == alien_platform_api::types::DebugGrantTool::Kubectl)
-        .then(|| kubectl_namespace_from_args(cmd))
-        .flatten();
+    let is_kubectl = debug_tool == alien_platform_api::types::DebugGrantTool::Kubectl;
+    let debug_namespace = is_kubectl.then(|| kubectl_namespace_from_args(cmd)).flatten();
+    validate_access_cloud_scope(access_cloud_scope, is_kubectl)?;
     let requested_expires_at = crate::commands::access_requests::requested_expiration(
         chrono::Utc::now(),
         Some(access_duration),
@@ -293,7 +303,7 @@ async fn request_debug_access_then_wait(
             max_risk: None,
             debug_tool: Some(debug_tool),
             debug_namespace,
-            debug_cloud_scope: None,
+            debug_cloud_scope: access_cloud_scope.map(str::to_string),
             title: None,
             reason: None,
             remediation_plan_id: None,
@@ -340,6 +350,22 @@ fn kubectl_namespace_from_args(cmd: &[String]) -> Option<String> {
         }
     }
     None
+}
+
+/// Reject `--access-cloud-scope` when the tool being requested is kubectl
+/// (scoped by namespace, derived automatically) rather than a cloud CLI —
+/// matches the manager's own `debugCloudScope`/`debugTool` compatibility
+/// rule so the CLI fails fast instead of round-tripping an invalid request.
+fn validate_access_cloud_scope(access_cloud_scope: Option<&str>, is_kubectl: bool) -> Result<()> {
+    if access_cloud_scope.is_some() && is_kubectl {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "access_cloud_scope".to_string(),
+            message: "`--access-cloud-scope` only applies to aws/gcloud/az; kubectl is scoped \
+                by namespace instead."
+                .to_string(),
+        }));
+    }
+    Ok(())
 }
 
 impl DebugArgs {
@@ -1807,5 +1833,23 @@ mod tests {
     fn kubectl_namespace_from_args_none_when_flag_has_no_value() {
         let cmd = args(&["kubectl", "get", "pods", "-n"]);
         assert_eq!(kubectl_namespace_from_args(&cmd), None);
+    }
+
+    #[test]
+    fn validate_access_cloud_scope_rejects_it_for_kubectl() {
+        let err = validate_access_cloud_scope(Some("123456789012/prod-readonly"), true)
+            .expect_err("kubectl + cloud scope must be rejected");
+        assert_eq!(err.code, "VALIDATION_ERROR");
+    }
+
+    #[test]
+    fn validate_access_cloud_scope_allows_it_for_non_kubectl() {
+        assert!(validate_access_cloud_scope(Some("123456789012/prod-readonly"), false).is_ok());
+    }
+
+    #[test]
+    fn validate_access_cloud_scope_allows_absent_scope_for_any_tool() {
+        assert!(validate_access_cloud_scope(None, true).is_ok());
+        assert!(validate_access_cloud_scope(None, false).is_ok());
     }
 }
