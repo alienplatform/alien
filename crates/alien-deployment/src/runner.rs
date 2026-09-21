@@ -397,12 +397,15 @@ async fn run_step_loop_body(
             "Running deployment step"
         );
 
-        let step_result = step(
+        // `step` dispatches every deployment phase and therefore has a large async
+        // state machine. Keep that future off Tokio's worker stack: complex stacks can
+        // otherwise cross the default thread-stack limit while entering Pending.
+        let step_result = Box::pin(step(
             state.clone(),
             config.clone(),
             client_config.clone(),
             service_provider.clone(),
-        )
+        ))
         .await;
 
         let step_result = match step_result {
