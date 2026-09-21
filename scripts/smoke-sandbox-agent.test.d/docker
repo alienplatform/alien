@@ -108,6 +108,11 @@ case "$command" in
     fi
     ;;
 
+  image)
+    [ "${args[0]:-}" = rm ] || { echo "stub docker: unrecognised image command: $all" >&2; exit 125; }
+    echo image-rm >> "$state/image-removals"
+    ;;
+
   rm) ;;
 
   *)

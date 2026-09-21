@@ -114,6 +114,14 @@ for platform in linux/amd64 linux/arm64; do
     echo "ok   happy: ${platform} probed 6 times"
   fi
 done
+removals=$(wc -l < "$state/image-removals")
+if [ "$removals" -ne 2 ]; then
+  failed=$((failed + 1))
+  echo "FAIL happy: digest reference removed ${removals} times, expected 2"
+else
+  passed=$((passed + 1))
+  echo "ok   happy: digest reference removed between platform pulls"
+fi
 
 out="$("$script" 2>&1)"
 status=$?

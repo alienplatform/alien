@@ -151,4 +151,10 @@ for platform in linux/amd64 linux/arm64; do
     echo "::error::${platform}: the agent reported a listener and then exited"
     exit 1
   fi
+
+  # A digest reference can name only one locally selected platform in the classic
+  # Docker image store. Remove that reference before pulling the other platform;
+  # layers remain cached, while Docker no longer rejects the second pull with
+  # "cannot overwrite digest".
+  docker image rm "$image" >/dev/null || true
 done
