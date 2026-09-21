@@ -15,7 +15,10 @@ fn deserialize_bool_or_null<'de, D: Deserializer<'de>>(deserializer: D) -> Resul
 }
 
 use alien_core::{
-    sync::{OperationsReport, OperatorCapabilityReport, TargetDeployment, TargetOperationsBundleSet},
+    sync::{
+        OperationsReport, OperatorCapabilityReport, OperatorImageReport, TargetDeployment,
+        TargetOperationsBundleSet,
+    },
     DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentVariable,
     EnvironmentVariablesSnapshot, ObservedInventoryBatch, Platform, ReleaseInfo, ResourceHeartbeat,
 };
@@ -25,7 +28,7 @@ use crate::error::ErrorData;
 use crate::ids;
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
-    DeploymentRecord, ReconcileData, ReleaseRecord, TokenType,
+    DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
 };
 
 use super::{auth, AppState};
@@ -156,6 +159,19 @@ pub struct AgentSyncRequest {
     /// bundle hash. Opaque to OSS beyond forwarding it to `reconcile()`.
     #[serde(default)]
     pub operations_report: Option<OperationsReport>,
+}
+
+/// Inbound sync payload that adds optional receipts without expanding the
+/// public [`AgentSyncRequest`] struct literal.
+#[derive(Debug, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+struct AgentSyncWireRequest {
+    #[serde(flatten)]
+    request: AgentSyncRequest,
+    /// Exact immutable Operator image identity reported by the running process.
+    #[serde(default)]
+    operator_image: Option<OperatorImageReport>,
 }
 
 #[derive(Debug, Serialize)]
@@ -473,6 +489,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &mut final_state,
     )
     .await;
@@ -527,6 +544,7 @@ async fn reconcile(
         &state.bindings_provider,
         &state.target_bindings_providers,
         &req.deployment_id,
+        &deployment.project_id,
         &final_state,
     )
     .await
@@ -628,8 +646,8 @@ mod tests {
         deployment_state_from_record, deployment_target_release_id, management_platform,
         may_deliver_agent_target, preserve_recorded_gate_answers, release_stack_platform,
         should_ignore_agent_state_report, should_return_current_state_for_agent_sync,
-        validate_initialize_base_platform, AgentSyncRequest, InitialDesiredRelease,
-        InitializeRequest, ReconcileRequest,
+        validate_initialize_base_platform, AgentSyncRequest, AgentSyncWireRequest,
+        InitialDesiredRelease, InitializeRequest, ReconcileRequest,
     };
 
     #[test]
@@ -740,6 +758,27 @@ mod tests {
         assert!(req.capabilities.is_empty());
         assert!(req.operator_version.is_none());
         assert!(!req.supports_execution_claims);
+    }
+
+    #[test]
+    fn agent_sync_wire_request_accepts_operator_image_receipt() {
+        let req: AgentSyncWireRequest = serde_json::from_value(json!({
+            "deploymentId": "dep_test",
+            "operatorImage": {
+                "source": "package",
+                "packageId": "pkg_operator_123",
+                "packageVersion": "7",
+                "image": "registry.example.com/alien/operator@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                "digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+        }))
+        .expect("agent sync wire request should accept an immutable Operator image receipt");
+
+        req.operator_image
+            .expect("operator image receipt should be present")
+            .validate()
+            .expect("operator image receipt should be valid");
+        assert_eq!(req.request.deployment_id, "dep_test");
     }
 
     #[test]
@@ -1259,6 +1298,27 @@ mod tests {
     }
 }
 
+async fn reconcile_agent_report(
+    store: &dyn crate::traits::DeploymentStore,
+    subject: &crate::auth::Subject,
+    data: ReconcileData,
+    operator_image: Option<OperatorImageReport>,
+) -> Result<crate::traits::ReconcileOutcome, AlienError> {
+    match operator_image {
+        Some(operator_image) => {
+            store
+                .reconcile_request(
+                    subject,
+                    ReconcileInput::builder(data)
+                        .operator_image(operator_image)
+                        .build(),
+                )
+                .await
+        }
+        None => store.reconcile(subject, data).await,
+    }
+}
+
 /// `POST /v1/sync` — Inbound: deployment bearer. The agent-driven sync
 /// path; `caller: &Subject` is threaded into the store so embedders see
 /// the agent's own scope.
@@ -1266,7 +1326,7 @@ mod tests {
     post,
     path = "/v1/sync",
     tag = "sync",
-    request_body = AgentSyncRequest,
+    request_body = AgentSyncWireRequest,
     responses(
         (status = 200, description = "Agent sync response with optional target state", body = AgentSyncResponse)
     ),
@@ -1277,7 +1337,10 @@ mod tests {
 async fn agent_sync(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Json(req): Json<AgentSyncRequest>,
+    Json(AgentSyncWireRequest {
+        request: req,
+        operator_image,
+    }): Json<AgentSyncWireRequest>,
 ) -> Response {
     let subject = match auth::require_auth(&state, &headers).await {
         Ok(s) => s,
@@ -1297,6 +1360,12 @@ async fn agent_sync(
     };
     if !state.authz.can_sync_deployment(&subject, &deployment) {
         return ErrorData::forbidden("Access denied").into_response();
+    }
+
+    if let Some(operator_image) = &operator_image {
+        if let Err(reason) = operator_image.validate() {
+            return ErrorData::bad_request(reason).into_response();
+        }
     }
 
     let requires_execution_claims = state.deployment_store.requires_execution_claims();
@@ -1351,30 +1420,33 @@ async fn agent_sync(
                         &state.bindings_provider,
                         &state.target_bindings_providers,
                         &req.deployment_id,
+                        &deployment.project_id,
                         &mut agent_state,
                     )
                     .await;
 
-                    match state
-                        .deployment_store
-                        .reconcile(
-                            &subject,
-                            ReconcileData {
-                                deployment_id: req.deployment_id.clone(),
-                                session: req.session.clone(),
-                                state: agent_state.clone(),
-                                update_heartbeat: true,
-                                heartbeats: req.heartbeats.clone(),
-                                observed_inventory_batches: req.observed_inventory_batches.clone(),
-                                capabilities: req.capabilities.clone(),
-                                operator_version: req.operator_version.clone(),
-                                suggested_delay_ms: None,
-                                execution_claim: req.execution_claim.clone(),
-                                operations_report: req.operations_report.clone(),
-                            },
-                        )
-                        .await
-                    {
+                    let reconcile_data = ReconcileData {
+                        deployment_id: req.deployment_id.clone(),
+                        session: req.session.clone(),
+                        state: agent_state.clone(),
+                        update_heartbeat: true,
+                        heartbeats: req.heartbeats.clone(),
+                        observed_inventory_batches: req.observed_inventory_batches.clone(),
+                        capabilities: req.capabilities.clone(),
+                        operator_version: req.operator_version.clone(),
+                        suggested_delay_ms: None,
+                        execution_claim: req.execution_claim.clone(),
+                        operations_report: req.operations_report.clone(),
+                    };
+                    let reconcile_result = reconcile_agent_report(
+                        state.deployment_store.as_ref(),
+                        &subject,
+                        reconcile_data,
+                        operator_image.clone(),
+                    )
+                    .await;
+
+                    match reconcile_result {
                         Err(e) => {
                             if report_has_claim {
                                 return e.into_response();
@@ -1383,14 +1455,16 @@ async fn agent_sync(
                         }
                         Ok(outcome) => {
                             target_operations_bundle_set = outcome.target_operations_bundle_set;
-                            if let Err(error) = crate::registry_access::cleanup_deleted_registry_access(
-                                state.deployment_store.as_ref(),
-                                &state.bindings_provider,
-                                &state.target_bindings_providers,
-                                &req.deployment_id,
-                                &agent_state,
-                            )
-                            .await
+                            if let Err(error) =
+                                crate::registry_access::cleanup_deleted_registry_access(
+                                    state.deployment_store.as_ref(),
+                                    &state.bindings_provider,
+                                    &state.target_bindings_providers,
+                                    &req.deployment_id,
+                                    &deployment.project_id,
+                                    &agent_state,
+                                )
+                                .await
                             {
                                 return error.into_response();
                             }
@@ -1643,28 +1717,31 @@ async fn agent_sync(
                         || !req.observed_inventory_batches.is_empty()
                         || !req.capabilities.is_empty()
                         || req.operator_version.is_some()
+                        || operator_image.is_some()
                         || req.operations_report.is_some())
                 {
-                    match state
-                        .deployment_store
-                        .reconcile(
-                            &subject,
-                            ReconcileData {
-                                deployment_id: req.deployment_id.clone(),
-                                session: "agent-sync".to_string(),
-                                state: deployment_state.clone(),
-                                update_heartbeat: true,
-                                heartbeats: req.heartbeats.clone(),
-                                observed_inventory_batches: req.observed_inventory_batches.clone(),
-                                capabilities: req.capabilities.clone(),
-                                operator_version: req.operator_version.clone(),
-                                suggested_delay_ms: None,
-                                execution_claim: None,
-                                operations_report: req.operations_report.clone(),
-                            },
-                        )
-                        .await
-                    {
+                    let reconcile_data = ReconcileData {
+                        deployment_id: req.deployment_id.clone(),
+                        session: "agent-sync".to_string(),
+                        state: deployment_state.clone(),
+                        update_heartbeat: true,
+                        heartbeats: req.heartbeats.clone(),
+                        observed_inventory_batches: req.observed_inventory_batches.clone(),
+                        capabilities: req.capabilities.clone(),
+                        operator_version: req.operator_version.clone(),
+                        suggested_delay_ms: None,
+                        execution_claim: None,
+                        operations_report: req.operations_report.clone(),
+                    };
+                    let reconcile_result = reconcile_agent_report(
+                        state.deployment_store.as_ref(),
+                        &subject,
+                        reconcile_data,
+                        operator_image.clone(),
+                    )
+                    .await;
+
+                    match reconcile_result {
                         Err(e) => {
                             tracing::warn!(
                                 deployment_id = %req.deployment_id,

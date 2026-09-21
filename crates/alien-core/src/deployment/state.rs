@@ -103,6 +103,27 @@ pub struct RuntimeMetadata {
     /// every reconcile tick.
     #[serde(default, skip_serializing_if = "is_false")]
     pub registry_access_granted: bool,
+
+    /// What that grant opened, compared against what the deployment needs now so a grant made
+    /// before a resource existed is finished rather than skipped, and the revoke names what was
+    /// granted. Absent on a grant recorded before this field existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry_access: Option<RegistryAccess>,
+}
+
+/// The cross-account read a manager opened on Alien's registry for one deployment.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct RegistryAccess {
+    /// Repository identifiers the grant names, sorted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub repositories: Vec<String>,
+
+    /// Compute services the grant admits, sorted. Each pulls as its own principal, so a service
+    /// added later needs the policy rewritten.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub service_types: Vec<String>,
 }
 
 /// Deployment state

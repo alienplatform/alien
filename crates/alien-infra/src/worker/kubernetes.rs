@@ -2,7 +2,8 @@ use std::time::Duration;
 use tracing::{debug, info};
 
 use crate::core::{
-    delete_environment_secret, reconcile_environment_secret, ResourceControllerContext,
+    delete_environment_secret, kubernetes_cleanup_resource_labels, reconcile_environment_secret,
+    ResourceControllerContext,
 };
 use crate::error::{ErrorData, Result};
 use crate::kubernetes_public_endpoint::{
@@ -60,6 +61,68 @@ impl KubernetesWorkerController {
 
         let function_name = kubernetes_resource_name(&ctx.resource_prefix, &config.id);
         let namespace = kubernetes_namespace(ctx)?;
+        let registry_secret_name = format!("{}-registry", function_name);
+        let environment_secret_name = format!("{}-env", function_name);
+        let deployment_client = ctx
+            .service_provider
+            .get_kubernetes_deployment_client(kubernetes_config)
+            .await?;
+        let (legacy_registry_owner_proven, legacy_environment_owner_proven) =
+            match deployment_client
+                .get_deployment(&namespace, &function_name)
+                .await
+            {
+                Ok(existing) => {
+                    let mut desired_labels = worker_labels(&function_name);
+                    desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+                    if !crate::core::kubernetes_labels_match_identity(
+                        existing.metadata.labels.as_ref(),
+                        &desired_labels,
+                        &["managed-by", "component", "app"],
+                    ) || !crate::core::kubernetes_labels_have_compatible_scope(
+                        existing.metadata.labels.as_ref(),
+                        &desired_labels,
+                    ) {
+                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Refusing to create Worker '{}' because Deployment '{function_name}' is not owned by this deployment",
+                            config.id
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                    }
+                    let pod_spec = existing
+                        .spec
+                        .as_ref()
+                        .and_then(|spec| spec.template.spec.as_ref());
+                    (
+                        crate::kubernetes_registry::pod_spec_references_image_pull_secret(
+                            pod_spec,
+                            &registry_secret_name,
+                        ),
+                        crate::core::pod_spec_references_environment_secret(
+                            pod_spec,
+                            &environment_secret_name,
+                        ),
+                    )
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    (false, false)
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to inspect Deployment '{function_name}' before Worker creation"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
 
         // Store data needed for binding construction
         self.worker_id = Some(config.id.clone());
@@ -78,26 +141,37 @@ impl KubernetesWorkerController {
                     resource_id: Some(config.id.clone()),
                 })
             })?;
-            let secret_name = format!("{}-registry", function_name);
+            let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(&secrets_client, &namespace, &secret_name, image, token)
-                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                &namespace,
+                &secret_name,
+                image,
+                token,
+                &config.id,
+                ctx,
+                legacy_registry_owner_proven,
+            )
+            .await?;
             Some(secret_name)
         } else {
             None
         };
-        let env_secret_plan =
-            reconcile_environment_secret("worker", &config.id, &function_name, &namespace, ctx)
-                .await?;
+        let env_secret_plan = reconcile_environment_secret(
+            "worker",
+            &config.id,
+            &function_name,
+            &namespace,
+            legacy_environment_owner_proven,
+            ctx,
+        )
+        .await?;
 
         // Create the Deployment
-        let deployment_client = ctx
-            .service_provider
-            .get_kubernetes_deployment_client(kubernetes_config)
-            .await?;
         let deployment = build_worker_deployment(
             self,
             config,
@@ -351,6 +425,52 @@ impl KubernetesWorkerController {
                 });
             }
 
+            let mut desired_labels = worker_labels(&deployment_name);
+            desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+            let mut existing = deployment_client
+                .get_deployment(&namespace, &deployment_name)
+                .await
+                .context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to inspect Deployment '{deployment_name}' for ownership migration"
+                    ),
+                    resource_id: Some(config.id.clone()),
+                })?;
+            if !crate::core::kubernetes_labels_match_current_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                if !crate::core::kubernetes_labels_match_identity(
+                    existing.metadata.labels.as_ref(),
+                    &desired_labels,
+                    &["managed-by", "component", "app"],
+                ) || !crate::core::kubernetes_labels_have_compatible_scope(
+                    existing.metadata.labels.as_ref(),
+                    &desired_labels,
+                ) {
+                    return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                        message: format!(
+                            "Refusing to migrate foreign Deployment '{deployment_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+                existing
+                    .metadata
+                    .labels
+                    .get_or_insert_default()
+                    .extend(desired_labels);
+                deployment_client
+                    .update_deployment(&namespace, &deployment_name, &existing)
+                    .await
+                    .context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to migrate cleanup ownership for Deployment '{deployment_name}'"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    })?;
+            }
+
             debug!(deployment_name=%deployment_name, namespace=%namespace, "Worker deployment is healthy");
         }
 
@@ -403,8 +523,39 @@ impl KubernetesWorkerController {
                 ),
                 resource_id: Some(config.id.clone()),
             })?;
+        let mut desired_labels = worker_labels(deployment_name);
+        desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+        if !crate::core::kubernetes_labels_match_identity(
+            existing.metadata.labels.as_ref(),
+            &desired_labels,
+            &["managed-by", "component", "app"],
+        ) || !crate::core::kubernetes_labels_have_compatible_scope(
+            existing.metadata.labels.as_ref(),
+            &desired_labels,
+        ) {
+            return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: format!(
+                    "Refusing to update Kubernetes Deployment '{deployment_name}' because it is not owned by Worker '{}' in this deployment",
+                    config.id
+                ),
+                resource_id: Some(config.id.clone()),
+            }));
+        }
 
         let resource_version = existing.metadata.resource_version.clone();
+        let registry_secret_name = format!("{}-registry", deployment_name);
+        let environment_secret_name = format!("{}-env", deployment_name);
+        let pod_spec = existing
+            .spec
+            .as_ref()
+            .and_then(|spec| spec.template.spec.as_ref());
+        let legacy_registry_owner_proven =
+            crate::kubernetes_registry::pod_spec_references_image_pull_secret(
+                pod_spec,
+                &registry_secret_name,
+            );
+        let legacy_environment_owner_proven =
+            crate::core::pod_spec_references_environment_secret(pod_spec, &environment_secret_name);
 
         let service_account_name =
             kubernetes_service_account_name(&ctx.resource_prefix, config.get_permissions());
@@ -416,20 +567,35 @@ impl KubernetesWorkerController {
                     resource_id: Some(config.id.clone()),
                 })
             })?;
-            let secret_name = format!("{}-registry", deployment_name);
+            let secret_name = registry_secret_name.clone();
             let secrets_client = ctx
                 .service_provider
                 .get_kubernetes_secrets_client(kubernetes_config)
                 .await?;
-            create_registry_pull_secret(&secrets_client, namespace, &secret_name, image, token)
-                .await?;
+            create_registry_pull_secret(
+                &secrets_client,
+                namespace,
+                &secret_name,
+                image,
+                token,
+                &config.id,
+                ctx,
+                legacy_registry_owner_proven,
+            )
+            .await?;
             Some(secret_name)
         } else {
             None
         };
-        let env_secret_plan =
-            reconcile_environment_secret("worker", &config.id, deployment_name, namespace, ctx)
-                .await?;
+        let env_secret_plan = reconcile_environment_secret(
+            "worker",
+            &config.id,
+            deployment_name,
+            namespace,
+            legacy_environment_owner_proven,
+            ctx,
+        )
+        .await?;
 
         let mut new_deployment = build_worker_deployment(
             self,
@@ -603,10 +769,87 @@ impl KubernetesWorkerController {
 
         info!(namespace=%namespace, "Initiating Kubernetes Worker deletion");
 
-        delete_kubernetes_public_endpoint(ctx, &config.id, namespace, &mut self.public_endpoint)
-            .await?;
+        let legacy_owner_proven = if let Some(deployment_name) = self.deployment_name.as_deref() {
+            let deployment_client = ctx
+                .service_provider
+                .get_kubernetes_deployment_client(kubernetes_config)
+                .await?;
+            match deployment_client
+                .get_deployment(namespace, deployment_name)
+                .await
+            {
+                Ok(existing) => {
+                    let mut desired_labels = worker_labels(deployment_name);
+                    desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+                    if !crate::core::kubernetes_labels_match_identity(
+                        existing.metadata.labels.as_ref(),
+                        &desired_labels,
+                        &["managed-by", "component", "app"],
+                    ) || !crate::core::kubernetes_labels_have_compatible_scope(
+                        existing.metadata.labels.as_ref(),
+                        &desired_labels,
+                    ) {
+                        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                            message: format!(
+                                "Refusing to delete Kubernetes Deployment '{deployment_name}' because it is not owned by Worker '{}' in this deployment",
+                                config.id
+                            ),
+                            resource_id: Some(config.id.clone()),
+                        }));
+                    }
+                    true
+                }
+                Err(error)
+                    if matches!(
+                        error.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    false
+                }
+                Err(error) => {
+                    return Err(error.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to inspect Deployment '{deployment_name}' before deletion"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }))
+                }
+            }
+        } else {
+            false
+        };
+
+        delete_kubernetes_public_endpoint(
+            ctx,
+            &config.id,
+            namespace,
+            self.deployment_name.as_deref().unwrap_or_default(),
+            "worker",
+            legacy_owner_proven,
+            &mut self.public_endpoint,
+        )
+        .await?;
         if let Some(service_name) = &self.service_name {
-            delete_command_service(namespace, service_name, &config.id, ctx).await?;
+            delete_command_service(
+                namespace,
+                service_name,
+                &config.id,
+                ctx,
+                legacy_owner_proven,
+            )
+            .await?;
+        }
+        if let Some(deployment_name) = self.deployment_name.as_deref() {
+            delete_environment_secret(
+                "worker",
+                &config.id,
+                deployment_name,
+                namespace,
+                ctx,
+                legacy_owner_proven,
+            )
+            .await?;
         }
 
         // Delete Deployment
@@ -615,6 +858,61 @@ impl KubernetesWorkerController {
                 .service_provider
                 .get_kubernetes_deployment_client(kubernetes_config)
                 .await?;
+
+            let existing = match deployment_client
+                .get_deployment(namespace, deployment_name)
+                .await
+            {
+                Ok(existing) => existing,
+                Err(e)
+                    if matches!(
+                        e.error,
+                        Some(CloudClientErrorData::RemoteResourceNotFound { .. })
+                    ) =>
+                {
+                    delete_environment_secret(
+                        "worker",
+                        &config.id,
+                        deployment_name,
+                        namespace,
+                        ctx,
+                        false,
+                    )
+                    .await?;
+                    self.deployment_name = None;
+                    self.namespace = None;
+                    return Ok(HandlerAction::Continue {
+                        state: Deleted,
+                        suggested_delay: None,
+                    });
+                }
+                Err(e) => {
+                    return Err(e.context(ErrorData::CloudPlatformError {
+                        message: format!(
+                            "Failed to inspect Deployment '{deployment_name}' before deletion"
+                        ),
+                        resource_id: Some(config.id.clone()),
+                    }));
+                }
+            };
+            let mut desired_labels = worker_labels(deployment_name);
+            desired_labels.extend(kubernetes_cleanup_resource_labels(ctx, &config.id));
+            if !crate::core::kubernetes_labels_match_identity(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+                &["managed-by", "component", "app"],
+            ) || !crate::core::kubernetes_labels_have_compatible_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ) {
+                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                    message: format!(
+                        "Refusing to delete Kubernetes Deployment '{deployment_name}' because it is not owned by Worker '{}' in this deployment",
+                        config.id
+                    ),
+                    resource_id: Some(config.id.clone()),
+                }));
+            }
 
             match deployment_client
                 .delete_deployment(namespace, deployment_name)
@@ -637,6 +935,7 @@ impl KubernetesWorkerController {
                         deployment_name,
                         namespace,
                         ctx,
+                        false,
                     )
                     .await?;
 
@@ -710,6 +1009,7 @@ impl KubernetesWorkerController {
                         deployment_name,
                         namespace,
                         ctx,
+                        false,
                     )
                     .await?;
 
@@ -995,6 +1295,9 @@ async fn create_registry_pull_secret(
     secret_name: &str,
     proxy_host: &str,
     deployment_token: &str,
+    resource_id: &str,
+    ctx: &ResourceControllerContext<'_>,
+    legacy_owner_proven: bool,
 ) -> Result<()> {
     crate::kubernetes_registry::ensure_registry_pull_secret(
         secrets_client,
@@ -1002,6 +1305,8 @@ async fn create_registry_pull_secret(
         secret_name,
         proxy_host,
         deployment_token,
+        kubernetes_cleanup_resource_labels(ctx, resource_id),
+        legacy_owner_proven,
     )
     .await
 }

@@ -1,5 +1,6 @@
 use alien_core::sync::{
-    OperationsBundleDownload, OperationsReport, ReportedOperation, TargetOperationsBundleSet,
+    OperationsBundleDownload, OperationsReport, OperatorImageReport, OperatorImageSource,
+    ReportedOperation, TargetOperationsBundleSet,
 };
 use alien_core::*;
 use clap::Parser;
@@ -243,6 +244,8 @@ use utoipa::OpenApi;
     AzureSandboxImportData,
     ReportedOperation,
     OperationsReport,
+    OperatorImageReport,
+    OperatorImageSource,
     OperationsBundleDownload,
     TargetOperationsBundleSet,
 )))]

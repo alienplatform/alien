@@ -22,8 +22,8 @@ pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
     CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,
-    DeploymentRecord, DeploymentStore, ReconcileData, ReconcileOutcome,
-    UpdateImportedDeploymentParams,
+    DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput, ReconcileInputBuilder,
+    ReconcileOutcome, UpdateImportedDeploymentParams,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

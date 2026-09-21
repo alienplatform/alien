@@ -23,15 +23,21 @@ impl OssAuthz {
             && matches!(s.role, Role::WorkspaceAdmin | Role::WorkspaceMember)
     }
 
+    /// Capability roles share the project scope without its reads. A deny-list so every other
+    /// project-scoped subject keeps the reads it has today.
+    fn project_reader(s: &Subject) -> bool {
+        s.role != Role::ImageRepositoryProvisioner
+    }
+
     /// True if the subject has *any* read authority on the project. Used for
     /// "any authenticated token can read its own project's resources" calls.
     fn can_act_on_project(s: &Subject, _project_id: &str) -> bool {
         // OSS is single-project; project_id is always "default" and any
-        // authenticated token is project-bound.
+        // authenticated token is project-bound. The provisioner capability is not.
         matches!(
             s.kind,
             SubjectKind::ServiceAccount { .. } | SubjectKind::User { .. }
-        )
+        ) && Self::project_reader(s)
     }
 }
 
@@ -51,6 +57,7 @@ impl Authz for OssAuthz {
         // commands capability is deliberately inert outside command routes.
         !matches!(s.scope, Scope::Commands { .. } | Scope::Telemetry { .. })
             && !matches!(s.role, Role::CommandCapability | Role::TelemetryCapability)
+            && Self::project_reader(s)
     }
 
     fn can_export_release(&self, s: &Subject, release: &ReleaseRecord) -> bool {
@@ -72,7 +79,9 @@ impl Authz for OssAuthz {
     fn can_read_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
         match &s.scope {
             Scope::Workspace => true,
-            Scope::Project { project_id } => project_id == &deployment.project_id,
+            Scope::Project { project_id } => {
+                Self::project_reader(s) && project_id == &deployment.project_id
+            }
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
@@ -138,7 +147,8 @@ impl Authz for OssAuthz {
 
     fn can_read_deployment_group(&self, s: &Subject, dg: &DeploymentGroupRecord) -> bool {
         match &s.scope {
-            Scope::Workspace | Scope::Project { .. } => true,
+            Scope::Workspace => true,
+            Scope::Project { .. } => Self::project_reader(s),
             Scope::DeploymentGroup {
                 deployment_group_id,
                 ..
@@ -195,7 +205,9 @@ impl Authz for OssAuthz {
         }
         match &s.scope {
             Scope::Workspace => true,
-            Scope::Project { project_id } => project_id == &command.project_id,
+            Scope::Project { project_id } => {
+                Self::project_reader(s) && project_id == &command.project_id
+            }
             Scope::Deployment { deployment_id, .. } => {
                 deployment_id == &command.deployment_id
                     && matches!(s.role, Role::DeploymentManager | Role::DeploymentViewer)
@@ -239,7 +251,7 @@ impl Authz for OssAuthz {
                 ..
             } => deployment_group_id == &deployment.deployment_group_id,
             Scope::Workspace => Self::is_workspace_writer(s),
-            Scope::Project { .. } => true,
+            Scope::Project { .. } => Self::project_reader(s),
             Scope::Commands { .. } | Scope::Telemetry { .. } => false,
         }
     }
@@ -274,6 +286,10 @@ impl Authz for OssAuthz {
                 | Role::ProjectDeveloper
                 | Role::DeploymentGroupDeployer
         )
+    }
+
+    fn can_provision_image_repository(&self, s: &Subject, project_id: &str) -> bool {
+        self.can_push_image(s, project_id, "")
     }
 
     fn can_act_on_deployment(&self, s: &Subject, deployment: &DeploymentRecord) -> bool {
@@ -464,6 +480,40 @@ mod tests {
         assert!(OssAuthz.can_delete_deployment(&deployment_token("d1"), &dep));
         assert!(!OssAuthz.can_delete_deployment(&deployment_token("d2"), &dep));
         assert!(!OssAuthz.can_delete_deployment(&dg_token("dg-a"), &dep));
+    }
+
+    #[test]
+    // OSS mints no capability role and denies it everything, provisioning included; an embedder's
+    // Authz is what grants the provisioner its one repository.
+    fn the_image_repository_provisioner_has_no_project_access() {
+        let mut subject = admin();
+        subject.scope = Scope::Project {
+            project_id: "default".to_string(),
+        };
+        subject.role = Role::ImageRepositoryProvisioner;
+        let dep = deployment("d1", "dg-a");
+
+        assert!(!OssAuthz.can_read_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_sync_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_update_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_delete_deployment(&subject, &dep));
+        assert!(!OssAuthz.can_dispatch_command(&subject, &dep));
+        assert!(!OssAuthz.can_create_release(&subject, "default"));
+        assert!(!OssAuthz.can_read_release(&subject, &release()));
+        assert!(!OssAuthz.can_export_release(&subject, &release()));
+        assert!(!OssAuthz.can_acquire_deployments(&subject, &[dep.clone()]));
+        let command = alien_commands::server::CommandAccessContext {
+            workspace_id: "default".to_string(),
+            project_id: "default".to_string(),
+            deployment_id: "d1".to_string(),
+            target: alien_core::CommandTarget::new(
+                "daemon-a",
+                alien_core::CommandTargetType::Daemon,
+            ),
+        };
+        assert!(!OssAuthz.can_read_command_context(&subject, &command));
+        assert!(!OssAuthz.can_push_image(&subject, "default", "repo"));
+        assert!(!OssAuthz.can_provision_image_repository(&subject, "default"));
     }
 
     #[test]

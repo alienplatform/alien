@@ -66,6 +66,84 @@ pub struct OperationsReport {
     pub operations: Vec<ReportedOperation>,
 }
 
+/// Origin of the exact Operator image running this process.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "kebab-case")]
+pub enum OperatorImageSource {
+    /// The image came from an immutable generated package.
+    Package,
+    /// The image was configured directly by the installer.
+    Configured,
+}
+
+/// Exact immutable Operator image identity observed by the running process.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct OperatorImageReport {
+    /// How the installer selected this image.
+    pub source: OperatorImageSource,
+    /// Package ID when `source` is `package`; otherwise `null`.
+    pub package_id: Option<String>,
+    /// Package version when `source` is `package`; otherwise `null`.
+    pub package_version: Option<String>,
+    /// Exact OCI image reference in `repository@sha256:digest` form.
+    pub image: String,
+    /// Exact lowercase OCI digest in `sha256:digest` form.
+    pub digest: String,
+}
+
+impl OperatorImageReport {
+    /// Validate that this report identifies one immutable image and that its
+    /// package fields agree with `source`.
+    pub fn validate(&self) -> Result<(), &'static str> {
+        let Some(encoded_digest) = self.digest.strip_prefix("sha256:") else {
+            return Err("operator image digest must start with sha256:");
+        };
+        if encoded_digest.len() != 64
+            || !encoded_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err("operator image digest must contain 64 lowercase hex characters");
+        }
+
+        let Some((repository, image_digest)) = self.image.rsplit_once('@') else {
+            return Err("operator image must use repository@sha256:digest form");
+        };
+        if repository.is_empty()
+            || repository.chars().any(char::is_whitespace)
+            || repository.contains('@')
+            || image_digest != self.digest
+        {
+            return Err("operator image must contain one repository and the reported digest");
+        }
+
+        let package_id = self.package_id.as_deref().map(str::trim);
+        let package_version = self.package_version.as_deref().map(str::trim);
+        match self.source {
+            OperatorImageSource::Package
+                if package_id.is_some_and(|value| !value.is_empty())
+                    && package_version.is_some_and(|value| !value.is_empty()) =>
+            {
+                Ok(())
+            }
+            OperatorImageSource::Package => {
+                Err("package operator images require package ID and version")
+            }
+            OperatorImageSource::Configured
+                if self.package_id.is_none() && self.package_version.is_none() =>
+            {
+                Ok(())
+            }
+            OperatorImageSource::Configured => {
+                Err("configured operator images must not include package identity")
+            }
+        }
+    }
+}
+
 /// One bundle the Operator needs to download to reach `targetBundleHash`.
 /// The manager mints a short-lived presigned GET URL per bundle — the
 /// Operator never holds real cloud storage credentials, mirroring the OCI
@@ -145,6 +223,53 @@ pub struct SyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
+/// Extensible wire input for sync metadata that is not part of the
+/// long-standing [`SyncRequest`] struct-literal contract.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SyncInput {
+    #[serde(flatten)]
+    request: SyncRequest,
+    /// Exact immutable image identity injected by the installer. Absent for
+    /// older installations that do not carry an image receipt.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    operator_image: Option<OperatorImageReport>,
+}
+
+impl SyncInput {
+    /// Start building a sync payload while preserving the stable
+    /// [`SyncRequest`] literal surface for downstream callers.
+    pub fn builder(request: SyncRequest) -> SyncInputBuilder {
+        SyncInputBuilder {
+            request,
+            operator_image: None,
+        }
+    }
+}
+
+/// Builder for optional sync receipts. New optional wire metadata belongs
+/// here so adding it does not break downstream [`SyncRequest`] literals.
+pub struct SyncInputBuilder {
+    request: SyncRequest,
+    operator_image: Option<OperatorImageReport>,
+}
+
+impl SyncInputBuilder {
+    /// Attach the immutable image receipt for the running Operator.
+    pub fn operator_image(mut self, operator_image: OperatorImageReport) -> Self {
+        self.operator_image = Some(operator_image);
+        self
+    }
+
+    /// Finish the serializable sync payload.
+    pub fn build(self) -> SyncInput {
+        SyncInput {
+            request: self.request,
+            operator_image: self.operator_image,
+        }
+    }
+}
+
 /// Response from the manager to the agent sync request.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -222,6 +347,7 @@ mod tests {
         assert!(json.get("resourceHeartbeats").is_none());
         assert!(json.get("capabilities").is_none());
         assert!(json.get("operatorVersion").is_none());
+        assert!(json.get("operatorImage").is_none());
         assert!(json.get("operationsReport").is_none());
     }
 
@@ -379,6 +505,133 @@ mod tests {
     }
 
     #[test]
+    fn test_sync_request_operator_image_roundtrip() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let report = OperatorImageReport {
+            source: OperatorImageSource::Package,
+            package_id: Some("pkg_operator".to_string()),
+            package_version: Some("1.2.3".to_string()),
+            image: format!("registry.example.com/operator@{digest}"),
+            digest,
+        };
+        report.validate().expect("valid package image report");
+
+        let value = serde_json::to_value(&report).unwrap();
+        assert_eq!(value["source"], "package");
+        assert_eq!(value["packageId"], "pkg_operator");
+        assert_eq!(value["packageVersion"], "1.2.3");
+
+        let decoded: OperatorImageReport = serde_json::from_value(value).unwrap();
+        assert_eq!(decoded, report);
+    }
+
+    #[test]
+    fn sync_input_adds_operator_image_without_expanding_sync_request() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let request = SyncRequest {
+            deployment_id: "dep_1".to_string(),
+            session: String::new(),
+            supports_execution_claims: false,
+            execution_claim: None,
+            current_state: None,
+            heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: None,
+            operations_report: None,
+        };
+        let input = SyncInput::builder(request)
+            .operator_image(OperatorImageReport {
+                source: OperatorImageSource::Configured,
+                package_id: None,
+                package_version: None,
+                image: format!("registry.example.com/operator@{digest}"),
+                digest,
+            })
+            .build();
+
+        let value = serde_json::to_value(input).unwrap();
+        assert_eq!(value["deploymentId"], "dep_1");
+        assert_eq!(value["operatorImage"]["source"], "configured");
+    }
+
+    #[test]
+    fn sync_input_omits_absent_operator_image() {
+        let request = SyncRequest {
+            deployment_id: "dep_1".to_string(),
+            session: String::new(),
+            supports_execution_claims: false,
+            execution_claim: None,
+            current_state: None,
+            heartbeats: Vec::new(),
+            observed_inventory_batches: Vec::new(),
+            capabilities: Vec::new(),
+            operator_version: None,
+            operations_report: None,
+        };
+
+        let value = serde_json::to_value(SyncInput::builder(request).build()).unwrap();
+        assert!(value.get("operatorImage").is_none());
+    }
+
+    #[test]
+    fn operator_image_report_rejects_mutable_or_inconsistent_identity() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let mutable = OperatorImageReport {
+            source: OperatorImageSource::Configured,
+            package_id: None,
+            package_version: None,
+            image: "registry.example.com/operator:latest".to_string(),
+            digest: digest.clone(),
+        };
+        assert_eq!(
+            mutable.validate(),
+            Err("operator image must use repository@sha256:digest form")
+        );
+
+        let mismatched = OperatorImageReport {
+            source: OperatorImageSource::Configured,
+            package_id: None,
+            package_version: None,
+            image: format!("registry.example.com/operator@sha256:{}", "b".repeat(64)),
+            digest,
+        };
+        assert_eq!(
+            mismatched.validate(),
+            Err("operator image must contain one repository and the reported digest")
+        );
+    }
+
+    #[test]
+    fn operator_image_report_enforces_source_specific_package_fields() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let image = format!("registry.example.com/operator@{digest}");
+        let missing_package = OperatorImageReport {
+            source: OperatorImageSource::Package,
+            package_id: None,
+            package_version: None,
+            image: image.clone(),
+            digest: digest.clone(),
+        };
+        assert_eq!(
+            missing_package.validate(),
+            Err("package operator images require package ID and version")
+        );
+
+        let configured_with_package = OperatorImageReport {
+            source: OperatorImageSource::Configured,
+            package_id: Some("pkg_operator".to_string()),
+            package_version: Some("1.2.3".to_string()),
+            image,
+            digest,
+        };
+        assert_eq!(
+            configured_with_package.validate(),
+            Err("configured operator images must not include package identity")
+        );
+    }
+
+    #[test]
     fn test_sync_request_operations_report_roundtrip() {
         let req = SyncRequest {
             deployment_id: "dep_1".to_string(),
@@ -417,7 +670,11 @@ mod tests {
 
         let deserialized: SyncRequest = serde_json::from_value(json).unwrap();
         assert_eq!(
-            deserialized.operations_report.as_ref().unwrap().loaded_bundle_hash,
+            deserialized
+                .operations_report
+                .as_ref()
+                .unwrap()
+                .loaded_bundle_hash,
             req.operations_report.as_ref().unwrap().loaded_bundle_hash
         );
         assert_eq!(
@@ -444,7 +701,10 @@ mod tests {
         };
 
         let json = serde_json::to_value(&resp).unwrap();
-        assert_eq!(json["targetOperationsBundleSet"]["hash"], "builtin:s3@1.0.0:key|");
+        assert_eq!(
+            json["targetOperationsBundleSet"]["hash"],
+            "builtin:s3@1.0.0:key|"
+        );
         assert_eq!(
             json["targetOperationsBundleSet"]["bundles"][0]["plugin"],
             "s3"

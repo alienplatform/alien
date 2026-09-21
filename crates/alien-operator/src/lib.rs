@@ -28,6 +28,7 @@ pub mod error;
 pub mod lock;
 pub mod loops;
 pub mod otlp_server;
+pub mod readiness_server;
 
 pub use alien_core::{DeploymentState, DeploymentStatus, Platform, ReleaseInfo};
 pub use config::{OperatorConfig, SyncConfig};
@@ -35,9 +36,82 @@ pub use db::{Approval, ApprovalStatus};
 pub use error::ErrorData;
 pub use lock::InstanceLock;
 
-use alien_error::AlienError;
+use alien_core::sync::OperatorImageReport;
+use alien_error::{AlienError, Context as _};
+use alien_k8s_clients::{
+    kubernetes::kubernetes_request_utils::sign_send_no_response, KubernetesClient,
+    KubernetesClientConfig, KubernetesClientConfigExt,
+};
+use reqwest::Method;
+use std::collections::BTreeSet;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
+use tracing::{info, warn};
+
+#[derive(Debug, Default)]
+struct OperatorRuntimeOptions {
+    readiness_server_port: Option<u16>,
+    identity_initialized_config_map: Option<String>,
+    runtime_deployment_scope: Option<(String, String)>,
+}
+
+impl OperatorRuntimeOptions {
+    fn from_env() -> error::Result<Self> {
+        Ok(Self {
+            readiness_server_port: readiness_server_port_from_env()?,
+            identity_initialized_config_map: identity_initialized_config_map_from_env()?,
+            runtime_deployment_scope: runtime_deployment_scope_from_env()?,
+        })
+    }
+}
+
+fn runtime_deployment_scope_from_env() -> error::Result<Option<(String, String)>> {
+    let key = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY");
+    let value = std::env::var("ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE");
+    match (key, value) {
+        (Ok(key), Ok(value)) if !key.trim().is_empty() && !value.trim().is_empty() => {
+            Ok(Some((key, value)))
+        }
+        (Err(std::env::VarError::NotPresent), Err(std::env::VarError::NotPresent)) => Ok(None),
+        (Err(std::env::VarError::NotUnicode(_)), _)
+        | (_, Err(std::env::VarError::NotUnicode(_))) => {
+            Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "runtime deployment label scope must be valid UTF-8".to_string(),
+            }))
+        }
+        _ => Err(AlienError::new(error::ErrorData::ConfigurationError {
+            message: "ALIEN_RUNTIME_DEPLOYMENT_LABEL_KEY and ALIEN_RUNTIME_DEPLOYMENT_LABEL_VALUE must be set together and non-empty".to_string(),
+        })),
+    }
+}
+
+fn readiness_server_port_from_env() -> error::Result<Option<u16>> {
+    match std::env::var("OPERATOR_READINESS_PORT") {
+        Ok(value) => Ok(Some(value.parse::<u16>().map_err(|_| {
+            AlienError::new(error::ErrorData::ConfigurationError {
+                message: "OPERATOR_READINESS_PORT must be a valid TCP port".to_string(),
+            })
+        })?)),
+        Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "OPERATOR_READINESS_PORT must be valid UTF-8".to_string(),
+            }))
+        }
+    }
+}
+
+fn identity_initialized_config_map_from_env() -> error::Result<Option<String>> {
+    match std::env::var("OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP") {
+        Ok(value) if !value.trim().is_empty() => Ok(Some(value)),
+        Ok(_) | Err(std::env::VarError::NotPresent) => Ok(None),
+        Err(std::env::VarError::NotUnicode(_)) => {
+            Err(AlienError::new(error::ErrorData::ConfigurationError {
+                message: "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP must be valid UTF-8".to_string(),
+            }))
+        }
+    }
+}
 
 /// Run the Operator with the given configuration.
 ///
@@ -117,8 +191,33 @@ pub async fn run_operator_with_cancel_and_loops(
     operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
     cancel: CancellationToken,
 ) -> error::Result<()> {
-    use tracing::{info, warn};
+    let runtime_options = OperatorRuntimeOptions::from_env()?;
+    run_operator_with_cancel_and_loops_and_runtime(
+        config,
+        None,
+        service_provider,
+        debug_session_loop,
+        access_request_loop,
+        operations_exec_loop,
+        operations_sync_handler,
+        cancel,
+        runtime_options,
+    )
+    .await
+}
 
+#[allow(clippy::too_many_arguments)]
+async fn run_operator_with_cancel_and_loops_and_runtime(
+    config: OperatorConfig,
+    operator_image: Option<OperatorImageReport>,
+    service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    debug_session_loop: Option<Arc<dyn loops::debug_session::DebugSessionLoop>>,
+    access_request_loop: Option<Arc<dyn loops::access_requests::AccessRequestSyncLoop>>,
+    operations_exec_loop: Option<Arc<dyn loops::operations_exec::OperationsExecLoop>>,
+    operations_sync_handler: Option<Arc<dyn loops::operations_exec::OperationsSyncHandler>>,
+    cancel: CancellationToken,
+    runtime_options: OperatorRuntimeOptions,
+) -> error::Result<()> {
     info!(
         sync_configured = config.sync.is_some(),
         deployment_approval = config.requires_deployment_approval(),
@@ -126,6 +225,7 @@ pub async fn run_operator_with_cancel_and_loops(
         telemetry_enabled = config.is_telemetry_enabled(),
         otlp_host = %config.otlp_server_host,
         otlp_port = config.otlp_server_port,
+        readiness_port = runtime_options.readiness_server_port,
         "Starting operator"
     );
 
@@ -138,6 +238,22 @@ pub async fn run_operator_with_cancel_and_loops(
 
     // Initialize encrypted database
     let db = Arc::new(db::OperatorDb::new(&config.data_dir, &config.encryption_key).await?);
+    validate_runtime_deployment_scope(
+        &db,
+        config.label_domain.as_deref(),
+        runtime_options.runtime_deployment_scope.as_ref(),
+    )
+    .await?;
+
+    let readiness_port = runtime_options.readiness_server_port;
+    let readiness_cancel = cancel.clone();
+    let readiness_server = async move {
+        if let Some(port) = readiness_port {
+            readiness_server::start_readiness_server(port, readiness_cancel).await
+        } else {
+            std::future::pending::<error::Result<()>>().await
+        }
+    };
 
     // Capture command-address support before moving the receiver into its
     // task. Readiness requires both version-aware execution and current
@@ -166,7 +282,12 @@ pub async fn run_operator_with_cancel_and_loops(
     let otlp_db = db.clone();
     let otlp_namespace = config.namespace.clone();
     let otlp_collector_token = config.collector_token.clone();
-    let sandbox_broker = sandbox_broker_router(&config).await;
+    let sandbox_broker = sandbox_broker_router(
+        &config,
+        db.clone(),
+        runtime_options.runtime_deployment_scope.as_ref(),
+    )
+    .await;
     let otlp_cancel = cancel.clone();
     tokio::spawn(async move {
         if let Err(e) = otlp_server::start_otlp_server(
@@ -200,6 +321,7 @@ pub async fn run_operator_with_cancel_and_loops(
                 loops::sync::run_sync_loop_with_command_address_support(
                     state,
                     operations_command_address_v1,
+                    operator_image,
                 )
                 .await;
             }
@@ -294,11 +416,25 @@ pub async fn run_operator_with_cancel_and_loops(
         _ => None,
     };
 
-    // Wait for cancellation or any loop to exit unexpectedly. `exited_loop`
-    // captures which loop (if any) fell out on its own; `None` means we were
-    // cancelled cleanly. A loop exiting is never expected — the operator has no
-    // useful work left once one is gone — so we surface it as an error below
-    // rather than reporting a clean exit to CLI/service callers.
+    // A newly initialized remote deployment does not have authoritative stack
+    // state until its first successful sync. Keep Helm's identity gate pending
+    // until that state proves the immutable cleanup/broker scope rendered into
+    // the chart. Existing installations validate immediately above and pass
+    // through the same proof before the marker is made immutable.
+    let identity_initialization = await_and_mark_kubernetes_identity_initialized(
+        &db,
+        config.namespace.as_deref(),
+        config.label_domain.as_deref(),
+        runtime_options.runtime_deployment_scope.as_ref(),
+        runtime_options.identity_initialized_config_map.as_deref(),
+        &cancel,
+    );
+
+    // Wait for cancellation or any loop to exit unexpectedly. A loop exiting is
+    // never expected — the operator has no useful work left once one is gone —
+    // so we surface it as an error rather than reporting a clean exit to
+    // CLI/service callers. Readiness errors retain their original configuration
+    // context so a bind failure is immediately diagnosable.
     //
     // Distinguishing a genuine loop failure from a shutdown-driven loop return
     // is a race unless we resolve it atomically WITH the branch that wins. Two
@@ -312,56 +448,64 @@ pub async fn run_operator_with_cancel_and_loops(
     //     BECAUSE it observed the cancelled token classifies itself as clean.
     // A loop branch that wins with the token NOT yet cancelled is a real failure,
     // and nothing that happens afterward can flip that verdict.
-    let exited_loop: Option<&'static str> = tokio::select! {
+    let exit_result: error::Result<Option<&'static str>> = tokio::select! {
         biased;
 
         _ = cancel.cancelled() => {
             info!("Shutdown signal received, waiting for loops to finish...");
-            None
+            Ok(None)
         },
-        _ = deployment_handle => loop_exit(&cancel, "deployment"),
+        result = readiness_server => match result {
+            Ok(()) => Ok(loop_exit(&cancel, "readiness")),
+            Err(error) => Err(error),
+        },
+        result = identity_initialization => match result {
+            Ok(()) => Ok(loop_exit(&cancel, "identity-initialization")),
+            Err(error) => Err(error),
+        },
+        _ = deployment_handle => Ok(loop_exit(&cancel, "deployment")),
         _ = async {
             if let Some(h) = debug_session_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "debug-session"),
+        } => Ok(loop_exit(&cancel, "debug-session")),
         _ = async {
             if let Some(h) = sync_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "sync"),
+        } => Ok(loop_exit(&cancel, "sync")),
         _ = async {
             if let Some(h) = telemetry_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "telemetry"),
+        } => Ok(loop_exit(&cancel, "telemetry")),
         _ = async {
             if let Some(h) = commands_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "commands-dispatch"),
+        } => Ok(loop_exit(&cancel, "commands-dispatch")),
         _ = async {
             if let Some(h) = access_request_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "access-request-sync"),
+        } => Ok(loop_exit(&cancel, "access-request-sync")),
         _ = async {
             if let Some(h) = operations_exec_handle {
                 h.await.ok();
             } else {
                 std::future::pending::<()>().await;
             }
-        } => loop_exit(&cancel, "operations-execution"),
+        } => Ok(loop_exit(&cancel, "operations-execution")),
     };
 
     // Signal all loops to stop (idempotent if already cancelled)
@@ -375,7 +519,7 @@ pub async fn run_operator_with_cancel_and_loops(
         local_bindings.shutdown().await;
     }
 
-    if let Some(loop_name) = exited_loop {
+    if let Some(loop_name) = exit_result? {
         // A core loop exited on its own — report a non-zero exit so CLI and
         // Windows-service callers don't mistake a failed loop for a clean stop.
         return Err(AlienError::new(error::ErrorData::LoopExited {
@@ -385,6 +529,140 @@ pub async fn run_operator_with_cancel_and_loops(
 
     info!("Operator shutdown complete");
     Ok(())
+}
+
+async fn validate_runtime_deployment_scope(
+    db: &db::OperatorDb,
+    label_domain: Option<&str>,
+    configured_scope: Option<&(String, String)>,
+) -> error::Result<bool> {
+    let Some(configured_scope) = configured_scope else {
+        return Ok(false);
+    };
+    let Some(deployment) = db.get_deployment_state().await? else {
+        return Ok(false);
+    };
+    let Some(stack_state) = deployment.stack_state.as_ref() else {
+        return Ok(false);
+    };
+    let expected = alien_infra::kubernetes_deployment_scope_label_for(
+        label_domain,
+        &stack_state.resource_prefix,
+    );
+    if configured_scope != &expected {
+        return Err(AlienError::new(error::ErrorData::ConfigurationError {
+            message: format!(
+                "runtime deployment scope {}={} does not match the initialized resource prefix; expected {}={}",
+                configured_scope.0, configured_scope.1, expected.0, expected.1
+            ),
+        }));
+    }
+    Ok(true)
+}
+
+async fn mark_kubernetes_identity_initialized(
+    db: &db::OperatorDb,
+    namespace: &str,
+    config_map_name: &str,
+) -> error::Result<()> {
+    let durable_deployment_id = db
+        .get_deployment_id()
+        .await?
+        .filter(|deployment_id| !deployment_id.trim().is_empty());
+    if durable_deployment_id.is_none() {
+        return Err(AlienError::new(error::ErrorData::ConfigurationError {
+            message: "Refusing to initialize the Helm identity marker before a non-empty deployment ID is durable"
+                .to_string(),
+        }));
+    }
+    let client_config = KubernetesClientConfig::try_incluster().await.context(
+        error::ErrorData::ConfigurationError {
+            message:
+                "Failed to load in-cluster Kubernetes configuration for identity initialization"
+                    .to_string(),
+        },
+    )?;
+    let client = KubernetesClient::new(client_config).await.context(
+        error::ErrorData::ConfigurationError {
+            message: "Failed to create Kubernetes client for identity initialization".to_string(),
+        },
+    )?;
+    patch_kubernetes_identity_initialized(&client, namespace, config_map_name).await
+}
+
+async fn await_and_mark_kubernetes_identity_initialized(
+    db: &db::OperatorDb,
+    namespace: Option<&str>,
+    label_domain: Option<&str>,
+    configured_scope: Option<&(String, String)>,
+    config_map_name: Option<&str>,
+    cancel: &CancellationToken,
+) -> error::Result<()> {
+    let Some(config_map_name) = config_map_name else {
+        cancel.cancelled().await;
+        return Ok(());
+    };
+    let namespace = namespace.ok_or_else(|| {
+        AlienError::new(error::ErrorData::ConfigurationError {
+            message: "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP requires KUBERNETES_NAMESPACE"
+                .to_string(),
+        })
+    })?;
+    let configured_scope = configured_scope.ok_or_else(|| {
+        AlienError::new(error::ErrorData::ConfigurationError {
+            message: "OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP requires the runtime deployment label scope"
+                .to_string(),
+        })
+    })?;
+
+    loop {
+        let has_durable_identity = db
+            .get_deployment_id()
+            .await?
+            .is_some_and(|deployment_id| !deployment_id.trim().is_empty());
+        if has_durable_identity
+            && validate_runtime_deployment_scope(db, label_domain, Some(configured_scope)).await?
+        {
+            mark_kubernetes_identity_initialized(db, namespace, config_map_name).await?;
+            cancel.cancelled().await;
+            return Ok(());
+        }
+
+        tokio::select! {
+            _ = cancel.cancelled() => return Ok(()),
+            _ = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
+        }
+    }
+}
+
+async fn patch_kubernetes_identity_initialized(
+    client: &KubernetesClient,
+    namespace: &str,
+    config_map_name: &str,
+) -> error::Result<()> {
+    let url = format!(
+        "{}/api/v1/namespaces/{namespace}/configmaps/{config_map_name}",
+        client.get_base_url().trim_end_matches('/')
+    );
+    let request = client
+        .client()
+        .request(Method::PATCH, &url)
+        .header("Content-Type", "application/merge-patch+json")
+        .json(&serde_json::json!({
+            "metadata": {
+                "labels": {
+                    "alien.dev/remote-operator-identity-phase": "initialized"
+                }
+            },
+            "immutable": true
+        }));
+    sign_send_no_response(request, &client.auth_config())
+        .await
+        .context(error::ErrorData::ConfigurationError {
+            message: format!(
+                "Failed to mark ConfigMap {namespace}/{config_map_name} as initialized"
+            ),
+        })
 }
 
 /// Classify a supervised loop falling out of the `select!`. Called synchronously
@@ -487,9 +765,203 @@ pub struct OperatorState {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::{collections::HashMap, path::Path, time::Duration};
+    use std::{collections::HashMap, path::Path, sync::Mutex, time::Duration};
 
     use alien_local::{DaemonLaunchOptions, LocalBindingsProvider};
+    use axum::{
+        extract::State,
+        http::{HeaderMap, StatusCode},
+        routing::patch,
+        Json, Router,
+    };
+
+    #[tokio::test]
+    async fn readiness_bind_failure_stops_operator() {
+        let occupied = tokio::net::TcpListener::bind((std::net::Ipv4Addr::UNSPECIFIED, 0))
+            .await
+            .expect("reserve readiness port");
+        let readiness_port = occupied.local_addr().expect("read listener address").port();
+        let temp = tempfile::tempdir().expect("create test directory");
+        let config = OperatorConfig::builder()
+            .platform(Platform::Local)
+            .data_dir(temp.path().to_string_lossy().to_string())
+            .encryption_key("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+            .otlp_server_port(0)
+            .build();
+
+        let error = tokio::time::timeout(
+            Duration::from_secs(5),
+            run_operator_with_cancel_and_loops_and_runtime(
+                config,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                CancellationToken::new(),
+                OperatorRuntimeOptions {
+                    readiness_server_port: Some(readiness_port),
+                    identity_initialized_config_map: None,
+                    runtime_deployment_scope: None,
+                },
+            ),
+        )
+        .await
+        .expect("readiness bind failure should stop the operator")
+        .expect_err("occupied readiness port must fail startup");
+
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to bind Operator readiness server"),
+            "unexpected readiness error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_initialization_patches_the_exact_marker_contract() {
+        type CapturedRequest = Arc<Mutex<Option<(HeaderMap, serde_json::Value)>>>;
+
+        async fn capture_patch(
+            State(captured): State<CapturedRequest>,
+            headers: HeaderMap,
+            Json(body): Json<serde_json::Value>,
+        ) -> StatusCode {
+            *captured.lock().expect("capture request lock") = Some((headers, body));
+            StatusCode::NO_CONTENT
+        }
+
+        let captured: CapturedRequest = Arc::new(Mutex::new(None));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind mock Kubernetes API");
+        let address = listener.local_addr().expect("mock Kubernetes address");
+        let app = Router::new()
+            .route(
+                "/api/v1/namespaces/product/configmaps/product-operator-initialized",
+                patch(capture_patch),
+            )
+            .with_state(captured.clone());
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve mock Kubernetes API");
+        });
+        let client = alien_k8s_clients::KubernetesClient::new(
+            alien_k8s_clients::KubernetesClientConfig::Manual {
+                server_url: format!("http://{address}"),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: None,
+                client_certificate_data: None,
+                client_key_data: None,
+                token: Some("test-token".to_string()),
+                username: None,
+                password: None,
+                namespace: Some("product".to_string()),
+                additional_headers: HashMap::new(),
+            },
+        )
+        .await
+        .expect("create mock Kubernetes client");
+
+        patch_kubernetes_identity_initialized(&client, "product", "product-operator-initialized")
+            .await
+            .expect("patch initialized identity marker");
+        server.abort();
+
+        let (headers, body) = captured
+            .lock()
+            .expect("capture request lock")
+            .take()
+            .expect("identity marker patch request");
+        assert_eq!(
+            headers
+                .get("content-type")
+                .and_then(|value| value.to_str().ok()),
+            Some("application/merge-patch+json")
+        );
+        assert_eq!(
+            headers
+                .get("authorization")
+                .and_then(|value| value.to_str().ok()),
+            Some("Bearer test-token")
+        );
+        assert_eq!(
+            body,
+            serde_json::json!({
+                "metadata": {
+                    "labels": {
+                        "alien.dev/remote-operator-identity-phase": "initialized"
+                    }
+                },
+                "immutable": true
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn identity_marker_refuses_an_empty_durable_identity() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let db = db::OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("create operator database");
+
+        let error = mark_kubernetes_identity_initialized(&db, "product", "initialized")
+            .await
+            .expect_err("an empty database must not initialize the Helm marker");
+        assert!(error.to_string().contains("deployment ID is durable"));
+    }
+
+    #[tokio::test]
+    async fn first_synced_stack_scope_must_match_before_identity_completion() {
+        let temp = tempfile::tempdir().expect("create test directory");
+        let db = db::OperatorDb::new(
+            &temp.path().to_string_lossy(),
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("create operator database");
+        db.set_deployment_id("dep_test")
+            .await
+            .expect("persist deployment ID");
+        let deployment = DeploymentState {
+            platform: Platform::Kubernetes,
+            status: DeploymentStatus::Pending,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(alien_core::StackState::with_resource_prefix(
+                Platform::Kubernetes,
+                "authoritative-prefix".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        db.set_deployment_state(&deployment)
+            .await
+            .expect("persist first synced state");
+
+        let error = await_and_mark_kubernetes_identity_initialized(
+            &db,
+            Some("product"),
+            None,
+            Some(&(
+                "alien.dev/deployment".to_string(),
+                "wrong-prefix".to_string(),
+            )),
+            Some("initialized"),
+            &CancellationToken::new(),
+        )
+        .await
+        .expect_err("a mismatched first sync must not complete the Helm marker");
+        assert!(error.to_string().contains("does not match"));
+    }
 
     #[tokio::test]
     async fn cancellation_stops_local_daemon_processes() {
@@ -591,18 +1063,99 @@ mod tests {
 /// claim. A state it cannot build disables the broker rather than taking the operator down — a
 /// deployment with no sandbox is unaffected, and one with a sandbox reports it on first claim
 /// rather than by refusing to boot.
-async fn sandbox_broker_router(config: &config::OperatorConfig) -> Option<axum::Router> {
+async fn sandbox_broker_router(
+    config: &config::OperatorConfig,
+    db: Arc<db::OperatorDb>,
+    runtime_deployment_scope: Option<&(String, String)>,
+) -> Option<axum::Router> {
     if config.platform != alien_core::Platform::Kubernetes {
         return None;
     }
 
     let namespace = config.namespace.clone()?;
-
     match alien_infra::BrokerState::in_cluster(namespace).await {
-        Ok(state) => Some(alien_infra::broker_router(state)),
+        Ok(state) => Some(alien_infra::broker_router_with_authorization(
+            state,
+            Arc::new(OperatorBrokerAuthorization {
+                db,
+                label_domain: config.label_domain.clone(),
+                configured_scope: runtime_deployment_scope.cloned(),
+            }),
+        )),
         Err(error) => {
             tracing::warn!(error = %error, "sandbox broker disabled: no in-cluster Kubernetes client");
             None
         }
+    }
+}
+
+struct OperatorBrokerAuthorization {
+    db: Arc<db::OperatorDb>,
+    label_domain: Option<String>,
+    configured_scope: Option<(String, String)>,
+}
+
+#[async_trait::async_trait]
+impl alien_infra::BrokerAuthorizationProvider for OperatorBrokerAuthorization {
+    async fn authorization(
+        &self,
+    ) -> alien_infra::Result<alien_infra::BrokerDeploymentAuthorization> {
+        let unavailable = |message: String| {
+            AlienError::new(alien_infra::ErrorData::ResourceConfigInvalid {
+                message,
+                resource_id: Some("sandbox-broker".to_string()),
+            })
+        };
+        let deployment = self
+            .db
+            .get_deployment_state()
+            .await
+            .map_err(|error| unavailable(format!("cannot read deployment state: {error}")))?
+            .ok_or_else(|| unavailable("deployment state is not available yet".to_string()))?;
+        let stack_state = deployment.stack_state.as_ref().ok_or_else(|| {
+            unavailable("deployment resource prefix is not available yet".to_string())
+        })?;
+        let derived_scope = alien_infra::kubernetes_deployment_scope_label_for(
+            self.label_domain.as_deref(),
+            &stack_state.resource_prefix,
+        );
+        if self
+            .configured_scope
+            .as_ref()
+            .is_some_and(|configured| configured != &derived_scope)
+        {
+            return Err(unavailable(format!(
+                "configured runtime scope does not match the synced resource prefix (expected {}={})",
+                derived_scope.0, derived_scope.1
+            )));
+        }
+        let (deployment_label_key, deployment_label_value) = derived_scope;
+
+        let mut service_accounts = BTreeSet::new();
+        for release in deployment
+            .current_release
+            .iter()
+            .chain(deployment.target_release.iter())
+        {
+            for (_, entry) in release.stack.resources() {
+                if let Some(profile) = entry.config.get_permissions() {
+                    service_accounts.insert(alien_core::kubernetes_service_account_name(
+                        &stack_state.resource_prefix,
+                        profile,
+                    ));
+                }
+            }
+        }
+        if service_accounts.is_empty() {
+            return Err(unavailable(
+                "no deployed workload ServiceAccounts are available yet".to_string(),
+            ));
+        }
+
+        Ok(alien_infra::BrokerDeploymentAuthorization {
+            deployment_label_key,
+            deployment_label_value,
+            service_accounts,
+        })
     }
 }

@@ -1,6 +1,8 @@
 use alien_helm::{
-    generate_operator_manifest, HelmChart, OperatorManifestOptions, OperatorOutputFormat,
-    OperatorPermission, OperatorScope,
+    generate_operator_manifest, generate_operator_manifest_with_image_identity,
+    generate_product_operator_manifest, HelmChart, OperatorImageIdentityOptions,
+    OperatorLogCollectorOptions, OperatorManifestOptions, OperatorOutputFormat, OperatorPermission,
+    OperatorScope, ProductOperatorManifestOptions,
 };
 use alien_operations_sdk::{CanonicalPluginManifest, KubernetesOperationPermissions};
 use indexmap::IndexMap;
@@ -550,5 +552,153 @@ alien:
             .stdout
             .contains("azure.workload.identity/use: \"true\""),
         "AKS workload identity label must be attached to the Operator pod"
+    );
+}
+
+#[test]
+fn operator_template_can_reference_setup_owned_credentials() {
+    let template = generate_product_operator_manifest(ProductOperatorManifestOptions {
+        manifest: OperatorManifestOptions {
+            custom_operation_permissions: &[],
+            manager_url: "https://manager.example.com",
+            group_token: "",
+            encryption_key: "",
+            image: "registry.example.com/operator:test",
+            log_collector: Some(OperatorLogCollectorOptions {
+                image: "registry.example.com/collector:test",
+                token: "",
+            }),
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: None,
+            install_namespace: None,
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            kubernetes_operations_enabled: true,
+            permission: OperatorPermission::Remediation,
+            format: OperatorOutputFormat::HelmTemplate,
+        },
+        credentials_secret_name:
+            "{{ required \"remoteOperator.existingSecret.name is required\" .Values.remoteOperator.existingSecret.name }}",
+        credentials_encryption_key_sha256:
+            "{{ required \"remoteOperator.existingSecret.encryptionKeySha256 is required\" .Values.remoteOperator.existingSecret.encryptionKeySha256 }}",
+        resource_name: Some("my-saas-operator"),
+    })
+    .expect("operator template should accept an existing credential Secret");
+
+    let chart = HelmChart {
+        name: "operator-test".to_string(),
+        files: IndexMap::from([
+            (
+                "Chart.yaml".to_string(),
+                "apiVersion: v2\nname: operator-test\nversion: 0.1.0\n".to_string(),
+            ),
+            (
+                "values.yaml".to_string(),
+                "remoteOperator:\n  existingSecret:\n    name: setup-owned\n".to_string(),
+            ),
+            ("templates/byoc-operator.yaml".to_string(), template),
+        ]),
+    };
+
+    let rendered = test_utils::helm_template(&chart.files, None);
+    rendered.assert_ok("existing credential Secret helm template");
+    assert!(
+        !rendered
+            .stdout
+            .contains("OPERATOR_IDENTITY_INITIALIZED_CONFIGMAP"),
+        "the reusable product-operator template must not reference host-chart lifecycle helpers"
+    );
+    let documents = parse_manifest(&rendered.stdout);
+    assert!(
+        documents
+            .iter()
+            .all(|document| document["kind"] != "Secret"),
+        "the product release must not copy bootstrap credentials into Helm-owned values"
+    );
+    let deployment = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment")
+        .expect("operator Deployment");
+    let credential_volume = deployment["spec"]["template"]["spec"]["volumes"]
+        .as_sequence()
+        .expect("deployment volumes")
+        .iter()
+        .find(|volume| volume["name"] == "credentials")
+        .expect("credential volume");
+    assert_eq!(credential_volume["secret"]["secretName"], "setup-owned");
+    let collector = documents
+        .iter()
+        .find(|document| document["kind"] == "DaemonSet")
+        .expect("log collector DaemonSet");
+    assert_eq!(
+        collector["spec"]["template"]["spec"]["containers"][0]["env"][0]["valueFrom"]
+            ["secretKeyRef"]["name"],
+        "setup-owned"
+    );
+}
+
+#[test]
+fn operator_manifest_reports_exact_package_image_identity() {
+    let digest = format!("sha256:{}", "a".repeat(64));
+    let image = format!("registry.example.com/operator@{digest}");
+    let manifest = generate_operator_manifest_with_image_identity(
+        OperatorManifestOptions {
+            custom_operation_permissions: &[],
+            manager_url: "https://manager.example.com",
+            group_token: "ax_dg_test",
+            encryption_key: TEST_ENCRYPTION_KEY,
+            image: &image,
+            log_collector: None,
+            stack_settings: None,
+            project_name: "my-saas",
+            environment_name: Some("acme-prod-eu"),
+            install_namespace: Some("demo"),
+            label_domain: None,
+            scope: OperatorScope::Namespace,
+            label_selector: None,
+            kubernetes_operations_enabled: true,
+            permission: OperatorPermission::Remediation,
+            format: OperatorOutputFormat::RawManifest,
+        },
+        OperatorImageIdentityOptions::Package {
+            package_id: "pkg_operator",
+            package_version: "1.2.3",
+        },
+    )
+    .expect("exact image identity should render");
+
+    let documents = parse_manifest(&manifest);
+    let deployment = documents
+        .iter()
+        .find(|document| document["kind"] == "Deployment")
+        .expect("operator Deployment");
+    let env = &deployment["spec"]["template"]["spec"]["containers"][0]["env"];
+    let env_value = |name: &str| {
+        env.as_sequence()
+            .expect("env sequence")
+            .iter()
+            .find(|entry| entry["name"].as_str() == Some(name))
+            .and_then(|entry| entry["value"].as_str())
+    };
+
+    assert_eq!(env_value("ALIEN_OPERATOR_IMAGE_SOURCE"), Some("package"));
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_RECEIPT"),
+        Some(image.as_str())
+    );
+    assert_eq!(env_value("ALIEN_OPERATOR_IMAGE"), None);
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_DIGEST"),
+        Some(digest.as_str())
+    );
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_PACKAGE_ID"),
+        Some("pkg_operator")
+    );
+    assert_eq!(
+        env_value("ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION"),
+        Some("1.2.3")
     );
 }

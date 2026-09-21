@@ -21,6 +21,27 @@ pub struct KubernetesEnvSecretPlan {
     pub keys: Vec<String>,
 }
 
+pub(crate) fn pod_spec_references_environment_secret(
+    pod_spec: Option<&k8s_openapi::api::core::v1::PodSpec>,
+    secret_name: &str,
+) -> bool {
+    let Some(pod_spec) = pod_spec else {
+        return false;
+    };
+    pod_spec
+        .containers
+        .iter()
+        .chain(pod_spec.init_containers.iter().flatten())
+        .flat_map(|container| container.env.iter().flatten())
+        .any(|variable| {
+            variable
+                .value_from
+                .as_ref()
+                .and_then(|source| source.secret_key_ref.as_ref())
+                .is_some_and(|reference| reference.name == secret_name)
+        })
+}
+
 fn environment_secret_values(
     resource_id: &str,
     variables: &[EnvironmentVariable],
@@ -94,15 +115,19 @@ fn environment_secret_manifest(
     resource_id: &str,
     namespace: &str,
     secret_values: &BTreeMap<String, String>,
+    deployment_labels: &BTreeMap<String, String>,
 ) -> Secret {
+    let mut labels = BTreeMap::from([
+        ("managed-by".to_string(), "runtime".to_string()),
+        ("resource-id".to_string(), resource_id.to_string()),
+    ]);
+    labels.extend(deployment_labels.clone());
+
     Secret {
         metadata: ObjectMeta {
             name: Some(plan.secret_name.clone()),
             namespace: Some(namespace.to_string()),
-            labels: Some(BTreeMap::from([
-                ("managed-by".to_string(), "runtime".to_string()),
-                ("resource-id".to_string(), resource_id.to_string()),
-            ])),
+            labels: Some(labels),
             annotations: Some(BTreeMap::from([(
                 "env-secret-checksum".to_string(),
                 plan.checksum.clone(),
@@ -131,8 +156,20 @@ fn ensure_environment_secret_is_owned(
     secret: &Secret,
     secret_name: &str,
     resource_id: &str,
+    desired_labels: &BTreeMap<String, String>,
+    legacy_owner_proven: bool,
 ) -> Result<()> {
-    if environment_secret_is_owned(secret, resource_id) {
+    if environment_secret_is_owned(secret, resource_id)
+        && crate::core::kubernetes_labels_have_compatible_scope(
+            secret.metadata.labels.as_ref(),
+            desired_labels,
+        )
+        && (legacy_owner_proven
+            || crate::core::kubernetes_labels_have_recognized_scope(
+                secret.metadata.labels.as_ref(),
+                desired_labels,
+            ))
+    {
         return Ok(());
     }
 
@@ -155,6 +192,7 @@ pub async fn delete_environment_secret(
     workload_name: &str,
     namespace: &str,
     ctx: &ResourceControllerContext<'_>,
+    legacy_owner_proven: bool,
 ) -> Result<()> {
     let secret_name = format!("{workload_name}-env");
     let kubernetes_config = ctx.get_kubernetes_config()?;
@@ -182,7 +220,18 @@ pub async fn delete_environment_secret(
             }));
         }
     };
-    if !environment_secret_is_owned(&existing, resource_id) {
+    let desired_labels = crate::core::kubernetes_cleanup_resource_labels(ctx, resource_id);
+    if !environment_secret_is_owned(&existing, resource_id)
+        || !crate::core::kubernetes_labels_have_compatible_scope(
+            existing.metadata.labels.as_ref(),
+            &desired_labels,
+        )
+        || !(legacy_owner_proven
+            || crate::core::kubernetes_labels_have_recognized_scope(
+                existing.metadata.labels.as_ref(),
+                &desired_labels,
+            ))
+    {
         tracing::debug!(
             secret_name = %secret_name,
             resource_id = %resource_id,
@@ -215,6 +264,7 @@ pub async fn reconcile_environment_secret(
     resource_id: &str,
     workload_name: &str,
     namespace: &str,
+    legacy_owner_proven: bool,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<KubernetesEnvSecretPlan>> {
     reconcile_environment_secret_with_additional_secrets(
@@ -223,6 +273,7 @@ pub async fn reconcile_environment_secret(
         workload_name,
         namespace,
         &BTreeMap::new(),
+        legacy_owner_proven,
         ctx,
     )
     .await
@@ -234,6 +285,7 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
     workload_name: &str,
     namespace: &str,
     additional_secrets: &BTreeMap<String, String>,
+    legacy_owner_proven: bool,
     ctx: &ResourceControllerContext<'_>,
 ) -> Result<Option<KubernetesEnvSecretPlan>> {
     let variables = &ctx.deployment_config.environment_variables.variables;
@@ -243,13 +295,27 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
         variables,
         additional_secrets,
     ) else {
-        delete_environment_secret(resource_kind, resource_id, workload_name, namespace, ctx)
-            .await?;
+        delete_environment_secret(
+            resource_kind,
+            resource_id,
+            workload_name,
+            namespace,
+            ctx,
+            legacy_owner_proven,
+        )
+        .await?;
         return Ok(None);
     };
 
     let secret_values = environment_secret_values(resource_id, variables, additional_secrets);
-    let mut secret = environment_secret_manifest(&plan, resource_id, namespace, &secret_values);
+    let deployment_labels = crate::core::kubernetes_cleanup_resource_labels(ctx, resource_id);
+    let mut secret = environment_secret_manifest(
+        &plan,
+        resource_id,
+        namespace,
+        &secret_values,
+        &deployment_labels,
+    );
     let secret_name = plan.secret_name.clone();
 
     let kubernetes_config = ctx.get_kubernetes_config()?;
@@ -272,7 +338,13 @@ pub async fn reconcile_environment_secret_with_additional_secrets(
                         ),
                         resource_id: Some(resource_id.to_string()),
                     })?;
-                ensure_environment_secret_is_owned(&existing, &secret_name, resource_id)?;
+                ensure_environment_secret_is_owned(
+                    &existing,
+                    &secret_name,
+                    resource_id,
+                    &deployment_labels,
+                    legacy_owner_proven,
+                )?;
                 secret.metadata.resource_version = existing.metadata.resource_version;
                 secrets_client
                     .update_secret(namespace, &secret_name, &secret)
@@ -483,6 +555,32 @@ mod tests {
     }
 
     #[test]
+    fn workload_reference_is_the_proof_for_legacy_environment_secret_migration() {
+        let secret_ref = |name: &str| k8s_openapi::api::core::v1::Container {
+            name: name.to_string(),
+            env: Some(vec![secret_key_ref_env_var("TOKEN", "agent-env", "TOKEN")]),
+            ..Default::default()
+        };
+        let pod_spec = k8s_openapi::api::core::v1::PodSpec {
+            containers: vec![k8s_openapi::api::core::v1::Container {
+                name: "main".to_string(),
+                ..Default::default()
+            }],
+            init_containers: Some(vec![secret_ref("init")]),
+            ..Default::default()
+        };
+
+        assert!(pod_spec_references_environment_secret(
+            Some(&pod_spec),
+            "agent-env"
+        ));
+        assert!(!pod_spec_references_environment_secret(
+            Some(&pod_spec),
+            "agent-registry"
+        ));
+    }
+
+    #[test]
     fn plan_collects_applicable_secret_keys_and_checksum() {
         let variables = vec![
             plain_var("APP_ENV", "prod"),
@@ -529,12 +627,31 @@ mod tests {
         ];
         let plan = environment_secret_plan("web", "web", &variables).expect("plan");
         let secret_values = environment_secret_values("web", &variables, &BTreeMap::new());
+        let deployment_labels = BTreeMap::from([(
+            "alien.dev/deployment".to_string(),
+            "test-release".to_string(),
+        )]);
 
-        let secret = environment_secret_manifest(&plan, "web", "test-ns", &secret_values);
+        let secret = environment_secret_manifest(
+            &plan,
+            "web",
+            "test-ns",
+            &secret_values,
+            &deployment_labels,
+        );
 
         assert_eq!(secret.metadata.name.as_deref(), Some("web-env"));
         assert_eq!(secret.metadata.namespace.as_deref(), Some("test-ns"));
         assert_eq!(secret.type_.as_deref(), Some("Opaque"));
+        assert_eq!(
+            secret
+                .metadata
+                .labels
+                .as_ref()
+                .and_then(|labels| labels.get("alien.dev/deployment"))
+                .map(String::as_str),
+            Some("test-release")
+        );
         assert_eq!(
             secret
                 .metadata
@@ -575,7 +692,8 @@ mod tests {
             environment_secret_plan_with_additional_secrets("web", "web", &variables, &additional)
                 .expect("plan");
         let values = environment_secret_values("web", &variables, &additional);
-        let secret = environment_secret_manifest(&plan, "web", "test-ns", &values);
+        let secret =
+            environment_secret_manifest(&plan, "web", "test-ns", &values, &BTreeMap::new());
 
         assert_eq!(
             plan.keys,
@@ -640,6 +758,16 @@ mod tests {
 
     #[test]
     fn environment_secret_cleanup_requires_exact_ownership_labels() {
+        let desired_labels = BTreeMap::from([
+            ("managed-by".to_string(), "runtime".to_string()),
+            ("resource-id".to_string(), "web".to_string()),
+            (
+                "alien.dev/label-domain".to_string(),
+                "alien.dev".to_string(),
+            ),
+            ("alien.dev/deployment".to_string(), "release-a".to_string()),
+            ("alien.dev/resource".to_string(), "web".to_string()),
+        ]);
         let owned = Secret {
             metadata: ObjectMeta {
                 name: Some("web-env".to_string()),
@@ -651,8 +779,22 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(ensure_environment_secret_is_owned(&owned, "web-env", "web").is_ok());
-        assert!(ensure_environment_secret_is_owned(&owned, "web-env", "other").is_err());
+        assert!(ensure_environment_secret_is_owned(
+            &owned,
+            "web-env",
+            "web",
+            &desired_labels,
+            true
+        )
+        .is_ok());
+        assert!(ensure_environment_secret_is_owned(
+            &owned,
+            "web-env",
+            "other",
+            &desired_labels,
+            true
+        )
+        .is_err());
 
         let unmanaged = Secret {
             metadata: ObjectMeta {
@@ -661,7 +803,36 @@ mod tests {
             },
             ..Default::default()
         };
-        assert!(ensure_environment_secret_is_owned(&unmanaged, "web-env", "web").is_err());
+        assert!(ensure_environment_secret_is_owned(
+            &unmanaged,
+            "web-env",
+            "web",
+            &desired_labels,
+            true
+        )
+        .is_err());
+
+        let mut foreign = owned.clone();
+        foreign
+            .metadata
+            .labels
+            .as_mut()
+            .expect("labels")
+            .insert("alien.dev/deployment".to_string(), "release-b".to_string());
+        assert!(ensure_environment_secret_is_owned(
+            &foreign,
+            "web-env",
+            "web",
+            &desired_labels,
+            true
+        )
+        .is_err());
+
+        assert!(
+            ensure_environment_secret_is_owned(&owned, "web-env", "web", &desired_labels, false)
+                .is_err(),
+            "an unscoped same-name Secret needs proof from an existing owned workload root"
+        );
     }
 
     #[tokio::test]
@@ -700,10 +871,16 @@ mod tests {
         )
         .with_service_provider(Arc::new(provider));
 
-        let plan =
-            reconcile_environment_secret("daemon", "agent", "agent", "test-ns", &harness.ctx())
-                .await
-                .expect("cleanup reconcile");
+        let plan = reconcile_environment_secret(
+            "daemon",
+            "agent",
+            "agent",
+            "test-ns",
+            true,
+            &harness.ctx(),
+        )
+        .await
+        .expect("cleanup reconcile");
 
         assert!(plan.is_none());
     }
@@ -739,10 +916,16 @@ mod tests {
         )
         .with_service_provider(Arc::new(provider));
 
-        let plan =
-            reconcile_environment_secret("daemon", "agent", "agent", "test-ns", &harness.ctx())
-                .await
-                .expect("non-owned cleanup reconcile");
+        let plan = reconcile_environment_secret(
+            "daemon",
+            "agent",
+            "agent",
+            "test-ns",
+            false,
+            &harness.ctx(),
+        )
+        .await
+        .expect("non-owned cleanup reconcile");
 
         assert!(plan.is_none());
     }

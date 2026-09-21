@@ -21,8 +21,8 @@ use alien_core::{
     Stack, StackSettings, Storage, Worker, WorkerCode,
 };
 use alien_terraform::{
-    generate_terraform_module, TerraformHelmInstall, TerraformOptions, TerraformRegistration,
-    TerraformTarget, TfRegistry,
+    generate_product_terraform_module, TerraformHelmInstall, TerraformOptions,
+    TerraformRegistration, TerraformTarget, TfRegistry,
 };
 
 fn storage_data_read_service_account() -> ServiceAccount {
@@ -694,7 +694,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         )
         .build();
     let registry = TfRegistry::built_in();
-    let module = generate_terraform_module(
+    let module = generate_product_terraform_module(
         &stack,
         TerraformTarget::Eks,
         TerraformOptions {
@@ -717,6 +717,7 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
             }),
             supported_aws_regions: Vec::new(),
         },
+        false,
     )
     .expect("module should render");
 
@@ -734,6 +735,94 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .expect("registered module with helm install should include helm.tf");
     assert!(helm.contains("acme_app_deployment.this.helm_values"));
     assert!(!helm.contains("local.helm_values"));
+    assert!(helm.contains("resource \"kubernetes_secret_v1\" \"remote_operator_credentials\""));
+    assert!(helm.contains("var.remote_operator_sync_token"));
+    assert!(helm.contains("var.remote_operator_encryption_key"));
+    assert!(helm.contains("encryptionKeySha256 = var.remote_operator_encryption_key != null ? sha256(var.remote_operator_encryption_key)"));
+    assert!(helm.contains("var.remote_operator_collector_token"));
+    assert!(helm.contains("\"collector-token\""));
+    let compact_helm = helm.split_whitespace().collect::<Vec<_>>().join(" ");
+    assert!(
+        compact_helm.contains("ignore_changes = [ data[\"encryption-key\"] ]"),
+        "{helm}"
+    );
+    assert!(helm.contains("bootstrapIdentity = var.remote_operator_bootstrap_identity"));
+    assert!(helm.contains("syncTokenRevision = var.remote_operator_sync_token_revision"));
+    assert!(helm.contains(
+        "collectorTokenRevision = var.remote_operator_collector_token != null ? sha256(var.remote_operator_collector_token) : \"\""
+    ));
+    assert!(helm.contains(
+        "podLabels = var.remote_operator_enabled ? { \"alien.dev/credentials-secret-uid\" = kubernetes_secret_v1.remote_operator_credentials[0].metadata[0].uid } : {}"
+    ));
+    assert!(!helm.contains("yamldecode(acme_app_deployment.this.helm_values).management.token"));
+    assert!(helm.contains("remoteOperator = {"));
+    assert!(helm.contains("enabled = var.remote_operator_enabled"));
+    assert!(helm.contains("data \"kubernetes_resources\" \"remote_operator_namespace\""));
+    assert!(helm.contains("data \"kubernetes_resources\" \"remote_operator_identity_records\""));
+    assert!(!helm.contains("remote_operator_terraform_owners"));
+    assert!(compact_helm
+        .contains("kind = local.remote_operator_namespace_exists ? \"ConfigMap\" : \"Namespace\""));
+    assert!(compact_helm.contains(
+        "namespace = local.remote_operator_namespace_exists ? local.remote_operator_lifecycle_namespace : null"
+    ));
+    assert!(helm.contains(
+        "local.remote_operator_namespace_exists ? \"metadata.name=${local.remote_operator_identity_record_name}\" : \"metadata.name=${local.remote_operator_lifecycle_namespace}\""
+    ));
+    assert!(helm.contains("remote_operator_release_prefix"));
+    assert!(helm.contains("remote_operator_identity_record_name"));
+    assert!(helm.contains("resource \"terraform_data\" \"remote_operator_ownership\""));
+    assert!(compact_helm.contains("ignore_changes = [ input ]"));
+    assert!(helm.contains("remote_operator_pinned_ownership"));
+    assert!(helm.contains("substr(sha256("));
+    assert!(!helm.contains("label_selector"));
+    assert!(helm.contains("count = var.kubernetes_namespace_create ? 1 : 0"));
+    assert!(
+        helm.contains("count = var.helm_install_enabled && var.remote_operator_enabled ? 1 : 0")
+    );
+    assert!(helm.contains("resource \"terraform_data\" \"remote_operator_lifecycle_guard\""));
+    assert!(helm.contains(
+        "local.remote_operator_pinned_ownership.managed ? (local.remote_operator_requested_managed"
+    ));
+    assert!(!helm.contains("remote_operator_terraform_owner"));
+    assert!(helm.contains("terraform apply -replace=terraform_data.remote_operator_ownership"));
+    assert!(helm.contains("kubernetes_secret_v1.remote_operator_credentials"));
+    assert!(compact_helm.contains("atomic = true"));
+    assert!(!compact_helm.contains("cleanup_on_fail"));
+    assert!(compact_helm.contains("wait = true"));
+    assert!(compact_helm.contains("timeout = 300"));
+    let variables = module
+        .get("variables.tf")
+        .expect("registered module should include variables");
+    assert!(variables.contains("variable \"remote_operator_sync_token\""));
+    assert!(variables.contains("variable \"remote_operator_encryption_key\""));
+    assert!(variables.contains("variable \"remote_operator_collector_token\""));
+    assert!(variables.contains("variable \"remote_operator_enabled\""));
+    assert!(variables.contains("variable \"remote_operator_bootstrap_identity\""));
+    assert!(variables.contains("variable \"remote_operator_sync_token_revision\""));
+    assert!(variables.contains(
+        "var.remote_operator_sync_token_revision >= 0 && floor(var.remote_operator_sync_token_revision) == var.remote_operator_sync_token_revision"
+    ));
+    assert!(variables.contains("Never reuse the product deployment token"));
+    assert!(variables.contains("default     = false"));
+    let readme = module
+        .get("README.md")
+        .expect("registered module should document lifecycle behavior");
+    assert!(readme.contains("identity PVC"));
+    assert!(readme.contains("permanently retires the setup"));
+    assert!(readme.contains("disabling it in place is unsupported"));
+    assert!(readme.contains("separately managed Helm release"));
+    assert!(readme.contains("Supply `remote_operator_collector_token` only when"));
+    assert!(readme.contains("Keep the credentials required by the chart populated"));
+    assert!(readme.contains("terraform apply -replace=terraform_data.remote_operator_ownership"));
+    let sync_token_variable = variables
+        .split("variable \"remote_operator_sync_token\"")
+        .nth(1)
+        .and_then(|rest| rest.split("\nvariable ").next())
+        .expect("sync token variable block");
+    assert!(sync_token_variable
+        .split_whitespace()
+        .collect::<String>()
+        .contains("default=null"));
 
     let registration = module
         .get("registration.tf")
@@ -745,7 +834,11 @@ fn registered_kubernetes_module_installs_provider_rendered_helm_values() {
         .get("providers.tf")
         .expect("registered Kubernetes module should include providers.tf");
     assert!(providers.contains("kubernetes = {"));
-    assert!(!providers.contains("kubernetes {"));
+    assert!(providers.contains("provider \"kubernetes\""));
+    assert!(
+        providers.contains("host                   = data.aws_eks_cluster.target.endpoint"),
+        "{providers}"
+    );
 }
 
 #[test]
@@ -771,7 +864,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
         )
         .build();
     let registry = TfRegistry::built_in();
-    let module = generate_terraform_module(
+    let module = generate_product_terraform_module(
         &stack,
         TerraformTarget::Gke,
         TerraformOptions {
@@ -794,6 +887,7 @@ fn registered_gke_kubernetes_module_declares_dynamic_network_inputs() {
             }),
             supported_aws_regions: Vec::new(),
         },
+        false,
     )
     .expect("module should render");
 

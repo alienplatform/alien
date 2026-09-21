@@ -970,6 +970,76 @@ impl OperatorDb {
         Ok(())
     }
 
+    /// Persist every durable value returned by first-time initialization in one
+    /// SQLite statement. When the manager returns a replacement credential, a
+    /// restart must never observe its deployment ID without that credential.
+    /// Admin-token initialization returns no replacement and keeps using the
+    /// externally configured credential, so only its ID and optional state are
+    /// written here.
+    pub async fn persist_initialized_identity(
+        &self,
+        deployment_id: &str,
+        deployment_state: Option<&DeploymentState>,
+        sync_token: Option<&str>,
+    ) -> Result<()> {
+        let deployment_state = deployment_state
+            .map(serde_json::to_string)
+            .transpose()
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to serialize initialized deployment_state".to_string(),
+            })?;
+        let conn = self.conn.lock().await;
+        let result = match (deployment_state, sync_token) {
+            (Some(deployment_state), Some(sync_token)) => conn
+                .execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES
+                     ('deployment_id', ?1, datetime('now')),
+                     ('deployment_state', ?2, datetime('now')),
+                     ('sync_token', ?3, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (
+                        deployment_id.to_string(),
+                        deployment_state,
+                        sync_token.to_string(),
+                    ),
+                )
+                .await,
+            (Some(deployment_state), None) => conn
+                .execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES
+                     ('deployment_id', ?1, datetime('now')),
+                     ('deployment_state', ?2, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (deployment_id.to_string(), deployment_state),
+                )
+                .await,
+            (None, Some(sync_token)) => conn
+                .execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES
+                     ('deployment_id', ?1, datetime('now')),
+                     ('sync_token', ?2, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (deployment_id.to_string(), sync_token.to_string()),
+                )
+                .await,
+            (None, None) => conn
+                .execute(
+                    "INSERT INTO state (key, value, updated_at) VALUES
+                     ('deployment_id', ?1, datetime('now'))
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+                    (deployment_id.to_string(),),
+                )
+                .await,
+        };
+        result
+            .into_alien_error()
+            .context(ErrorData::DatabaseError {
+                message: "Failed to atomically persist initialized identity".to_string(),
+            })?;
+        Ok(())
+    }
+
     /// Load the durable pull-executor session and its current operation claim.
     pub async fn get_sync_execution(&self) -> Result<Option<DurableSyncExecution>> {
         let conn = self.conn.lock().await;
@@ -1222,17 +1292,18 @@ impl OperatorDb {
         else {
             return Ok(None);
         };
-        let value: String =
-            row.get(0)
-                .into_alien_error()
-                .context(ErrorData::DatabaseError {
-                    message: "Failed to read target_operations_bundle_set value".to_string(),
-                })?;
-        let target = serde_json::from_str(&value)
+        let value: String = row
+            .get(0)
             .into_alien_error()
             .context(ErrorData::DatabaseError {
-                message: "Failed to parse target_operations_bundle_set".to_string(),
+                message: "Failed to read target_operations_bundle_set value".to_string(),
             })?;
+        let target =
+            serde_json::from_str(&value)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to parse target_operations_bundle_set".to_string(),
+                })?;
         Ok(Some(target))
     }
 
@@ -1243,11 +1314,12 @@ impl OperatorDb {
     ) -> Result<()> {
         let conn = self.conn.lock().await;
 
-        let value = serde_json::to_string(target)
-            .into_alien_error()
-            .context(ErrorData::DatabaseError {
-                message: "Failed to serialize target_operations_bundle_set".to_string(),
-            })?;
+        let value =
+            serde_json::to_string(target)
+                .into_alien_error()
+                .context(ErrorData::DatabaseError {
+                    message: "Failed to serialize target_operations_bundle_set".to_string(),
+                })?;
         conn.execute(
             "INSERT INTO state (key, value, updated_at) VALUES ('target_operations_bundle_set', ?, datetime('now'))
              ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
@@ -1270,6 +1342,57 @@ mod tests {
 
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    #[tokio::test]
+    async fn initial_identity_write_never_leaves_a_deployment_id_without_its_token() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is utf-8");
+        let db = OperatorDb::new(data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open encrypted operator db");
+        {
+            let conn = db.conn.lock().await;
+            conn.execute(
+                "CREATE TRIGGER reject_initial_sync_token
+                 BEFORE INSERT ON state
+                 WHEN NEW.key = 'sync_token'
+                 BEGIN
+                   SELECT RAISE(ABORT, 'forced sync-token failure');
+                 END",
+                (),
+            )
+            .await
+            .expect("install forced failure trigger");
+        }
+
+        db.persist_initialized_identity("dep_new", None, Some("ax_dep_new"))
+            .await
+            .expect_err("the forced token failure must abort initialization persistence");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment id"),
+            None,
+            "the deployment ID row must roll back with the token row"
+        );
+        assert_eq!(db.get_sync_token().await.expect("read sync token"), None);
+
+        {
+            let conn = db.conn.lock().await;
+            conn.execute("DROP TRIGGER reject_initial_sync_token", ())
+                .await
+                .expect("remove forced failure trigger");
+        }
+        db.persist_initialized_identity("dep_new", None, Some("ax_dep_new"))
+            .await
+            .expect("persist complete initialized identity");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment id"),
+            Some("dep_new".to_string())
+        );
+        assert_eq!(
+            db.get_sync_token().await.expect("read sync token"),
+            Some("ax_dep_new".to_string())
+        );
+    }
 
     #[tokio::test]
     async fn sync_token_persists_across_reopen() {

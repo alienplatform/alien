@@ -7,9 +7,13 @@ use crate::error::{ErrorData, Result};
 use crate::loops::access_requests::AccessRequestSyncLoop;
 use crate::loops::debug_session::DebugSessionLoop;
 use crate::loops::operations_exec::{OperationsExecLoop, OperationsSyncHandler};
-use crate::{run_operator_with_cancel_and_loops, InstanceLock, OperatorConfig};
+use crate::{
+    run_operator_with_cancel_and_loops_and_runtime, InstanceLock, OperatorConfig,
+    OperatorRuntimeOptions,
+};
 use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
 use alien_core::{
+    sync::{OperatorImageReport, OperatorImageSource},
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
     DEPLOYMENT_PROTOCOL_VERSION,
 };
@@ -20,6 +24,28 @@ use std::path::PathBuf;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, warn};
 use tracing_subscriber::{fmt, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+
+#[derive(Parser, Debug)]
+#[command(
+    name = "operator",
+    about = "Operator - Continuous deployment service (pull model)",
+    long_about = "Run the Operator for continuous deployment using the pull model.
+
+The Operator:
+- Syncs with the manager every 30 seconds
+- Runs the deployment step locally when updates are available
+- Collects and forwards telemetry to the manager
+- Supports offline/airgapped operation with state persistence",
+    after_help = "Secrets are loaded from files or environment variables only — \
+                  CLI flags for tokens and encryption keys were removed because \
+                  argv is visible in `ps` / `/proc/<pid>/cmdline`."
+)]
+struct OperatorCliArgs {
+    #[command(flatten)]
+    args: Args,
+    #[command(flatten)]
+    operator_image: OperatorImageArgs,
+}
 
 #[derive(Parser, Debug)]
 #[command(
@@ -143,6 +169,29 @@ pub struct Args {
     pub service: bool,
 }
 
+#[derive(clap::Args, Debug, Default)]
+struct OperatorImageArgs {
+    /// Origin of the immutable image receipt: `package` or `configured`.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_SOURCE")]
+    operator_image_source: Option<String>,
+
+    /// Exact running image in `repository@sha256:digest` form.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_RECEIPT")]
+    operator_image: Option<String>,
+
+    /// Exact lowercase OCI image digest.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_DIGEST")]
+    operator_image_digest: Option<String>,
+
+    /// Package ID for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_ID")]
+    operator_image_package_id: Option<String>,
+
+    /// Package version for a package-sourced image.
+    #[arg(long, env = "ALIEN_OPERATOR_IMAGE_PACKAGE_VERSION")]
+    operator_image_package_version: Option<String>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum InitialDesiredReleaseArg {
     Active,
@@ -234,7 +283,10 @@ pub fn cli_main_with_all_loops(
     // Ignoring `Err` makes this idempotent across re-invocations in tests.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    let args = Args::parse();
+    let OperatorCliArgs {
+        args,
+        operator_image,
+    } = OperatorCliArgs::parse();
 
     #[cfg(windows)]
     if args.service {
@@ -254,6 +306,7 @@ pub fn cli_main_with_all_loops(
 
     if let Err(e) = rt.block_on(run(
         args,
+        operator_image,
         init_hook,
         debug_loop_hook,
         access_request_loop_hook,
@@ -271,7 +324,30 @@ pub fn cli_main() {
 }
 
 async fn run(
+    args: Args,
+    operator_image: OperatorImageArgs,
+    init_hook: InitHook,
+    debug_loop_hook: DebugLoopHook,
+    access_request_loop_hook: AccessRequestSyncLoopHook,
+    operations_exec_loop_hook: OperationsExecLoopHook,
+    operations_sync_handler_hook: OperationsSyncHandlerHook,
+) -> Result<()> {
+    run_operator_cli(
+        args,
+        operator_image,
+        init_hook,
+        debug_loop_hook,
+        access_request_loop_hook,
+        operations_exec_loop_hook,
+        operations_sync_handler_hook,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_operator_cli(
     mut args: Args,
+    operator_image_args: OperatorImageArgs,
     init_hook: InitHook,
     debug_loop_hook: DebugLoopHook,
     access_request_loop_hook: AccessRequestSyncLoopHook,
@@ -289,6 +365,8 @@ async fn run(
         .or_else(|| env_path("COLLECTOR_TOKEN_FILE"));
 
     setup_tracing(args.verbose);
+
+    let operator_image = parse_operator_image_report(&operator_image_args)?;
 
     // Run the extension hook before any operator state is touched. Idempotent.
     init_hook();
@@ -329,6 +407,20 @@ async fn run(
     let operator_scope = args.operator_scope.or_else(|| args.namespace.clone());
     let operator_permission = args.operator_permission;
     let operator_setup_method = args.operator_setup_method;
+    let pinned_legacy_label_domain = env_string("ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY")
+        .map(|key| {
+            key.strip_suffix("/deployment")
+                .filter(|domain| !domain.is_empty())
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    AlienError::new(ErrorData::ConfigurationError {
+                        message:
+                            "ALIEN_RUNTIME_LEGACY_DEPLOYMENT_LABEL_KEY must end with /deployment"
+                                .to_string(),
+                    })
+                })
+        })
+        .transpose()?;
 
     let sync_config = match (effective_sync_url, effective_sync_token) {
         (Some(sync_url_str), Some(mut sync_token)) => {
@@ -415,17 +507,15 @@ async fn run(
                     )
                     .await?;
 
-                    db.set_deployment_id(&initialized_deployment_id).await?;
-                    if args.initial_desired_release == InitialDesiredReleaseArg::None {
-                        db.set_deployment_state(&observe_only_initial_state(args.platform))
-                            .await?;
-                    }
-
-                    if let Some(ref dt) = deployment_token {
-                        info!("   Received deployment-scoped token from manager");
-                        db.set_sync_token(dt).await?;
-                        sync_token = dt.clone();
-                    }
+                    sync_token = persist_initialized_manager_identity(
+                        &db,
+                        &initialized_deployment_id,
+                        deployment_token,
+                        &sync_token,
+                        args.platform,
+                        args.initial_desired_release,
+                    )
+                    .await?;
 
                     info!(
                         "   Initialized successfully, deployment ID: {}",
@@ -510,16 +600,10 @@ async fn run(
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
         .maybe_app_version(args.operator_release_version)
-        .maybe_label_domain(embedded_config.as_ref().and_then(|config| {
-            // `brand` is the already-slugged identity `access_request_crd_names`
-            // expects (see alien-core::access_request_crd) — packages-builder
-            // computes it once and embeds both fields, but `label_domain` is
-            // the raw, pre-slug config value (e.g. a placeholder like
-            // "acme.local"), which can disagree with what the manifest
-            // generator derived the CRD/RBAC from. Prefer `brand`; fall back
-            // to `label_domain` only for older embedded binaries that
-            // predate the `brand` field.
-            config.brand.clone().or_else(|| config.label_domain.clone())
+        .maybe_label_domain(pinned_legacy_label_domain.or_else(|| {
+            embedded_config
+                .as_ref()
+                .and_then(|config| config.brand.clone().or_else(|| config.label_domain.clone()))
         }))
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
@@ -553,14 +637,21 @@ async fn run(
         };
 
     let operations_sync_handler = operations_sync_handler_hook(&operator_config.data_dir);
-    run_operator_with_cancel_and_loops(
+    let runtime_options = OperatorRuntimeOptions {
+        readiness_server_port: crate::readiness_server_port_from_env()?,
+        identity_initialized_config_map: crate::identity_initialized_config_map_from_env()?,
+        runtime_deployment_scope: crate::runtime_deployment_scope_from_env()?,
+    };
+    run_operator_with_cancel_and_loops_and_runtime(
         operator_config,
+        operator_image,
         service_provider,
         debug_loop_hook(),
         access_request_loop_hook(),
         operations_exec_loop_hook(),
         operations_sync_handler,
         cancel,
+        runtime_options,
     )
     .await?;
 
@@ -591,6 +682,28 @@ fn select_startup_deployment_id(
         (None, Some(configured)) => Ok(StartupDeploymentId::Configured(configured)),
         (None, None) => Ok(StartupDeploymentId::Initialize),
     }
+}
+
+async fn persist_initialized_manager_identity(
+    db: &crate::db::OperatorDb,
+    deployment_id: &str,
+    replacement_token: Option<String>,
+    configured_sync_token: &str,
+    platform: Platform,
+    initial_desired_release: InitialDesiredReleaseArg,
+) -> Result<String> {
+    if replacement_token.is_some() {
+        info!("   Received deployment-scoped token from manager");
+    }
+    let initial_state = (initial_desired_release == InitialDesiredReleaseArg::None)
+        .then(|| observe_only_initial_state(platform));
+    db.persist_initialized_identity(
+        deployment_id,
+        initial_state.as_ref(),
+        replacement_token.as_deref(),
+    )
+    .await?;
+    Ok(replacement_token.unwrap_or_else(|| configured_sync_token.to_string()))
 }
 
 fn observe_only_initial_state(platform: Platform) -> DeploymentState {
@@ -763,7 +876,10 @@ mod windows_entry {
             .lock()
             .expect("operations-sync handler hook lock")
             .unwrap_or(super::NOOP_OPERATIONS_SYNC_HANDLER_HOOK);
-        let args = Args::parse();
+        let OperatorCliArgs {
+            args,
+            operator_image,
+        } = OperatorCliArgs::parse();
         let cancel = CancellationToken::new();
         let cancel_for_stop = cancel.clone();
 
@@ -779,6 +895,7 @@ mod windows_entry {
 
         let exit_code = match rt.block_on(super::run(
             args,
+            operator_image,
             init_hook,
             debug_loop_hook,
             access_request_loop_hook,
@@ -1040,6 +1157,74 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env_string(name).map(PathBuf::from)
 }
 
+fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<OperatorImageReport>> {
+    let optional_value = |value: &Option<String>| {
+        value
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let source = optional_value(&args.operator_image_source);
+    let image = optional_value(&args.operator_image);
+    let digest = optional_value(&args.operator_image_digest);
+    let package_id = optional_value(&args.operator_image_package_id);
+    let package_version = optional_value(&args.operator_image_package_version);
+
+    if source.is_none()
+        && image.is_none()
+        && digest.is_none()
+        && package_id.is_none()
+        && package_version.is_none()
+    {
+        return Ok(None);
+    }
+
+    let source = match source.as_deref() {
+        Some("package") => OperatorImageSource::Package,
+        Some("configured") => OperatorImageSource::Configured,
+        Some(_) => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: "ALIEN_OPERATOR_IMAGE_SOURCE must be package or configured".to_string(),
+            }));
+        }
+        None => {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_SOURCE is required when image identity is configured"
+                        .to_string(),
+            }));
+        }
+    };
+    let report = OperatorImageReport {
+        source,
+        package_id,
+        package_version,
+        image: image.ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_RECEIPT is required when image identity is configured"
+                        .to_string(),
+            })
+        })?,
+        digest: digest.ok_or_else(|| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message:
+                    "ALIEN_OPERATOR_IMAGE_DIGEST is required when image identity is configured"
+                        .to_string(),
+            })
+        })?,
+    };
+    report
+        .validate()
+        .map_err(|message| {
+            AlienError::new(ErrorData::ConfigurationError {
+                message: message.to_string(),
+            })
+        })
+        .map(|()| Some(report))
+}
+
 async fn load_sync_token(file: Option<&std::path::Path>) -> Result<Option<String>> {
     if let Some(path) = file {
         return Ok(Some(read_secret_file(path, "sync token").await?));
@@ -1064,10 +1249,14 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 mod tests {
     use super::{
         has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, StartupDeploymentId,
+        parse_operator_image_report, persist_initialized_manager_identity, run_operator_cli,
+        select_startup_deployment_id, Args, InitialDesiredReleaseArg, OperatorCliArgs,
+        StartupDeploymentId, NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
+        NOOP_OPERATIONS_EXEC_LOOP_HOOK, NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
-    use alien_core::{DeploymentStatus, Platform};
+    use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
     use clap::Parser;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn rotation_accepts_both_deployment_token_formats_but_excludes_setup_and_admin_tokens() {
@@ -1152,6 +1341,40 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn admin_initialization_persists_identity_without_requiring_a_replacement_token() {
+        let data_dir = tempfile::tempdir().expect("create temp data directory");
+        let data_dir = data_dir.path().to_str().expect("data dir path is UTF-8");
+        let db = crate::db::OperatorDb::new(
+            data_dir,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect("open encrypted operator database");
+
+        let effective_token = persist_initialized_manager_identity(
+            &db,
+            "dep_admin",
+            None,
+            "ax_admin_existing",
+            Platform::Kubernetes,
+            InitialDesiredReleaseArg::Active,
+        )
+        .await
+        .expect("persist admin-token initialization");
+
+        assert_eq!(effective_token, "ax_admin_existing");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment ID"),
+            Some("dep_admin".to_string())
+        );
+        assert_eq!(
+            db.get_sync_token().await.expect("read replacement token"),
+            None,
+            "an absent manager replacement must preserve the configured admin-token workflow"
+        );
+    }
+
     #[test]
     fn no_desired_release_initializes_running_observed_state() {
         let state = observe_only_initial_state(Platform::Kubernetes);
@@ -1173,12 +1396,148 @@ mod tests {
             "--initial-desired-release",
             "active",
         ])
-        .expect("operator arguments should parse");
+        .expect("public operator arguments should parse");
 
         assert_eq!(
             args.initial_desired_release,
             InitialDesiredReleaseArg::Active
         );
         assert_eq!(args.operator_permission.as_deref(), Some("observe"));
+    }
+
+    #[tokio::test]
+    async fn cli_persists_identity_before_later_runtime_config_errors() {
+        let temp = tempfile::tempdir().expect("create temporary operator directory");
+        let data_dir = temp.path().join("data");
+        let encryption_key_file = temp.path().join("encryption-key");
+        let sync_token_file = temp.path().join("sync-token");
+        std::fs::write(&encryption_key_file, "a".repeat(64)).expect("write test encryption key");
+        std::fs::write(&sync_token_file, "ax_setup_test").expect("write test setup credential");
+        std::fs::set_permissions(&encryption_key_file, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict test encryption key");
+        std::fs::set_permissions(&sync_token_file, std::fs::Permissions::from_mode(0o600))
+            .expect("restrict test setup credential");
+        let OperatorCliArgs {
+            args,
+            operator_image,
+        } = OperatorCliArgs::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--sync-url",
+            "http://127.0.0.1:1",
+            "--sync-token-file",
+            sync_token_file.to_str().expect("UTF-8 sync token path"),
+            "--deployment-id",
+            "dep_configured",
+            "--data-dir",
+            data_dir.to_str().expect("UTF-8 data directory"),
+            "--encryption-key-file",
+            encryption_key_file
+                .to_str()
+                .expect("UTF-8 encryption key path"),
+            "--namespace",
+            "product",
+            "--external-bindings",
+            "{",
+        ])
+        .expect("parse operator test arguments");
+        let error = run_operator_cli(
+            args,
+            operator_image,
+            NOOP_INIT,
+            NOOP_DEBUG_LOOP_HOOK,
+            NOOP_ACCESS_REQUEST_LOOP_HOOK,
+            NOOP_OPERATIONS_EXEC_LOOP_HOOK,
+            NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
+        )
+        .await
+        .expect_err("invalid later runtime configuration must stop startup");
+
+        assert!(error.message.contains("Invalid external bindings JSON"));
+        let db = crate::db::OperatorDb::new(&data_dir.to_string_lossy(), &"a".repeat(64))
+            .await
+            .expect("reopen operator database");
+        assert_eq!(
+            db.get_deployment_id().await.expect("read deployment ID"),
+            Some("dep_configured".to_string())
+        );
+    }
+
+    #[test]
+    fn package_operator_image_identity_is_strict_and_complete() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let args = OperatorCliArgs::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--operator-image-source",
+            "package",
+            "--operator-image",
+            &format!("registry.example.com/operator@{digest}"),
+            "--operator-image-digest",
+            &digest,
+            "--operator-image-package-id",
+            "pkg_operator",
+            "--operator-image-package-version",
+            "1.2.3",
+        ])
+        .expect("operator image arguments should parse");
+
+        let report = parse_operator_image_report(&args.operator_image)
+            .expect("package identity should validate")
+            .expect("identity should be present");
+        assert_eq!(report.source, OperatorImageSource::Package);
+        assert_eq!(report.package_id.as_deref(), Some("pkg_operator"));
+        assert_eq!(report.package_version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn installer_operator_image_override_is_not_an_image_receipt() {
+        temp_env::with_var(
+            "ALIEN_OPERATOR_IMAGE",
+            Some("registry.example.com/operator:installer-override"),
+            || {
+                let args = OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
+                    .expect("operator arguments should parse");
+
+                assert!(parse_operator_image_report(&args.operator_image)
+                    .expect("installer override must not parse as a receipt")
+                    .is_none());
+            },
+        );
+    }
+
+    #[test]
+    fn configured_operator_image_identity_rejects_package_fields() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let args = OperatorCliArgs::try_parse_from([
+            "operator",
+            "--platform",
+            "aws",
+            "--operator-image-source",
+            "configured",
+            "--operator-image",
+            &format!("registry.example.com/operator@{digest}"),
+            "--operator-image-digest",
+            &digest,
+            "--operator-image-package-id",
+            "pkg_operator",
+        ])
+        .expect("operator image arguments should parse");
+
+        let error = parse_operator_image_report(&args.operator_image)
+            .expect_err("configured image must not carry package fields");
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("must not include package identity"));
+    }
+
+    #[test]
+    fn operator_image_identity_is_optional_for_older_installations() {
+        let args = OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
+            .expect("operator arguments should parse");
+        assert!(parse_operator_image_report(&args.operator_image)
+            .unwrap()
+            .is_none());
     }
 }

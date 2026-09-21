@@ -496,6 +496,11 @@ pub struct Sandbox {
     pub id: String,
     /// Where the sandbox's root filesystem comes from
     pub code: SandboxCode,
+    /// Private ECR base image an AWS build pulls; `code.image` names only the S3 bundle, so this is
+    /// what the cross-account grant opens. Live only: the grant needs the customer account,
+    /// which registration reports. Absent means the base image is pulled anonymously.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub private_base_image: Option<String>,
     /// Enforced resource ceilings.
     ///
     /// Optional because not every platform can enforce them, and a declaration that names none
@@ -573,6 +578,15 @@ impl Sandbox {
                 reason: "no sandbox backend builds an image from source yet; give code.image a \
                          prebuilt reference"
                     .to_string(),
+            }));
+        }
+
+        // Elsewhere `code.image` is pulled directly, so a second reference would be a grant
+        // nothing reads.
+        if self.private_base_image.is_some() && platform != Platform::Aws {
+            return Err(AlienError::new(ErrorData::SandboxCapabilityUnsupported {
+                capability: "privateBaseImage".to_string(),
+                platform: platform.to_string(),
             }));
         }
 
@@ -1598,6 +1612,39 @@ mod tests {
             .validate_for_platform(Platform::Kubernetes)
             .expect_err("Kubernetes preview is deferred");
         assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+    }
+
+    /// A grant nothing reads is the silent no-op the capability contract exists to prevent, and
+    /// here it is worse than useless: the reader would take it for a base image that needs
+    /// authenticating while the platform pulls `code.image` itself.
+    #[test]
+    fn a_private_base_image_is_refused_off_aws() {
+        let mut sandbox = sandbox_with(SandboxEgress::Allow, vec![]);
+        sandbox.code = SandboxCode::Image {
+            image: "s3://acme-artifacts/agents/bundle.zip".to_string(),
+        };
+        sandbox.private_base_image =
+            Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme:tag".to_string());
+
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("AWS builds its image from a bundle, so a base image sits behind code.image");
+
+        for platform in [
+            Platform::Gcp,
+            Platform::Azure,
+            Platform::Kubernetes,
+            Platform::Local,
+        ] {
+            let error = sandbox
+                .validate_for_platform(platform)
+                .expect_err("a backend that builds no image must refuse a base image for one");
+            assert_eq!(error.code, "SANDBOX_CAPABILITY_UNSUPPORTED");
+            assert!(
+                error.to_string().contains("privateBaseImage"),
+                "the refusal must name the field the user declared: {error}"
+            );
+        }
     }
 
     #[test]

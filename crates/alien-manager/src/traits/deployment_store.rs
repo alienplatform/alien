@@ -5,10 +5,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use alien_core::{
-    import::ImportSourceKind, sync::OperatorCapabilityReport, DeploymentConfig, DeploymentModel,
-    DeploymentState, DeploymentStatus, EnvironmentInfo, EnvironmentVariable, ManagementConfig,
-    ObservedInventoryBatch, Platform, ResourceHeartbeat, RuntimeMetadata, StackSettings,
-    StackState,
+    import::ImportSourceKind,
+    sync::{OperatorCapabilityReport, OperatorImageReport},
+    DeploymentConfig, DeploymentModel, DeploymentState, DeploymentStatus, EnvironmentInfo,
+    EnvironmentVariable, ManagementConfig, ObservedInventoryBatch, Platform, ResourceHeartbeat,
+    RuntimeMetadata, StackSettings, StackState,
 };
 use alien_error::AlienError;
 
@@ -291,6 +292,48 @@ pub struct ReconcileData {
     pub operations_report: Option<alien_core::sync::OperationsReport>,
 }
 
+/// Extensible input for reconciliation metadata that is not part of the
+/// long-standing [`ReconcileData`] struct-literal contract.
+#[derive(Debug, Clone)]
+pub struct ReconcileInput {
+    data: ReconcileData,
+    operator_image: Option<OperatorImageReport>,
+}
+
+impl ReconcileInput {
+    pub fn builder(data: ReconcileData) -> ReconcileInputBuilder {
+        ReconcileInputBuilder {
+            data,
+            operator_image: None,
+        }
+    }
+
+    pub fn into_parts(self) -> (ReconcileData, Option<OperatorImageReport>) {
+        (self.data, self.operator_image)
+    }
+}
+
+/// Builder for optional reconciliation receipts. New optional metadata belongs
+/// here so adding it does not break downstream [`ReconcileData`] literals.
+pub struct ReconcileInputBuilder {
+    data: ReconcileData,
+    operator_image: Option<OperatorImageReport>,
+}
+
+impl ReconcileInputBuilder {
+    pub fn operator_image(mut self, operator_image: OperatorImageReport) -> Self {
+        self.operator_image = Some(operator_image);
+        self
+    }
+
+    pub fn build(self) -> ReconcileInput {
+        ReconcileInput {
+            data: self.data,
+            operator_image: self.operator_image,
+        }
+    }
+}
+
 /// Result of a successful [`DeploymentStore::reconcile`] call.
 pub struct ReconcileOutcome {
     pub record: DeploymentRecord,
@@ -442,6 +485,20 @@ pub trait DeploymentStore: Send + Sync {
         caller: &crate::auth::Subject,
         data: ReconcileData,
     ) -> Result<ReconcileOutcome, AlienError>;
+
+    /// Reconcile with optional process receipts supplied by newer callers.
+    ///
+    /// The default preserves compatibility for existing store implementations.
+    /// Embedders that persist Operator image identity override this method and
+    /// consume [`ReconcileInput::into_parts`].
+    async fn reconcile_request(
+        &self,
+        caller: &crate::auth::Subject,
+        request: ReconcileInput,
+    ) -> Result<ReconcileOutcome, AlienError> {
+        let (data, _) = request.into_parts();
+        self.reconcile(caller, data).await
+    }
 
     /// Renew an acquired deployment lease without changing deployment state.
     /// Implementations must compare the active session atomically and return a

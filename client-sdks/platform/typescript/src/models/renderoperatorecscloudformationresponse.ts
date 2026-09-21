@@ -7,6 +7,10 @@ import * as z from "zod/v4";
 import { safeParse } from "../lib/schemas.js";
 import { Result as SafeParseResult } from "../types/fp.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  RemoteOperatorInstallReceipt,
+  RemoteOperatorInstallReceipt$inboundSchema,
+} from "./remoteoperatorinstallreceipt.js";
 
 export type RenderOperatorEcsCloudFormationResponse = {
   /**
@@ -37,6 +41,7 @@ export type RenderOperatorEcsCloudFormationResponse = {
    * True until a ready Operator image digest is available. A pending template must not be deployed.
    */
   imagePending: boolean;
+  operatorImage: RemoteOperatorInstallReceipt | null;
 };
 
 /** @internal */
@@ -51,6 +56,7 @@ export const RenderOperatorEcsCloudFormationResponse$inboundSchema: z.ZodType<
   managerUrl: z.string(),
   image: z.string(),
   imagePending: z.boolean(),
+  operatorImage: z.nullable(RemoteOperatorInstallReceipt$inboundSchema),
 });
 
 export function renderOperatorEcsCloudFormationResponseFromJSON(
