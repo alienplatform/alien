@@ -99,6 +99,7 @@ check detached-warning pass ""
 check listener-never fail "linux/amd64: the agent never reported a listener within 60s"
 check inspect-unreadable fail "linux/amd64: the container state could not be read, so the listener proves nothing"
 check listener-then-exit fail "linux/amd64: the agent reported a listener and then exited"
+check image-error fail "linux/amd64: the digest reference could not be released before the next platform pull" "stub: the image cleanup failed"
 
 check happy pass ""
 # Every mode above asserts on linux/amd64, so this is the only thing that would

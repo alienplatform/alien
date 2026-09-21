@@ -156,5 +156,9 @@ for platform in linux/amd64 linux/arm64; do
   # Docker image store. Remove that reference before pulling the other platform;
   # layers remain cached, while Docker no longer rejects the second pull with
   # "cannot overwrite digest".
-  docker image rm "$image" >/dev/null || true
+  if ! cleanup=$(docker image rm "$image" 2>&1); then
+    echo "$cleanup"
+    echo "::error::${platform}: the digest reference could not be released before the next platform pull"
+    exit 1
+  fi
 done
