@@ -51,6 +51,8 @@ test("stable publication qualifies and publishes the reviewed workflow tip", () 
   assert.match(stableWorkflow, /RELEASE_COMMIT=\$\(git rev-parse HEAD\)/)
   assert.doesNotMatch(stableWorkflow, /git rev-list --reverse/)
   assert.match(stableWorkflow, /source_ref: \$\{\{ needs\.resolve\.outputs\.commit \}\}/)
+  assert.match(workflow, /RELEASE_COMMIT="\$\{\{ inputs\.source_ref \}\}"/)
+  assert.doesNotMatch(workflow, /git rev-list --reverse/)
 })
 
 test("dev publication requires an explicit full source commit", () => {
