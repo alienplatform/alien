@@ -503,10 +503,8 @@ fn validate_local_image_artifact(
     target: alien_core::BinaryTarget,
 ) -> Result<()> {
     let path = Path::new(image);
-    let is_local_reference = path.is_absolute()
-        || image.starts_with("./")
-        || image.starts_with("../")
-        || image.ends_with(".tar");
+    let is_local_reference =
+        path.is_absolute() || image.starts_with("./") || image.starts_with("../");
     if !is_local_reference {
         return Ok(());
     }
@@ -1141,12 +1139,14 @@ mod tests {
 
     #[test]
     fn local_release_preserves_registry_images() {
-        validate_local_image_artifact(
-            "Container",
-            "database",
-            "postgres:16-alpine",
-            alien_core::BinaryTarget::linux_container_target(),
-        )
-        .unwrap();
+        for image in ["postgres:16-alpine", "team/app:release.tar"] {
+            validate_local_image_artifact(
+                "Container",
+                "database",
+                image,
+                alien_core::BinaryTarget::linux_container_target(),
+            )
+            .unwrap();
+        }
     }
 }
