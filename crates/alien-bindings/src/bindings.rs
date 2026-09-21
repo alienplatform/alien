@@ -10,6 +10,7 @@ use crate::error::Result;
 use crate::provider::{BindingsProvider, LazyEnvBindingsProvider};
 use crate::refreshing::{
     RefreshingKey, RefreshingKv, RefreshingQueue, RefreshingStorage, RefreshingVault,
+    RefreshingWorker,
 };
 use crate::traits::{
     BindingsProviderApi, Container, Key, Kv, MessagePayload, Postgres, Queue, QueueMessage,
@@ -182,7 +183,11 @@ impl Bindings {
 
     /// Loads a linked worker for direct invocation and public URL discovery.
     pub async fn worker(&self, binding_name: &str) -> Result<Arc<dyn Worker>> {
-        self.provider.load_worker(binding_name).await
+        self.provider.load_worker(binding_name).await?;
+        Ok(Arc::new(RefreshingWorker::new(
+            self.provider.clone(),
+            binding_name.to_string(),
+        )))
     }
 
     /// Loads the connection details for a linked Postgres database.
@@ -220,7 +225,7 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     use crate::error::binding_env_var;
-    use crate::traits::MessagePayload;
+    use crate::traits::{MessagePayload, WorkerInvokeRequest};
     use alien_core::{
         Platform, ENV_ALIEN_DEPLOYMENT_ID, ENV_ALIEN_DEPLOYMENT_SERVICE_ACCOUNT,
         ENV_ALIEN_DEPLOYMENT_TOKEN, ENV_ALIEN_DEPLOYMENT_TYPE, ENV_ALIEN_MANAGER_URL,
@@ -420,6 +425,66 @@ mod tests {
             .expect("the same long-lived handle should read")
             .expect("value should exist");
         assert_eq!(value.value, b"hi");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "the refreshed provider should stay cached while fresh"
+        );
+    }
+
+    #[tokio::test]
+    async fn long_lived_worker_handle_refreshes_minted_provider_before_invocation() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let (manager_url, calls) = spawn_mint_server(
+            temp_dir
+                .path()
+                .to_str()
+                .expect("tempdir path must be valid UTF-8"),
+        )
+        .await;
+        let app = Router::new().route("/processor/jobs", post(|| async { "accepted" }));
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0)))
+            .await
+            .expect("bind fake worker server");
+        let address = listener.local_addr().expect("read fake worker address");
+        tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("serve fake worker endpoint");
+        });
+
+        let worker_url = format!("http://{address}");
+        let json = format!(r#"{{"service":"local","workerUrl":"{worker_url}"}}"#);
+        let env = with_binding(mint_env(&manager_url), "processor", &json);
+        let bindings = Bindings::from_env_map(env).expect("minting env should construct Bindings");
+        let worker = bindings
+            .worker("processor")
+            .await
+            .expect("first binding resolution should mint credentials");
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+        let response = worker
+            .invoke(WorkerInvokeRequest {
+                target_worker: "processor".to_string(),
+                method: "POST".to_string(),
+                path: "/jobs".to_string(),
+                headers: Default::default(),
+                body: Vec::new(),
+                timeout: None,
+            })
+            .await
+            .expect("the long-lived handle should refresh and invoke");
+        assert_eq!(response.status, 200);
+        assert_eq!(response.body, b"accepted");
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+        assert_eq!(
+            worker
+                .get_worker_url()
+                .await
+                .expect("the same long-lived handle should resolve its URL"),
+            Some(worker_url)
+        );
         assert_eq!(
             calls.load(Ordering::SeqCst),
             2,

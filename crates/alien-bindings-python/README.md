@@ -23,6 +23,7 @@ The native extension uses Python's `asyncio` interface and runs Alien futures on
 
 ```python
 from alienplatform import ai, container, key, kv, postgres, queue, sandbox, storage, vault, worker
+from sqlalchemy.ext.asyncio import create_async_engine
 
 files = storage("files")
 await files.put("reports/today.json", b"{}")
@@ -38,7 +39,7 @@ secrets = vault("secrets")
 api_token = await secrets.get("api-token")
 
 database = await postgres("database").connection()
-print(database.sqlalchemy_async_url())
+engine = create_async_engine(**database.sqlalchemy_async_engine_kwargs())
 
 service_url = await container("api").internal_url()
 
@@ -90,7 +91,7 @@ Long-running commands can use `start_job`, `poll_job`, and `cancel_job`. Call `c
 
 ## PostgreSQL TLS
 
-`Postgres.connection()` returns the provider-neutral connection parameters, a wire-protocol URL, CA certificates, and SSL mode. `sqlalchemy_async_url()` translates the URL for SQLAlchemy with `asyncpg`; `ssl_context()` returns a configured Python TLS context where required.
+`Postgres.connection()` returns the provider-neutral connection parameters, a wire-protocol URL, CA certificates, and SSL mode. `sqlalchemy_async_engine_kwargs()` translates the URL and supplies the verified TLS context together so `create_async_engine()` cannot omit provider CA certificates. Lower-level integrations can use `sqlalchemy_async_url()` and `ssl_context()` directly.
 
 ## Errors
 

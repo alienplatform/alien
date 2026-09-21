@@ -12,6 +12,7 @@ use pyo3::types::PyAny;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::watch;
 
 #[pyclass(frozen, get_all, skip_from_py_object)]
 #[derive(Clone)]
@@ -100,21 +101,44 @@ fn job_result(value: JobPoll) -> JobResult {
     }
 }
 
-#[pyclass]
+#[pyclass(skip_from_py_object)]
+#[derive(Clone)]
 pub(crate) struct CommandStreamHandle {
     frames: Arc<Mutex<Option<BoxStream<'static, alien_bindings::error::Result<CommandOutput>>>>>,
+    closed: watch::Sender<bool>,
 }
 
-#[pymethods]
 impl CommandStreamHandle {
-    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let frames = self.frames.clone();
-        future_into_py(py, async move {
-            let mut frames = frames.lock().await;
-            let Some(stream) = frames.as_mut() else {
-                return Ok(None);
-            };
-            match stream.next().await {
+    fn new(frames: BoxStream<'static, alien_bindings::error::Result<CommandOutput>>) -> Self {
+        let (closed, _) = watch::channel(false);
+        Self {
+            frames: Arc::new(Mutex::new(Some(frames))),
+            closed,
+        }
+    }
+
+    async fn next_frame(&self) -> PyResult<Option<CommandFrame>> {
+        let mut closed = self.closed.subscribe();
+        if *closed.borrow() {
+            return Ok(None);
+        }
+
+        let mut frames = self.frames.lock().await;
+        if *closed.borrow() {
+            *frames = None;
+            return Ok(None);
+        }
+        let Some(stream) = frames.as_mut() else {
+            return Ok(None);
+        };
+
+        tokio::select! {
+            biased;
+            _ = closed.changed() => {
+                *frames = None;
+                Ok(None)
+            }
+            frame = stream.next() => match frame {
                 Some(Ok(frame)) => Ok(Some(command_frame(frame))),
                 Some(Err(error)) => Err(map_alien_error(error)),
                 None => {
@@ -122,13 +146,26 @@ impl CommandStreamHandle {
                     Ok(None)
                 }
             }
-        })
+        }
+    }
+
+    async fn close_stream(&self) {
+        self.closed.send_replace(true);
+        *self.frames.lock().await = None;
+    }
+}
+
+#[pymethods]
+impl CommandStreamHandle {
+    fn next<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+        let handle = self.clone();
+        future_into_py(py, async move { handle.next_frame().await })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
-        let frames = self.frames.clone();
+        let handle = self.clone();
         future_into_py(py, async move {
-            *frames.lock().await = None;
+            handle.close_stream().await;
             Ok(())
         })
     }
@@ -280,9 +317,7 @@ impl SandboxHandle {
                 )
                 .await
                 .map_err(map_alien_error)?;
-            Ok(CommandStreamHandle {
-                frames: Arc::new(Mutex::new(Some(frames))),
-            })
+            Ok(CommandStreamHandle::new(frames))
         })
     }
 
@@ -394,5 +429,37 @@ impl SandboxHandle {
         future_into_py(py, async move {
             inner.terminate(&sandbox_id).await.map_err(map_alien_error)
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn close_wakes_a_pending_command_read() {
+        let handle = Arc::new(CommandStreamHandle::new(futures::stream::pending().boxed()));
+        let reader = {
+            let handle = Arc::clone(&handle);
+            tokio::spawn(async move { handle.next_frame().await })
+        };
+        tokio::task::yield_now().await;
+
+        tokio::time::timeout(Duration::from_millis(100), handle.close_stream())
+            .await
+            .expect("close should wake the pending read");
+        assert!(reader
+            .await
+            .expect("reader task should complete")
+            .expect("close should end the stream without an error")
+            .is_none());
+        assert!(handle
+            .next_frame()
+            .await
+            .expect("closed stream should remain readable")
+            .is_none());
+
+        handle.close_stream().await;
+        assert!(handle.frames.lock().await.is_none());
     }
 }

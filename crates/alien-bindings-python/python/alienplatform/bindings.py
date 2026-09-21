@@ -6,7 +6,7 @@ import asyncio
 import json
 import ssl
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Generic, Literal, TypeVar
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -30,10 +30,16 @@ class _LazyHandle(Generic[H]):
                 return await getattr(bindings, self._kind)(self._name)
 
             self._task = asyncio.create_task(resolve())
+        task = self._task
         try:
-            return await self._task
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            if task.cancelled() and self._task is task:
+                self._task = None
+            raise
         except Exception:
-            self._task = None
+            if self._task is task:
+                self._task = None
             raise
 
 
@@ -61,10 +67,18 @@ class PostgresConnection:
         parts = urlsplit(self.connection_string)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         sslmode = query.pop("sslmode", self.sslmode)
-        query["ssl"] = "disable" if sslmode == "disable" else "require"
+        query["ssl"] = sslmode
         return urlunsplit(
             ("postgresql+asyncpg", parts.netloc, parts.path, urlencode(query), parts.fragment)
         )
+
+    def sqlalchemy_async_engine_kwargs(self) -> dict[str, Any]:
+        """Return safe keyword arguments for SQLAlchemy's ``create_async_engine``."""
+        tls = self.ssl_context()
+        return {
+            "url": self.sqlalchemy_async_url(),
+            "connect_args": {"ssl": False if tls is None else tls},
+        }
 
     def ssl_context(self) -> ssl.SSLContext | None:
         """Build a TLS context for drivers that accept structured SSL configuration."""
@@ -341,6 +355,7 @@ class AiConnection:
     base_url: str
     api_key: str | None
     provider: str | None
+    _owner: Any = field(default=None, repr=False, compare=False)
 
     def __repr__(self) -> str:
         return (
@@ -360,8 +375,9 @@ class Ai:
 
     @translate_errors
     async def connection(self) -> AiConnection:
-        value = (await self._handle.get()).connection()
-        return AiConnection(value.base_url, value.api_key, value.provider)
+        handle = await self._handle.get()
+        value = handle.connection()
+        return AiConnection(value.base_url, value.api_key, value.provider, handle)
 
 
 @dataclass(frozen=True)

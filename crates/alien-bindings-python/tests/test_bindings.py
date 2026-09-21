@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import asyncio
+import gc
 import json
 import os
+import ssl
 import threading
+import weakref
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 
+import alienplatform.bindings as bindings_module
 import pytest
 from alienplatform import (
     AlienError,
@@ -19,6 +25,7 @@ from alienplatform import (
     vault,
     worker,
 )
+from alienplatform.bindings import AiConnection, PostgresConnection
 
 
 def bind(name: str, value: dict[str, object]) -> None:
@@ -109,6 +116,83 @@ async def test_postgres_helpers_and_container_discovery() -> None:
     assert await container("api").public_url() == "http://localhost:18000"
 
 
+def test_postgres_sqlalchemy_helper_preserves_tls_verification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeContext:
+        def __init__(self) -> None:
+            self.loaded: list[str] = []
+            self.check_hostname = True
+
+        def load_verify_locations(self, *, cadata: str) -> None:
+            self.loaded.append(cadata)
+
+    context = FakeContext()
+    monkeypatch.setattr(ssl, "create_default_context", lambda: context)
+    connection = PostgresConnection(
+        "postgres://user:password@db.internal/app?sslmode=verify-full",
+        "db.internal",
+        5432,
+        "app",
+        "user",
+        "password",
+        "verify-full",
+        ("test-ca",),
+    )
+
+    kwargs = connection.sqlalchemy_async_engine_kwargs()
+    assert kwargs["url"].endswith("?ssl=verify-full")
+    assert kwargs["connect_args"] == {"ssl": context}
+    assert context.loaded == ["test-ca"]
+    assert context.check_hostname is True
+
+    disabled = PostgresConnection(
+        "postgres://user:password@localhost/app?sslmode=disable",
+        "localhost",
+        5432,
+        "app",
+        "user",
+        "password",
+        "disable",
+        (),
+    )
+    assert disabled.sqlalchemy_async_engine_kwargs()["connect_args"] == {"ssl": False}
+
+
+@pytest.mark.asyncio
+async def test_cancelling_one_waiter_does_not_cancel_shared_initialization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = asyncio.Event()
+    release = asyncio.Event()
+    resolved_handle = object()
+    calls = 0
+
+    class FakeBindingsHandle:
+        async def storage(self, name: str) -> object:
+            nonlocal calls
+            assert name == "files"
+            calls += 1
+            started.set()
+            await release.wait()
+            return resolved_handle
+
+    monkeypatch.setattr(bindings_module._native, "BindingsHandle", FakeBindingsHandle)
+    lazy = bindings_module._LazyHandle[object]("storage", "files")
+    cancelled_waiter = asyncio.create_task(lazy.get())
+    await started.wait()
+    surviving_waiter = asyncio.create_task(lazy.get())
+
+    cancelled_waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await cancelled_waiter
+    release.set()
+
+    assert await surviving_waiter is resolved_handle
+    assert await lazy.get() is resolved_handle
+    assert calls == 1
+
+
 @pytest.mark.asyncio
 async def test_missing_binding_is_stable_alien_error() -> None:
     with pytest.raises(AlienError) as raised:
@@ -141,6 +225,41 @@ async def test_external_ai_connection_is_typed_and_redacted(
     assert connection.api_key == "test-secret"
     assert connection.provider == "openai"
     assert "test-secret" not in repr(connection)
+
+
+@pytest.mark.asyncio
+async def test_ai_connection_retains_managed_gateway_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeAiHandle:
+        def connection(self) -> SimpleNamespace:
+            return SimpleNamespace(
+                base_url="http://127.0.0.1:1234",
+                api_key="secret",
+                provider="managed",
+            )
+
+    handle = FakeAiHandle()
+    handle_ref = weakref.ref(handle)
+    handles = {"assistant": handle}
+
+    class FakeBindingsHandle:
+        async def ai(self, name: str) -> FakeAiHandle:
+            assert name == "assistant"
+            return handles[name]
+
+    monkeypatch.setattr(bindings_module._native, "BindingsHandle", FakeBindingsHandle)
+    connection = await bindings_module.Ai("assistant").connection()
+    del handle
+    handles.clear()
+    gc.collect()
+    assert handle_ref() is not None
+    assert connection == AiConnection("http://127.0.0.1:1234", "secret", "managed")
+    assert "secret" not in repr(connection)
+
+    del connection
+    gc.collect()
+    assert handle_ref() is None
 
 
 @pytest.mark.asyncio

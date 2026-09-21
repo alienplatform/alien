@@ -34,7 +34,8 @@ use crate::presigned::PresignedRequest;
 use crate::remote::RemoteStorage;
 use crate::traits::{
     Binding, BindingsProviderApi, Key, Kv, KvEntry, MessagePayload, PutOptions as KvPutOptions,
-    Queue, QueueMessage, ScanResult, Storage, Vault,
+    Queue, QueueMessage, ScanResult, Storage, Vault, Worker, WorkerInvokeRequest,
+    WorkerInvokeResponse,
 };
 
 const OBJECT_STORE_NAME: &str = "Alien binding";
@@ -99,6 +100,10 @@ impl Resolver {
 
     async fn vault(&self) -> Result<Arc<dyn Vault>> {
         self.provider.load_vault(&self.binding_name).await
+    }
+
+    async fn worker(&self) -> Result<Arc<dyn Worker>> {
+        self.provider.load_worker(&self.binding_name).await
     }
 }
 
@@ -541,5 +546,36 @@ impl Vault for RefreshingVault {
 
     async fn list_secrets(&self) -> Result<Vec<String>> {
         self.resolver.vault().await?.list_secrets().await
+    }
+}
+
+/// Worker handle that resolves a fresh-enough provider for every operation.
+#[derive(Debug)]
+pub(super) struct RefreshingWorker {
+    resolver: Resolver,
+}
+
+impl RefreshingWorker {
+    pub(super) fn new(provider: Arc<dyn BindingsProviderApi>, binding_name: String) -> Self {
+        Self {
+            resolver: Resolver::new(provider, binding_name),
+        }
+    }
+}
+
+impl Binding for RefreshingWorker {}
+
+#[async_trait]
+impl Worker for RefreshingWorker {
+    async fn invoke(&self, request: WorkerInvokeRequest) -> Result<WorkerInvokeResponse> {
+        self.resolver.worker().await?.invoke(request).await
+    }
+
+    async fn get_worker_url(&self) -> Result<Option<String>> {
+        self.resolver.worker().await?.get_worker_url().await
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
     }
 }

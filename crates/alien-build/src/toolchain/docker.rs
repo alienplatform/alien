@@ -64,7 +64,7 @@ impl DockerToolchain {
         format!("alien-build-{}-{suffix}", std::process::id())
     }
 
-    fn absolute_path(path: &Path) -> Result<PathBuf> {
+    pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
         if path.is_absolute() {
             return Ok(path.to_path_buf());
         }
