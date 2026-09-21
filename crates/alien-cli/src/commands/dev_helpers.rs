@@ -13,7 +13,8 @@ use crate::{
 };
 use alien_build::settings::{BuildSettings, PlatformBuildSettings};
 use alien_core::{
-    AgentStatus, DeploymentStatus, DevResourceInfo, DevStatus, DevStatusState, Stack, StackState,
+    AgentStatus, Container, ContainerCode, Daemon, DaemonCode, DeploymentStatus, DevResourceInfo,
+    DevStatus, DevStatusState, Stack, StackState, Worker, WorkerCode,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_manager::{
@@ -31,7 +32,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::time::Duration;
 use tracing::info;
@@ -418,6 +419,8 @@ pub async fn build_and_post_release_simple(
         reason: "Failed to parse stack.json".to_string(),
     })?;
 
+    validate_local_release_artifacts(&stack)?;
+
     // Post release to dev server
     let client = AlienManagerClient::new(&format!("http://localhost:{}", port));
 
@@ -457,6 +460,98 @@ pub async fn build_and_post_release_simple(
         })?;
 
     Ok(response.id.clone())
+}
+
+fn validate_local_release_artifacts(stack: &Stack) -> Result<()> {
+    for (_, entry) in stack.resources() {
+        if let Some(worker) = entry.config.downcast_ref::<Worker>() {
+            if let WorkerCode::Image { image } = &worker.code {
+                validate_local_image_artifact(
+                    "Worker",
+                    &worker.id,
+                    image,
+                    alien_core::BinaryTarget::current_os(),
+                )?;
+            }
+        } else if let Some(daemon) = entry.config.downcast_ref::<Daemon>() {
+            if let DaemonCode::Image { image } = &daemon.code {
+                validate_local_image_artifact(
+                    "Daemon",
+                    &daemon.id,
+                    image,
+                    alien_core::BinaryTarget::current_os(),
+                )?;
+            }
+        } else if let Some(container) = entry.config.downcast_ref::<Container>() {
+            if let ContainerCode::Image { image } = &container.code {
+                validate_local_image_artifact(
+                    "Container",
+                    &container.id,
+                    image,
+                    alien_core::BinaryTarget::linux_container_target(),
+                )?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_local_image_artifact(
+    resource_type: &str,
+    resource_id: &str,
+    image: &str,
+    target: alien_core::BinaryTarget,
+) -> Result<()> {
+    let path = Path::new(image);
+    let is_local_reference = path.is_absolute()
+        || image.starts_with("./")
+        || image.starts_with("../")
+        || image.ends_with(".tar");
+    if !is_local_reference {
+        return Ok(());
+    }
+
+    if !path.exists() {
+        return Err(local_artifact_error(
+            resource_type,
+            resource_id,
+            format!("local image path '{}' does not exist", path.display()),
+        ));
+    }
+    if path.is_file() {
+        return Ok(());
+    }
+
+    let expected = path.join(format!("{}.oci.tar", target.runtime_platform_id()));
+    if expected.is_file() {
+        return Ok(());
+    }
+
+    Err(local_artifact_error(
+        resource_type,
+        resource_id,
+        format!(
+            "artifact directory '{}' has no image for target '{}' (expected '{}')",
+            path.display(),
+            target.runtime_platform_id(),
+            expected.display()
+        ),
+    ))
+}
+
+fn local_artifact_error(
+    resource_type: &str,
+    resource_id: &str,
+    message: String,
+) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ValidationError {
+        field: format!(
+            "{}.{}.code.image",
+            resource_type.to_ascii_lowercase(),
+            resource_id
+        ),
+        message: format!("{message}. Run `alien dev` without `--skip-build` to rebuild it"),
+    })
 }
 
 /// Create initial deployment if it doesn't exist.
@@ -902,8 +997,16 @@ fn parse_deployment_status(status: &str) -> Result<DeploymentStatus> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_core::ResourceLifecycle;
     use std::fs;
     use tempfile::TempDir;
+
+    fn worker_with_image(image: String) -> Worker {
+        Worker::new("worker".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image { image })
+            .build()
+    }
 
     #[test]
     fn parse_deployment_status_rejects_unknown_values() {
@@ -970,5 +1073,80 @@ mod tests {
         let written = fs::read_to_string(&status_path).unwrap();
         assert!(written.contains("\"apiUrl\": \"http://localhost:9090\""));
         assert!(written.contains("\"status\": \"initializing\""));
+    }
+
+    #[test]
+    fn local_release_accepts_host_worker_artifact() {
+        let temp_dir = TempDir::new().unwrap();
+        let artifact_dir = temp_dir.path().join("worker-12345678");
+        fs::create_dir(&artifact_dir).unwrap();
+        let target = alien_core::BinaryTarget::current_os();
+        fs::write(
+            artifact_dir.join(format!("{}.oci.tar", target.runtime_platform_id())),
+            b"oci",
+        )
+        .unwrap();
+        let stack = Stack::new("local-artifact".to_string())
+            .add(
+                worker_with_image(artifact_dir.to_string_lossy().into_owned()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        validate_local_release_artifacts(&stack).unwrap();
+    }
+
+    #[test]
+    fn local_release_rejects_missing_artifact_before_post() {
+        let temp_dir = TempDir::new().unwrap();
+        let missing = temp_dir.path().join("missing-worker");
+        let stack = Stack::new("local-artifact".to_string())
+            .add(
+                worker_with_image(missing.to_string_lossy().into_owned()),
+                ResourceLifecycle::Live,
+            )
+            .build();
+
+        let error = validate_local_release_artifacts(&stack).unwrap_err();
+        let message = error.to_string();
+        assert!(message.contains("does not exist"));
+        assert!(message.contains("without `--skip-build`"));
+        assert!(message.contains("worker.worker.code.image"));
+    }
+
+    #[test]
+    fn local_release_rejects_incompatible_worker_artifact() {
+        let temp_dir = TempDir::new().unwrap();
+        let artifact_dir = temp_dir.path().join("worker-12345678");
+        fs::create_dir(&artifact_dir).unwrap();
+        let incompatible = match alien_core::BinaryTarget::current_os() {
+            alien_core::BinaryTarget::LinuxX64 => alien_core::BinaryTarget::LinuxArm64,
+            _ => alien_core::BinaryTarget::LinuxX64,
+        };
+        fs::write(
+            artifact_dir.join(format!("{}.oci.tar", incompatible.runtime_platform_id())),
+            b"oci",
+        )
+        .unwrap();
+
+        let error = validate_local_image_artifact(
+            "Worker",
+            "worker",
+            artifact_dir.to_string_lossy().as_ref(),
+            alien_core::BinaryTarget::current_os(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("has no image for target"));
+    }
+
+    #[test]
+    fn local_release_preserves_registry_images() {
+        validate_local_image_artifact(
+            "Container",
+            "database",
+            "postgres:16-alpine",
+            alien_core::BinaryTarget::linux_container_target(),
+        )
+        .unwrap();
     }
 }
