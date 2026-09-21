@@ -135,6 +135,15 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         settings.platform.runtime_platform()
     );
 
+    // Release auto-builds and library callers can construct BuildSettings directly instead of
+    // going through the CLI planner. Enforce the platform's architecture contract here so every
+    // path fails before doing build work or writing artifacts.
+    plan::resolve_targets_for_stack_platform(
+        &stack,
+        settings.platform.runtime_platform(),
+        settings.targets.as_deref(),
+    )?;
+
     // Run preflights (compile-time checks only)
     let preflight_runner = PreflightRunner::new();
     let preflight_started = Instant::now();
@@ -3666,6 +3675,37 @@ mod tests {
         let serialized = serde_json::to_string(&error).expect("error should serialize");
         assert!(serialized.contains("MACHINES_UNSUPPORTED_RESOURCE"));
         assert!(!output.path().join("build").join("machines").exists());
+    }
+
+    #[tokio::test]
+    async fn aws_build_rejects_worker_target_mismatch_before_writing_artifacts() {
+        let output = tempdir().unwrap();
+        let worker = Worker::new("job".to_string())
+            .permissions("execution".to_string())
+            .code(WorkerCode::Image {
+                image: "registry.example.com/job:latest".to_string(),
+            })
+            .build();
+        let stack = Stack::new("worker-target-mismatch".to_string())
+            .add(worker, alien_core::ResourceLifecycle::Live)
+            .build();
+        let settings = BuildSettings {
+            output_directory: output.path().display().to_string(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: Some(vec![BinaryTarget::LinuxX64]),
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        };
+
+        let error = build_stack(stack, &settings)
+            .await
+            .expect_err("AWS Worker should reject an x86-only build");
+
+        assert!(error.to_string().contains("expected LinuxArm64"));
+        assert!(!output.path().join("build").join("aws").exists());
     }
 
     #[test]
