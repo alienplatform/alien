@@ -4,6 +4,10 @@ import { resolve } from "node:path"
 import test from "node:test"
 
 const workflow = readFileSync(resolve(process.cwd(), ".github/workflows/release.yml"), "utf8")
+const stableWorkflow = readFileSync(
+  resolve(process.cwd(), ".github/workflows/release-stable.yml"),
+  "utf8",
+)
 
 function parseJobs(source) {
   const jobs = new Map()
@@ -40,6 +44,15 @@ test("stable remains the default release mode", () => {
   assert.match(
     workflow,
     /mode:\n\s+description: Publication channel\n\s+type: choice\n\s+default: stable\n\s+options: \[stable, dev\]/,
+  )
+})
+
+test("stable publication qualifies and publishes the reviewed workflow tip", () => {
+  assert.match(stableWorkflow, /RELEASE_COMMIT=\$\(git rev-parse HEAD\)/)
+  assert.doesNotMatch(stableWorkflow, /git rev-list --reverse/)
+  assert.match(
+    stableWorkflow,
+    /source_ref: \$\{\{ needs\.resolve\.outputs\.commit \}\}/,
   )
 })
 
