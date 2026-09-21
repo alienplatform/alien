@@ -4,6 +4,10 @@ import { resolve } from "node:path"
 import test from "node:test"
 
 const workflow = readFileSync(resolve(process.cwd(), ".github/workflows/release.yml"), "utf8")
+const stableWorkflow = readFileSync(
+  resolve(process.cwd(), ".github/workflows/release-stable.yml"),
+  "utf8",
+)
 
 function parseJobs(source) {
   const jobs = new Map()
@@ -41,6 +45,14 @@ test("stable remains the default release mode", () => {
     workflow,
     /mode:\n\s+description: Publication channel\n\s+type: choice\n\s+default: stable\n\s+options: \[stable, dev\]/,
   )
+})
+
+test("stable publication qualifies and publishes the reviewed workflow tip", () => {
+  assert.match(stableWorkflow, /RELEASE_COMMIT=\$\(git rev-parse HEAD\)/)
+  assert.doesNotMatch(stableWorkflow, /git rev-list --reverse/)
+  assert.match(stableWorkflow, /source_ref: \$\{\{ needs\.resolve\.outputs\.commit \}\}/)
+  assert.match(workflow, /RELEASE_COMMIT="\$\{\{ inputs\.source_ref \}\}"/)
+  assert.doesNotMatch(workflow, /git rev-list --reverse/)
 })
 
 test("dev publication requires an explicit full source commit", () => {
@@ -85,6 +97,11 @@ test("stable binary releases publish the pinned Platform composition as alien", 
     const block = jobBlock(job)
     assert.match(block, /repository: alienplatform\/platform/)
     assert.match(block, /ref: \$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/)
+    assert.match(
+      block,
+      /repository: alienplatform\/platform[\s\S]*?- uses: \.\/platform\/\.github\/actions\/setup-composed-cli-dependencies\n {8}with:\n {10}repo-access-token: \$\{\{ secrets\.REPO_ACCESS_TOKEN \}\}/,
+      `${job} must prepare the pinned Platform checkout before building the composed CLI`,
+    )
     assert.match(
       block,
       /key: .*\$\{\{ needs\.prepare\.outputs\.source_ref \}\}.*\$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/,
