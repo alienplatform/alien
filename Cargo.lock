@@ -371,7 +371,7 @@ dependencies = [
 
 [[package]]
 name = "alien-bindings-python"
-version = "3.3.22"
+version = "3.3.23"
 dependencies = [
  "alien-ai-gateway",
  "alien-bindings",
