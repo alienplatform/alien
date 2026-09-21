@@ -87,6 +87,11 @@ test("stable binary releases publish the pinned Platform composition as alien", 
     assert.match(block, /ref: \$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/)
     assert.match(
       block,
+      /repository: alienplatform\/platform[\s\S]*?- uses: \.\/platform\/\.github\/actions\/setup-composed-cli-dependencies\n        with:\n          repo-access-token: \$\{\{ secrets\.REPO_ACCESS_TOKEN \}\}/,
+      `${job} must prepare the pinned Platform checkout before building the composed CLI`,
+    )
+    assert.match(
+      block,
       /key: .*\$\{\{ needs\.prepare\.outputs\.source_ref \}\}.*\$\{\{ needs\.prepare\.outputs\.platform_ref \}\}/,
     )
     assert.match(
