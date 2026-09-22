@@ -402,7 +402,8 @@ export interface ResolvedSandbox {
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
   /**
-   * An existing provider-scoped id to reconnect to, or a requested id when creating.
+   * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
+   * sandbox is created.
    *
    * Providers are not required to honor a requested creation id. Always read and persist the
    * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
