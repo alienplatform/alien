@@ -42,7 +42,17 @@
           // AWS authorizes creation against no resource type, so an ARN here would deny rather
           // than narrow. The boundary tags are what bound it instead: this statement is the
           // runtime controller's build.
-          "actions": ["lambda:CreateMicrovmImage"]
+          //
+          // The tagged create performs an implicit TagResource, and the service evaluates that
+          // one against "*" too. The reference says otherwise — TagResource lists microvmImage
+          // as a resource type — so this reads like it belongs on the image ARN. It does not:
+          // a grant on `microvm-image:<prefix>-*` was in place, matched the image being
+          // created, and AWS still refused with "TagResource on resource: *".
+          //
+          // On "*" it is bounded only by the request tags, which is safe while a forged tag
+          // reaches nothing: every Lambda statement keyed on aws:ResourceTag also pins the
+          // name, as `lambda_resource_tag_statements_are_name_pinned` holds.
+          "actions": ["lambda:CreateMicrovmImage", "lambda:TagResource"]
         },
         "binding": {
           "stack": {
@@ -68,8 +78,9 @@
       },
       {
         "grant": {
-          // The same build under the tag CloudFormation and Terraform put on a Frozen image.
-          "actions": ["lambda:CreateMicrovmImage"]
+          // The same build, and the same implicit tag, under the tag CloudFormation and
+          // Terraform put on a Frozen image.
+          "actions": ["lambda:CreateMicrovmImage", "lambda:TagResource"]
         },
         "binding": {
           "stack": {

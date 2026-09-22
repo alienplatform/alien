@@ -717,7 +717,13 @@ fn lambda_resource_tag_statements_are_name_pinned() {
 fn action_requires_tag_condition(action: &str) -> bool {
     matches!(
         action,
-        "acm:ImportCertificate"
+        // A tagged create carries an implicit TagResource, authorized the way its create is. For
+        // lambda:CreateMicrovmImage that is against no resource type, so the tag cannot be
+        // authorized against the image ARN and only the request tags can bound it. What keeps
+        // that from being a way to pull a foreign function into this stack's scope is
+        // `lambda_resource_tag_statements_are_name_pinned`.
+        "lambda:TagResource"
+            | "acm:ImportCertificate"
             | "acm:AddTagsToCertificate"
             | "acm:DeleteCertificate"
             | "apigateway:POST"
