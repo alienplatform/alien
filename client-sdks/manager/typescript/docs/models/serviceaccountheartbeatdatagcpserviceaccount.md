@@ -21,7 +21,7 @@ let value: ServiceAccountHeartbeatDataGcpServiceAccount = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },

@@ -11,13 +11,13 @@ let value: AiHeartbeatDataExternal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
     stale: true,
   },

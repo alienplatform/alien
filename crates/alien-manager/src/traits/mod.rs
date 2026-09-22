@@ -21,9 +21,10 @@ pub use credential_resolver::{
 pub(crate) use deployment_store::deployment_status_from_record;
 pub use deployment_store::{
     AcquiredDeployment, CreateDeploymentGroupParams, CreateDeploymentParams,
-    CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentFilter, DeploymentGroupRecord,
-    DeploymentRecord, DeploymentStore, ReconcileData, ReconcileInput, ReconcileInputBuilder,
-    ReconcileOutcome, UpdateImportedDeploymentParams,
+    CreateImportedDeploymentParams, DeploymentAcquireMode, DeploymentAcquireResult,
+    DeploymentAcquireUnavailableReason, DeploymentFilter, DeploymentGroupRecord, DeploymentRecord,
+    DeploymentStore, ReconcileData, ReconcileInput, ReconcileInputBuilder, ReconcileOutcome,
+    UnacquiredDeployment, UpdateImportedDeploymentParams,
 };
 pub use release_store::{CreateReleaseParams, ReleaseRecord, ReleaseStore};
 pub use server_bindings::ServerBindings;

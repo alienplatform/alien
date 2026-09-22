@@ -13,10 +13,10 @@ let value: ObservedInventoryBatch = {
   observedAt: new Date("2024-09-10T06:27:56.143Z"),
   resources: [
     {
-      displayName: "Hunter72",
+      displayName: "Camden_Denesik91",
       health: "unhealthy",
-      lifecycle: "creating",
-      partial: false,
+      lifecycle: "scaling",
+      partial: true,
       providerKind: "<value>",
       providerStale: true,
       rawIdentity: "<value>",

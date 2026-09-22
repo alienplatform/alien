@@ -20,18 +20,11 @@ const value: models.ContainerHeartbeatDataHorizonPlatform = {
   replicas: {},
   schedulingMode: "daemon",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "deleted",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "horizonPlatform",
 };
@@ -52,18 +45,11 @@ const value: models.ContainerHeartbeatDataKubernetes = {
   pods: [],
   replicas: {},
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "deleted",
     partial: false,
-    stale: false,
+    stale: true,
   },
   workloadKind: "deployment",
   backend: "kubernetes",
@@ -79,20 +65,12 @@ const value: models.ContainerHeartbeatDataLocal = {
   portCount: 776553,
   runtimeReachable: false,
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "deleted",
     partial: false,
-    stale: false,
+    stale: true,
   },
   backend: "local",
 };
 ```
-

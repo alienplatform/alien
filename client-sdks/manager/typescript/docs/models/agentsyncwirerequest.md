@@ -1,25 +1,28 @@
-# AgentSyncRequest
+# AgentSyncWireRequest
+
+Inbound sync payload that adds optional receipts without expanding the
+public [`AgentSyncRequest`] struct literal.
 
 ## Example Usage
 
 ```typescript
-import { AgentSyncRequest } from "@alienplatform/manager-api/models";
+import { AgentSyncWireRequest } from "@alienplatform/manager-api/models";
 
-let value: AgentSyncRequest = {
+let value: AgentSyncWireRequest = {
   deploymentId: "<id>",
   observedInventoryBatches: [
     {
-      backend: "external",
-      complete: false,
+      backend: "local",
+      complete: true,
       controllerPlatform: "test",
       inventoryScope: "<value>",
-      observedAt: new Date("2026-03-15T15:54:44.264Z"),
+      observedAt: new Date("2024-03-08T01:42:23.482Z"),
       resources: [
         {
-          displayName: "Hunter72",
+          displayName: "Camden_Denesik91",
           health: "unhealthy",
-          lifecycle: "creating",
-          partial: false,
+          lifecycle: "scaling",
+          partial: true,
           providerKind: "<value>",
           providerStale: true,
           rawIdentity: "<value>",
@@ -32,25 +35,25 @@ let value: AgentSyncRequest = {
   resourceHeartbeats: [
     {
       backend: "external",
-      controllerPlatform: "local",
+      controllerPlatform: "azure",
       data: {
         data: {
-          data: {
-            enabled: true,
-            keyArn: "<value>",
-            keySpec: "<value>",
-            keyState: "<value>",
-            keyUsage: "<value>",
-            status: {
-              health: "healthy",
-              lifecycle: "running",
-            },
+          functionName: "<value>",
+          functionUrlCorsPresent: false,
+          layerCount: 847359,
+          status: {
+            collectionIssues: [],
+            health: "degraded",
+            lifecycle: "deleted",
+            partial: false,
+            stale: true,
           },
-          provider: "aws-kms",
+          triggerCount: 195082,
+          backend: "awsLambda",
         },
-        resourceType: "key",
+        resourceType: "worker",
       },
-      observedAt: new Date("2026-03-29T08:18:22.529Z"),
+      observedAt: new Date("2026-04-02T11:29:30.200Z"),
       raw: [],
       resourceId: "<id>",
       resourceType: "worker",
@@ -69,8 +72,8 @@ let value: AgentSyncRequest = {
 | `executionClaim`                                                                                                                                                        | [models.ExecutionClaim](../models/executionclaim.md)                                                                                                                    | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `observedInventoryBatches`                                                                                                                                              | [models.ObservedInventoryBatch](../models/observedinventorybatch.md)[]                                                                                                  | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `operationsReport`                                                                                                                                                      | [models.OperationsReport](../models/operationsreport.md)                                                                                                                | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
-| `operatorImage`                                                                                                                                                         | [models.OperatorImageReport](../models/operatorimagereport.md)                                                                                                          | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `operatorVersion`                                                                                                                                                       | *string*                                                                                                                                                                | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `resourceHeartbeats`                                                                                                                                                    | [models.ResourceHeartbeat](../models/resourceheartbeat.md)[]                                                                                                            | :heavy_minus_sign:                                                                                                                                                      | Managed resource status samples emitted by pull-mode deployment steps.                                                                                                  |
 | `session`                                                                                                                                                               | *string*                                                                                                                                                                | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
 | `supportsExecutionClaims`                                                                                                                                               | *boolean*                                                                                                                                                               | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |
+| `operatorImage`                                                                                                                                                         | [models.OperatorImageReport](../models/operatorimagereport.md)                                                                                                          | :heavy_minus_sign:                                                                                                                                                      | N/A                                                                                                                                                                     |

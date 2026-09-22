@@ -23,18 +23,11 @@ let value: DaemonHeartbeatDataGcp = {
   horizonStatus: "<value>",
   latestUpdateTimestamp: "<value>",
   status: {
-    collectionIssues: [
-      {
-        message: "<value>",
-        reason: "forbidden",
-        severity: "info",
-        source: "<value>",
-      },
-    ],
-    health: "unhealthy",
-    lifecycle: "deleting",
+    collectionIssues: [],
+    health: "degraded",
+    lifecycle: "deleted",
     partial: false,
-    stale: false,
+    stale: true,
   },
   unavailableInstances: 685429,
   backend: "gcp",

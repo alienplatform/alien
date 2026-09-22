@@ -29,6 +29,7 @@ use crate::ids;
 use crate::traits::{
     CreateDeploymentParams, CreateTokenParams, DeploymentAcquireMode, DeploymentFilter,
     DeploymentRecord, ReconcileData, ReconcileInput, ReleaseRecord, TokenType,
+    UnacquiredDeployment,
 };
 
 use super::{auth, AppState};
@@ -64,6 +65,11 @@ fn default_limit() -> u32 {
 #[serde(rename_all = "camelCase")]
 pub struct AcquireResponse {
     pub deployments: Vec<AcquiredDeploymentResponse>,
+    /// Bounded reasons for explicitly requested deployments that were not acquired.
+    /// Empty for discovery-style batch acquisition.
+    #[serde(default)]
+    #[cfg_attr(feature = "openapi", schema(required = false))]
+    pub not_acquired: Vec<UnacquiredDeployment>,
 }
 
 #[derive(Debug, Serialize)]
@@ -391,16 +397,17 @@ async fn acquire(
         ..DeploymentFilter::default()
     };
 
-    let acquired = match state
+    let acquire_result = match state
         .deployment_store
-        .acquire(&subject, &req.session, &filter, req.limit)
+        .acquire_with_reasons(&subject, &req.session, &filter, req.limit)
         .await
     {
         Ok(a) => a,
         Err(e) => return e.into_response(),
     };
 
-    let deployments: Vec<AcquiredDeploymentResponse> = match acquired
+    let deployments: Vec<AcquiredDeploymentResponse> = match acquire_result
+        .deployments
         .into_iter()
         .map(|a| {
             let mut deployment = serde_json::to_value(&a.deployment)?;
@@ -427,7 +434,11 @@ async fn acquire(
         }
     };
 
-    Json(AcquireResponse { deployments }).into_response()
+    Json(AcquireResponse {
+        deployments,
+        not_acquired: acquire_result.not_acquired,
+    })
+    .into_response()
 }
 
 /// `POST /v1/sync/reconcile` — Inbound: workspace / dg / deployment
