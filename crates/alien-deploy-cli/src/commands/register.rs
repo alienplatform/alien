@@ -343,11 +343,12 @@ fn build_import_request(
             reason: "DeploymentManagementConfig has unexpected shape".to_string(),
         })?;
 
-    let stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
+    let mut stack_settings_value = outputs.stack_settings.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "DeploymentStackSettings output not found in stack".to_string(),
         })
     })?;
+    normalize_cloudformation_stack_settings(&mut stack_settings_value)?;
     let stack_settings: StackSettings = serde_json::from_value(stack_settings_value)
         .into_alien_error()
         .context(ErrorData::JsonError {
@@ -363,12 +364,16 @@ fn build_import_request(
             }));
         };
         for item in items {
-            let imported: ImportedResourceWire = serde_json::from_value(item.clone())
+            let mut imported: ImportedResourceWire = serde_json::from_value(item.clone())
                 .into_alien_error()
                 .context(ErrorData::JsonError {
                     operation: "deserialize ImportedResource".to_string(),
                     reason: "DeploymentResources item has unexpected shape".to_string(),
                 })?;
+            normalize_cloudformation_import_data(
+                &imported.resource_type,
+                &mut imported.import_data,
+            )?;
             resources.push(ImportedResource {
                 id: imported.id,
                 resource_type: ResourceType::from(imported.resource_type),
@@ -403,6 +408,79 @@ fn build_import_request(
         input_values: Default::default(),
         resources,
     })
+}
+
+/// CloudFormation resolves `Number` parameter references inside
+/// `Fn::ToJsonString` as JSON strings. Convert only the numeric fields the
+/// generated StackSettings contract sources from those parameters.
+fn normalize_cloudformation_stack_settings(value: &mut JsonValue) -> Result<()> {
+    normalize_u32_string(value, "/network/availability_zones")?;
+
+    let Some(pools) = value
+        .pointer_mut("/compute/pools")
+        .and_then(JsonValue::as_object_mut)
+    else {
+        return Ok(());
+    };
+    for (pool_id, pool) in pools {
+        for field in ["machines", "min", "max"] {
+            let Some(field_value) = pool.get_mut(field) else {
+                continue;
+            };
+            normalize_u32_value(field_value, &format!("compute.pools.{pool_id}.{field}"))?;
+        }
+    }
+    Ok(())
+}
+
+fn normalize_u32_string(value: &mut JsonValue, pointer: &str) -> Result<()> {
+    if let Some(field) = value.pointer_mut(pointer) {
+        normalize_u32_value(field, pointer.trim_start_matches('/'))?;
+    }
+    Ok(())
+}
+
+fn normalize_u32_value(value: &mut JsonValue, field: &str) -> Result<()> {
+    let JsonValue::String(text) = value else {
+        return Ok(());
+    };
+    let number = text.parse::<u32>().map_err(|_| {
+        AlienError::new(ErrorData::ConfigurationError {
+            message: format!(
+                "DeploymentStackSettings field '{field}' is not a valid unsigned integer"
+            ),
+        })
+    })?;
+    *value = JsonValue::from(number);
+    Ok(())
+}
+
+/// `AWS::NoValue` becomes `null` inside an `Fn::ToJsonString` list. Generated
+/// network subnet lists gate only their trailing availability-zone entries, so
+/// trim trailing nulls while rejecting an interior null as malformed output.
+fn normalize_cloudformation_import_data(
+    resource_type: &str,
+    import_data: &mut JsonValue,
+) -> Result<()> {
+    if resource_type != "network" {
+        return Ok(());
+    }
+    for field in ["publicSubnetIds", "privateSubnetIds"] {
+        let Some(values) = import_data.get_mut(field).and_then(JsonValue::as_array_mut) else {
+            continue;
+        };
+        while values.last().is_some_and(JsonValue::is_null) {
+            values.pop();
+        }
+        if values.iter().any(JsonValue::is_null) {
+            return Err(AlienError::new(ErrorData::ConfigurationError {
+                message: format!(
+                    "CloudFormation network import field '{field}' contains a non-trailing null"
+                ),
+            }));
+        }
+    }
+    Ok(())
 }
 
 #[derive(serde::Deserialize)]
@@ -504,6 +582,93 @@ mod tests {
         assert!(
             format!("{error:?}").contains("deserialize ImportedResource"),
             "expected the typed importer to reject the null: {error:?}"
+        );
+    }
+
+    #[test]
+    fn resolved_cloudformation_outputs_normalize_typed_settings_and_subnet_lists() {
+        let mut outputs = base_outputs();
+        outputs.stack_settings = Some(serde_json::json!({
+            "network": {
+                "type": "create",
+                "cidr": "10.20.0.0/16",
+                "availability_zones": "2"
+            },
+            "compute": {
+                "pools": {
+                    "general": {
+                        "mode": "autoscale",
+                        "min": "1",
+                        "max": "3",
+                        "machine": "m7g.large"
+                    },
+                    "jobs": {
+                        "mode": "fixed",
+                        "machines": "2",
+                        "machine": "m7g.xlarge"
+                    }
+                }
+            }
+        }));
+        outputs.resources_chunks = vec![serde_json::json!([{
+            "id": "network",
+            "type": "network",
+            "importData": {
+                "vpcId": "vpc-123",
+                "publicSubnetIds": ["subnet-public-a", "subnet-public-b", null],
+                "privateSubnetIds": ["subnet-private-a", "subnet-private-b", null]
+            }
+        }])];
+
+        let request = build_import_request(&outputs, "dg_token", "app", "stack")
+            .expect("resolved CloudFormation outputs should satisfy the typed import contract");
+        let settings = serde_json::to_value(&request.stack_settings).expect("stack settings");
+        assert_eq!(settings["network"]["availability_zones"], 2);
+        assert_eq!(settings["compute"]["pools"]["general"]["min"], 1);
+        assert_eq!(settings["compute"]["pools"]["general"]["max"], 3);
+        assert_eq!(settings["compute"]["pools"]["jobs"]["machines"], 2);
+        assert_eq!(
+            request.resources[0].import_data["publicSubnetIds"],
+            serde_json::json!(["subnet-public-a", "subnet-public-b"])
+        );
+        assert_eq!(
+            request.resources[0].import_data["privateSubnetIds"],
+            serde_json::json!(["subnet-private-a", "subnet-private-b"])
+        );
+    }
+
+    #[test]
+    fn malformed_cloudformation_numeric_setting_still_fails() {
+        let mut outputs = base_outputs();
+        outputs.stack_settings = Some(serde_json::json!({
+            "network": {"type": "create", "availability_zones": "two"}
+        }));
+
+        let error = build_import_request(&outputs, "dg_token", "app", "stack")
+            .expect_err("non-numeric text must not be coerced");
+        assert!(
+            format!("{error:?}").contains("network/availability_zones"),
+            "the error should identify the malformed field: {error:?}"
+        );
+    }
+
+    #[test]
+    fn interior_network_null_still_fails() {
+        let mut outputs = base_outputs();
+        outputs.resources_chunks = vec![serde_json::json!([{
+            "id": "network",
+            "type": "network",
+            "importData": {
+                "publicSubnetIds": ["subnet-public-a", null, "subnet-public-c"],
+                "privateSubnetIds": ["subnet-private-a"]
+            }
+        }])];
+
+        let error = build_import_request(&outputs, "dg_token", "app", "stack")
+            .expect_err("an interior null is not a declined trailing AZ");
+        assert!(
+            format!("{error:?}").contains("non-trailing null"),
+            "the malformed array should fail explicitly: {error:?}"
         );
     }
 }
