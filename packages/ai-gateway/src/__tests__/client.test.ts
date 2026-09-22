@@ -17,6 +17,26 @@ const EXTERNAL = JSON.stringify({ service: "external-ai", provider: "openai", ap
 
 const GATEWAY_URL = "http://127.0.0.1:41999"
 
+const unverifiedCapabilities = [
+  "open-ai-chat-completions",
+  "open-ai-responses",
+  "anthropic-messages",
+].map(api => ({
+  api,
+  functionTools: "unverified",
+  imageInput: "unverified",
+  reasoningControls: "unverified",
+  serverManagedContinuation: "unverified",
+  statelessReplay: "unverified",
+}))
+
+const gatewayModel = {
+  id: "gpt-oss-20b",
+  provider: "openai",
+  displayName: "GPT-OSS 20B",
+  capabilities: unverifiedCapabilities,
+}
+
 const stubGateway: Gateway = {
   startAiGateway: () => Promise.resolve({ url: GATEWAY_URL } as unknown as RawAiGatewayHandle),
 }
@@ -256,24 +276,36 @@ describe("Ai.getAvailableModels", () => {
     expect(ids).toContain("claude-sonnet-5")
     expect(ids).toContain("claude-haiku-4-5")
     expect(ids.some(id => id.startsWith("claude-3-5"))).toBe(false)
-    // Each entry carries the provider/displayName shape a model picker consumes.
-    expect(models[0]).toMatchObject({ provider: "anthropic", displayName: models[0]!.id })
+    // Each entry carries the same explicit capability shape as a Gateway model.
+    expect(models[0]).toMatchObject({
+      provider: "anthropic",
+      displayName: models[0]!.id,
+      capabilities: unverifiedCapabilities,
+    })
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it("fetches the gateway's curated catalog for an ambient binding", async () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
     const fetchMock = stubFetch({
-      data: [{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }],
+      data: [gatewayModel],
     })
     const models = await ai("llm").getAvailableModels()
     expect(callUrl(fetchMock)).toBe(`${GATEWAY_URL}/llm/v1/models`)
-    expect(models).toEqual([{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }])
+    expect(models).toEqual([gatewayModel])
+  })
+
+  it("rejects a model list whose capability matrix is incomplete", async () => {
+    vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
+    stubFetch({ data: [{ ...gatewayModel, capabilities: unverifiedCapabilities.slice(1) }] })
+    await expect(ai("llm").getAvailableModels()).rejects.toThrow(
+      "models response entry has an invalid model or capabilities shape",
+    )
   })
 
   it("retries a transient gateway-start failure on a retained instance", async () => {
     vi.stubEnv("ALIEN_LLM_BINDING", JSON.stringify({ service: "bedrock", region: "us-east-2" }))
-    stubFetch({ data: [{ id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" }] })
+    stubFetch({ data: [gatewayModel] })
     const start = vi
       .fn()
       .mockRejectedValueOnce(new Error("ambient credential unavailable"))
@@ -282,9 +314,7 @@ describe("Ai.getAvailableModels", () => {
 
     await expect(llm.getAvailableModels()).rejects.toThrow()
     // A cached rejection would leave this instance permanently broken; it must retry.
-    expect(await llm.getAvailableModels()).toEqual([
-      { id: "gpt-oss-20b", provider: "openai", displayName: "GPT-OSS 20B" },
-    ])
+    expect(await llm.getAvailableModels()).toEqual([gatewayModel])
     expect(start).toHaveBeenCalledTimes(2)
   })
 })
