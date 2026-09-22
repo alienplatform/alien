@@ -655,6 +655,65 @@ fn action_requires_service_name_condition(action: &str) -> bool {
     matches!(action, "iam:CreateServiceLinkedRole")
 }
 
+/// The invariant that makes `lambda:TagResource` safe on Resource "*".
+///
+/// A holder of it can stamp this stack's tag onto any Lambda resource in the account. That is
+/// only harmless while every Lambda statement keyed on `aws:ResourceTag` also pins the name to
+/// this stack — a forged tag on `their-function` then satisfies the condition but never the
+/// resource. Drop the name pin from one of those statements and the wildcard tag becomes a way
+/// to read and reconfigure a customer's own functions.
+#[test]
+fn lambda_resource_tag_statements_are_name_pinned() {
+    let mut failures = Vec::new();
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        let Some(aws_permissions) = permission_set.platforms.aws.as_ref() else {
+            continue;
+        };
+
+        for (statement_index, permission) in aws_permissions.iter().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+            let Some(actions) = permission.grant.actions.as_ref() else {
+                continue;
+            };
+            if !actions.iter().any(|action| action.starts_with("lambda:")) {
+                continue;
+            }
+
+            for binding in [
+                permission.binding.stack.as_ref(),
+                permission.binding.resource.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if !has_condition_key(binding, "aws:ResourceTag/${stackTag}") {
+                    continue;
+                }
+                for resource in &binding.resources {
+                    if !resource.contains("${stackPrefix}") && !resource.contains("${resourceName}")
+                    {
+                        failures.push(format!(
+                            "{permission_set_id}[{statement_index}] keys a Lambda grant on \
+                             aws:ResourceTag but does not pin the name to this stack: {resource}"
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    assert!(
+        failures.is_empty(),
+        "Lambda ResourceTag name-pinning failed:\n{}",
+        failures.join("\n")
+    );
+}
+
 fn action_requires_tag_condition(action: &str) -> bool {
     matches!(
         action,
