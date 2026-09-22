@@ -201,6 +201,30 @@ impl StackResourceStateExt for StackResourceState {
                 Ok(true)
             }
             Ok(None) => {
+                // Refresh failures happen after initialization and retain the live controller in
+                // `internal_state`. They do not necessarily populate `last_failed_state`, because
+                // observation failed without interrupting another lifecycle transition. Preserve
+                // that durable identity instead of incorrectly re-entering resource creation.
+                if self.status == ResourceStatus::RefreshFailed {
+                    let mut controller = self.get_internal_controller()?.ok_or_else(|| {
+                        AlienError::new(ErrorData::ResourceStateSerializationFailed {
+                            resource_id: resource_id.clone(),
+                            message: "Refresh-failed resource has no controller state".to_string(),
+                        })
+                    })?;
+                    tracing::info!(
+                        resource_id = %resource_id,
+                        "Resuming refresh-failed resource from its current controller state"
+                    );
+                    controller.reset_stay_count();
+                    self.status = controller.get_status();
+                    self.outputs = controller.get_outputs();
+                    self.set_internal_controller(Some(controller))?;
+                    self.retry_attempt = 0;
+                    self.error = None;
+                    return Ok(true);
+                }
+
                 // No last failed state — the resource was interrupted before its controller was
                 // initialized (i.e. it was in Pending when the deployment stopped). Reset it to
                 // Pending so it starts fresh on the next deployment attempt.
@@ -585,7 +609,7 @@ mod tests {
                 Some(lifecycle),
                 Vec::new(),
             );
-            state.status = ResourceStatus::RefreshFailed;
+            state.status = ResourceStatus::ProvisionFailed;
             state
         }
 
@@ -948,7 +972,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_retry_failed_recovers_refresh_failed_resource() {
+    async fn test_retry_failed_preserves_current_refresh_controller() {
         let function_config = Worker::new("test-function".to_string())
             .code(WorkerCode::Image {
                 image: "test:latest".to_string(),
@@ -956,8 +980,11 @@ mod tests {
             .permissions("execution".to_string())
             .build();
 
-        let mut last_ready_controller = TestWorkerController::default();
-        last_ready_controller.state = TestWorkerState::Ready;
+        let mut current_controller = TestWorkerController::default();
+        current_controller.state = TestWorkerState::RefreshFailed;
+        current_controller.identifier = Some("durable-worker-id".to_string());
+        current_controller.url = Some("https://worker.example.test".to_string());
+        current_controller._internal_stay_count = Some(50);
 
         let mut resource_state = StackResourceState::new_pending(
             "worker".to_string(),
@@ -971,15 +998,48 @@ mod tests {
             message: "heartbeat failed".to_string(),
         }));
         resource_state
-            .set_last_failed_controller(Some(Box::new(last_ready_controller)))
+            .set_internal_controller(Some(Box::new(current_controller)))
             .unwrap();
 
         let retried = resource_state.retry_failed().unwrap();
 
         assert!(retried, "refresh-failed resources must be retryable");
-        assert_eq!(resource_state.status, ResourceStatus::Running);
+        assert_eq!(resource_state.status, ResourceStatus::RefreshFailed);
         assert_eq!(resource_state.retry_attempt, 0);
         assert!(resource_state.error.is_none());
         assert!(resource_state.last_failed_state.is_none());
+
+        let restored = resource_state
+            .get_internal_controller_typed::<TestWorkerController>()
+            .unwrap();
+        assert_eq!(restored.state, TestWorkerState::RefreshFailed);
+        assert_eq!(restored.identifier.as_deref(), Some("durable-worker-id"));
+        assert_eq!(restored.url.as_deref(), Some("https://worker.example.test"));
+        assert!(restored._internal_stay_count.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_retry_failed_rejects_refresh_failure_without_controller() {
+        let function_config = Worker::new("test-function".to_string())
+            .code(WorkerCode::Image {
+                image: "test:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .build();
+        let mut resource_state = StackResourceState::new_pending(
+            "worker".to_string(),
+            Resource::new(function_config),
+            None,
+            Vec::new(),
+        );
+        resource_state.status = ResourceStatus::RefreshFailed;
+
+        let error = resource_state
+            .retry_failed()
+            .expect_err("refresh failure without a controller is corrupt state");
+
+        assert_eq!(error.code, "RESOURCE_STATE_SERIALIZATION_FAILED");
+        assert_eq!(resource_state.status, ResourceStatus::RefreshFailed);
+        assert!(resource_state.internal_state.is_none());
     }
 }

@@ -660,6 +660,73 @@ async fn health_failure_recovers_through_observation_without_retry_or_reprovisio
 }
 
 #[tokio::test]
+async fn explicit_retry_after_health_failure_preserves_the_running_resource() {
+    let mut stack = create_test_stack("retry-health-stack", "health-worker");
+    let worker = Worker::new("health-worker".to_string())
+        .code(WorkerCode::Image {
+            image: "test:latest".to_string(),
+        })
+        .permissions("default".to_string())
+        .environment(HashMap::from([
+            (
+                "SIMULATE_OBSERVED_URL_REFRESH".to_string(),
+                "true".to_string(),
+            ),
+            (
+                "SIMULATE_OBSERVED_REFRESH_FAIL_ONCE".to_string(),
+                "true".to_string(),
+            ),
+        ]))
+        .build();
+    stack.resources.get_mut("health-worker").unwrap().config = alien_core::Resource::new(worker);
+    let config = create_test_config("retry-health", false);
+    let state = run_to_completion(create_initial_state(stack), config.clone()).await;
+    let failed = alien_deployment::step(state, config.clone(), ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(failed.state.status, DeploymentStatus::RefreshFailed);
+
+    let mut retry_state = failed.state;
+    request_retry(&mut retry_state);
+    let retried = alien_deployment::step(retry_state, config.clone(), ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(retried.state.status, DeploymentStatus::Running);
+    assert!(!retried.state.retry_requested);
+    let retried_worker = &retried.state.stack_state.as_ref().unwrap().resources["health-worker"];
+    assert_eq!(
+        retried_worker.status,
+        alien_core::ResourceStatus::RefreshFailed
+    );
+    let retried_outputs = retried_worker
+        .outputs
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<alien_core::WorkerOutputs>()
+        .unwrap();
+    assert_eq!(
+        retried_outputs.identifier.as_deref(),
+        Some("test:worker:health-worker")
+    );
+
+    let observed = alien_deployment::step(retried.state, config, ClientConfig::Test, None)
+        .await
+        .unwrap();
+    assert_eq!(observed.state.status, DeploymentStatus::Running);
+    let observed_worker = &observed.state.stack_state.as_ref().unwrap().resources["health-worker"];
+    let observed_outputs = observed_worker
+        .outputs
+        .as_ref()
+        .unwrap()
+        .downcast_ref::<alien_core::WorkerOutputs>()
+        .unwrap();
+    assert_eq!(
+        observed_outputs.public_endpoints["default"].url,
+        "https://observed-2.test"
+    );
+}
+
+#[tokio::test]
 async fn persistent_worker_failure_surfaces_during_provisioning() {
     let _temp_dir = TempDir::new().expect("Failed to create temp dir");
 
