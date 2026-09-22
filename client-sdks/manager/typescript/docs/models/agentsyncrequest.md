@@ -1,4 +1,4 @@
-# AgentSyncWireRequest
+# AgentSyncRequest
 
 Inbound sync payload that adds optional receipts without expanding the
 public [`AgentSyncRequest`] struct literal.
@@ -6,23 +6,23 @@ public [`AgentSyncRequest`] struct literal.
 ## Example Usage
 
 ```typescript
-import { AgentSyncWireRequest } from "@alienplatform/manager-api/models";
+import { AgentSyncRequest } from "@alienplatform/manager-api/models";
 
-let value: AgentSyncWireRequest = {
+let value: AgentSyncRequest = {
   deploymentId: "<id>",
   observedInventoryBatches: [
     {
-      backend: "local",
-      complete: true,
+      backend: "external",
+      complete: false,
       controllerPlatform: "test",
       inventoryScope: "<value>",
-      observedAt: new Date("2024-03-08T01:42:23.482Z"),
+      observedAt: new Date("2026-03-15T15:54:44.264Z"),
       resources: [
         {
-          displayName: "Camden_Denesik91",
+          displayName: "Hunter72",
           health: "unhealthy",
-          lifecycle: "scaling",
-          partial: true,
+          lifecycle: "creating",
+          partial: false,
           providerKind: "<value>",
           providerStale: true,
           rawIdentity: "<value>",
@@ -35,25 +35,25 @@ let value: AgentSyncWireRequest = {
   resourceHeartbeats: [
     {
       backend: "external",
-      controllerPlatform: "azure",
+      controllerPlatform: "local",
       data: {
         data: {
-          functionName: "<value>",
-          functionUrlCorsPresent: false,
-          layerCount: 847359,
-          status: {
-            collectionIssues: [],
-            health: "degraded",
-            lifecycle: "deleted",
-            partial: false,
-            stale: true,
+          data: {
+            enabled: true,
+            keyArn: "<value>",
+            keySpec: "<value>",
+            keyState: "<value>",
+            keyUsage: "<value>",
+            status: {
+              health: "healthy",
+              lifecycle: "running",
+            },
           },
-          triggerCount: 195082,
-          backend: "awsLambda",
+          provider: "aws-kms",
         },
-        resourceType: "worker",
+        resourceType: "key",
       },
-      observedAt: new Date("2026-04-02T11:29:30.200Z"),
+      observedAt: new Date("2026-03-29T08:18:22.529Z"),
       raw: [],
       resourceId: "<id>",
       resourceType: "worker",

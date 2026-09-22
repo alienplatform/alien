@@ -31,7 +31,7 @@ import { Result } from "../types/fp.js";
  */
 export function syncAgentSync(
   client: AlienManagerCore,
-  request: models.AgentSyncWireRequest,
+  request: models.AgentSyncRequest,
   options?: RequestOptions,
 ): APIPromise<
   Result<
@@ -55,7 +55,7 @@ export function syncAgentSync(
 
 async function $do(
   client: AlienManagerCore,
-  request: models.AgentSyncWireRequest,
+  request: models.AgentSyncRequest,
   options?: RequestOptions,
 ): Promise<
   [
@@ -75,7 +75,7 @@ async function $do(
 > {
   const parsed = safeParse(
     request,
-    (value) => models.AgentSyncWireRequest$outboundSchema.parse(value),
+    (value) => models.AgentSyncRequest$outboundSchema.parse(value),
     "Input validation failed",
   );
   if (!parsed.ok) {

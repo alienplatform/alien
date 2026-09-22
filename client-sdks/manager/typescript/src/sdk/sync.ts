@@ -37,7 +37,7 @@ export class Sync extends ClientSDK {
    * the agent's own scope.
    */
   async agentSync(
-    request: models.AgentSyncWireRequest,
+    request: models.AgentSyncRequest,
     options?: RequestOptions,
   ): Promise<models.AgentSyncResponse> {
     return unwrapAsync(syncAgentSync(

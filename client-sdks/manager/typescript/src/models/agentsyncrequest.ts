@@ -40,7 +40,7 @@ import {
  * @remarks
  * public [`AgentSyncRequest`] struct literal.
  */
-export type AgentSyncWireRequest = {
+export type AgentSyncRequest = {
   capabilities?: Array<OperatorCapabilityReport> | undefined;
   /**
    * Current deployment state as reported by the agent.
@@ -65,7 +65,7 @@ export type AgentSyncWireRequest = {
 };
 
 /** @internal */
-export type AgentSyncWireRequest$Outbound = {
+export type AgentSyncRequest$Outbound = {
   capabilities?: Array<OperatorCapabilityReport$Outbound> | undefined;
   currentState?: any | undefined;
   deploymentId: string;
@@ -80,9 +80,9 @@ export type AgentSyncWireRequest$Outbound = {
 };
 
 /** @internal */
-export const AgentSyncWireRequest$outboundSchema: z.ZodType<
-  AgentSyncWireRequest$Outbound,
-  AgentSyncWireRequest
+export const AgentSyncRequest$outboundSchema: z.ZodType<
+  AgentSyncRequest$Outbound,
+  AgentSyncRequest
 > = z.object({
   capabilities: z.array(OperatorCapabilityReport$outboundSchema).optional(),
   currentState: z.any().optional(),
@@ -98,10 +98,10 @@ export const AgentSyncWireRequest$outboundSchema: z.ZodType<
   operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
 });
 
-export function agentSyncWireRequestToJSON(
-  agentSyncWireRequest: AgentSyncWireRequest,
+export function agentSyncRequestToJSON(
+  agentSyncRequest: AgentSyncRequest,
 ): string {
   return JSON.stringify(
-    AgentSyncWireRequest$outboundSchema.parse(agentSyncWireRequest),
+    AgentSyncRequest$outboundSchema.parse(agentSyncRequest),
   );
 }

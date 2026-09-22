@@ -1253,7 +1253,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentSyncWireRequest"
+                "$ref": "#/components/schemas/AgentSyncRequest"
               }
             }
           },
@@ -1524,6 +1524,28 @@
         }
       },
       "AgentSyncRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AgentSyncRequestBase"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "operatorImage": {
+                "nullable": true,
+                "description": "Exact immutable Operator image identity reported by the running process.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/OperatorImageReport"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
+      },
+      "AgentSyncRequestBase": {
         "type": "object",
         "required": [
           "deploymentId"
@@ -1613,28 +1635,6 @@
             ]
           }
         }
-      },
-      "AgentSyncWireRequest": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/AgentSyncRequest"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "operatorImage": {
-                "nullable": true,
-                "description": "Exact immutable Operator image identity reported by the running process.",
-                "allOf": [
-                  {
-                    "$ref": "#/components/schemas/OperatorImageReport"
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
       },
       "AiAccessTest": {
         "type": "string",

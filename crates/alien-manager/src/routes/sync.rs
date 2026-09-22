@@ -138,6 +138,7 @@ pub struct RenewRequest {
 
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = AgentSyncRequestBase))]
 #[serde(rename_all = "camelCase")]
 pub struct AgentSyncRequest {
     pub deployment_id: String,
@@ -171,6 +172,7 @@ pub struct AgentSyncRequest {
 /// public [`AgentSyncRequest`] struct literal.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = AgentSyncRequest))]
 #[serde(rename_all = "camelCase")]
 struct AgentSyncWireRequest {
     #[serde(flatten)]
