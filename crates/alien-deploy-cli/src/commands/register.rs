@@ -456,7 +456,7 @@ fn normalize_u32_value(value: &mut JsonValue, field: &str) -> Result<()> {
 }
 
 /// `AWS::NoValue` becomes `null` inside an `Fn::ToJsonString` list. Generated
-/// network subnet lists gate only their trailing availability-zone entries, so
+/// network lists gate only their trailing availability-zone entries, so
 /// trim trailing nulls while rejecting an interior null as malformed output.
 fn normalize_cloudformation_import_data(
     resource_type: &str,
@@ -465,7 +465,7 @@ fn normalize_cloudformation_import_data(
     if resource_type != "network" {
         return Ok(());
     }
-    for field in ["publicSubnetIds", "privateSubnetIds"] {
+    for field in ["publicSubnetIds", "privateSubnetIds", "availabilityZones"] {
         let Some(values) = import_data.get_mut(field).and_then(JsonValue::as_array_mut) else {
             continue;
         };
@@ -616,7 +616,8 @@ mod tests {
             "importData": {
                 "vpcId": "vpc-123",
                 "publicSubnetIds": ["subnet-public-a", "subnet-public-b", null],
-                "privateSubnetIds": ["subnet-private-a", "subnet-private-b", null]
+                "privateSubnetIds": ["subnet-private-a", "subnet-private-b", null],
+                "availabilityZones": ["us-east-1a", "us-east-1b", null]
             }
         }])];
 
@@ -634,6 +635,10 @@ mod tests {
         assert_eq!(
             request.resources[0].import_data["privateSubnetIds"],
             serde_json::json!(["subnet-private-a", "subnet-private-b"])
+        );
+        assert_eq!(
+            request.resources[0].import_data["availabilityZones"],
+            serde_json::json!(["us-east-1a", "us-east-1b"])
         );
     }
 
