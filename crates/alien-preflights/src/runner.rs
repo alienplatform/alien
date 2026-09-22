@@ -1,6 +1,6 @@
 use crate::error::{ErrorData, Result};
 use crate::{PreflightRegistry, PreflightSummary};
-use alien_core::{DeploymentConfig, Platform, Stack, StackState};
+use alien_core::{DeploymentConfig, Platform, Sandbox, Stack, StackState};
 use alien_error::{AlienError, Context};
 use tracing::{debug, error, info, warn};
 
@@ -396,6 +396,7 @@ impl PreflightRunner {
         // Apply mutations BEFORE compatibility checks
         // This ensures compatibility checks compare mutated stacks (old mutated vs new mutated)
         let mutated_stack = self.apply_mutations(stack, stack_state, config).await?;
+        reject_unsupported_direct_setup(&mutated_stack, platform, setup_authority)?;
         let setup_update_authorized = setup_authority
             == Some(alien_core::InitialSetupAuthority::DirectSetup)
             || setup_update_authorization.is_some_and(|authorization| {
@@ -474,6 +475,29 @@ impl PreflightRunner {
     }
 }
 
+fn reject_unsupported_direct_setup(
+    stack: &Stack,
+    platform: Platform,
+    setup_authority: Option<alien_core::InitialSetupAuthority>,
+) -> Result<()> {
+    let direct_aws_setup = platform == Platform::Aws
+        && setup_authority == Some(alien_core::InitialSetupAuthority::DirectSetup);
+    let contains_sandbox = stack
+        .resources()
+        .any(|(_, entry)| entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref());
+    if direct_aws_setup && contains_sandbox {
+        return Err(AlienError::new(ErrorData::InstallMethodUnsupported {
+            resource_type: "Sandbox".to_string(),
+            platform: "AWS".to_string(),
+            install_method: "direct setup".to_string(),
+            required_action:
+                "Generate and deploy the CloudFormation or Terraform setup package, then register its outputs before deploying."
+                    .to_string(),
+        }));
+    }
+    Ok(())
+}
+
 fn setup_update_authorization_matches(
     old_stack: Option<&Stack>,
     target_stack: &Stack,
@@ -493,8 +517,46 @@ impl Default for PreflightRunner {
 #[cfg(test)]
 mod setup_update_authorization_tests {
     use super::*;
-    use alien_core::{PermissionsConfig, SetupUpdateAuthorization};
+    use alien_core::{
+        PermissionsConfig, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy,
+        SetupUpdateAuthorization,
+    };
     use indexmap::IndexMap;
+    #[cfg(feature = "runtime-checks")]
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    #[cfg(feature = "runtime-checks")]
+    struct ObservedPrerequisiteCheck(Arc<AtomicBool>);
+
+    #[cfg(feature = "runtime-checks")]
+    #[async_trait::async_trait]
+    impl crate::DeploymentPrerequisiteCheck for ObservedPrerequisiteCheck {
+        fn description(&self) -> &'static str {
+            "record prerequisite execution"
+        }
+
+        fn should_run(
+            &self,
+            _stack: &Stack,
+            _stack_state: &StackState,
+            _config: &DeploymentConfig,
+        ) -> bool {
+            true
+        }
+
+        async fn check(
+            &self,
+            _stack: &Stack,
+            _stack_state: &StackState,
+            _config: &DeploymentConfig,
+        ) -> Result<CheckResult> {
+            self.0.store(true, Ordering::SeqCst);
+            Ok(CheckResult::success())
+        }
+    }
 
     fn empty_stack() -> Stack {
         Stack {
@@ -516,6 +578,99 @@ mod setup_update_authorization_tests {
             setup_fingerprint: "fingerprint".to_string(),
             setup_fingerprint_version: 1,
         }
+    }
+
+    fn sandbox_stack() -> Stack {
+        Stack::new("stack".to_string())
+            .add(
+                Sandbox::new("runner".to_string())
+                    .code(SandboxCode::Image {
+                        image: "s3://example-artifacts/runner.zip".to_string(),
+                    })
+                    .egress(SandboxEgress::Allow)
+                    .lifecycle(SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build()
+    }
+
+    #[test]
+    fn direct_aws_setup_rejects_sandbox_before_cloud_checks() {
+        let error = reject_unsupported_direct_setup(
+            &sandbox_stack(),
+            Platform::Aws,
+            Some(alien_core::InitialSetupAuthority::DirectSetup),
+        )
+        .expect_err("direct AWS setup cannot provision Sandbox setup infrastructure");
+
+        assert_eq!(error.code, "DEPLOYMENT_INSTALL_METHOD_UNSUPPORTED");
+        assert!(!error.retryable);
+        assert!(error.message.contains("CloudFormation or Terraform"));
+    }
+
+    #[test]
+    fn generated_setup_and_other_platforms_remain_supported() {
+        for (platform, authority, stack) in [
+            (
+                Platform::Aws,
+                alien_core::InitialSetupAuthority::ImportedHandoff,
+                sandbox_stack(),
+            ),
+            (
+                Platform::Gcp,
+                alien_core::InitialSetupAuthority::DirectSetup,
+                sandbox_stack(),
+            ),
+            (
+                Platform::Aws,
+                alien_core::InitialSetupAuthority::DirectSetup,
+                empty_stack(),
+            ),
+        ] {
+            reject_unsupported_direct_setup(&stack, platform, Some(authority))
+                .expect("supported setup path");
+        }
+    }
+
+    #[cfg(feature = "runtime-checks")]
+    #[tokio::test]
+    async fn unsupported_direct_setup_stops_before_prerequisites() {
+        let prerequisite_ran = Arc::new(AtomicBool::new(false));
+        let mut registry = crate::PreflightRegistry::new();
+        registry.add_deployment_prerequisite_check(Box::new(ObservedPrerequisiteCheck(
+            prerequisite_ran.clone(),
+        )));
+        let runner = PreflightRunner::with_registry(registry);
+        let config = DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+
+        let error = runner
+            .run_deployment_time_preflights(
+                sandbox_stack(),
+                &StackState::new(Platform::Aws),
+                &config,
+                &ClientConfig::Test,
+                None,
+                None,
+                Some(alien_core::InitialSetupAuthority::DirectSetup),
+            )
+            .await
+            .expect_err("unsupported setup must fail before prerequisite or cloud checks");
+
+        assert_eq!(error.code, "DEPLOYMENT_INSTALL_METHOD_UNSUPPORTED");
+        assert!(!prerequisite_ran.load(Ordering::SeqCst));
     }
 
     #[cfg(feature = "runtime-checks")]

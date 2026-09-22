@@ -6,6 +6,25 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, AlienErrorData, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ErrorData {
+    /// The selected installation method cannot provision a resource on this platform.
+    #[error(
+        code = "DEPLOYMENT_INSTALL_METHOD_UNSUPPORTED",
+        message = "{resource_type} resources on {platform} cannot be provisioned by {install_method}. {required_action}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 400
+    )]
+    InstallMethodUnsupported {
+        /// Resource type requiring a different installation path.
+        resource_type: String,
+        /// Target deployment platform.
+        platform: String,
+        /// Installation method that cannot satisfy the resource contract.
+        install_method: String,
+        /// Action the deployer must take instead.
+        required_action: String,
+    },
+
     /// The requested deployment needs choices or resources owned by setup.
     #[error(
         code = "DEPLOYMENT_SETUP_REQUIRED",
