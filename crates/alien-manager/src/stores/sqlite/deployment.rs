@@ -273,8 +273,8 @@ impl SqliteDeploymentStore {
 #[cfg(test)]
 mod tests {
     use alien_core::{
-        DeploymentState, DeploymentStatus, Platform, StackSettings,
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        DeploymentState, DeploymentStatus, EnvironmentVariable, EnvironmentVariableType, Platform,
+        StackSettings, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
     use chrono::Utc;
 
@@ -378,6 +378,29 @@ mod tests {
             updated_at: Some(now),
             error: None,
         }
+    }
+
+    #[test]
+    fn deployment_debug_redacts_sensitive_values() {
+        let mut deployment = deployment_record("running");
+        deployment.input_values.insert(
+            "apiToken".to_string(),
+            serde_json::json!("sentinel-secret-value"),
+        );
+        deployment.user_environment_variables = Some(vec![EnvironmentVariable {
+            name: "SECRET_TOKEN".to_string(),
+            value: "sentinel-environment-secret".to_string(),
+            var_type: EnvironmentVariableType::Secret,
+            target_resources: None,
+        }]);
+
+        let debug = format!("{deployment:?}");
+
+        assert!(debug.contains("input_values: \"[REDACTED]\""));
+        assert!(!debug.contains("apiToken"));
+        assert!(!debug.contains("sentinel-secret-value"));
+        assert!(!debug.contains("SECRET_TOKEN"));
+        assert!(!debug.contains("sentinel-environment-secret"));
     }
 }
 
