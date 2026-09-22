@@ -1496,6 +1496,13 @@
             "items": {
               "$ref": "#/components/schemas/AcquiredDeploymentResponse"
             }
+          },
+          "notAcquired": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnacquiredDeployment"
+            },
+            "description": "Bounded reasons for explicitly requested deployments that were not acquired.\nEmpty for discovery-style batch acquisition."
           }
         }
       },
@@ -1517,6 +1524,28 @@
         }
       },
       "AgentSyncRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AgentSyncRequestBase"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "operatorImage": {
+                "nullable": true,
+                "description": "Exact immutable Operator image identity reported by the running process.",
+                "allOf": [
+                  {
+                    "$ref": "#/components/schemas/OperatorImageReport"
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
+      },
+      "AgentSyncRequestBase": {
         "type": "object",
         "required": [
           "deploymentId"
@@ -1554,15 +1583,6 @@
             "allOf": [
               {
                 "$ref": "#/components/schemas/OperationsReport"
-              }
-            ]
-          },
-          "operatorImage": {
-            "nullable": true,
-            "description": "Exact immutable Operator image identity reported by the running process.\nOpaque to OSS beyond forwarding it to `reconcile()`.",
-            "allOf": [
-              {
-                "$ref": "#/components/schemas/OperatorImageReport"
               }
             ]
           },
@@ -6632,6 +6652,20 @@
             "description": "Human-readable summary of the accepted operation."
           }
         }
+      },
+      "DeploymentAcquireUnavailableReason": {
+        "type": "string",
+        "description": "Why an explicitly requested deployment was not acquired.\n\nThese reasons are intentionally bounded and do not identify the session\nthat owns a competing lease.",
+        "enum": [
+          "contended",
+          "deferred",
+          "statusMismatch",
+          "deploymentModelMismatch",
+          "platformMismatch",
+          "setupMethodMismatch",
+          "acquireModeMismatch",
+          "limitReached"
+        ]
       },
       "DeploymentGroupMinimal": {
         "type": "object",
@@ -15359,6 +15393,27 @@
           "tracestate": {
             "type": "string",
             "description": "Optional W3C `tracestate` header value.",
+            "nullable": true
+          }
+        }
+      },
+      "UnacquiredDeployment": {
+        "type": "object",
+        "description": "Atomic outcome for one explicitly requested deployment that was not acquired.",
+        "required": [
+          "deploymentId",
+          "reason"
+        ],
+        "properties": {
+          "deploymentId": {
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/DeploymentAcquireUnavailableReason"
+          },
+          "retryAfter": {
+            "type": "string",
+            "format": "date-time",
             "nullable": true
           }
         }

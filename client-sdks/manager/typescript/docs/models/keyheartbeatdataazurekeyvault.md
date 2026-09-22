@@ -13,8 +13,8 @@ let value: KeyHeartbeatDataAzureKeyVault = {
     ],
     keyType: "<value>",
     status: {
-      health: "healthy",
-      lifecycle: "running",
+      health: "unknown",
+      lifecycle: "deleted",
     },
   },
   provider: "azure-key-vault",

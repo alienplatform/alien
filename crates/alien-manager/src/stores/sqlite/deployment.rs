@@ -1,10 +1,11 @@
 //! SQLite implementation of DeploymentStore.
 
 use async_trait::async_trait;
-use chrono::Utc;
+use chrono::{Duration, Utc};
 use sea_query::{Cond, Expr, IntoCondition, Order, Query, SqliteQueryBuilder};
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use tracing::warn;
+use turso::transaction::TransactionBehavior;
 
 use alien_core::{
     import::ImportSourceKind, DeploymentModel, DeploymentStatus, EnvironmentVariable, Platform,
@@ -127,6 +128,34 @@ impl SqliteDeploymentStore {
                 .add(Expr::col(Deployments::Status).is_in(Self::WORK_STATUSES))
                 .add(retryable_failed)
         }
+    }
+
+    fn acquire_status_matches(
+        status: &str,
+        retry_requested: bool,
+        statuses: Option<&Vec<String>>,
+    ) -> bool {
+        let failed_is_retryable = Self::FAILED_STATUSES.contains(&status) && retry_requested;
+
+        let Some(statuses) = statuses else {
+            return Self::WORK_STATUSES.contains(&status) || failed_is_retryable;
+        };
+
+        let explicitly_active = statuses.iter().any(|requested| {
+            requested == status
+                && (Self::WORK_STATUSES.contains(&status)
+                    || Self::SETUP_TEARDOWN_STATUSES.contains(&status)
+                    || status == Self::RUNNING_STATUS
+                    || (status == "refresh-failed"
+                        && statuses
+                            .iter()
+                            .any(|candidate| candidate == Self::RUNNING_STATUS)))
+        });
+        let explicitly_failed = statuses.iter().any(|requested| requested == status)
+            && Self::FAILED_STATUSES.contains(&status)
+            && retry_requested;
+
+        explicitly_active || explicitly_failed
     }
 
     fn deployment_model_condition(model: DeploymentModel) -> sea_query::Condition {
@@ -1041,11 +1070,24 @@ impl DeploymentStore for SqliteDeploymentStore {
 
     async fn acquire(
         &self,
-        _caller: &crate::auth::Subject,
+        caller: &crate::auth::Subject,
         session: &str,
         filter: &DeploymentFilter,
         limit: u32,
     ) -> Result<Vec<AcquiredDeployment>, AlienError> {
+        Ok(self
+            .acquire_with_reasons(caller, session, filter, limit)
+            .await?
+            .deployments)
+    }
+
+    async fn acquire_with_reasons(
+        &self,
+        _caller: &crate::auth::Subject,
+        session: &str,
+        filter: &DeploymentFilter,
+        limit: u32,
+    ) -> Result<DeploymentAcquireResult, AlienError> {
         let now = Utc::now();
 
         // Stale lock threshold: 5 minutes. If a manager crashed mid-processing,
@@ -1100,14 +1142,24 @@ impl DeploymentStore for SqliteDeploymentStore {
             query.to_string(SqliteQueryBuilder)
         };
 
-        let conn = self.db.conn().lock().await;
-        let mut rows = conn
-            .query(&select_sql, ())
+        // BEGIN IMMEDIATE makes selection, lease mutation, and miss classification
+        // one atomic decision. A follow-up read could otherwise misreport a phase
+        // change as contention (or vice versa).
+        let mut conn = self.db.conn().lock().await;
+        let tx = conn
+            .transaction_with_behavior(TransactionBehavior::Immediate)
             .await
             .into_alien_error()
             .context(GenericError {
-                message: "Failed to query deployments for acquire".to_string(),
+                message: "Failed to begin deployment acquisition transaction".to_string(),
             })?;
+        let mut rows =
+            tx.query(&select_sql, ())
+                .await
+                .into_alien_error()
+                .context(GenericError {
+                    message: "Failed to query deployments for acquire".to_string(),
+                })?;
 
         let mut deployments = Vec::new();
         while let Some(row) = rows.next().await.into_alien_error().context(GenericError {
@@ -1116,9 +1168,7 @@ impl DeploymentStore for SqliteDeploymentStore {
             deployments.push(Self::parse_deployment(&row)?);
         }
 
-        // Must drop rows and conn before calling self.db methods
         drop(rows);
-        drop(conn);
 
         // Lock each acquired deployment, checking rows_affected to avoid phantom locks
         let mut acquired = Vec::new();
@@ -1160,7 +1210,13 @@ impl DeploymentStore for SqliteDeploymentStore {
                 );
             }
 
-            let rows_affected = self.db.execute_returning_rows_affected(&lock_sql).await?;
+            let rows_affected =
+                tx.execute(&lock_sql, ())
+                    .await
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to acquire deployment lease".to_string(),
+                    })?;
 
             // Only count as acquired if our UPDATE actually modified a row.
             // Another caller may have locked it between our SELECT and UPDATE.
@@ -1176,7 +1232,114 @@ impl DeploymentStore for SqliteDeploymentStore {
             }
         }
 
-        Ok(acquired)
+        let acquired_ids = acquired
+            .iter()
+            .map(|item| item.deployment.id.as_str())
+            .collect::<HashSet<_>>();
+        let mut not_acquired = Vec::new();
+
+        if let Some(requested_ids) = filter.deployment_ids.as_ref().filter(|ids| !ids.is_empty()) {
+            let reason_sql = {
+                let id_strs = requested_ids.iter().map(String::as_str).collect::<Vec<_>>();
+                Query::select()
+                    .columns([
+                        Deployments::Id,
+                        Deployments::Status,
+                        Deployments::RetryRequested,
+                        Deployments::LockedBy,
+                        Deployments::LockedAt,
+                        Deployments::NextStepAfter,
+                        Deployments::Platform,
+                        Deployments::StackSettings,
+                    ])
+                    .from(Deployments::Table)
+                    .and_where(Expr::col(Deployments::Id).is_in(id_strs))
+                    .to_string(SqliteQueryBuilder)
+            };
+            let mut reason_rows =
+                tx.query(&reason_sql, ())
+                    .await
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to classify unacquired deployments".to_string(),
+                    })?;
+
+            while let Some(row) =
+                reason_rows
+                    .next()
+                    .await
+                    .into_alien_error()
+                    .context(GenericError {
+                        message: "Failed to read unacquired deployment state".to_string(),
+                    })?
+            {
+                let parser = RowParser::new(&row);
+                let deployment_id = parser.string(0, "id")?;
+                if acquired_ids.contains(deployment_id.as_str()) {
+                    continue;
+                }
+
+                let status = parser.string(1, "status")?;
+                let retry_requested = parser
+                    .optional_i64(2, "retry_requested")?
+                    .unwrap_or_default()
+                    != 0;
+                let locked_by = parser.optional_string(3, "locked_by")?;
+                let locked_at = parser.optional_datetime(4, "locked_at")?;
+                let retry_after = parser.optional_datetime(5, "next_step_after")?;
+                let platform = parser
+                    .string(6, "platform")?
+                    .parse::<Platform>()
+                    .map_err(|error| db_error(&error))?;
+                let stack_settings =
+                    parser.json::<alien_core::StackSettings>(7, "stack_settings")?;
+
+                let reason = if filter
+                    .deployment_model
+                    .is_some_and(|model| model != stack_settings.deployment_model)
+                {
+                    DeploymentAcquireUnavailableReason::DeploymentModelMismatch
+                } else if filter
+                    .platforms
+                    .as_ref()
+                    .is_some_and(|platforms| !platforms.contains(&platform))
+                {
+                    DeploymentAcquireUnavailableReason::PlatformMismatch
+                } else if !Self::acquire_status_matches(
+                    &status,
+                    retry_requested,
+                    explicit_status_filter,
+                ) {
+                    DeploymentAcquireUnavailableReason::StatusMismatch
+                } else if retry_after.is_some_and(|available_at| available_at > now) {
+                    DeploymentAcquireUnavailableReason::Deferred
+                } else if locked_by.is_some()
+                    && locked_at.is_some_and(|locked_at| locked_at >= now - Duration::minutes(5))
+                {
+                    DeploymentAcquireUnavailableReason::Contended
+                } else {
+                    DeploymentAcquireUnavailableReason::LimitReached
+                };
+
+                not_acquired.push(UnacquiredDeployment {
+                    deployment_id,
+                    reason,
+                    retry_after: (reason == DeploymentAcquireUnavailableReason::Deferred)
+                        .then_some(retry_after)
+                        .flatten(),
+                });
+            }
+            drop(reason_rows);
+        }
+
+        tx.commit().await.into_alien_error().context(GenericError {
+            message: "Failed to commit deployment acquisition".to_string(),
+        })?;
+
+        Ok(DeploymentAcquireResult {
+            deployments: acquired,
+            not_acquired,
+        })
     }
 
     async fn reconcile(

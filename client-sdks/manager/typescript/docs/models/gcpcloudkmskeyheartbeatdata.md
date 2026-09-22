@@ -9,8 +9,8 @@ let value: GcpCloudKmsKeyHeartbeatData = {
   cryptoKeyName: "<value>",
   purpose: "<value>",
   status: {
-    health: "healthy",
-    lifecycle: "running",
+    health: "unknown",
+    lifecycle: "deleted",
   },
 };
 ```

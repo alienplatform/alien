@@ -29,13 +29,13 @@ const value: models.AiHeartbeatDataAwsBedrock = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
     stale: true,
   },
@@ -70,13 +70,13 @@ const value: models.AiHeartbeatDataGcpVertex = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
     stale: true,
   },
@@ -110,13 +110,13 @@ const value: models.AiHeartbeatDataAzureFoundry = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
     stale: true,
   },
@@ -133,17 +133,16 @@ const value: models.AiHeartbeatDataExternal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
     ],
-    health: "healthy",
-    lifecycle: "updating",
+    health: "unknown",
+    lifecycle: "running",
     partial: true,
     stale: true,
   },
   backend: "external",
 };
 ```
-

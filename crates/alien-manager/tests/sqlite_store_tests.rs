@@ -948,6 +948,150 @@ async fn concurrent_acquire() {
 }
 
 #[tokio::test]
+async fn explicit_acquire_classifies_unavailable_deployments_atomically() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db.clone());
+    let group_id = create_test_group(&store).await;
+
+    let available = create_test_deployment(&store, &group_id, "available", Platform::Aws).await;
+    let contended = create_test_deployment(&store, &group_id, "contended", Platform::Aws).await;
+    let deferred = create_test_deployment(&store, &group_id, "deferred", Platform::Aws).await;
+    let wrong_status =
+        create_test_deployment(&store, &group_id, "wrong-status", Platform::Aws).await;
+    let wrong_platform =
+        create_test_deployment(&store, &group_id, "wrong-platform", Platform::Gcp).await;
+    let wrong_model = create_test_deployment_with_settings(
+        &store,
+        &group_id,
+        "wrong-model",
+        Platform::Aws,
+        StackSettings {
+            deployment_model: DeploymentModel::Pull,
+            ..StackSettings::default()
+        },
+    )
+    .await;
+
+    let conn = db.conn().lock().await;
+    let locked_at = chrono::Utc::now().to_rfc3339();
+    conn.execute(
+        "UPDATE deployments SET locked_by = 'other-session', locked_at = ?2 WHERE id = ?1",
+        (contended.id.as_str(), locked_at.as_str()),
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "UPDATE deployments SET next_step_after = '2999-01-01T00:00:00Z' WHERE id = ?",
+        [deferred.id.as_str()],
+    )
+    .await
+    .unwrap();
+    conn.execute(
+        "UPDATE deployments SET status = 'running' WHERE id = ?",
+        [wrong_status.id.as_str()],
+    )
+    .await
+    .unwrap();
+    drop(conn);
+
+    let result = store
+        .acquire_with_reasons(
+            &test_subject(),
+            "diagnostic-session",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![
+                    available.id.clone(),
+                    contended.id.clone(),
+                    deferred.id.clone(),
+                    wrong_status.id.clone(),
+                    wrong_platform.id.clone(),
+                    wrong_model.id.clone(),
+                ]),
+                statuses: Some(vec!["pending".to_string()]),
+                platforms: Some(vec![Platform::Aws]),
+                deployment_model: Some(DeploymentModel::Push),
+                ..DeploymentFilter::default()
+            },
+            10,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.deployments.len(), 1);
+    assert_eq!(result.deployments[0].deployment.id, available.id);
+
+    let reasons = result
+        .not_acquired
+        .iter()
+        .map(|item| (item.deployment_id.as_str(), item.reason))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    assert_eq!(
+        reasons.get(contended.id.as_str()),
+        Some(&DeploymentAcquireUnavailableReason::Contended)
+    );
+    assert_eq!(
+        reasons.get(deferred.id.as_str()),
+        Some(&DeploymentAcquireUnavailableReason::Deferred)
+    );
+    assert_eq!(
+        reasons.get(wrong_status.id.as_str()),
+        Some(&DeploymentAcquireUnavailableReason::StatusMismatch)
+    );
+    assert_eq!(
+        reasons.get(wrong_platform.id.as_str()),
+        Some(&DeploymentAcquireUnavailableReason::PlatformMismatch)
+    );
+    assert_eq!(
+        reasons.get(wrong_model.id.as_str()),
+        Some(&DeploymentAcquireUnavailableReason::DeploymentModelMismatch)
+    );
+    assert!(result
+        .not_acquired
+        .iter()
+        .find(|item| item.deployment_id == deferred.id)
+        .and_then(|item| item.retry_after)
+        .is_some());
+    assert!(result
+        .not_acquired
+        .iter()
+        .filter(|item| item.deployment_id != deferred.id)
+        .all(|item| item.retry_after.is_none()));
+}
+
+#[tokio::test]
+async fn explicit_acquire_reports_the_batch_limit_without_claiming_the_extra_row() {
+    let db = fresh_db().await;
+    let store = SqliteDeploymentStore::new(db);
+    let group_id = create_test_group(&store).await;
+    let first = create_test_deployment(&store, &group_id, "first", Platform::Aws).await;
+    let second = create_test_deployment(&store, &group_id, "second", Platform::Aws).await;
+
+    let result = store
+        .acquire_with_reasons(
+            &test_subject(),
+            "limited-session",
+            &DeploymentFilter {
+                deployment_ids: Some(vec![first.id.clone(), second.id.clone()]),
+                ..DeploymentFilter::default()
+            },
+            1,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.deployments.len(), 1);
+    assert_eq!(result.not_acquired.len(), 1);
+    assert_eq!(
+        result.not_acquired[0].reason,
+        DeploymentAcquireUnavailableReason::LimitReached
+    );
+    assert_ne!(
+        result.deployments[0].deployment.id,
+        result.not_acquired[0].deployment_id
+    );
+}
+
+#[tokio::test]
 async fn stale_lock_broken() {
     let db = fresh_db().await;
     let store = SqliteDeploymentStore::new(db.clone());

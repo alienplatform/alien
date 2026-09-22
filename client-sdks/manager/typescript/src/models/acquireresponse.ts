@@ -10,9 +10,20 @@ import {
   AcquiredDeploymentResponse$inboundSchema,
 } from "./acquireddeploymentresponse.js";
 import { SDKValidationError } from "./errors/sdkvalidationerror.js";
+import {
+  UnacquiredDeployment,
+  UnacquiredDeployment$inboundSchema,
+} from "./unacquireddeployment.js";
 
 export type AcquireResponse = {
   deployments: Array<AcquiredDeploymentResponse>;
+  /**
+   * Bounded reasons for explicitly requested deployments that were not acquired.
+   *
+   * @remarks
+   * Empty for discovery-style batch acquisition.
+   */
+  notAcquired?: Array<UnacquiredDeployment> | undefined;
 };
 
 /** @internal */
@@ -21,6 +32,7 @@ export const AcquireResponse$inboundSchema: z.ZodType<
   unknown
 > = z.object({
   deployments: z.array(AcquiredDeploymentResponse$inboundSchema),
+  notAcquired: z.array(UnacquiredDeployment$inboundSchema).optional(),
 });
 
 export function acquireResponseFromJSON(

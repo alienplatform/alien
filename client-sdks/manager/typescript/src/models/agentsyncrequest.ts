@@ -34,6 +34,12 @@ import {
   ResourceHeartbeat$outboundSchema,
 } from "./resourceheartbeat.js";
 
+/**
+ * Inbound sync payload that adds optional receipts without expanding the
+ *
+ * @remarks
+ * public [`AgentSyncRequest`] struct literal.
+ */
 export type AgentSyncRequest = {
   capabilities?: Array<OperatorCapabilityReport> | undefined;
   /**
@@ -48,7 +54,6 @@ export type AgentSyncRequest = {
   executionClaim?: ExecutionClaim | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch> | undefined;
   operationsReport?: OperationsReport | null | undefined;
-  operatorImage?: OperatorImageReport | null | undefined;
   operatorVersion?: string | null | undefined;
   /**
    * Managed resource status samples emitted by pull-mode deployment steps.
@@ -56,6 +61,7 @@ export type AgentSyncRequest = {
   resourceHeartbeats?: Array<ResourceHeartbeat> | undefined;
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
+  operatorImage?: OperatorImageReport | null | undefined;
 };
 
 /** @internal */
@@ -66,11 +72,11 @@ export type AgentSyncRequest$Outbound = {
   executionClaim?: ExecutionClaim$Outbound | null | undefined;
   observedInventoryBatches?: Array<ObservedInventoryBatch$Outbound> | undefined;
   operationsReport?: OperationsReport$Outbound | null | undefined;
-  operatorImage?: OperatorImageReport$Outbound | null | undefined;
   operatorVersion?: string | null | undefined;
   resourceHeartbeats?: Array<ResourceHeartbeat$Outbound> | undefined;
   session?: string | undefined;
   supportsExecutionClaims?: boolean | undefined;
+  operatorImage?: OperatorImageReport$Outbound | null | undefined;
 };
 
 /** @internal */
@@ -85,11 +91,11 @@ export const AgentSyncRequest$outboundSchema: z.ZodType<
   observedInventoryBatches: z.array(ObservedInventoryBatch$outboundSchema)
     .optional(),
   operationsReport: z.nullable(OperationsReport$outboundSchema).optional(),
-  operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
   operatorVersion: z.nullable(z.string()).optional(),
   resourceHeartbeats: z.array(ResourceHeartbeat$outboundSchema).optional(),
   session: z.string().optional(),
   supportsExecutionClaims: z.boolean().optional(),
+  operatorImage: z.nullable(OperatorImageReport$outboundSchema).optional(),
 });
 
 export function agentSyncRequestToJSON(

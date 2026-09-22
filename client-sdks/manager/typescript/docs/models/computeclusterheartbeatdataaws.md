@@ -27,7 +27,7 @@ let value: ComputeClusterHeartbeatDataAws = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },

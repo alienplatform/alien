@@ -28,7 +28,7 @@ const value: models.ComputeClusterHeartbeatDataAws = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -61,7 +61,7 @@ const value: models.ComputeClusterHeartbeatDataGcp = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -94,7 +94,7 @@ const value: models.ComputeClusterHeartbeatDataAzure = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -126,7 +126,7 @@ const value: models.ComputeClusterHeartbeatDataMachines = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -152,7 +152,7 @@ const value: models.ComputeClusterHeartbeatDataLocal = {
     collectionIssues: [
       {
         message: "<value>",
-        reason: "forbidden",
+        reason: "not-installed",
         severity: "info",
         source: "<value>",
       },
@@ -165,4 +165,3 @@ const value: models.ComputeClusterHeartbeatDataLocal = {
   backend: "local",
 };
 ```
-

@@ -8,14 +8,14 @@ import { ResourceHeartbeatDataKey } from "@alienplatform/manager-api/models";
 let value: ResourceHeartbeatDataKey = {
   data: {
     data: {
-      enabled: true,
+      enabled: false,
       keyArn: "<value>",
       keySpec: "<value>",
       keyState: "<value>",
       keyUsage: "<value>",
       status: {
-        health: "healthy",
-        lifecycle: "running",
+        health: "unknown",
+        lifecycle: "deleted",
       },
     },
     provider: "aws-kms",

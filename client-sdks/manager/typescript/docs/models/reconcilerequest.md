@@ -9,17 +9,17 @@ let value: ReconcileRequest = {
   deploymentId: "<id>",
   observedInventoryBatches: [
     {
-      backend: "external",
-      complete: false,
+      backend: "local",
+      complete: true,
       controllerPlatform: "test",
       inventoryScope: "<value>",
-      observedAt: new Date("2026-03-15T15:54:44.264Z"),
+      observedAt: new Date("2024-03-08T01:42:23.482Z"),
       resources: [
         {
-          displayName: "Hunter72",
+          displayName: "Camden_Denesik91",
           health: "unhealthy",
-          lifecycle: "creating",
-          partial: false,
+          lifecycle: "scaling",
+          partial: true,
           providerKind: "<value>",
           providerStale: true,
           rawIdentity: "<value>",
@@ -32,25 +32,25 @@ let value: ReconcileRequest = {
   resourceHeartbeats: [
     {
       backend: "external",
-      controllerPlatform: "local",
+      controllerPlatform: "azure",
       data: {
         data: {
-          data: {
-            enabled: true,
-            keyArn: "<value>",
-            keySpec: "<value>",
-            keyState: "<value>",
-            keyUsage: "<value>",
-            status: {
-              health: "healthy",
-              lifecycle: "running",
-            },
+          functionName: "<value>",
+          functionUrlCorsPresent: false,
+          layerCount: 847359,
+          status: {
+            collectionIssues: [],
+            health: "degraded",
+            lifecycle: "deleted",
+            partial: false,
+            stale: true,
           },
-          provider: "aws-kms",
+          triggerCount: 195082,
+          backend: "awsLambda",
         },
-        resourceType: "key",
+        resourceType: "worker",
       },
-      observedAt: new Date("2026-03-29T08:18:22.529Z"),
+      observedAt: new Date("2026-04-02T11:29:30.200Z"),
       raw: [],
       resourceId: "<id>",
       resourceType: "worker",

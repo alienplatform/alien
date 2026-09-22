@@ -265,6 +265,42 @@ pub struct AcquiredDeployment {
     pub execution_claim: Option<ExecutionClaim>,
 }
 
+/// Why an explicitly requested deployment was not acquired.
+///
+/// These reasons are intentionally bounded and do not identify the session
+/// that owns a competing lease.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum DeploymentAcquireUnavailableReason {
+    Contended,
+    Deferred,
+    StatusMismatch,
+    DeploymentModelMismatch,
+    PlatformMismatch,
+    SetupMethodMismatch,
+    AcquireModeMismatch,
+    LimitReached,
+}
+
+/// Atomic outcome for one explicitly requested deployment that was not acquired.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct UnacquiredDeployment {
+    pub deployment_id: String,
+    pub reason: DeploymentAcquireUnavailableReason,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_after: Option<DateTime<Utc>>,
+}
+
+/// Atomic deployment acquisition result.
+#[derive(Debug, Clone)]
+pub struct DeploymentAcquireResult {
+    pub deployments: Vec<AcquiredDeployment>,
+    pub not_acquired: Vec<UnacquiredDeployment>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase")]
@@ -478,6 +514,24 @@ pub trait DeploymentStore: Send + Sync {
         filter: &DeploymentFilter,
         limit: u32,
     ) -> Result<Vec<AcquiredDeployment>, AlienError>;
+
+    /// Acquire deployments that need processing and explain explicit misses.
+    ///
+    /// Stores can override this when they can classify misses in the same
+    /// transaction as acquisition. The default preserves compatibility for
+    /// stores that only implement acquisition.
+    async fn acquire_with_reasons(
+        &self,
+        caller: &crate::auth::Subject,
+        session: &str,
+        filter: &DeploymentFilter,
+        limit: u32,
+    ) -> Result<DeploymentAcquireResult, AlienError> {
+        Ok(DeploymentAcquireResult {
+            deployments: self.acquire(caller, session, filter, limit).await?,
+            not_acquired: Vec::new(),
+        })
+    }
 
     /// Write new state back after processing.
     async fn reconcile(

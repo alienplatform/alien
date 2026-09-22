@@ -18,18 +18,11 @@ let value: ResourceHeartbeatDataContainer = {
     pods: [],
     replicas: {},
     status: {
-      collectionIssues: [
-        {
-          message: "<value>",
-          reason: "forbidden",
-          severity: "info",
-          source: "<value>",
-        },
-      ],
-      health: "unhealthy",
-      lifecycle: "deleting",
+      collectionIssues: [],
+      health: "degraded",
+      lifecycle: "deleted",
       partial: false,
-      stale: false,
+      stale: true,
     },
     workloadKind: "daemonSet",
     backend: "kubernetes",
