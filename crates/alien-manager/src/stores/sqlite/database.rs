@@ -47,7 +47,7 @@ impl SqliteDatabase {
         // Key creation, plaintext migration, and encrypted database opening are
         // one initialization transaction. Lock before inspecting any of them
         // so a second manager cannot observe a partially-written key file.
-        let migration_lock = acquire_initialization_lock(path).await?;
+        let _migration_lock = acquire_initialization_lock(path).await?;
 
         let key = match configured_key {
             Some(key) => validate_key(key)?.to_string(),
