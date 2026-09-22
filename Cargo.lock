@@ -960,6 +960,7 @@ dependencies = [
  "dockdash",
  "dotenvy",
  "form_urlencoded",
+ "fs2",
  "futures",
  "futures-util",
  "hex",
