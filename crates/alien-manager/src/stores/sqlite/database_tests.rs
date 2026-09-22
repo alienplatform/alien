@@ -75,7 +75,9 @@ async fn missing_generated_key_never_replaces_key_for_encrypted_state() {
     );
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+// Both initialization futures must make progress even when Tokio has only one
+// async worker. The filesystem lock waits on the blocking pool.
+#[tokio::test]
 async fn concurrent_first_open_uses_one_key_and_one_database() {
     let directory = tempfile::tempdir().expect("create temporary directory");
     let path = directory.path().join("manager.db");

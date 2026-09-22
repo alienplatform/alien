@@ -47,16 +47,7 @@ impl SqliteDatabase {
         // Key creation, plaintext migration, and encrypted database opening are
         // one initialization transaction. Lock before inspecting any of them
         // so a second manager cannot observe a partially-written key file.
-        let migration_lock = open_migration_lock(path)?;
-        migration_lock
-            .lock_exclusive()
-            .into_alien_error()
-            .context(GenericError {
-                message: format!(
-                    "Failed to lock manager database migration for '{}'",
-                    path.display()
-                ),
-            })?;
+        let migration_lock = acquire_initialization_lock(path).await?;
 
         let key = match configured_key {
             Some(key) => validate_key(key)?.to_string(),
@@ -203,6 +194,28 @@ fn open_migration_lock(path: &Path) -> Result<File, AlienError> {
                 lock_path.display()
             ),
         })
+}
+
+async fn acquire_initialization_lock(path: &Path) -> Result<File, AlienError> {
+    let path = path.to_owned();
+    tokio::task::spawn_blocking(move || {
+        let migration_lock = open_migration_lock(&path)?;
+        migration_lock
+            .lock_exclusive()
+            .into_alien_error()
+            .context(GenericError {
+                message: format!(
+                    "Failed to lock manager database migration for '{}'",
+                    path.display()
+                ),
+            })?;
+        Ok(migration_lock)
+    })
+    .await
+    .into_alien_error()
+    .context(GenericError {
+        message: "Manager database initialization lock task failed".to_string(),
+    })?
 }
 
 fn validate_key(key: &str) -> Result<&str, AlienError> {
