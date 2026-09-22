@@ -377,7 +377,13 @@ export interface Vault {
 
 /** A live sandbox. */
 export interface SandboxInstance {
-  /** Sandbox id, which is what every later call addresses. */
+  /**
+   * Provider-scoped sandbox id, which is what every later call addresses.
+   *
+   * This returned value is authoritative: a provider may allocate an id different from the one
+   * requested at creation. Persist it durably before starting work so a replacement process can
+   * reconnect with `get` or `getOrCreate`, or clean up with `terminate`.
+   */
   sandboxId: string
   /** Lifecycle state. */
   state: "starting" | "running" | "paused" | "terminated"
@@ -395,6 +401,13 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
+  /**
+   * An existing provider-scoped id to reconnect to, or a requested id when creating.
+   *
+   * Providers are not required to honor a requested creation id. Always read and persist the
+   * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
+   * the id of the resulting sandbox.
+   */
   sandboxId?: string
   tenantKey?: string
   /** Environment every command in the sandbox starts with. */
