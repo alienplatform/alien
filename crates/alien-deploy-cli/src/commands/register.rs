@@ -212,16 +212,16 @@ fn resolve_registration_target(
     embedded_config: Option<&DeployCliConfig>,
     has_secret_inputs: bool,
 ) -> Result<RegistrationTarget> {
-    match (base_url, manager_url) {
-        (Some(base_url), _) => Ok(RegistrationTarget::Platform(
-            base_url.trim_end_matches('/').to_string(),
-        )),
-        (None, Some(_)) if has_secret_inputs => Err(AlienError::new(ErrorData::ValidationError {
+    match (manager_url, base_url) {
+        (Some(_), _) if has_secret_inputs => Err(AlienError::new(ErrorData::ValidationError {
             field: "secret-input-file".to_string(),
             message: "Secret stack inputs require hosted registration through Platform; remove --manager-url and optionally pass --base-url".to_string(),
         })),
-        (None, Some(manager_url)) => Ok(RegistrationTarget::StandaloneManager(
+        (Some(manager_url), _) => Ok(RegistrationTarget::StandaloneManager(
             manager_url.trim_end_matches('/').to_string(),
+        )),
+        (None, Some(base_url)) => Ok(RegistrationTarget::Platform(
+            base_url.trim_end_matches('/').to_string(),
         )),
         (None, None) => Ok(RegistrationTarget::Platform(
             resolve_base_url_option(None, embedded_config)
@@ -334,6 +334,14 @@ fn collect_registration_inputs(
                 operation: format!("parse --input-json value for '{id}'"),
                 reason: format!("Stack input '{id}' is not valid JSON"),
             })?;
+        if !is_supported_stack_input_value(&value) {
+            return Err(AlienError::new(ErrorData::ValidationError {
+                field: "input-json".to_string(),
+                message: format!(
+                    "Stack input '{id}' must be a string, number, boolean, or array of strings"
+                ),
+            }));
+        }
         insert_registration_input(&mut values, id, value)?;
     }
     for input in secret_input_files {
@@ -356,6 +364,13 @@ fn collect_registration_inputs(
     }
 
     Ok(RegistrationInputs { values, secret_ids })
+}
+
+fn is_supported_stack_input_value(value: &JsonValue) -> bool {
+    matches!(
+        value,
+        JsonValue::String(_) | JsonValue::Number(_) | JsonValue::Bool(_)
+    ) || matches!(value, JsonValue::Array(values) if values.iter().all(JsonValue::is_string))
 }
 
 fn parse_input_assignment(input: &str, flag: &str) -> Result<(String, String)> {
@@ -843,30 +858,47 @@ mod tests {
 
     #[test]
     fn standalone_manager_rejects_secret_inputs_before_registration() {
-        let error =
-            resolve_registration_target(Some("https://manager.example.test"), None, None, true)
-                .err()
-                .expect("direct manager import must reject secret inputs");
+        let base_url = "https://api.example.test".to_string();
+        let error = resolve_registration_target(
+            Some("https://manager.example.test"),
+            Some(&base_url),
+            None,
+            true,
+        )
+        .err()
+        .expect("direct manager import must reject secret inputs");
 
         assert_eq!(error.code, "VALIDATION_ERROR");
         assert!(error.message.contains("hosted registration"));
     }
 
     #[test]
-    fn explicit_platform_url_wins_over_an_ambient_manager_url() {
+    fn manager_url_wins_over_a_base_url() {
         let base_url = "https://api.example.test".to_string();
         let target = resolve_registration_target(
             Some("https://manager.example.test"),
             Some(&base_url),
             None,
-            true,
+            false,
         )
-        .expect("explicit hosted registration must accept secret inputs");
+        .expect("manager selection should remain explicit");
 
-        let RegistrationTarget::Platform(url) = target else {
-            panic!("explicit Platform URL must not select the ambient manager");
+        let RegistrationTarget::StandaloneManager(url) = target else {
+            panic!("manager URL must take precedence over a base URL");
         };
-        assert_eq!(url, base_url);
+        assert_eq!(url, "https://manager.example.test");
+    }
+
+    #[test]
+    fn registration_inputs_reject_json_outside_the_platform_contract() {
+        for unsupported in ["null", "{}", "[1,2]", "[\"a\",2]"] {
+            let error = collect_registration_inputs(&[], &[format!("value={unsupported}")], &[])
+                .err()
+                .expect("unsupported JSON must fail before registration");
+
+            assert_eq!(error.code, "VALIDATION_ERROR");
+            assert!(error.message.contains("array of strings"));
+        }
     }
 
     #[test]
