@@ -1,9 +1,8 @@
 //! Register an externally-provisioned stack with a manager.
 //!
-//! Today's only flow: read CloudFormation Stack Outputs via
-//! `DescribeStacks` from the customer's local AWS credentials and POST
-//! the resolved import payload to the manager's `/v1/stack/import`
-//! endpoint.
+//! Reads CloudFormation Stack Outputs via `DescribeStacks` from the
+//! deployer's local AWS credentials. Hosted registration goes through the
+//! Platform import boundary; an explicit manager URL selects standalone mode.
 //!
 //! Future flows (Terraform `alien_deployment` provider, Helm boot path)
 //! land alongside under the same subcommand surface keyed on
@@ -13,12 +12,16 @@ use std::{collections::HashMap, path::PathBuf};
 
 use crate::error::{ErrorData, Result};
 use alien_core::{
+    embedded_config::DeployCliConfig,
     import::{ImportSourceKind, ImportedResource, StackImportRequest},
     ManagementConfig, Platform, ResourceType, StackSettings,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use clap::{Parser, ValueEnum};
+use serde::Serialize;
 use serde_json::Value as JsonValue;
+
+use super::up::resolve_base_url_option;
 
 #[derive(Parser, Debug, Clone)]
 #[command(
@@ -29,7 +32,7 @@ use serde_json::Value as JsonValue;
         --import cloudformation \\
         --stack-name acme-prod \\
         --region us-east-1 \\
-        --manager-url https://manager.example.com \\
+        --base-url https://api.alien.dev \\
         --token dg_... \\
         --input region=us-east-1 \\
         --input-json replicas=3 \\
@@ -55,9 +58,15 @@ pub struct RegisterArgs {
     #[arg(long, env = "AWS_REGION", default_value = "us-east-1")]
     pub region: String,
 
-    /// Manager URL the resolved payload is POSTed to.
+    /// Standalone manager URL. Omit for hosted registration through Platform.
+    /// Direct manager registration cannot accept secret inputs.
     #[arg(long, env = "ALIEN_MANAGER_URL")]
-    pub manager_url: String,
+    pub manager_url: Option<String>,
+
+    /// Platform API URL for hosted registration. Defaults to the URL embedded
+    /// in a packaged CLI, then https://api.alien.dev.
+    #[arg(long, env = "ALIEN_BASE_URL")]
+    pub base_url: Option<String>,
 
     /// Deployment token authorizing the import.
     #[arg(long, env = "ALIEN_TOKEN")]
@@ -87,13 +96,19 @@ pub enum ImportKind {
     Cloudformation,
 }
 
-pub async fn register_command(args: RegisterArgs) -> Result<()> {
+pub async fn register_command(
+    args: RegisterArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
     match args.import {
-        ImportKind::Cloudformation => register_cloudformation(args).await,
+        ImportKind::Cloudformation => register_cloudformation(args, embedded_config).await,
     }
 }
 
-async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
+async fn register_cloudformation(
+    args: RegisterArgs,
+    embedded_config: Option<&DeployCliConfig>,
+) -> Result<()> {
     let stack_name = args.stack_name.clone().ok_or_else(|| {
         AlienError::new(ErrorData::ConfigurationError {
             message: "--stack-name is required for --import cloudformation".to_string(),
@@ -102,12 +117,19 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
 
     let deployment_name = args.name.clone().unwrap_or_else(|| stack_name.clone());
 
-    let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
     let registration_inputs = collect_registration_inputs(
         &args.input_values,
         &args.json_input_values,
         &args.secret_input_files,
     )?;
+    let target = resolve_registration_target(
+        args.manager_url.as_deref(),
+        args.base_url.as_ref(),
+        embedded_config,
+        !registration_inputs.secret_ids.is_empty(),
+    )?;
+
+    let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
     let request = build_import_request(
         &outputs,
         &deployment_name,
@@ -117,17 +139,30 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
 
     if args.dry_run {
         let redacted_request = redact_secret_inputs(&request, &registration_inputs.secret_ids);
-        let json = serde_json::to_string_pretty(&redacted_request)
+        let redacted_body = serialize_registration_request(&target, &redacted_request)?;
+        let json = serde_json::to_string_pretty(&redacted_body)
             .into_alien_error()
             .context(ErrorData::JsonError {
-                operation: "serialize stack import request".to_string(),
-                reason: "Failed to serialize import request".to_string(),
+                operation: "serialize stack registration request".to_string(),
+                reason: "Failed to serialize stack registration request".to_string(),
             })?;
         println!("{json}");
         return Ok(());
     }
 
-    let url = format!("{}/v1/stack/import", args.manager_url.trim_end_matches('/'));
+    let request_body = serialize_registration_request(&target, &request)?;
+    let (url, operation, destination) = match &target {
+        RegistrationTarget::Platform(base_url) => (
+            format!("{base_url}/v1/deployments/import"),
+            "POST /v1/deployments/import",
+            "Platform",
+        ),
+        RegistrationTarget::StandaloneManager(manager_url) => (
+            format!("{manager_url}/v1/stack/import"),
+            "POST /v1/stack/import",
+            "standalone manager",
+        ),
+    };
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()
@@ -141,29 +176,127 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
     let response = client
         .post(&url)
         .header("Authorization", format!("Bearer {}", args.token))
-        .json(&request)
+        .json(&request_body)
         .send()
         .await
         .into_alien_error()
         .context(ErrorData::HttpError {
-            operation: "POST /v1/stack/import".to_string(),
+            operation: operation.to_string(),
             url: url.clone(),
-            reason: "Manager request failed".to_string(),
+            reason: format!("{destination} request failed"),
         })?;
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
     if !status.is_success() {
         return Err(AlienError::new(ErrorData::HttpError {
-            operation: "POST /v1/stack/import".to_string(),
+            operation: operation.to_string(),
             url,
-            reason: format!("Manager returned {status}: {body}"),
+            reason: format!("{destination} returned {status}: {body}"),
         }));
     }
 
-    println!("Registered stack '{stack_name}' with the manager at {url}");
+    println!("Registered stack '{stack_name}' through {destination} at {url}");
     println!("{body}");
     Ok(())
+}
+
+enum RegistrationTarget {
+    Platform(String),
+    StandaloneManager(String),
+}
+
+fn resolve_registration_target(
+    manager_url: Option<&str>,
+    base_url: Option<&String>,
+    embedded_config: Option<&DeployCliConfig>,
+    has_secret_inputs: bool,
+) -> Result<RegistrationTarget> {
+    match (base_url, manager_url) {
+        (Some(base_url), _) => Ok(RegistrationTarget::Platform(
+            base_url.trim_end_matches('/').to_string(),
+        )),
+        (None, Some(_)) if has_secret_inputs => Err(AlienError::new(ErrorData::ValidationError {
+            field: "secret-input-file".to_string(),
+            message: "Secret stack inputs require hosted registration through Platform; remove --manager-url and optionally pass --base-url".to_string(),
+        })),
+        (None, Some(manager_url)) => Ok(RegistrationTarget::StandaloneManager(
+            manager_url.trim_end_matches('/').to_string(),
+        )),
+        (None, None) => Ok(RegistrationTarget::Platform(
+            resolve_base_url_option(None, embedded_config)
+                .trim_end_matches('/')
+                .to_string(),
+        )),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardImportRequest<'a> {
+    mode: &'static str,
+    source: ForwardImportSource<'a>,
+    input_values: &'a HashMap<String, JsonValue>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ForwardImportSource<'a> {
+    deployment_name: &'a str,
+    resource_prefix: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source_kind: Option<ImportSourceKind>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    setup_metadata: Option<&'a JsonValue>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    release_id: Option<&'a str>,
+    platform: Platform,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    base_platform: Option<Platform>,
+    region: &'a str,
+    setup_target: &'a str,
+    setup_import_format_version: u32,
+    setup_fingerprint: &'a str,
+    setup_fingerprint_version: u32,
+    stack_settings: &'a StackSettings,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    management_config: Option<&'a ManagementConfig>,
+    resources: &'a [ImportedResource],
+}
+
+fn serialize_registration_request(
+    target: &RegistrationTarget,
+    request: &StackImportRequest,
+) -> Result<JsonValue> {
+    match target {
+        RegistrationTarget::Platform(_) => serde_json::to_value(ForwardImportRequest {
+            mode: "forward",
+            source: ForwardImportSource {
+                deployment_name: &request.deployment_name,
+                resource_prefix: &request.resource_prefix,
+                source_kind: request.source_kind,
+                setup_metadata: request.setup_metadata.as_ref(),
+                release_id: request.release_id.as_deref(),
+                platform: request.platform,
+                base_platform: request.base_platform,
+                region: &request.region,
+                setup_target: &request.setup_target,
+                setup_import_format_version: request.setup_import_format_version,
+                setup_fingerprint: &request.setup_fingerprint,
+                setup_fingerprint_version: request.setup_fingerprint_version,
+                stack_settings: &request.stack_settings,
+                management_config: request.management_config.as_ref(),
+                resources: &request.resources,
+            },
+            input_values: &request.input_values,
+        }),
+        RegistrationTarget::StandaloneManager(_) => serde_json::to_value(request),
+    }
+    .into_alien_error()
+    .context(ErrorData::JsonError {
+        operation: "serialize stack registration request".to_string(),
+        reason: "Failed to serialize stack registration request".to_string(),
+    })
 }
 
 struct RegistrationInputs {
@@ -656,7 +789,32 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_redacts_secret_inputs_without_changing_the_request() {
+    fn platform_forward_request_preserves_typed_inputs_without_manager_credentials() {
+        let secret = "private-value";
+        let inputs = HashMap::from([
+            ("region".to_string(), serde_json::json!("us-east-1")),
+            ("apiKey".to_string(), serde_json::json!(secret)),
+        ]);
+        let request =
+            build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
+
+        let body = serialize_registration_request(
+            &RegistrationTarget::Platform("https://api.example.test".to_string()),
+            &request,
+        )
+        .expect("serialize Platform forward import");
+
+        assert_eq!(body["mode"], "forward");
+        assert_eq!(body["source"]["deploymentName"], "app");
+        assert_eq!(body["source"]["basePlatform"], "aws");
+        assert_eq!(body["inputValues"]["apiKey"], secret);
+        assert_eq!(body["inputValues"]["region"], "us-east-1");
+        assert!(body.get("deploymentGroupToken").is_none());
+        assert!(body["source"].get("deploymentGroupToken").is_none());
+    }
+
+    #[test]
+    fn hosted_dry_run_redacts_secret_inputs_without_changing_the_request() {
         let secret = "private-value";
         let inputs = HashMap::from([
             ("region".to_string(), serde_json::json!("us-east-1")),
@@ -666,7 +824,12 @@ mod tests {
             build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
 
         let redacted = redact_secret_inputs(&request, &["apiKey".to_string()]);
-        let output = serde_json::to_string(&redacted).expect("serialize dry run");
+        let body = serialize_registration_request(
+            &RegistrationTarget::Platform("https://api.example.test".to_string()),
+            &redacted,
+        )
+        .expect("serialize redacted Platform request");
+        let output = serde_json::to_string(&body).expect("serialize dry run");
 
         assert!(!output.contains(secret));
         assert!(output.contains("[REDACTED]"));
@@ -676,6 +839,34 @@ mod tests {
             serde_json::json!("us-east-1")
         );
         assert!(redacted.deployment_group_token.is_empty());
+    }
+
+    #[test]
+    fn standalone_manager_rejects_secret_inputs_before_registration() {
+        let error =
+            resolve_registration_target(Some("https://manager.example.test"), None, None, true)
+                .err()
+                .expect("direct manager import must reject secret inputs");
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("hosted registration"));
+    }
+
+    #[test]
+    fn explicit_platform_url_wins_over_an_ambient_manager_url() {
+        let base_url = "https://api.example.test".to_string();
+        let target = resolve_registration_target(
+            Some("https://manager.example.test"),
+            Some(&base_url),
+            None,
+            true,
+        )
+        .expect("explicit hosted registration must accept secret inputs");
+
+        let RegistrationTarget::Platform(url) = target else {
+            panic!("explicit Platform URL must not select the ambient manager");
+        };
+        assert_eq!(url, base_url);
     }
 
     #[test]
