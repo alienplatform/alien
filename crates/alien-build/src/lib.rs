@@ -1167,8 +1167,10 @@ fn add_push_target_resource(
 /// Returns an error if any compute resource still has unbuilt source code — that means
 /// `alien build` was not run first.
 ///
-/// To add support for a new compute resource type, add an `else if` branch here and in
-/// [`apply_pushed_images`].
+/// To add support for a new compute resource type, add an `else if` branch here, in
+/// [`apply_pushed_images`], and in the three push-cache sites in the CLI's `release`: the prebuilt
+/// rebase, the cache apply, and the cache collect. A type missing from those three still pushes,
+/// but re-pushes on every release.
 fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
     let mut targets = Vec::new();
 
@@ -1300,8 +1302,8 @@ fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
 
 /// Applies pushed registry URIs back to their respective resources in the stack.
 ///
-/// To add support for a new compute resource type, add an `else if` branch here and in
-/// [`collect_push_targets`].
+/// To add support for a new compute resource type, add an `else if` branch here, in
+/// [`collect_push_targets`], and in the three push-cache sites in the CLI's `release`.
 fn apply_pushed_images(stack: &mut Stack, updates: Vec<(String, String)>) {
     for (resource_id, image_uri) in updates {
         if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id) {
