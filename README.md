@@ -69,6 +69,7 @@ alien logs --source ai-gateway --status provider-error --provider anthropic --js
 alien deployments status production/api
 alien deployments resources production/api --json
 alien deployments wait production/api --for ready --timeout 10m --json
+alien deployments redeploy production/api --wait --timeout 10m --json
 
 # Read privacy-safe aggregate usage.
 alien usage ai --range 7d --json

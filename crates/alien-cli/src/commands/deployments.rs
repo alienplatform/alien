@@ -19,7 +19,9 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentListItemResponse, GetDeploymentId, GetDeploymentWorkspace,
+    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
+    DeploymentListItemResponse, DeploymentUpdateOperationStatus,
+    DeploymentUpdateOperationSummaryInner, GetDeploymentId, GetDeploymentWorkspace,
     ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
     PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
 };
@@ -33,6 +35,43 @@ struct DeploymentMutationOutput<'a> {
     deployment_id: &'a str,
     action: &'static str,
     accepted: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeploymentRedeployOutput {
+    deployment_id: String,
+    action: &'static str,
+    accepted: bool,
+    operation_id: String,
+    operation_status: String,
+    successful: bool,
+    elapsed_seconds: f64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdateOperationDisposition {
+    Pending,
+    Succeeded,
+    Failed,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PlatformRedeployOptions {
+    wait: bool,
+    timeout: Duration,
+    interval: Duration,
+    json: bool,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UpdateOperationWaitOptions<'a> {
+    workspace: &'a str,
+    deployment_id: &'a str,
+    operation_id: &'a str,
+    timeout: Duration,
+    interval: Duration,
+    json: bool,
 }
 
 /// Telemetry (monitoring) mode for a deployment.
@@ -245,6 +284,15 @@ pub enum DeploymentsCmd {
     Redeploy {
         /// Deployment ID, or <deployment-group-name>/<deployment-name>
         id: String,
+        /// Wait for this exact redeploy operation to finish (Platform mode only)
+        #[arg(long)]
+        wait: bool,
+        /// Maximum wait duration when --wait is used
+        #[arg(long, default_value = "10m", value_parser = parse_wait_duration)]
+        timeout: Duration,
+        /// Poll interval when --wait is used
+        #[arg(long, default_value = "2s", value_parser = parse_wait_duration)]
+        interval: Duration,
         /// Print the updated deployment as machine-readable JSON
         #[arg(long)]
         json: bool,
@@ -460,19 +508,40 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             retry_deployment_task(&manager, &id, json).await
         }
-        DeploymentsCmd::Redeploy { id, json } => {
+        DeploymentsCmd::Redeploy {
+            id,
+            wait,
+            timeout,
+            interval,
+            json,
+        } => {
             #[cfg(feature = "platform")]
             if ctx.is_platform() {
-                let resolved = crate::platform_deployment_resolver::resolve_with_manager(
-                    &ctx, &id, None, !json,
+                let workspace = ctx.resolve_workspace_with_bootstrap(!json).await?;
+                let client = ctx.sdk_client().await?;
+                let deployment = crate::platform_deployment_resolver::resolve(
+                    &ctx, &client, &workspace, &id, None, !json,
                 )
                 .await?;
-                return redeploy_deployment_task(
-                    &resolved.manager.client,
-                    &String::from(resolved.detail.id),
-                    json,
+                return redeploy_platform_deployment_task(
+                    &client,
+                    workspace.as_str(),
+                    &deployment,
+                    PlatformRedeployOptions {
+                        wait,
+                        timeout,
+                        interval,
+                        json,
+                    },
                 )
                 .await;
+            }
+            if wait {
+                return Err(AlienError::new(ErrorData::ValidationError {
+                    field: "wait".to_string(),
+                    message: "Operation-correlated redeploy waiting requires Platform mode."
+                        .to_string(),
+                }));
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
             redeploy_deployment_task(&manager, &id, json).await
@@ -1457,6 +1526,218 @@ async fn redeploy_deployment_task(
     Ok(())
 }
 
+async fn redeploy_platform_deployment_task(
+    client: &alien_platform_api::Client,
+    workspace: &str,
+    deployment: &DeploymentDetailResponse,
+    options: PlatformRedeployOptions,
+) -> Result<()> {
+    let deployment_id = String::from(deployment.id.clone());
+    if !options.json {
+        println!(
+            "{}",
+            contextual_heading("Redeploying deployment", &deployment.name, &[])
+        );
+        println!("{} {}", dim_label("ID"), deployment_id);
+        println!("{} {}", dim_label("Status"), deployment.status);
+    }
+
+    let response = client
+        .redeploy_deployment()
+        .id(deployment_id.as_str())
+        .workspace(workspace)
+        .send()
+        .await
+        .into_sdk_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "redeploying deployment".to_string(),
+            url: None,
+        })?
+        .into_inner();
+    let operation = response.operation.0.ok_or_else(|| {
+        AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!(
+                "Platform accepted redeploy for {deployment_id} without an operation identity"
+            ),
+            url: None,
+        })
+    })?;
+    let operation_id = String::from(operation.id.clone());
+
+    if !options.wait {
+        return print_redeploy_result(&deployment_id, &operation, Duration::ZERO, options.json);
+    }
+
+    wait_for_platform_update_operation(
+        client,
+        operation,
+        UpdateOperationWaitOptions {
+            workspace,
+            deployment_id: &deployment_id,
+            operation_id: &operation_id,
+            timeout: options.timeout,
+            interval: options.interval,
+            json: options.json,
+        },
+    )
+    .await
+}
+
+async fn wait_for_platform_update_operation(
+    client: &alien_platform_api::Client,
+    mut operation: DeploymentUpdateOperationSummaryInner,
+    options: UpdateOperationWaitOptions<'_>,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_status = None;
+    loop {
+        if !options.json && last_status != Some(operation.status) {
+            eprintln!("{} {}", dim_label("Redeploy operation:"), operation.status);
+            last_status = Some(operation.status);
+        }
+
+        match update_operation_disposition(operation.status) {
+            UpdateOperationDisposition::Succeeded => {
+                return print_redeploy_result(
+                    options.deployment_id,
+                    &operation,
+                    started.elapsed(),
+                    options.json,
+                );
+            }
+            UpdateOperationDisposition::Failed => {
+                return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "Redeploy operation {} for deployment {} reached {}{}",
+                        options.operation_id,
+                        options.deployment_id,
+                        operation.status,
+                        operation
+                            .action_required
+                            .as_deref()
+                            .map(|action| format!(": {action}"))
+                            .unwrap_or_default()
+                    ),
+                    url: None,
+                }));
+            }
+            UpdateOperationDisposition::Pending => {}
+        }
+
+        if started.elapsed() >= options.timeout {
+            return Err(AlienError::new(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "Timed out after {:.1}s waiting for redeploy operation {} on deployment {} (last status: {})",
+                    options.timeout.as_secs_f64(),
+                    options.operation_id,
+                    options.deployment_id,
+                    operation.status
+                ),
+                url: None,
+            }));
+        }
+        tokio::time::sleep(
+            options
+                .interval
+                .min(options.timeout.saturating_sub(started.elapsed())),
+        )
+        .await;
+
+        let current = client
+            .get_deployment()
+            .id(options.deployment_id)
+            .workspace(options.workspace)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "reading redeploy operation {} for deployment {}",
+                    options.operation_id, options.deployment_id
+                ),
+                url: None,
+            })?
+            .into_inner();
+        operation = find_update_operation(&current, options.operation_id)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "Redeploy operation {} disappeared from deployment {} update state",
+                        options.operation_id, options.deployment_id
+                    ),
+                    url: None,
+                })
+            })?;
+    }
+}
+
+fn find_update_operation<'a>(
+    deployment: &'a DeploymentDetailResponse,
+    operation_id: &str,
+) -> Option<&'a DeploymentUpdateOperationSummaryInner> {
+    find_update_operation_in_state(deployment.update_state.as_ref(), operation_id)
+}
+
+fn find_update_operation_in_state<'a>(
+    state: Option<&'a DeploymentDetailResponseUpdateState>,
+    operation_id: &str,
+) -> Option<&'a DeploymentUpdateOperationSummaryInner> {
+    let state = state?;
+    [&state.active, &state.next, &state.latest]
+        .into_iter()
+        .filter_map(|operation| operation.0.as_ref())
+        .find(|operation| operation.id.as_str() == operation_id)
+}
+
+fn update_operation_disposition(
+    status: DeploymentUpdateOperationStatus,
+) -> UpdateOperationDisposition {
+    match status {
+        DeploymentUpdateOperationStatus::Queued | DeploymentUpdateOperationStatus::Applying => {
+            UpdateOperationDisposition::Pending
+        }
+        DeploymentUpdateOperationStatus::Succeeded => UpdateOperationDisposition::Succeeded,
+        DeploymentUpdateOperationStatus::Blocked
+        | DeploymentUpdateOperationStatus::Failed
+        | DeploymentUpdateOperationStatus::Superseded => UpdateOperationDisposition::Failed,
+    }
+}
+
+fn print_redeploy_result(
+    deployment_id: &str,
+    operation: &DeploymentUpdateOperationSummaryInner,
+    elapsed: Duration,
+    json: bool,
+) -> Result<()> {
+    let output = DeploymentRedeployOutput {
+        deployment_id: deployment_id.to_string(),
+        action: "redeploy",
+        accepted: true,
+        operation_id: String::from(operation.id.clone()),
+        operation_status: operation.status.to_string(),
+        successful: operation.status == DeploymentUpdateOperationStatus::Succeeded,
+        elapsed_seconds: elapsed.as_secs_f64(),
+    };
+    if json {
+        return print_json(&output);
+    }
+    if output.successful {
+        println!(
+            "{}",
+            success_line(&format!(
+                "Redeploy operation {} succeeded in {:.1}s.",
+                output.operation_id, output.elapsed_seconds
+            ))
+        );
+    } else {
+        println!("{}", success_line("Redeploy requested."));
+        println!("{} {}", dim_label("Operation"), output.operation_id);
+        println!("{} {}", dim_label("Status"), output.operation_status);
+    }
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------
 // Display helpers
 // ---------------------------------------------------------------------------
@@ -2427,6 +2708,30 @@ mod tests {
                 ..
             }
         ));
+
+        let redeploy = DeploymentsArgs::try_parse_from([
+            "deployments",
+            "redeploy",
+            "production/api",
+            "--wait",
+            "--timeout",
+            "45m",
+            "--interval",
+            "5s",
+            "--json",
+        ])
+        .expect("operation-correlated redeploy wait should parse");
+        assert!(matches!(
+            redeploy.cmd,
+            DeploymentsCmd::Redeploy {
+                wait: true,
+                timeout,
+                interval,
+                json: true,
+                ..
+            } if timeout == Duration::from_secs(45 * 60)
+                && interval == Duration::from_secs(5)
+        ));
     }
 
     #[test]
@@ -2464,6 +2769,69 @@ mod tests {
         assert_eq!(parse_wait_duration("2m").unwrap(), Duration::from_secs(120));
         assert!(parse_wait_duration("0s").is_err());
         assert!(parse_wait_duration("30").is_err());
+    }
+
+    #[test]
+    fn update_operation_disposition_is_terminal_only_for_final_states() {
+        assert_eq!(
+            update_operation_disposition(DeploymentUpdateOperationStatus::Queued),
+            UpdateOperationDisposition::Pending
+        );
+        assert_eq!(
+            update_operation_disposition(DeploymentUpdateOperationStatus::Applying),
+            UpdateOperationDisposition::Pending
+        );
+        assert_eq!(
+            update_operation_disposition(DeploymentUpdateOperationStatus::Succeeded),
+            UpdateOperationDisposition::Succeeded
+        );
+        for status in [
+            DeploymentUpdateOperationStatus::Blocked,
+            DeploymentUpdateOperationStatus::Failed,
+            DeploymentUpdateOperationStatus::Superseded,
+        ] {
+            assert_eq!(
+                update_operation_disposition(status),
+                UpdateOperationDisposition::Failed
+            );
+        }
+    }
+
+    #[test]
+    fn update_operation_lookup_is_bound_to_the_requested_id() {
+        let requested_id = format!("duop_{}", "a".repeat(28));
+        let other_id = format!("duop_{}", "b".repeat(28));
+        let operation = |id: &str, status| {
+            alien_platform_api::types::DeploymentUpdateOperationSummaryInner::builder()
+                .id(id)
+                .status(status)
+                .reasons(vec![
+                    alien_platform_api::types::DeploymentUpdateReason::Redeploy,
+                ])
+                .changed_keys(Vec::<String>::new())
+                .requested_at(chrono::Utc::now())
+                .target_release_id(format!("rel_{}", "a".repeat(28)))
+                .try_into()
+                .expect("valid operation")
+        };
+        let state = DeploymentDetailResponseUpdateState::builder()
+            .active(Some(operation(
+                &other_id,
+                DeploymentUpdateOperationStatus::Applying,
+            )))
+            .next(None::<DeploymentUpdateOperationSummaryInner>)
+            .latest(Some(operation(
+                &requested_id,
+                DeploymentUpdateOperationStatus::Succeeded,
+            )))
+            .try_into()
+            .expect("valid update state");
+
+        let found = find_update_operation_in_state(Some(&state), &requested_id)
+            .expect("requested operation should be found");
+        assert_eq!(found.id.as_str(), requested_id);
+        assert_eq!(found.status, DeploymentUpdateOperationStatus::Succeeded);
+        assert!(find_update_operation_in_state(Some(&state), "duop_missing").is_none());
     }
 
     #[test]

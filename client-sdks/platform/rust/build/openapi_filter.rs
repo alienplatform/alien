@@ -72,6 +72,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "listReleases",
     "pinDeploymentRelease",
     "promoteRelease",
+    "redeployDeployment",
     "resolve",
     "retryDeployment",
     "revokeAPIKey",
