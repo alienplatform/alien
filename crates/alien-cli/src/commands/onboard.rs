@@ -492,6 +492,7 @@ fn platform_onboard_deployment_setup_config(
             }),
         }),
         environment_variables,
+        validated_release_selection: None,
     })
 }
 
