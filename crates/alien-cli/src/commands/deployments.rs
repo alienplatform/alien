@@ -20,11 +20,11 @@ use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
-    DeploymentListItemResponse, DeploymentUpdateOperationStatus,
-    DeploymentUpdateOperationSummaryInner, GetDeploymentId, GetDeploymentWorkspace,
-    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
-    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
+    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentListItemResponse,
+    DeploymentUpdateOperationStatus, DeploymentUpdateOperationSummaryInner, GetDeploymentId,
+    GetDeploymentWorkspace, ListDeploymentsIncludeItem, NewDeploymentRequest,
+    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
+    PinReleaseRequestReleaseId,
 };
 use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
@@ -1590,9 +1590,10 @@ async fn wait_for_platform_update_operation(
     options: UpdateOperationWaitOptions<'_>,
 ) -> Result<()> {
     let (operation, elapsed) = await_update_operation(operation, options, || async {
-        let current = client
-            .get_deployment()
+        client
+            .get_deployment_update_operation()
             .id(options.deployment_id)
+            .operation_id(options.operation_id)
             .workspace(options.workspace)
             .send()
             .await
@@ -1604,13 +1605,12 @@ async fn wait_for_platform_update_operation(
                 ),
                 url: None,
             })?
-            .into_inner();
-        find_update_operation(&current, options.operation_id)
-            .cloned()
+            .into_inner()
+            .0
             .ok_or_else(|| {
                 AlienError::new(ErrorData::ApiRequestFailed {
                     message: format!(
-                        "Redeploy operation {} disappeared from deployment {} update state",
+                        "Platform returned an empty redeploy operation {} for deployment {}",
                         options.operation_id, options.deployment_id
                     ),
                     url: None,
@@ -1690,24 +1690,6 @@ fn redeploy_wait_timeout_error(
         ),
         url: None,
     })
-}
-
-fn find_update_operation<'a>(
-    deployment: &'a DeploymentDetailResponse,
-    operation_id: &str,
-) -> Option<&'a DeploymentUpdateOperationSummaryInner> {
-    find_update_operation_in_state(deployment.update_state.as_ref(), operation_id)
-}
-
-fn find_update_operation_in_state<'a>(
-    state: Option<&'a DeploymentDetailResponseUpdateState>,
-    operation_id: &str,
-) -> Option<&'a DeploymentUpdateOperationSummaryInner> {
-    let state = state?;
-    [&state.active, &state.next, &state.latest]
-        .into_iter()
-        .filter_map(|operation| operation.0.as_ref())
-        .find(|operation| operation.id.as_str() == operation_id)
 }
 
 fn update_operation_disposition(
@@ -2832,30 +2814,6 @@ mod tests {
                 UpdateOperationDisposition::Failed
             );
         }
-    }
-
-    #[test]
-    fn update_operation_lookup_is_bound_to_the_requested_id() {
-        let requested_id = format!("duop_{}", "a".repeat(28));
-        let other_id = format!("duop_{}", "b".repeat(28));
-        let state = DeploymentDetailResponseUpdateState::builder()
-            .active(Some(update_operation(
-                &other_id,
-                DeploymentUpdateOperationStatus::Applying,
-            )))
-            .next(None::<DeploymentUpdateOperationSummaryInner>)
-            .latest(Some(update_operation(
-                &requested_id,
-                DeploymentUpdateOperationStatus::Succeeded,
-            )))
-            .try_into()
-            .expect("valid update state");
-
-        let found = find_update_operation_in_state(Some(&state), &requested_id)
-            .expect("requested operation should be found");
-        assert_eq!(found.id.as_str(), requested_id);
-        assert_eq!(found.status, DeploymentUpdateOperationStatus::Succeeded);
-        assert!(find_update_operation_in_state(Some(&state), "duop_missing").is_none());
     }
 
     #[tokio::test]

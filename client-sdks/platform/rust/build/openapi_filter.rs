@@ -52,6 +52,7 @@ pub const REQUIRED_OPERATION_IDS: &[&str] = &[
     "getDeploymentGroup",
     "getDeploymentGroupByExternalId",
     "getDeploymentInfo",
+    "getDeploymentUpdateOperation",
     "getManager",
     "getProject",
     "getProjectCapabilityOverview",
