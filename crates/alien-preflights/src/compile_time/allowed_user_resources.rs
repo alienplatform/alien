@@ -50,6 +50,14 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
+            let configured_id = resource_entry.config.id();
+
+            if resource_id != configured_id {
+                errors.push(format!(
+                    "Resource map key '{resource_id}' does not match its configured ID '{configured_id}'"
+                ));
+                continue;
+            }
 
             if resource_id == SECRETS_VAULT_ID {
                 errors.push(format!(
@@ -236,6 +244,39 @@ mod tests {
         assert_eq!(result.errors.len(), 1);
         assert!(result.errors[0].contains("reserved for deployment secret delivery"));
         assert!(result.errors[0].contains("different ID"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_reserved_embedded_id_hidden_behind_another_map_key() {
+        let vault = alien_core::Vault::new(SECRETS_VAULT_ID.to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            "application-vault".to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("resource identity validation should run");
+
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("map key 'application-vault'"));
+        assert!(result.errors[0].contains("configured ID 'secrets'"));
     }
 
     #[tokio::test]
