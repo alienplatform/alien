@@ -1107,7 +1107,7 @@ fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
             ResourceLifecycle::Frozen,
         )
         .build();
-    let (template, _yaml) = render_built_ins_template(
+    let (template, yaml) = render_built_ins_template(
         &stack,
         StackSettings::default(),
         custom_resource_registration(),
@@ -1115,11 +1115,26 @@ fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
         "aws",
         "live remote sandbox",
     );
+    // The snapshot is what holds the set closed. A `contains` assertion is monotone, so it
+    // passes just as happily on a widened action list or a wildcarded image ARN.
+    insta::assert_snapshot!("remote_sandbox_grant_live_aws", yaml);
 
     let policy = template
         .resources
         .get("AgentsRemoteExecutePolicy")
         .expect("a Live remote sandbox must still receive the remote grant");
+    assert_eq!(policy.resource_type, "AWS::IAM::Policy");
+    let roles =
+        serde_json::to_string(policy.properties.get("Roles").expect("Roles")).expect("serializes");
+    assert!(
+        roles.contains("AccessRole"),
+        "the grant belongs to the shared Remote Bindings identity: {roles}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "setup renders the build role for a Live sandbox too, which is what the grant attaches beside"
+    );
+
     let document = serde_json::to_string(
         policy
             .properties
@@ -1130,6 +1145,9 @@ fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
     for action in [
         "lambda:RunMicrovm",
         "lambda:TerminateMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:GetMicrovm",
         "lambda:CreateMicrovmAuthToken",
         "lambda:PassNetworkConnector",
     ] {

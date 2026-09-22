@@ -2006,7 +2006,7 @@ mod tests {
 
         let mut bundle_stack = Stack::new("cache-test".to_string())
             .add(
-                sandbox_with_image("s3://bundles-us-east-1/sandbox-bundle/abc/bundle.zip"),
+                sandbox_with_image("s3://acme-bundles-us-east-1/sandbox-bundle/abc/bundle.zip"),
                 ResourceLifecycle::Frozen,
             )
             .build();

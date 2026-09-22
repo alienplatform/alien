@@ -77,8 +77,8 @@ pub fn stack_targets_native_host_binaries(stack: &Stack) -> bool {
                 DaemonCode::Image { .. } => None,
             }
         } else {
-            // A sandbox belongs to no runner group: its base image is built from a Dockerfile,
-            // which produces a linux image and never a host binary.
+            // No other resource contributes a host binary. A sandbox is the one worth naming:
+            // its base image is a Dockerfile build, so the missing arm is deliberate.
             None
         };
         matches!(

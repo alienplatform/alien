@@ -1353,10 +1353,9 @@ fn add_push_target_resource(
 /// Returns an error if any compute resource still has unbuilt source code — that means
 /// `alien build` was not run first.
 ///
-/// To add support for a new compute resource type, add an `else if` branch here, in
-/// [`apply_pushed_images`], and in the three push-cache sites in the CLI's `release`: the prebuilt
-/// rebase, the cache apply, and the cache collect. A type missing from those three still pushes,
-/// but re-pushes on every release.
+/// To add a compute resource type, branch here, in [`apply_pushed_images`], and in the CLI
+/// `release` push-cache sites: prebuilt rebase, cache apply, cache collect. One missing from
+/// those three still pushes, but re-pushes on every release.
 fn collect_push_targets(stack: &Stack) -> Result<Vec<ResourcePushTarget>> {
     let mut targets = Vec::new();
 
@@ -3223,10 +3222,6 @@ fn effective_source_base_images(
     )
 }
 
-/// Apply a feature-versioned generic runtime base only to non-TypeScript
-/// Workers. TypeScript has its own language-base override, resolved by
-/// `typescript_worker_base_images`, so a mixed-language stack never places
-/// Rust applications on the TypeScript image or vice versa.
 fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
     match toolchain {
         ToolchainConfig::Rust { .. } => "rust",
@@ -3236,6 +3231,10 @@ fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
     }
 }
 
+/// Apply a feature-versioned generic runtime base only to non-TypeScript
+/// Workers. TypeScript has its own language-base override, resolved by
+/// `typescript_worker_base_images`, so a mixed-language stack never places
+/// Rust applications on the TypeScript image or vice versa.
 fn base_images_for_workload(
     base_images: &[String],
     override_base_image: Option<&str>,

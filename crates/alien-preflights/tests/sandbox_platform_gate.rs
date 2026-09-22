@@ -7,7 +7,7 @@
 
 use alien_core::{
     PermissionProfile, PermissionsConfig, Platform, Sandbox, SandboxCode, SandboxEgress,
-    SandboxLifecyclePolicy, SandboxLimits, Stack, Worker, WorkerCode,
+    SandboxLifecyclePolicy, SandboxLimits, Stack, ToolchainConfig, Worker, WorkerCode,
 };
 use alien_preflights::runner::PreflightRunner;
 
@@ -89,4 +89,47 @@ async fn the_same_stack_without_ceilings_passes_preflight() {
         summary.success,
         "no declaration, nothing to refuse: {summary:?}"
     );
+}
+
+fn source_sandbox() -> Sandbox {
+    Sandbox::new("agent".to_string())
+        .code(SandboxCode::Source {
+            src: "./sandbox".to_string(),
+            toolchain: ToolchainConfig::Docker {
+                dockerfile: None,
+                target: None,
+                build_args: None,
+            },
+        })
+        .egress(SandboxEgress::Deny)
+        .lifecycle(SandboxLifecyclePolicy {
+            max_lifetime_seconds: None,
+            idle_pause_seconds: None,
+        })
+        .build()
+}
+
+/// `alien build` turns a sandbox's source into an image on AWS, and nowhere else. Driven through
+/// the runner rather than the method, because the runtime's empty-image fallback on Kubernetes
+/// rests on this gate being registered, not merely on the method refusing when called.
+#[tokio::test]
+async fn source_reaches_no_platform_but_aws_through_the_runner() {
+    let summary = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(source_sandbox()), Platform::Kubernetes)
+        .await
+        .expect("compile-time checks run");
+
+    assert!(!summary.success, "source has no builder off AWS: {summary:?}");
+    let rendered = format!("{summary:?}");
+    assert!(
+        rendered.contains("agent"),
+        "the failure must name the sandbox: {rendered}"
+    );
+
+    let on_aws = PreflightRunner::new()
+        .run_compile_time_checks(&stack_with(source_sandbox()), Platform::Aws)
+        .await
+        .expect("compile-time checks run");
+
+    assert!(on_aws.success, "AWS builds it: {on_aws:?}");
 }
