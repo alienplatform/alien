@@ -58,6 +58,90 @@ fn endpoint_scheme(protocol: ExposeProtocol) -> &'static str {
     }
 }
 
+type ExposedPorts = HashMap<String, HashMap<(), ()>>;
+type PortBindings = HashMap<String, Option<Vec<PortBinding>>>;
+
+fn loopback_port_bindings(
+    public_endpoint: Option<&LocalPublicEndpoint>,
+    host_port: Option<u16>,
+    health_check_port: Option<u16>,
+    health_host_port: Option<u16>,
+) -> (Option<ExposedPorts>, Option<PortBindings>) {
+    let mut exposed = HashMap::new();
+    let mut bindings = HashMap::new();
+    let mut insert = |container_port: u16, host_port: u16| {
+        let key = format!("{container_port}/tcp");
+        exposed.entry(key.clone()).or_insert_with(HashMap::new);
+        bindings.entry(key).or_insert_with(|| {
+            Some(vec![PortBinding {
+                host_ip: Some("127.0.0.1".to_string()),
+                host_port: Some(host_port.to_string()),
+            }])
+        });
+    };
+    if let (Some(endpoint), Some(host_port)) = (public_endpoint, host_port) {
+        insert(endpoint.port, host_port);
+    }
+    if let (Some(container_port), Some(host_port)) = (health_check_port, health_host_port) {
+        insert(container_port, host_port);
+    }
+    if exposed.is_empty() {
+        (None, None)
+    } else {
+        (Some(exposed), Some(bindings))
+    }
+}
+
+async fn probe_http_health(
+    container_id: &str,
+    host_port: u16,
+    method: &str,
+    path: &str,
+    timeout: std::time::Duration,
+) -> Result<()> {
+    let method = reqwest::Method::from_bytes(method.as_bytes()).map_err(|error| {
+        AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "health_check".to_string(),
+            reason: format!("Invalid HTTP method: {error}"),
+        })
+    })?;
+    let path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{path}")
+    };
+    let url = format!("http://127.0.0.1:{host_port}{path}");
+    let response = reqwest::Client::builder()
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "health_check".to_string(),
+            reason: "Failed to build HTTP health-check client".to_string(),
+        })?
+        .request(method, &url)
+        .send()
+        .await
+        .into_alien_error()
+        .context(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "health_check".to_string(),
+            reason: format!("Request to {url} failed"),
+        })?;
+    if response.status().is_success() {
+        Ok(())
+    } else {
+        Err(AlienError::new(ErrorData::DockerContainerError {
+            container: container_id.to_string(),
+            operation: "health_check".to_string(),
+            reason: format!("{url} returned HTTP {}", response.status()),
+        }))
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 struct OciProcessOverride {
     entrypoint: Option<Vec<String>>,
@@ -138,6 +222,21 @@ fn allocate_host_port(saved_port: Option<u16>, container_id: &str) -> crate::err
     Ok(port)
 }
 
+fn allocate_distinct_host_port(
+    saved_port: Option<u16>,
+    container_id: &str,
+    already_allocated: Option<u16>,
+) -> crate::error::Result<u16> {
+    let mut candidate = allocate_host_port(saved_port, container_id)?;
+    for _ in 0..10 {
+        if Some(candidate) != already_allocated {
+            return Ok(candidate);
+        }
+        candidate = allocate_host_port(None, container_id)?;
+    }
+    Err(AlienError::new(ErrorData::NoFreePortsAvailable))
+}
+
 /// Metadata stored for each container (for recovery).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -152,6 +251,9 @@ pub struct ContainerMetadata {
     pub ports: Vec<u16>,
     /// Host port mapping (if exposed - maps first exposed port)
     pub host_port: Option<u16>,
+    /// Loopback host port used for HTTP health checks.
+    #[serde(default)]
+    pub health_host_port: Option<u16>,
     /// Public endpoint served by the mapped host port.
     #[serde(default)]
     pub public_endpoint: Option<LocalPublicEndpoint>,
@@ -187,6 +289,8 @@ pub struct ContainerConfig {
     pub ports: Vec<u16>,
     /// Backend endpoint to publish on a loopback host port.
     pub public_endpoint: Option<LocalPublicEndpoint>,
+    /// Container port to publish on loopback for HTTP health checks.
+    pub health_check_port: Option<u16>,
     /// Environment variables
     pub env_vars: HashMap<String, String>,
     /// Whether this is a stateful container
@@ -236,6 +340,9 @@ pub struct ContainerInfo {
     pub docker_container_id: String,
     /// Host port (if exposed publicly - uses first exposed port)
     pub host_port: Option<u16>,
+    /// Loopback host port used for HTTP health checks.
+    #[serde(default)]
+    pub health_host_port: Option<u16>,
     /// Public endpoint served by the mapped host port.
     #[serde(default)]
     pub public_endpoint: Option<LocalPublicEndpoint>,
@@ -818,7 +925,7 @@ impl LocalContainerManager {
         self.ensure_network().await?;
 
         // Load existing metadata to check for saved host_port (for transparent recovery)
-        let saved_host_port = {
+        let (saved_host_port, saved_health_host_port) = {
             let metadata_file = self
                 .state_dir
                 .join("containers")
@@ -828,11 +935,12 @@ impl LocalContainerManager {
                 match tokio::fs::read_to_string(&metadata_file).await {
                     Ok(json) => serde_json::from_str::<ContainerMetadata>(&json)
                         .ok()
-                        .and_then(|m| m.host_port),
-                    Err(_) => None,
+                        .map(|m| (m.host_port, m.health_host_port))
+                        .unwrap_or((None, None)),
+                    Err(_) => (None, None),
                 }
             } else {
-                None
+                (None, None)
             }
         };
 
@@ -857,6 +965,23 @@ impl LocalContainerManager {
             Some(allocate_host_port(saved_host_port, container_id)?)
         } else {
             None
+        };
+        let health_host_port = match config.health_check_port {
+            Some(health_port)
+                if config
+                    .public_endpoint
+                    .as_ref()
+                    .map(|endpoint| endpoint.port)
+                    == Some(health_port) =>
+            {
+                host_port
+            }
+            Some(_) => Some(allocate_distinct_host_port(
+                saved_health_host_port,
+                container_id,
+                host_port,
+            )?),
+            None => None,
         };
 
         // Build environment variables
@@ -919,25 +1044,12 @@ impl LocalContainerManager {
             .collect();
 
         // Build port bindings for all ports
-        let (exposed_ports, port_bindings) = if let (Some(endpoint), Some(host_port)) =
-            (config.public_endpoint.as_ref(), host_port)
-        {
-            let mut exposed = HashMap::new();
-            let mut bindings = HashMap::new();
-            let port_key = format!("{}/tcp", endpoint.port);
-            exposed.insert(port_key.clone(), HashMap::new());
-            bindings.insert(
-                port_key,
-                Some(vec![PortBinding {
-                    host_ip: Some("127.0.0.1".to_string()),
-                    host_port: Some(host_port.to_string()),
-                }]),
-            );
-
-            (Some(exposed), Some(bindings))
-        } else {
-            (None, None)
-        };
+        let (exposed_ports, port_bindings) = loopback_port_bindings(
+            config.public_endpoint.as_ref(),
+            host_port,
+            config.health_check_port,
+            health_host_port,
+        );
 
         // Build volume mounts (both persistent storage and linked storage)
         let mut binds = Vec::new();
@@ -1084,6 +1196,7 @@ impl LocalContainerManager {
             image,
             ports: config.ports.clone(),
             host_port,
+            health_host_port,
             public_endpoint: config.public_endpoint.clone(),
             stateful: config.stateful,
             ordinal: config.ordinal,
@@ -1109,6 +1222,7 @@ impl LocalContainerManager {
             container_id: container_id.to_string(),
             docker_container_id: response.id,
             host_port,
+            health_host_port,
             public_endpoint: config.public_endpoint,
             ports: config.ports,
             internal_dns: format!("{}.svc", container_id),
@@ -1266,14 +1380,85 @@ impl LocalContainerManager {
         }
     }
 
-    /// Health check - verifies container is running.
-    pub async fn check_health(&self, container_id: &str) -> Result<()> {
-        if !self.is_running(container_id).await {
+    /// Reads the Docker restart count for a managed container.
+    pub async fn restart_count(&self, container_id: &str) -> Result<u32> {
+        let docker_name = format!("alien-{container_id}");
+        let inspection = self
+            .docker
+            .inspect_container(&docker_name, None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "inspect".to_string(),
+                reason: "Failed to inspect Docker container restart count".to_string(),
+            })?;
+        Ok(inspection
+            .restart_count
+            .unwrap_or_default()
+            .clamp(0, u32::MAX.into()) as u32)
+    }
+
+    /// Verifies that the container process is running and, when configured,
+    /// that its declared HTTP health endpoint returns a successful status.
+    pub async fn check_health(
+        &self,
+        container_id: &str,
+        method: Option<&str>,
+        path: Option<&str>,
+        timeout: std::time::Duration,
+    ) -> Result<u32> {
+        let docker_name = format!("alien-{container_id}");
+        let inspection = self
+            .docker
+            .inspect_container(&docker_name, None)
+            .await
+            .into_alien_error()
+            .context(ErrorData::DockerContainerError {
+                container: container_id.to_string(),
+                operation: "health_check".to_string(),
+                reason: "Failed to inspect Docker container state".to_string(),
+            })?;
+        if !inspection
+            .state
+            .and_then(|state| state.running)
+            .unwrap_or(false)
+        {
             return Err(AlienError::new(ErrorData::ContainerNotRunning {
                 container_id: container_id.to_string(),
             }));
         }
-        Ok(())
+        let restart_count = inspection
+            .restart_count
+            .unwrap_or_default()
+            .clamp(0, u32::MAX.into()) as u32;
+
+        let health_host_port = self
+            .containers
+            .read()
+            .await
+            .get(container_id)
+            .and_then(|metadata| metadata.health_host_port);
+        let Some(health_host_port) = health_host_port else {
+            return if method.is_none() && path.is_none() {
+                Ok(restart_count)
+            } else {
+                Err(AlienError::new(ErrorData::DockerContainerError {
+                    container: container_id.to_string(),
+                    operation: "health_check".to_string(),
+                    reason: "Declared health-check port is not published on loopback; redeploy the container to apply it".to_string(),
+                }))
+            };
+        };
+        probe_http_health(
+            container_id,
+            health_host_port,
+            method.unwrap_or("GET"),
+            path.unwrap_or("/health"),
+            timeout,
+        )
+        .await?;
+        Ok(restart_count)
     }
 
     /// Gets the URL for an exposed container.
@@ -1593,5 +1778,76 @@ mod tests {
                 cmd: None,
             }
         );
+    }
+
+    #[test]
+    fn health_check_reuses_the_public_mapping_for_the_same_port() {
+        let endpoint = LocalPublicEndpoint {
+            port: 8080,
+            protocol: ExposeProtocol::Http,
+            names: vec![],
+        };
+        let (_, bindings) =
+            loopback_port_bindings(Some(&endpoint), Some(41000), Some(8080), Some(41000));
+
+        let bindings = bindings.expect("port should be published");
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(
+            bindings["8080/tcp"].as_ref().unwrap()[0]
+                .host_port
+                .as_deref(),
+            Some("41000")
+        );
+    }
+
+    #[test]
+    fn private_health_check_gets_a_loopback_mapping() {
+        let (_, bindings) = loopback_port_bindings(None, None, Some(9090), Some(41001));
+
+        let bindings = bindings.expect("health port should be published");
+        let binding = &bindings["9090/tcp"].as_ref().unwrap()[0];
+        assert_eq!(binding.host_ip.as_deref(), Some("127.0.0.1"));
+        assert_eq!(binding.host_port.as_deref(), Some("41001"));
+    }
+
+    #[tokio::test]
+    async fn http_probe_requires_a_success_response() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let server = tokio::spawn(async move {
+            for status in [503, 204] {
+                let (mut stream, _) = listener.accept().await.unwrap();
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let mut request = [0; 1024];
+                let size = stream.read(&mut request).await.unwrap();
+                assert!(String::from_utf8_lossy(&request[..size]).starts_with("HEAD /ready "));
+                stream
+                    .write_all(
+                        format!("HTTP/1.1 {status} Test\r\nContent-Length: 0\r\n\r\n").as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+            }
+        });
+
+        assert!(probe_http_health(
+            "api",
+            port,
+            "HEAD",
+            "ready",
+            std::time::Duration::from_secs(1)
+        )
+        .await
+        .is_err());
+        probe_http_health(
+            "api",
+            port,
+            "HEAD",
+            "/ready",
+            std::time::Duration::from_secs(1),
+        )
+        .await
+        .unwrap();
+        server.await.unwrap();
     }
 }
