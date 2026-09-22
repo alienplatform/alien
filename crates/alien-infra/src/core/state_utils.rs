@@ -634,7 +634,7 @@ mod tests {
         );
         assert_eq!(
             stack_state.resources["runtime-owned"].status,
-            ResourceStatus::RefreshFailed
+            ResourceStatus::ProvisionFailed
         );
     }
 
