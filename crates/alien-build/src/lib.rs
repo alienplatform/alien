@@ -213,6 +213,7 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
     // Collect functions that need building
     let mut functions_to_build = Vec::new();
     let mut daemons_to_build: Vec<(String, Daemon, String, ToolchainConfig)> = Vec::new();
+    let mut sandboxes_to_build: Vec<(String, Sandbox, String, ToolchainConfig)> = Vec::new();
 
     for (id, resource_entry) in stack.resources() {
         if let Some(func) = resource_entry.config.downcast_ref::<alien_core::Worker>() {
@@ -251,6 +252,40 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
                 }
                 DaemonCode::Image { .. } => {
                     info!("Daemon '{}' already has an image. Skipping.", daemon.id);
+                }
+            }
+        } else if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
+            info!("Processing sandbox: {}", sandbox.id);
+            match &sandbox.code {
+                SandboxCode::Source { src, toolchain } => {
+                    // A sandbox base image is a root filesystem, not a compiled binary laid on one,
+                    // so the other toolchains have no meaning here rather than a missing
+                    // implementation.
+                    if !matches!(toolchain, ToolchainConfig::Docker { .. }) {
+                        return Err(AlienError::new(ErrorData::BuildConfigInvalid {
+                            message: format!(
+                                "Sandbox '{}' is built from source with a {} toolchain. A sandbox \
+                                 base image is a root filesystem, so it is built from a \
+                                 Dockerfile; give it a docker toolchain, or name a prebuilt image \
+                                 in code.image.",
+                                sandbox.id,
+                                toolchain_name(toolchain)
+                            ),
+                        }));
+                    }
+                    info!(
+                        "Sandbox '{}' has source code. Queued for parallel build.",
+                        sandbox.id
+                    );
+                    sandboxes_to_build.push((
+                        id.clone(),
+                        sandbox.clone(),
+                        src.clone(),
+                        toolchain.clone(),
+                    ));
+                }
+                SandboxCode::Image { .. } => {
+                    info!("Sandbox '{}' already has an image. Skipping.", sandbox.id);
                 }
             }
         }
@@ -623,6 +658,157 @@ pub async fn build_stack(mut stack: Stack, settings: &BuildSettings) -> Result<S
         }
 
         info!("Completed parallel building of {} daemons", completed_tasks);
+    }
+
+    // A sandbox base image is the root filesystem a session runs in. It is built and pushed like
+    // any other compute image; the bundle layers the sandbox agent on afterwards, and AWS builds
+    // the MicroVM from that bundle inside the customer's account.
+    if !sandboxes_to_build.is_empty() {
+        let build_targets = settings.get_targets();
+
+        info!(
+            "Building {} sandbox base images for {} target(s): {:?}",
+            sandboxes_to_build.len(),
+            build_targets.len(),
+            build_targets
+        );
+
+        let current_bus = alien_core::EventBus::current();
+        let cancel_token = tokio_util::sync::CancellationToken::new();
+
+        let build_tasks: Vec<_> = sandboxes_to_build
+            .into_iter()
+            .map(|(resource_id, sandbox, src, toolchain)| {
+                let sandbox_id = sandbox.id.clone();
+                let stack_id = stack_id.clone();
+                let settings = settings.clone();
+                let output_dir = output_dir.clone();
+                let bus = current_bus.clone();
+                let cancel_token = cancel_token.clone();
+
+                tokio::spawn(async move {
+                    let sandbox_id_for_warning = sandbox_id.clone();
+
+                    let build_work = async move {
+                        info!("Starting parallel build for resource: {}", sandbox_id);
+
+                        if cancel_token.is_cancelled() {
+                            return (
+                                resource_id.clone(),
+                                sandbox,
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: sandbox_id.clone(),
+                                })),
+                            );
+                        }
+
+                        let result = tokio::select! {
+                            result = build_resource(
+                                &src,
+                                &toolchain,
+                                &sandbox_id,
+                                &stack_id,
+                                &settings,
+                                &output_dir,
+                                toolchain::WorkloadKind::SandboxBase,
+                                &[],
+                            ) => result,
+                            _ = cancel_token.cancelled() => {
+                                info!("Build for sandbox '{}' was cancelled", sandbox_id);
+                                Err(AlienError::new(ErrorData::BuildCanceled {
+                                    resource_name: sandbox_id.clone()
+                                }))
+                            }
+                        };
+
+                        match &result {
+                            Ok(image_uri) => {
+                                info!(
+                                    "Successfully built OCI image for resource '{}' to: {}",
+                                    sandbox_id, image_uri
+                                );
+                            }
+                            Err(e) => {
+                                info!("Failed to build sandbox '{}': {}", sandbox_id, e);
+                            }
+                        }
+
+                        (resource_id, sandbox, result)
+                    };
+
+                    match bus {
+                        Some(bus) => bus.run(|| build_work).await,
+                        None => {
+                            tracing::debug!(
+                                "No event bus context available for parallel build of sandbox '{}'",
+                                sandbox_id_for_warning
+                            );
+                            build_work.await
+                        }
+                    }
+                })
+            })
+            .collect();
+
+        let mut build_results: Vec<(String, Sandbox)> = Vec::new();
+        let mut completed_tasks = 0;
+        let mut remaining_tasks = build_tasks;
+        let mut first_error: Option<AlienError<ErrorData>> = None;
+
+        while !remaining_tasks.is_empty() {
+            let (result, _index, rest) = futures::future::select_all(remaining_tasks).await;
+            remaining_tasks = rest;
+
+            match result {
+                Ok((resource_id, sandbox, build_result)) => match build_result {
+                    Ok(image_uri) => {
+                        let mut updated_sandbox = sandbox;
+                        updated_sandbox.code = SandboxCode::Image { image: image_uri };
+                        build_results.push((resource_id, updated_sandbox));
+                        completed_tasks += 1;
+                    }
+                    Err(e) => {
+                        if first_error.is_none() {
+                            first_error = Some(e);
+                            cancel_token.cancel();
+                            for task in remaining_tasks {
+                                task.abort();
+                            }
+                            break;
+                        }
+                    }
+                },
+                Err(join_error) => {
+                    if join_error.is_cancelled() {
+                        info!("Build task was cancelled");
+                    } else {
+                        tracing::warn!("Build task failed: {}", join_error);
+                        if first_error.is_none() {
+                            first_error = Some(AlienError::new(ErrorData::BuildConfigInvalid {
+                                message: format!("Build task failed: {}", join_error),
+                            }));
+                            cancel_token.cancel();
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(error) = first_error {
+            return Err(error);
+        }
+
+        for (resource_id, updated_sandbox) in build_results {
+            if let Some(resource_entry) = stack.resources_mut().find(|(id, _)| *id == &resource_id)
+            {
+                resource_entry.1.config = alien_core::Resource::new(updated_sandbox);
+            }
+        }
+
+        info!(
+            "Completed parallel building of {} sandbox base images",
+            completed_tasks
+        );
     }
 
     // Build all containers in parallel with fail-fast behavior
@@ -3024,6 +3210,9 @@ fn effective_source_base_images(
                 .map(|image| (*image).to_string())
                 .collect()
         }
+        // A sandbox base image is only built from a Dockerfile, which returned above, and its
+        // `FROM` is the developer's to choose. Alien picking one would decide what a session runs.
+        (toolchain::WorkloadKind::SandboxBase, _) => Vec::new(),
     };
 
     base_images_for_workload(
@@ -3038,6 +3227,15 @@ fn effective_source_base_images(
 /// Workers. TypeScript has its own language-base override, resolved by
 /// `typescript_worker_base_images`, so a mixed-language stack never places
 /// Rust applications on the TypeScript image or vice versa.
+fn toolchain_name(toolchain: &ToolchainConfig) -> &'static str {
+    match toolchain {
+        ToolchainConfig::Rust { .. } => "rust",
+        ToolchainConfig::TypeScript { .. } => "typescript",
+        ToolchainConfig::Docker { .. } => "docker",
+        ToolchainConfig::Python { .. } => "python",
+    }
+}
+
 fn base_images_for_workload(
     base_images: &[String],
     override_base_image: Option<&str>,
@@ -5397,6 +5595,99 @@ mod tests {
                 ("linux".to_string(), "arm64".to_string()),
             ],
             "merged stack must push as a real multi-arch index"
+        );
+    }
+}
+
+#[cfg(test)]
+mod sandbox_build_tests {
+    use super::*;
+    use alien_core::{ResourceLifecycle, SandboxEgress, SandboxLifecyclePolicy};
+
+    fn sandbox_from_source(toolchain: ToolchainConfig) -> Sandbox {
+        Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain,
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    fn settings() -> BuildSettings {
+        BuildSettings {
+            output_directory: std::env::temp_dir().to_string_lossy().into_owned(),
+            platform: PlatformBuildSettings::Aws {
+                managing_account_id: None,
+            },
+            targets: None,
+            cache_url: None,
+            override_base_image: None,
+            debug_mode: false,
+        }
+    }
+
+    /// A root filesystem is built from a Dockerfile. The other toolchains lay a compiled binary on
+    /// a base image Alien chooses, which is a different artifact, so they are refused by name
+    /// rather than half-built.
+    #[tokio::test]
+    async fn a_sandbox_built_from_source_requires_a_docker_toolchain() {
+        for toolchain in [
+            ToolchainConfig::Rust {
+                binary_name: "sbx".to_string(),
+            },
+            ToolchainConfig::TypeScript {
+                binary_name: Some("sbx".to_string()),
+            },
+        ] {
+            let stack = Stack::new("sandbox-build".to_string())
+                .add(sandbox_from_source(toolchain), ResourceLifecycle::Live)
+                .build();
+
+            let error = build_stack(stack, &settings())
+                .await
+                .expect_err("a non-docker sandbox toolchain must be refused");
+            let message = error.to_string();
+            assert!(
+                message.contains("root filesystem") && message.contains("docker"),
+                "the refusal must name the reason and the fix: {message}"
+            );
+        }
+    }
+
+    /// A sandbox that already names an image is left alone, the way a worker's is.
+    #[tokio::test]
+    async fn a_sandbox_with_an_image_is_not_rebuilt() {
+        let sandbox = Sandbox::new("sbx".to_string())
+            .code(SandboxCode::Image {
+                image: "public.ecr.aws/acme/base:v1".to_string(),
+            })
+            .egress(SandboxEgress::Allow)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("sandbox-build".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+
+        let built = build_stack(stack, &settings())
+            .await
+            .expect("an already-imaged sandbox needs no build");
+        let code = built
+            .resources()
+            .find_map(|(_, e)| e.config.downcast_ref::<Sandbox>().map(|s| s.code.clone()))
+            .expect("sandbox should survive the build");
+        assert_eq!(
+            code,
+            SandboxCode::Image {
+                image: "public.ecr.aws/acme/base:v1".to_string()
+            }
         );
     }
 }
