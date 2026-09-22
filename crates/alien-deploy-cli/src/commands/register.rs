@@ -9,6 +9,8 @@
 //! land alongside under the same subcommand surface keyed on
 //! `--import <kind>`.
 
+use std::{collections::HashMap, path::PathBuf};
+
 use crate::error::{ErrorData, Result};
 use alien_core::{
     import::{ImportSourceKind, ImportedResource, StackImportRequest},
@@ -28,7 +30,10 @@ use serde_json::Value as JsonValue;
         --stack-name acme-prod \\
         --region us-east-1 \\
         --manager-url https://manager.example.com \\
-        --token dg_..."
+        --token dg_... \\
+        --input region=us-east-1 \\
+        --input-json replicas=3 \\
+        --secret-input-file apiKey=/run/secrets/api-key"
 )]
 pub struct RegisterArgs {
     /// Source the resolved import payload comes from.
@@ -58,6 +63,19 @@ pub struct RegisterArgs {
     #[arg(long, env = "ALIEN_TOKEN")]
     pub token: String,
 
+    /// String stack input for registration (id=value). Repeat for multiple inputs.
+    #[arg(long = "input")]
+    pub input_values: Vec<String>,
+
+    /// Typed JSON stack input for registration (id=<json>). Repeat for multiple inputs.
+    #[arg(long = "input-json")]
+    pub json_input_values: Vec<String>,
+
+    /// Secret stack input read from a file (id=path). Repeat for multiple inputs.
+    /// A single trailing newline is removed from the file contents.
+    #[arg(long = "secret-input-file")]
+    pub secret_input_files: Vec<String>,
+
     /// Print the resolved payload to stdout instead of POSTing it.
     /// Useful for debugging or for piping into `curl`.
     #[arg(long)]
@@ -85,10 +103,21 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
     let deployment_name = args.name.clone().unwrap_or_else(|| stack_name.clone());
 
     let outputs = fetch_cloudformation_outputs(&args.region, &stack_name).await?;
-    let request = build_import_request(&outputs, &args.token, &deployment_name, &stack_name)?;
+    let registration_inputs = collect_registration_inputs(
+        &args.input_values,
+        &args.json_input_values,
+        &args.secret_input_files,
+    )?;
+    let request = build_import_request(
+        &outputs,
+        &deployment_name,
+        &stack_name,
+        registration_inputs.values,
+    )?;
 
     if args.dry_run {
-        let json = serde_json::to_string_pretty(&request)
+        let redacted_request = redact_secret_inputs(&request, &registration_inputs.secret_ids);
+        let json = serde_json::to_string_pretty(&redacted_request)
             .into_alien_error()
             .context(ErrorData::JsonError {
                 operation: "serialize stack import request".to_string(),
@@ -132,8 +161,98 @@ async fn register_cloudformation(args: RegisterArgs) -> Result<()> {
         }));
     }
 
-    println!("Imported stack '{stack_name}' into manager at {url}");
+    println!("Registered stack '{stack_name}' with the manager at {url}");
     println!("{body}");
+    Ok(())
+}
+
+struct RegistrationInputs {
+    values: HashMap<String, JsonValue>,
+    secret_ids: Vec<String>,
+}
+
+fn redact_secret_inputs(request: &StackImportRequest, secret_ids: &[String]) -> StackImportRequest {
+    let mut redacted = request.clone();
+    for input_id in secret_ids {
+        if let Some(value) = redacted.input_values.get_mut(input_id) {
+            *value = JsonValue::String("[REDACTED]".to_string());
+        }
+    }
+    redacted
+}
+
+fn collect_registration_inputs(
+    input_values: &[String],
+    json_input_values: &[String],
+    secret_input_files: &[String],
+) -> Result<RegistrationInputs> {
+    let mut values = HashMap::new();
+    let mut secret_ids = Vec::new();
+
+    for input in input_values {
+        let (id, value) = parse_input_assignment(input, "--input")?;
+        insert_registration_input(&mut values, id, JsonValue::String(value))?;
+    }
+    for input in json_input_values {
+        let (id, raw_value) = parse_input_assignment(input, "--input-json")?;
+        let value = serde_json::from_str(&raw_value)
+            .into_alien_error()
+            .context(ErrorData::JsonError {
+                operation: format!("parse --input-json value for '{id}'"),
+                reason: format!("Stack input '{id}' is not valid JSON"),
+            })?;
+        insert_registration_input(&mut values, id, value)?;
+    }
+    for input in secret_input_files {
+        let (id, path) = parse_input_assignment(input, "--secret-input-file")?;
+        let mut value = std::fs::read_to_string(PathBuf::from(&path))
+            .into_alien_error()
+            .context(ErrorData::FileOperationFailed {
+                operation: "read secret input file".to_string(),
+                file_path: path,
+                reason: format!("Could not load value for stack input '{id}'"),
+            })?;
+        if value.ends_with('\n') {
+            value.pop();
+            if value.ends_with('\r') {
+                value.pop();
+            }
+        }
+        insert_registration_input(&mut values, id.clone(), JsonValue::String(value))?;
+        secret_ids.push(id);
+    }
+
+    Ok(RegistrationInputs { values, secret_ids })
+}
+
+fn parse_input_assignment(input: &str, flag: &str) -> Result<(String, String)> {
+    let Some((id, value)) = input.split_once('=') else {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: use id=value"),
+        }));
+    };
+    let id = id.trim();
+    if id.is_empty() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: flag.trim_start_matches("--").to_string(),
+            message: format!("Invalid {flag} format: input id is required"),
+        }));
+    }
+    Ok((id.to_string(), value.to_string()))
+}
+
+fn insert_registration_input(
+    values: &mut HashMap<String, JsonValue>,
+    id: String,
+    value: JsonValue,
+) -> Result<()> {
+    if values.insert(id.clone(), value).is_some() {
+        return Err(AlienError::new(ErrorData::ValidationError {
+            field: "input".to_string(),
+            message: format!("Stack input '{id}' was provided more than once"),
+        }));
+    }
     Ok(())
 }
 
@@ -267,9 +386,9 @@ fn parse_json_output(key: &str, value: &str) -> Result<JsonValue> {
 
 fn build_import_request(
     outputs: &CfnOutputs,
-    token: &str,
     deployment_name: &str,
     stack_name: &str,
+    input_values: HashMap<String, JsonValue>,
 ) -> Result<StackImportRequest> {
     let source_kind: ImportSourceKind = match outputs.source_kind.as_deref() {
         Some("cloudformation") => ImportSourceKind::CloudFormation,
@@ -386,7 +505,7 @@ fn build_import_request(
 
     Ok(StackImportRequest {
         setup_import_format_version,
-        deployment_group_token: token.to_string(),
+        deployment_group_token: String::new(),
         deployment_name: deployment_name.to_string(),
         resource_prefix,
         source_kind: Some(source_kind),
@@ -400,7 +519,7 @@ fn build_import_request(
         setup_fingerprint_version,
         stack_settings,
         management_config: Some(management_config),
-        input_values: Default::default(),
+        input_values,
         resources,
     })
 }
@@ -416,6 +535,8 @@ struct ImportedResourceWire {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Write as _;
+
     use super::*;
     use alien_core::AwsManagementConfig;
 
@@ -446,7 +567,7 @@ mod tests {
     #[test]
     fn cloudformation_import_request_preserves_base_platform() {
         let request =
-            build_import_request(&base_outputs(), "dg_token", "app", "stack").expect("request");
+            build_import_request(&base_outputs(), "app", "stack", HashMap::new()).expect("request");
 
         assert_eq!(request.platform, Platform::Kubernetes);
         assert_eq!(request.base_platform, Some(Platform::Aws));
@@ -473,9 +594,9 @@ mod tests {
     fn a_declined_resource_is_absent_from_the_import_request() {
         let request = build_import_request(
             &outputs_with_resources(DECLINED_RESOURCE_PAYLOAD),
-            "dg_token",
             "app",
             "stack",
+            HashMap::new(),
         )
         .expect("a payload with a declined resource omitted should import");
 
@@ -495,9 +616,9 @@ mod tests {
     fn a_null_entry_fails_the_import_rather_than_being_skipped() {
         let error = build_import_request(
             &outputs_with_resources(r#"[null,{"id":"jobs","type":"queue","importData":{}}]"#),
-            "dg_token",
             "app",
             "stack",
+            HashMap::new(),
         )
         .expect_err("a null entry must not be silently dropped");
 
@@ -505,5 +626,71 @@ mod tests {
             format!("{error:?}").contains("deserialize ImportedResource"),
             "expected the typed importer to reject the null: {error:?}"
         );
+    }
+
+    #[test]
+    fn registration_inputs_preserve_explicit_types_and_secret_file_contents() {
+        let secret = "secret-that-must-not-appear-in-argv";
+        let mut file = tempfile::NamedTempFile::new().expect("secret fixture");
+        writeln!(file, "{secret}").expect("write secret fixture");
+
+        let secret_arg = format!("apiKey={}", file.path().display());
+        assert!(!secret_arg.contains(secret));
+        let collected = collect_registration_inputs(
+            &["region=us-east-1".to_string()],
+            &[
+                "replicas=3".to_string(),
+                "enabled=true".to_string(),
+                "zones=[\"a\",\"b\"]".to_string(),
+            ],
+            &[secret_arg],
+        )
+        .expect("typed inputs should be collected");
+
+        assert_eq!(collected.values["region"], serde_json::json!("us-east-1"));
+        assert_eq!(collected.values["replicas"], serde_json::json!(3));
+        assert_eq!(collected.values["enabled"], serde_json::json!(true));
+        assert_eq!(collected.values["zones"], serde_json::json!(["a", "b"]));
+        assert_eq!(collected.values["apiKey"], serde_json::json!(secret));
+        assert_eq!(collected.secret_ids, vec!["apiKey"]);
+    }
+
+    #[test]
+    fn dry_run_redacts_secret_inputs_without_changing_the_request() {
+        let secret = "private-value";
+        let inputs = HashMap::from([
+            ("region".to_string(), serde_json::json!("us-east-1")),
+            ("apiKey".to_string(), serde_json::json!(secret)),
+        ]);
+        let request =
+            build_import_request(&base_outputs(), "app", "stack", inputs).expect("request");
+
+        let redacted = redact_secret_inputs(&request, &["apiKey".to_string()]);
+        let output = serde_json::to_string(&redacted).expect("serialize dry run");
+
+        assert!(!output.contains(secret));
+        assert!(output.contains("[REDACTED]"));
+        assert_eq!(request.input_values["apiKey"], serde_json::json!(secret));
+        assert_eq!(
+            redacted.input_values["region"],
+            serde_json::json!("us-east-1")
+        );
+        assert!(redacted.deployment_group_token.is_empty());
+    }
+
+    #[test]
+    fn duplicate_registration_input_is_rejected_across_sources() {
+        let result = collect_registration_inputs(
+            &["replicas=3".to_string()],
+            &["replicas=3".to_string()],
+            &[],
+        );
+        let error = match result {
+            Ok(_) => panic!("duplicates must not depend on argument ordering"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.code, "VALIDATION_ERROR");
+        assert!(error.message.contains("provided more than once"));
     }
 }

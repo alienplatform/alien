@@ -343,6 +343,12 @@ mod tests {
             "https://manager.example.com",
             "--token",
             "dg_abc",
+            "--input",
+            "region=us-east-1",
+            "--input-json",
+            "replicas=3",
+            "--secret-input-file",
+            "apiKey=/run/secrets/api-key",
         ])
         .unwrap();
         let Commands::Register(args) = cli.command else {
@@ -356,6 +362,9 @@ mod tests {
         assert_eq!(args.region, "us-east-1");
         assert_eq!(args.manager_url, "https://manager.example.com");
         assert_eq!(args.token, "dg_abc");
+        assert_eq!(args.input_values, vec!["region=us-east-1"]);
+        assert_eq!(args.json_input_values, vec!["replicas=3"]);
+        assert_eq!(args.secret_input_files, vec!["apiKey=/run/secrets/api-key"]);
     }
 
     #[test]
