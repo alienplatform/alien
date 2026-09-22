@@ -125,24 +125,17 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let build_role_arn = self.build_role_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no build role was registered for this sandbox; setup must install \
-                          one before the image can be built"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-        let bundle_uri = self.bundle_uri.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no bundle was registered for this sandbox; setup must publish one \
-                          before the image can be built"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
         let aws_config = ctx.get_aws_config()?;
+        // Derived, not read back from what setup registered. Both are functions of the desired
+        // config and the deployment's own names, so a create that restarts after a failure still
+        // has them — and the adopt below, which is what makes that restart safe, is reachable.
+        let build_role_arn = sandbox_build_role_arn(
+            &aws_config.region,
+            &aws_config.account_id,
+            ctx.resource_prefix,
+            &config.id,
+        );
+        let bundle_uri = desired_bundle_uri(config, &aws_config.region)?;
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -515,14 +508,6 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let build_role_arn = self.build_role_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no build role was registered for this sandbox; setup must install \
-                          one before the image can be rebuilt"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
         let image_identifier = self.image_identifier.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "no MicroVM image is recorded for this sandbox; there is nothing to \
@@ -534,6 +519,12 @@ impl AwsSandboxController {
 
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        let build_role_arn = sandbox_build_role_arn(
+            &aws_config.region,
+            &aws_config.account_id,
+            ctx.resource_prefix,
+            &config.id,
+        );
         let tier = config
             .microvm_tier()
             .context(ErrorData::ResourceConfigInvalid {
@@ -1082,6 +1073,23 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .chars()
         .take(image_name.len() + 1 + 16)
         .collect()
+}
+
+/// The build role setup installs for this sandbox, named the way both generators name it.
+///
+/// Derived rather than read back from the registration: `SandboxBuildRoleNameCheck` refuses at
+/// plan time any id that could reach IAM's 64-character ceiling, so neither generator clamps the
+/// name, and `sandbox/provision` already scopes its `iam:PassRole` to this same shape.
+fn sandbox_build_role_arn(
+    region: &str,
+    account_id: &str,
+    resource_prefix: &str,
+    resource_id: &str,
+) -> String {
+    format!(
+        "arn:{}:iam::{account_id}:role/{resource_prefix}-{resource_id}-build",
+        aws_partition(region)
+    )
 }
 
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
