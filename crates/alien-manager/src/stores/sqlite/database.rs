@@ -44,6 +44,20 @@ impl SqliteDatabase {
         }
 
         let path = Path::new(path);
+        // Key creation, plaintext migration, and encrypted database opening are
+        // one initialization transaction. Lock before inspecting any of them
+        // so a second manager cannot observe a partially-written key file.
+        let migration_lock = open_migration_lock(path)?;
+        migration_lock
+            .lock_exclusive()
+            .into_alien_error()
+            .context(GenericError {
+                message: format!(
+                    "Failed to lock manager database migration for '{}'",
+                    path.display()
+                ),
+            })?;
+
         let key = match configured_key {
             Some(key) => validate_key(key)?.to_string(),
             None => {
@@ -68,17 +82,6 @@ impl SqliteDatabase {
                 load_or_create_key(&key_path)?
             }
         };
-
-        let migration_lock = open_migration_lock(path)?;
-        migration_lock
-            .lock_exclusive()
-            .into_alien_error()
-            .context(GenericError {
-                message: format!(
-                    "Failed to lock manager database migration for '{}'",
-                    path.display()
-                ),
-            })?;
         recover_or_migrate_plaintext(path, &key).await?;
 
         // Single-process open. Unlike the local binding stores in
@@ -255,12 +258,6 @@ fn load_or_create_key(path: &Path) -> Result<String, AlienError> {
             sync_parent(path)?;
             Ok(generated)
         }
-        Err(error) if error.kind() == ErrorKind::AlreadyExists => read_key(path).map_err(|error| {
-            db_error(&format!(
-                "Failed to read concurrently-created manager database encryption key at '{}': {error}",
-                path.display()
-            ))
-        }),
         Err(error) => Err(db_error(&format!(
             "Failed to create manager database encryption key at '{}': {error}",
             path.display()
