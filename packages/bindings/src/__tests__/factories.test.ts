@@ -672,6 +672,9 @@ describe("sandbox create", () => {
     expect(resolved.sandbox.sandboxId).toBe("provider-recovered")
     expect(resolved.created).toBe(true)
     expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000)
+
+    await handle.getOrCreate({ timeoutMs: 2_000 })
+    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000)
   })
 })
 
