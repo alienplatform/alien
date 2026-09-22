@@ -12,6 +12,10 @@ use alien_core::{
 use alien_preflights::runner::PreflightRunner;
 
 fn stack_with(sandbox: Sandbox) -> Stack {
+    stack_with_lifecycle(sandbox, alien_core::ResourceLifecycle::Frozen)
+}
+
+fn stack_with_lifecycle(sandbox: Sandbox, lifecycle: alien_core::ResourceLifecycle) -> Stack {
     // Azure's sandbox ceilings are unenforceable, so a declared ceiling must fail the gate. The
     // worker rounds out the stack; the gate under test is the sandbox capability one.
     Stack::new("sandbox-gate".to_string())
@@ -25,7 +29,7 @@ fn stack_with(sandbox: Sandbox) -> Stack {
                 .build(),
             alien_core::ResourceLifecycle::Live,
         )
-        .add(sandbox, alien_core::ResourceLifecycle::Frozen)
+        .add(sandbox, lifecycle)
         .build()
 }
 
@@ -112,10 +116,17 @@ fn source_sandbox() -> Sandbox {
 /// `alien build` turns a sandbox's source into an image on AWS, and nowhere else. Driven through
 /// the runner rather than the method, because the runtime's empty-image fallback on Kubernetes
 /// rests on this gate being registered, not merely on the method refusing when called.
+///
+/// Live, because the release pushes a source build to a private repository and a Frozen one is
+/// built before the registry can open it.
 #[tokio::test]
 async fn source_reaches_no_platform_but_aws_through_the_runner() {
+    let live = alien_core::ResourceLifecycle::Live;
     let summary = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(source_sandbox()), Platform::Kubernetes)
+        .run_compile_time_checks(
+            &stack_with_lifecycle(source_sandbox(), live),
+            Platform::Kubernetes,
+        )
         .await
         .expect("compile-time checks run");
 
@@ -127,7 +138,7 @@ async fn source_reaches_no_platform_but_aws_through_the_runner() {
     );
 
     let on_aws = PreflightRunner::new()
-        .run_compile_time_checks(&stack_with(source_sandbox()), Platform::Aws)
+        .run_compile_time_checks(&stack_with_lifecycle(source_sandbox(), live), Platform::Aws)
         .await
         .expect("compile-time checks run");
 
