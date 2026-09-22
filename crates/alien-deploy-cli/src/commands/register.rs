@@ -76,8 +76,8 @@ pub struct RegisterArgs {
     #[arg(long = "secret-input-file")]
     pub secret_input_files: Vec<String>,
 
-    /// Print the resolved payload to stdout instead of POSTing it.
-    /// Useful for debugging or for piping into `curl`.
+    /// Print a diagnostic payload to stdout instead of POSTing it.
+    /// File-backed secret values are redacted, so the output is not reusable.
     #[arg(long)]
     pub dry_run: bool,
 }
