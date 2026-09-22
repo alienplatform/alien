@@ -735,6 +735,7 @@ fn sync_file(path: &Path) -> Result<(), AlienError> {
         })
 }
 
+#[cfg(unix)]
 fn sync_parent(path: &Path) -> Result<(), AlienError> {
     let Some(parent) = path
         .parent()
@@ -748,6 +749,13 @@ fn sync_parent(path: &Path) -> Result<(), AlienError> {
         .context(GenericError {
             message: format!("Failed to sync database directory '{}'", parent.display()),
         })
+}
+
+#[cfg(not(unix))]
+fn sync_parent(_path: &Path) -> Result<(), AlienError> {
+    // Opening and flushing directory handles is not portable outside Unix.
+    // File contents are still synced before every rename boundary.
+    Ok(())
 }
 
 /// Type-safe row parser that extracts columns by index with proper error handling.
