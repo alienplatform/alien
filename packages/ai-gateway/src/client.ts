@@ -47,6 +47,18 @@ export interface ResponseCreateParams {
 }
 
 /** One model the gateway exposes for this binding's cloud. */
+export type ModelCapabilitySupport = "supported" | "unsupported" | "unverified"
+
+export interface ModelApiCapabilities {
+  api: "open-ai-chat-completions" | "open-ai-responses" | "anthropic-messages"
+  functionTools: ModelCapabilitySupport
+  imageInput: ModelCapabilitySupport
+  reasoningControls: ModelCapabilitySupport
+  serverManagedContinuation: ModelCapabilitySupport
+  statelessReplay: ModelCapabilitySupport
+  qualifiedOn?: string
+}
+
 export interface AiModel {
   /** The id passed to `chat.completions.create` / `responses.create`. */
   id: string
@@ -54,6 +66,8 @@ export interface AiModel {
   provider: string
   /** A human label for a model picker, e.g. "Claude Opus 4.8". */
   displayName: string
+  /** Qualified behavior for each public Gateway API. */
+  capabilities: ModelApiCapabilities[]
 }
 
 /**
@@ -113,6 +127,23 @@ function defaultModels(provider: string): string[] {
     : ["gpt-4o-mini", "gpt-4o"]
 }
 
+const PUBLIC_AI_APIS: ModelApiCapabilities["api"][] = [
+  "open-ai-chat-completions",
+  "open-ai-responses",
+  "anthropic-messages",
+]
+
+function unverifiedModelCapabilities(): ModelApiCapabilities[] {
+  return PUBLIC_AI_APIS.map(api => ({
+    api,
+    functionTools: "unverified",
+    imageInput: "unverified",
+    reasoningControls: "unverified",
+    serverManagedContinuation: "unverified",
+    statelessReplay: "unverified",
+  }))
+}
+
 /** Resolution shared by `ai()` and `getAiConnection()`. `baseUrl` is the root (no `/v1`);
  * `apiKey`/`staticModels` are set only for a BYO-key (External) provider. */
 export interface ResolvedAiBinding {
@@ -145,6 +176,7 @@ export async function resolveAiBinding(gateway: Gateway, name: string): Promise<
         id,
         provider: binding.provider,
         displayName: id,
+        capabilities: unverifiedModelCapabilities(),
       })),
     }
   }
@@ -338,12 +370,13 @@ export class Ai {
       if (
         typeof model?.id !== "string" ||
         typeof model?.provider !== "string" ||
-        typeof model?.displayName !== "string"
+        typeof model?.displayName !== "string" ||
+        !isModelCapabilities(model.capabilities)
       ) {
         throw createUpstreamError(
           url,
           response.status,
-          `models response entry is missing id/provider/displayName: ${JSON.stringify(model)}`,
+          `models response entry has an invalid model or capabilities shape: ${JSON.stringify(model)}`,
         )
       }
     }
@@ -419,6 +452,30 @@ export class Ai {
       )
     }
   }
+}
+
+function isModelCapabilities(value: unknown): value is ModelApiCapabilities[] {
+  if (!Array.isArray(value) || value.length !== PUBLIC_AI_APIS.length) return false
+  const support = new Set<ModelCapabilitySupport>(["supported", "unsupported", "unverified"])
+  const seen = new Set<string>()
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object") return false
+    const capability = entry as Partial<ModelApiCapabilities>
+    if (!PUBLIC_AI_APIS.includes(capability.api as ModelApiCapabilities["api"])) return false
+    if (seen.has(capability.api as string)) return false
+    seen.add(capability.api as string)
+    if (
+      !support.has(capability.functionTools as ModelCapabilitySupport) ||
+      !support.has(capability.imageInput as ModelCapabilitySupport) ||
+      !support.has(capability.reasoningControls as ModelCapabilitySupport) ||
+      !support.has(capability.serverManagedContinuation as ModelCapabilitySupport) ||
+      !support.has(capability.statelessReplay as ModelCapabilitySupport) ||
+      (capability.qualifiedOn !== undefined && typeof capability.qualifiedOn !== "string")
+    ) {
+      return false
+    }
+  }
+  return seen.size === PUBLIC_AI_APIS.length
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

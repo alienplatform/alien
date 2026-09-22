@@ -1,0 +1,1 @@
+{"type":"string","description":"Whether a model feature has been qualified through one public Gateway API.\n\n`Unverified` is deliberately different from `Unsupported`: Alien does not infer support from\na model family or from the provider-native protocol used behind the Gateway.","enum":["supported","unsupported","unverified"],"x-readme-ref-name":"ModelCapabilitySupport"}
