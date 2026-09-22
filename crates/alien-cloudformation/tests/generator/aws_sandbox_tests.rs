@@ -1092,3 +1092,51 @@ fn aws_remote_storage_management_role_keeps_its_heartbeat() {
         "heartbeat must not reach object contents: {management}"
     );
 }
+
+/// A Live sandbox is reachable remotely too: setup renders its build role either way
+/// (`SetupEmission::Always`), so the grant the preflight publishes has somewhere to attach.
+#[test]
+fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(
+            sandbox_fixture_with(SandboxEgress::Allow, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live remote sandbox",
+    );
+
+    let policy = template
+        .resources
+        .get("AgentsRemoteExecutePolicy")
+        .expect("a Live remote sandbox must still receive the remote grant");
+    let document = serde_json::to_string(
+        policy
+            .properties
+            .get("PolicyDocument")
+            .expect("PolicyDocument"),
+    )
+    .expect("serializes");
+    for action in [
+        "lambda:RunMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:PassNetworkConnector",
+    ] {
+        assert!(document.contains(action), "{action} is missing: {document}");
+    }
+    assert!(
+        document.contains("microvm-image:${AWS::StackName}-agents"),
+        "the grant must name this sandbox's own image: {document}"
+    );
+}
