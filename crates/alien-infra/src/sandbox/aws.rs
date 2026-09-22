@@ -625,69 +625,10 @@ impl AwsSandboxController {
             });
         }
 
-        let aws_config = ctx.get_aws_config()?;
-        // Deterministic fallback: a create can succeed without its ARN ever being recorded
-        // (a crash between the call and the state write), and walking past it here would leak
-        // a live image nothing ever removes. The name is derived, so its ARN is too; an image
-        // that never existed answers NotFound, which the loop below already treats as done.
-        let image_identifier = self.image_identifier.clone().unwrap_or_else(|| {
-            sandbox_image_arn(
-                &aws_config.region,
-                &aws_config.account_id,
-                &format!("{}-{}", ctx.resource_prefix, config.id),
-            )
-        });
-
-        let client = ctx
-            .service_provider
-            .get_aws_microvms_client(aws_config)
-            .await?;
-
-        let versions = match client.list_microvm_image_versions(&image_identifier).await {
-            Ok(versions) => versions,
-            Err(error) if is_remote_resource_absent(&error) => Vec::new(),
-            Err(error) => {
-                return Err(error).context(ErrorData::CloudPlatformError {
-                    message: format!(
-                        "Failed to list versions of MicroVM image '{image_identifier}'"
-                    ),
-                    resource_id: Some(config.id.clone()),
-                });
-            }
-        };
-
-        // Deleting a version that is still building fails and rides the executor's retry budget
-        // (~17 min ceiling against a ~160s build) rather than a dedicated wait state.
-        for version in versions {
-            // A versionless entry cannot be deleted, and skipping it would let the image
-            // delete below no-op while a version survives — Deleted without deleting.
-            let Some(image_version) = version.image_version else {
-                return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-                    message: format!(
-                        "MicroVM image '{image_identifier}' listed a version record with no \
-                         version identifier; refusing to delete around it"
-                    ),
-                    resource_id: Some(config.id.clone()),
-                }));
-            };
-            match client
-                .delete_microvm_image_version(&image_identifier, &image_version)
-                .await
-            {
-                Ok(()) => {}
-                Err(error) if is_remote_resource_absent(&error) => {}
-                Err(error) => {
-                    return Err(error).context(ErrorData::CloudPlatformError {
-                        message: format!(
-                            "Failed to delete MicroVM image '{image_identifier}' version \
-                             '{image_version}'"
-                        ),
-                        resource_id: Some(config.id.clone()),
-                    });
-                }
-            }
-        }
-
+        // No per-version sweep: deleting the image removes every version with it, and AWS
+        // refuses to delete the last one on its own — "This is the last version. Please delete
+        // the entire image". Sweeping first therefore failed teardown for every sandbox that
+        // built once and was never rolled.
         Ok(HandlerAction::Continue {
             state: DeletingImage,
             suggested_delay: Some(Duration::from_secs(2)),
@@ -2333,50 +2274,17 @@ mod tests {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    /// Versions hold the image: the API accepts a delete on an image with versions present
-    /// while removing nothing, so the order is load-bearing, not stylistic.
+    /// Deleting the image reaps its versions with it, so teardown makes exactly one call.
+    /// Sweeping versions first is not merely redundant: AWS refuses to delete an image's last
+    /// version at all, which failed teardown for every sandbox built once and never rolled.
     #[tokio::test]
-    async fn delete_removes_every_version_before_the_image() {
-        let mut sequence = mockall::Sequence::new();
+    async fn delete_removes_the_image_without_sweeping_its_versions() {
         let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_list_microvm_image_versions()
-            .withf(|identifier| identifier == IMAGE_ARN)
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_| {
-                Ok(vec![
-                    MicrovmImage {
-                        image_identifier: None,
-                        image_arn: Some(IMAGE_ARN.to_string()),
-                        image_version: Some("1.0".to_string()),
-                        state: Some("SUCCESSFUL".to_string()),
-                    },
-                    MicrovmImage {
-                        image_identifier: None,
-                        image_arn: Some(IMAGE_ARN.to_string()),
-                        image_version: Some("2.0".to_string()),
-                        state: Some("SUCCESSFUL".to_string()),
-                    },
-                ])
-            });
-        client
-            .expect_delete_microvm_image_version()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "1.0")
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_, _| Ok(()));
-        client
-            .expect_delete_microvm_image_version()
-            .withf(|identifier, version| identifier == IMAGE_ARN && version == "2.0")
-            .times(1)
-            .in_sequence(&mut sequence)
-            .returning(|_, _| Ok(()));
+        // No version expectations: the mock panics on any call, so a reintroduced sweep fails here.
         client
             .expect_delete_microvm_image()
             .withf(|identifier| identifier == IMAGE_ARN)
             .times(1)
-            .in_sequence(&mut sequence)
             .returning(|_| Ok(()));
 
         let mut executor = executor(ready_controller(), client).await;
@@ -2389,71 +2297,14 @@ mod tests {
         assert!(executor.outputs().is_none());
     }
 
-    /// A version record with no identifier cannot be deleted around: the image delete
-    /// no-ops while versions survive, which would report Deleted without deleting.
+    /// A sandbox whose create failed before the image existed still issues the delete, against
+    /// the ARN its name derives to; an image that never existed answers NotFound, which the
+    /// delete treats as done.
     #[tokio::test]
-    async fn a_versionless_record_fails_the_delete_instead_of_being_skipped() {
-        let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_list_microvm_image_versions()
-            .times(1)
-            .returning(|_| {
-                Ok(vec![MicrovmImage {
-                    image_identifier: None,
-                    image_arn: Some(IMAGE_ARN.to_string()),
-                    image_version: None,
-                    state: Some("SUCCESSFUL".to_string()),
-                }])
-            });
-        // No version delete and no image delete may run: refusing loudly is the point.
-
-        let mut executor = executor(ready_controller(), client).await;
-        executor.delete().expect("transition to delete");
-        let error = executor
-            .run_until_terminal()
-            .await
-            .expect_err("the refusal must surface, not be retried");
-        assert!(
-            error.to_string().contains("no version identifier"),
-            "the refusal names its cause: {error}"
-        );
-    }
-
-    /// Deletion is best-effort: an image someone already removed is the goal state, not a
-    /// failure.
-    #[tokio::test]
-    async fn deleting_an_absent_image_succeeds() {
-        let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_list_microvm_image_versions()
-            .times(1)
-            .returning(|_| Err(not_found()));
-        client
-            .expect_delete_microvm_image()
-            .times(1)
-            .returning(|_| Err(not_found()));
-
-        let mut executor = executor(ready_controller(), client).await;
-        executor.delete().expect("transition to delete");
-        executor
-            .run_until_terminal()
-            .await
-            .expect("an absent image deletes cleanly");
-        assert_eq!(executor.status(), ResourceStatus::Deleted);
-    }
-
-    /// A sandbox whose create failed before the image existed has nothing to delete, and
-    /// must not call the API at all — the mock has no expectations, so any call panics.
-    #[tokio::test]
-    async fn a_sandbox_that_never_recorded_its_image_still_sweeps_by_its_derived_arn() {
+    async fn a_sandbox_that_never_recorded_its_image_still_deletes_by_its_derived_arn() {
         // A create can succeed without its ARN reaching state; walking past it would leak a
-        // live image forever, so the delete sweeps the ARN derived from the name instead.
+        // live image forever, so the delete targets the ARN derived from the name instead.
         let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_list_microvm_image_versions()
-            .withf(|identifier| identifier == IMAGE_ARN)
-            .times(1)
-            .returning(|_| Err(not_found()));
         client
             .expect_delete_microvm_image()
             .withf(|identifier| identifier == IMAGE_ARN)
@@ -2509,23 +2360,17 @@ mod tests {
     #[tokio::test]
     async fn the_binding_is_withdrawn_the_moment_deletion_begins() {
         let mut client = MockLambdaMicrovmsApi::new();
-        client
-            .expect_list_microvm_image_versions()
-            .times(1)
-            .returning(|_| {
-                Ok(vec![MicrovmImage {
-                    image_identifier: None,
-                    image_arn: Some(IMAGE_ARN.to_string()),
-                    image_version: None,
-                    state: Some("SUCCESSFUL".to_string()),
-                }])
-            });
+        client.expect_delete_microvm_image().returning(|_| {
+            Err(AlienError::new(CloudClientErrorData::GenericError {
+                message: "throttled".to_string(),
+            }))
+        });
         let mut executor = executor(ready_controller(), client).await;
         executor.delete().expect("transition to delete");
         executor
             .run_until_terminal()
             .await
-            .expect_err("the refusal must surface, not be retried");
+            .expect_err("the failure must surface, not be retried forever");
         let controller: &AwsSandboxController = executor
             .internal_state()
             .expect("the sandbox controller is inspectable");
