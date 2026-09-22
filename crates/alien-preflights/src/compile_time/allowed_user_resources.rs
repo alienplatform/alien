@@ -251,7 +251,7 @@ mod tests {
         let vault = alien_core::Vault::new(SECRETS_VAULT_ID.to_string()).build();
         let mut resources = IndexMap::new();
         resources.insert(
-            "application-vault".to_string(),
+            SECRETS_VAULT_ID.to_string(),
             ResourceEntry {
                 config: alien_core::Resource::new(vault),
                 lifecycle: ResourceLifecycle::Frozen,
@@ -267,6 +267,17 @@ mod tests {
             supported_platforms: None,
             inputs: vec![],
         };
+        let mut encoded = serde_json::to_value(stack).expect("stack should serialize");
+        let encoded_resources = encoded
+            .get_mut("resources")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("stack resources should be an object");
+        let vault = encoded_resources
+            .remove(SECRETS_VAULT_ID)
+            .expect("serialized stack should contain its vault");
+        encoded_resources.insert("application-vault".to_string(), vault);
+        let stack: Stack =
+            serde_json::from_value(encoded).expect("mismatched resource identity can deserialize");
 
         let result = AllowedUserResourcesCheck
             .check(&stack, Platform::Aws)
