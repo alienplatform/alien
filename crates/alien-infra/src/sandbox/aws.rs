@@ -1572,6 +1572,51 @@ mod tests {
         );
     }
 
+    /// A create that restarts after a failure comes back with a `Default` controller: the
+    /// executor rebuilds the resource through `new_pending`, which keeps no controller state.
+    /// The build inputs must therefore be recomputed, not read back from what setup registered,
+    /// or the restarted create dies on its own guard and the sandbox can never be recovered.
+    #[tokio::test]
+    async fn a_restarted_create_builds_without_anything_registered() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .withf(|request| {
+                request.name == "test-agents"
+                    && request.build_role_arn == BUILD_ROLE_ARN
+                    && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(|_| Ok(created_response()));
+        client
+            .expect_get_microvm_image_version()
+            .returning(|_, _| Ok(active_version()));
+
+        // Nothing registered, nothing remembered: the state a restarted create starts from.
+        let controller = AwsSandboxController::default();
+        assert!(controller.build_role_arn.is_none());
+        assert!(controller.bundle_uri.is_none());
+
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("the restarted create derives its build inputs");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller.pending_version.as_deref(),
+            Some("1.0"),
+            "the build the restart submitted is the one being tracked"
+        );
+    }
+
     /// The full runtime build: the create call must satisfy the already-deployed
     /// `sandbox/provision` grant — the `deployment` and `managed-by: runtime` request tags
     /// are what the policy conditions on, the build role is what it authorizes as a pass —
