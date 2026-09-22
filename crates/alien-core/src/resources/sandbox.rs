@@ -31,7 +31,10 @@ pub enum SandboxCode {
         /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
         image: String,
     },
-    /// Source built into a sandbox image at deploy time.
+    /// A Dockerfile `alien build` builds into the sandbox's base image.
+    ///
+    /// AWS only, and docker only: the base image is a root filesystem, not a binary laid on one.
+    /// `alien release` pushes it and the bundle layers the sandbox agent on afterwards.
     #[serde(rename_all = "camelCase")]
     Source {
         /// The source directory to build from
