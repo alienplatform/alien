@@ -457,10 +457,15 @@ impl LocalContainerManager {
                 reason: "Failed to connect to Docker daemon. Is Docker running?".to_string(),
             })?;
 
+        let containers = Self::load_metadata_from_disk(&state_dir)?
+            .into_iter()
+            .map(|metadata| (metadata.container_id.clone(), metadata))
+            .collect();
+
         Ok(Self {
             docker,
             state_dir,
-            containers: Arc::new(RwLock::new(HashMap::new())),
+            containers: Arc::new(RwLock::new(containers)),
         })
     }
 
@@ -1582,6 +1587,51 @@ impl LocalContainerManager {
 
     // ─────────────── Metadata Persistence ───────────────────────────────────
 
+    fn load_metadata_from_disk(state_dir: &Path) -> Result<Vec<ContainerMetadata>> {
+        let containers_dir = state_dir.join("containers");
+        if !containers_dir.exists() {
+            return Ok(Vec::new());
+        }
+
+        let entries = std::fs::read_dir(&containers_dir)
+            .into_alien_error()
+            .context(ErrorData::LocalDirectoryError {
+                path: containers_dir.display().to_string(),
+                operation: "read".to_string(),
+                reason: "Failed to read containers directory".to_string(),
+            })?;
+        let mut metadata_list = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .into_alien_error()
+                .context(ErrorData::LocalDirectoryError {
+                    path: containers_dir.display().to_string(),
+                    operation: "iterate".to_string(),
+                    reason: "Failed to iterate containers directory".to_string(),
+                })?;
+            let metadata_file = entry.path().join("metadata.json");
+            if !metadata_file.exists() {
+                continue;
+            }
+            match std::fs::read_to_string(&metadata_file) {
+                Ok(json) => match serde_json::from_str::<ContainerMetadata>(&json) {
+                    Ok(metadata) => metadata_list.push(metadata),
+                    Err(error) => warn!(
+                        path = %metadata_file.display(),
+                        error = %error,
+                        "Failed to parse container metadata"
+                    ),
+                },
+                Err(error) => warn!(
+                    path = %metadata_file.display(),
+                    error = %error,
+                    "Failed to read container metadata"
+                ),
+            }
+        }
+        Ok(metadata_list)
+    }
+
     async fn save_metadata(&self, metadata: &ContainerMetadata) -> Result<()> {
         let metadata_dir = self
             .state_dir
@@ -1625,57 +1675,12 @@ impl LocalContainerManager {
         Ok(())
     }
 
-    /// Loads existing container metadata from disk (for recovery).
+    /// Returns the container metadata currently tracked by the manager.
+    ///
+    /// Persisted metadata is loaded during construction, so this includes
+    /// containers recovered after a manager restart.
     pub async fn load_metadata(&self) -> Result<Vec<ContainerMetadata>> {
-        let containers_dir = self.state_dir.join("containers");
-        if !containers_dir.exists() {
-            return Ok(Vec::new());
-        }
-
-        let mut metadata_list = Vec::new();
-        let mut entries = tokio::fs::read_dir(&containers_dir)
-            .await
-            .into_alien_error()
-            .context(ErrorData::LocalDirectoryError {
-                path: containers_dir.display().to_string(),
-                operation: "read".to_string(),
-                reason: "Failed to read containers directory".to_string(),
-            })?;
-
-        while let Some(entry) = entries.next_entry().await.into_alien_error().context(
-            ErrorData::LocalDirectoryError {
-                path: containers_dir.display().to_string(),
-                operation: "iterate".to_string(),
-                reason: "Failed to iterate containers directory".to_string(),
-            },
-        )? {
-            let metadata_file = entry.path().join("metadata.json");
-            if metadata_file.exists() {
-                match tokio::fs::read_to_string(&metadata_file).await {
-                    Ok(json) => match serde_json::from_str::<ContainerMetadata>(&json) {
-                        Ok(metadata) => {
-                            metadata_list.push(metadata);
-                        }
-                        Err(e) => {
-                            warn!(
-                                path = %metadata_file.display(),
-                                error = %e,
-                                "Failed to parse container metadata"
-                            );
-                        }
-                    },
-                    Err(e) => {
-                        warn!(
-                            path = %metadata_file.display(),
-                            error = %e,
-                            "Failed to read container metadata"
-                        );
-                    }
-                }
-            }
-        }
-
-        Ok(metadata_list)
+        Ok(self.containers.read().await.values().cloned().collect())
     }
 }
 
@@ -1849,5 +1854,49 @@ mod tests {
         .await
         .unwrap();
         server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn manager_restart_restores_container_metadata() {
+        let state_dir = tempfile::tempdir().unwrap();
+        let metadata_dir = state_dir.path().join("containers/api");
+        std::fs::create_dir_all(&metadata_dir).unwrap();
+        let metadata = ContainerMetadata {
+            container_id: "api".to_string(),
+            docker_container_id: "docker-api".to_string(),
+            image: "example.test/api:latest".to_string(),
+            ports: vec![8080, 9090],
+            host_port: Some(41000),
+            health_host_port: Some(41001),
+            public_endpoint: Some(LocalPublicEndpoint {
+                port: 8080,
+                protocol: ExposeProtocol::Http,
+                names: vec!["web".to_string()],
+            }),
+            stateful: false,
+            ordinal: None,
+            created_at: chrono::Utc::now(),
+        };
+        std::fs::write(
+            metadata_dir.join("metadata.json"),
+            serde_json::to_vec(&metadata).unwrap(),
+        )
+        .unwrap();
+
+        let manager = LocalContainerManager::new(state_dir.path().to_path_buf()).unwrap();
+
+        assert_eq!(
+            manager.get_url("api").await.unwrap().as_deref(),
+            Some("http://localhost:41000")
+        );
+        assert_eq!(
+            manager
+                .containers
+                .read()
+                .await
+                .get("api")
+                .and_then(|metadata| metadata.health_host_port),
+            Some(41001)
+        );
     }
 }

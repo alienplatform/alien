@@ -86,6 +86,22 @@ async fn probes_an_internal_only_health_port_through_loopback() {
         }
     }
 
+    drop(manager);
+    let manager =
+        LocalContainerManager::new(temp_dir.path().to_path_buf()).expect("restarted manager");
+    assert_eq!(
+        manager
+            .check_health(
+                &container_id,
+                Some("HEAD"),
+                Some("/"),
+                Duration::from_secs(1),
+            )
+            .await
+            .expect("restarted manager should restore the health probe mapping"),
+        0
+    );
+
     assert!(manager
         .check_health(
             &container_id,
