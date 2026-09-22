@@ -182,7 +182,14 @@ impl AwsSandboxController {
         // A create whose response never reached state leaves an image under this
         // account-unique name, and a second create would collide with it. Read first and adopt
         // what is there; a bundle that changed later is rolled by the update flow, not here.
-        let existing = match client.get_microvm_image(&image_name).await {
+        let existing = match client
+            .get_microvm_image(&sandbox_image_arn(
+                &aws_config.region,
+                &aws_config.account_id,
+                &image_name,
+            ))
+            .await
+        {
             Ok(image) => Some(image),
             Err(error) if is_remote_resource_absent(&error) => None,
             Err(error) => {
@@ -627,16 +634,19 @@ impl AwsSandboxController {
             });
         }
 
+        let aws_config = ctx.get_aws_config()?;
         // Deterministic fallback: a create can succeed without its ARN ever being recorded
         // (a crash between the call and the state write), and walking past it here would leak
-        // a live image nothing ever removes. The name is derived, so sweep by it; an image
+        // a live image nothing ever removes. The name is derived, so its ARN is too; an image
         // that never existed answers NotFound, which the loop below already treats as done.
-        let image_identifier = self
-            .image_identifier
-            .clone()
-            .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
+        let image_identifier = self.image_identifier.clone().unwrap_or_else(|| {
+            sandbox_image_arn(
+                &aws_config.region,
+                &aws_config.account_id,
+                &format!("{}-{}", ctx.resource_prefix, config.id),
+            )
+        });
 
-        let aws_config = ctx.get_aws_config()?;
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -710,12 +720,15 @@ impl AwsSandboxController {
                 suggested_delay: None,
             });
         }
-        let image_identifier = self
-            .image_identifier
-            .clone()
-            .unwrap_or_else(|| format!("{}-{}", ctx.resource_prefix, config.id));
-
         let aws_config = ctx.get_aws_config()?;
+        let image_identifier = self.image_identifier.clone().unwrap_or_else(|| {
+            sandbox_image_arn(
+                &aws_config.region,
+                &aws_config.account_id,
+                &format!("{}-{}", ctx.resource_prefix, config.id),
+            )
+        });
+
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -1069,6 +1082,16 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .chars()
         .take(image_name.len() + 1 + 16)
         .collect()
+}
+
+/// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
+/// that no absent-resource check can read as absence. The name is account-unique, so the ARN
+/// it will carry is derivable before the image exists.
+fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
+    format!(
+        "arn:{}:lambda:{region}:{account_id}:microvm-image:{image_name}",
+        aws_partition(region)
+    )
 }
 
 /// The Lambda-managed base image the build runs on. The vendor's own base is inside the
