@@ -1481,7 +1481,7 @@ mod tests {
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_get_microvm_image()
-            .withf(|identifier| identifier == "test-agents")
+            .withf(|identifier| identifier == IMAGE_ARN)
             .times(1)
             .returning(|_| {
                 Ok(MicrovmImage {
@@ -1556,10 +1556,11 @@ mod tests {
     #[tokio::test]
     async fn a_live_sandbox_builds_its_image_and_reaches_running() {
         let mut client = MockLambdaMicrovmsApi::new();
-        // The pre-create probe: nothing under the derived name, so this is a real create.
+        // The pre-create probe reads by ARN: the API rejects a bare name with a 400 that no
+        // absent-resource check can read as absence, so the create would never be reached.
         client
             .expect_get_microvm_image()
-            .withf(|identifier| identifier == "test-agents")
+            .withf(|identifier| identifier == IMAGE_ARN)
             .times(1)
             .returning(|_| Err(not_found()));
         client
@@ -2368,18 +2369,18 @@ mod tests {
     /// A sandbox whose create failed before the image existed has nothing to delete, and
     /// must not call the API at all — the mock has no expectations, so any call panics.
     #[tokio::test]
-    async fn a_sandbox_that_never_recorded_its_image_still_sweeps_by_name() {
+    async fn a_sandbox_that_never_recorded_its_image_still_sweeps_by_its_derived_arn() {
         // A create can succeed without its ARN reaching state; walking past it would leak a
-        // live image forever, so the delete sweeps the deterministic name instead.
+        // live image forever, so the delete sweeps the ARN derived from the name instead.
         let mut client = MockLambdaMicrovmsApi::new();
         client
             .expect_list_microvm_image_versions()
-            .withf(|identifier| identifier.ends_with("-agents"))
+            .withf(|identifier| identifier == IMAGE_ARN)
             .times(1)
             .returning(|_| Err(not_found()));
         client
             .expect_delete_microvm_image()
-            .withf(|identifier| identifier.ends_with("-agents"))
+            .withf(|identifier| identifier == IMAGE_ARN)
             .times(1)
             .returning(|_| Err(not_found()));
         let controller = AwsSandboxController {
