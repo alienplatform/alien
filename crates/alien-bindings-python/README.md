@@ -26,8 +26,9 @@ from alienplatform import ai, container, key, kv, postgres, queue, sandbox, stor
 from sqlalchemy.ext.asyncio import create_async_engine
 
 files = storage("files")
-await files.put("reports/today.json", b"{}")
+await files.put("reports/today.json", b"{}", condition="absent")
 assert await files.get("reports/today.json") == b"{}"
+assert await files.get_optional("reports/missing.json") is None
 
 cache = kv("cache")
 await cache.put("status", b"ready", condition="absent")

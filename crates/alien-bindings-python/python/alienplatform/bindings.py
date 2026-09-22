@@ -100,8 +100,15 @@ class Storage:
         return bytes(await (await self._handle.get()).get(path))
 
     @translate_errors
-    async def put(self, path: str, data: bytes) -> None:
-        await (await self._handle.get()).put(path, list(data))
+    async def get_optional(self, path: str) -> bytes | None:
+        value = await (await self._handle.get()).get_optional(path)
+        return bytes(value) if value is not None else None
+
+    @translate_errors
+    async def put(
+        self, path: str, data: bytes, *, condition: Literal["absent"] | None = None
+    ) -> None:
+        await (await self._handle.get()).put(path, list(data), condition)
 
     @translate_errors
     async def delete(self, path: str) -> None:

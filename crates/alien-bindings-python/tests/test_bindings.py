@@ -46,6 +46,25 @@ async def test_storage_round_trip_and_structured_missing_error(tmp_path: Path) -
         await files.get("nested/data.bin")
     assert raised.value.code == "STORAGE_OBJECT_NOT_FOUND"
     assert "data.bin" not in str(raised.value)
+    assert await files.get_optional("nested/data.bin") is None
+
+
+@pytest.mark.asyncio
+async def test_storage_conditional_create_is_atomic(tmp_path: Path) -> None:
+    bind("immutable", {"service": "local-storage", "storagePath": str(tmp_path / "storage")})
+    files = storage("immutable")
+    writes = await asyncio.gather(
+        files.put("object.bin", b"first", condition="absent"),
+        files.put("object.bin", b"second", condition="absent"),
+        return_exceptions=True,
+    )
+
+    assert sum(value is None for value in writes) == 1
+    [failure] = [value for value in writes if isinstance(value, Exception)]
+    assert isinstance(failure, AlienError)
+    assert failure.code == "STORAGE_OBJECT_ALREADY_EXISTS"
+    assert failure.retryable is False
+    assert await files.get("object.bin") in {b"first", b"second"}
 
 
 @pytest.mark.asyncio

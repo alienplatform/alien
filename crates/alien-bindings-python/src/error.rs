@@ -51,6 +51,10 @@ pub(crate) fn map_object_store_error(
             binding_name: binding_name.to_string(),
             operation: operation.to_string(),
         },
+        object_store::Error::AlreadyExists { .. } => ErrorData::StorageObjectAlreadyExists {
+            binding_name: binding_name.to_string(),
+            operation: operation.to_string(),
+        },
         _ => ErrorData::StorageOperationFailed {
             binding_name: binding_name.to_string(),
             operation: operation.to_string(),

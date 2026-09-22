@@ -78,6 +78,8 @@ export interface StoragePutAttributes {
 
 /** Options for {@link Storage.put}. */
 export interface StoragePutOptions {
+  /** Atomic write precondition. `"absent"` creates only when the path does not exist. */
+  condition?: "absent"
   attributes?: StoragePutAttributes
 }
 
