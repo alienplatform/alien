@@ -107,7 +107,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     errors.push(format!(
                         "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
                          image is built after setup, but this resource requires its binding \
-                         during setup",
+                         during setup. Add the sandbox with `remoteAccess` and reach it through a \
+                         remote binding, or give it a base image that needs no build so it can stay \
+                         Frozen and be linked",
                         resource_id,
                         link.id()
                     ));
