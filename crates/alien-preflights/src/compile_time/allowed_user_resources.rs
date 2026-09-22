@@ -1,9 +1,9 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack};
+use alien_core::{Platform, SECRETS_VAULT_ID, Stack};
 use std::collections::HashSet;
 
-/// Ensures the stack contains only allowed user-defined resources.
+/// Ensures the stack contains only allowed user-defined resource types and IDs.
 ///
 /// Some resources like `AzureResourceGroup` and `RemoteStackManagement`
 /// are system-managed and should not be manually added.
@@ -15,7 +15,7 @@ pub struct AllowedUserResourcesCheck;
 #[async_trait::async_trait]
 impl CompileTimeCheck for AllowedUserResourcesCheck {
     fn description(&self) -> &'static str {
-        "Stack should contain only allowed user-defined resources"
+        "Stack should contain only allowed user-defined resource types and IDs"
     }
 
     fn should_run(&self, _stack: &Stack, _platform: Platform) -> bool {
@@ -50,6 +50,13 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
+
+            if resource_id == SECRETS_VAULT_ID {
+                errors.push(format!(
+                    "Resource ID '{SECRETS_VAULT_ID}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
 
             let is_allowed_user_type = allowed_user_types.contains(resource_type);
 
@@ -196,6 +203,39 @@ mod tests {
         assert!(!result.success);
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("network"));
+    }
+
+    #[tokio::test]
+    async fn rejects_the_reserved_deployment_secrets_id() {
+        let vault = alien_core::Vault::new(SECRETS_VAULT_ID.to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("reserved-id validation should run");
+
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("reserved for deployment secret delivery"));
+        assert!(result.errors[0].contains("different ID"));
     }
 
     #[tokio::test]
