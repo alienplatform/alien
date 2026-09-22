@@ -1,7 +1,7 @@
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
-use crate::commands::event_display::{print_event_table, EventDisplayRow};
+use crate::commands::event_display::{EventDisplayRow, print_event_table};
 use crate::deployment_tracking::DeploymentTracker;
 use crate::error::{ErrorData, Result};
 use crate::execution_context::ExecutionMode;
@@ -12,18 +12,20 @@ use crate::ui::{
     heading, make_table, print_table, render_human_error, status_cell, success_line,
 };
 use alien_cli_common::network::{self, NetworkArgs};
-use alien_core::{is_valid_resource_prefix, ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE};
+use alien_core::{ComputeClusterOutputs, RESOURCE_PREFIX_ERROR_MESSAGE, is_valid_resource_prefix};
 use alien_error::{AlienError, Context, IntoAlienError};
-use alien_manager_api::types::DeploymentResponse;
 use alien_manager_api::SdkResultExt as ManagerSdkResultExt;
 use alien_manager_api::SdkResultExtReadingBody as _;
+use alien_manager_api::types::DeploymentResponse;
+use alien_platform_api::SdkResultExt as _;
 use alien_platform_api::types::{
     CreateDeploymentTokenId, CreateDeploymentTokenRequest, CreateDeploymentTokenWorkspace,
-    CreateDeploymentWorkspace, DeploymentListItemResponse, GetDeploymentId, GetDeploymentWorkspace,
-    ListDeploymentsIncludeItem, NewDeploymentRequest, PinDeploymentReleaseId,
-    PinDeploymentReleaseWorkspace, PinReleaseRequest, PinReleaseRequestReleaseId,
+    CreateDeploymentWorkspace, DeploymentDetailResponse, DeploymentDetailResponseUpdateState,
+    DeploymentListItemResponse, DeploymentUpdateOperationSummaryInner, GetDeploymentId,
+    GetDeploymentWorkspace, ListDeploymentsIncludeItem, NewDeploymentRequest,
+    PinDeploymentReleaseId, PinDeploymentReleaseWorkspace, PinReleaseRequest,
+    PinReleaseRequestReleaseId,
 };
-use alien_platform_api::SdkResultExt as _;
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 
@@ -331,13 +333,14 @@ pub async fn deployments_task(args: DeploymentsArgs, ctx: ExecutionMode) -> Resu
                 return get_deployment_task(
                     &ctx,
                     &resolved.manager.client,
-                    &String::from(resolved.detail.id),
+                    resolved.detail.id.as_str(),
+                    Some(&resolved.detail),
                     json,
                 )
                 .await;
             }
             let manager = resolve_manager_client(&ctx, None, !json).await?;
-            get_deployment_task(&ctx, &manager, &id, json).await
+            get_deployment_task(&ctx, &manager, &id, None, json).await
         }
         DeploymentsCmd::Resources { id, json } => {
             #[cfg(feature = "platform")]
@@ -1061,6 +1064,7 @@ async fn get_deployment_task(
     ctx: &ExecutionMode,
     client: &alien_manager_api::Client,
     reference: &str,
+    platform_detail: Option<&DeploymentDetailResponse>,
     json: bool,
 ) -> Result<()> {
     let deployment = resolve_deployment_reference(client, reference).await?;
@@ -1069,6 +1073,7 @@ async fn get_deployment_task(
     if json {
         return print_json(&DeploymentDetailOutput {
             deployment: &deployment,
+            update_state: platform_detail.and_then(|detail| detail.update_state.as_ref()),
             observed_resources,
         });
     }
@@ -1105,6 +1110,10 @@ async fn get_deployment_task(
         println!("{}", render_human_error(&error));
     }
 
+    if let Some(update_state) = platform_detail.and_then(|detail| detail.update_state.as_ref()) {
+        print_deployment_update_state(update_state);
+    }
+
     if let Some(stack_state) = &deployment.stack_state {
         let stack_state: alien_core::StackState = serde_json::from_value(stack_state.clone())
             .into_alien_error()
@@ -1135,7 +1144,68 @@ async fn get_deployment_task(
 struct DeploymentDetailOutput<'a> {
     #[serde(flatten)]
     deployment: &'a DeploymentResponse,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    update_state: Option<&'a DeploymentDetailResponseUpdateState>,
     observed_resources: Vec<ObservedRolloutResource>,
+}
+
+fn print_deployment_update_state(update_state: &DeploymentDetailResponseUpdateState) {
+    let operations = deployment_update_operations(update_state);
+    if operations.is_empty() {
+        return;
+    }
+
+    println!("{}", heading("Deployment updates"));
+    let mut table = make_table(&[
+        "Operation",
+        "Status",
+        "Target release",
+        "Reasons",
+        "Action required",
+    ]);
+    for operation in operations {
+        table.add_row(vec![
+            String::from(operation.id.clone()).into(),
+            status_cell(&operation.status.to_string()),
+            String::from(operation.target_release_id.clone()).into(),
+            operation
+                .reasons
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+                .into(),
+            operation
+                .action_required
+                .clone()
+                .unwrap_or_else(|| "—".to_string())
+                .into(),
+        ]);
+    }
+    print_table(table);
+}
+
+fn deployment_update_operations(
+    update_state: &DeploymentDetailResponseUpdateState,
+) -> Vec<&DeploymentUpdateOperationSummaryInner> {
+    let mut operations = Vec::new();
+    for operation in [
+        update_state.active.0.as_ref(),
+        update_state.next.0.as_ref(),
+        update_state.latest.0.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    {
+        if operations
+            .iter()
+            .any(|existing: &&DeploymentUpdateOperationSummaryInner| existing.id == operation.id)
+        {
+            continue;
+        }
+        operations.push(operation);
+    }
+    operations
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2308,6 +2378,24 @@ fn parse_targeted_env_var(input: &str) -> Option<(String, String, Vec<String>)> 
 mod tests {
     use super::*;
     use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
+    use alien_platform_api::types::{DeploymentUpdateOperationStatus, DeploymentUpdateReason};
+
+    fn update_operation(
+        id: &str,
+        status: DeploymentUpdateOperationStatus,
+        action_required: Option<&str>,
+    ) -> DeploymentUpdateOperationSummaryInner {
+        DeploymentUpdateOperationSummaryInner::builder()
+            .id(id)
+            .status(status)
+            .reasons(vec![DeploymentUpdateReason::Release])
+            .target_release_id(format!("rel_{}", "a".repeat(28)))
+            .changed_keys(Vec::<String>::new())
+            .action_required(action_required.map(str::to_string))
+            .requested_at(chrono::Utc::now())
+            .try_into()
+            .expect("valid operation")
+    }
 
     fn deployment_with_releases(
         current: Option<&str>,
@@ -2347,6 +2435,32 @@ mod tests {
         assert_eq!(
             desired_release_cell(&deployment_with_releases(None, Some("rel_first"))),
             "rel_first"
+        );
+    }
+
+    #[test]
+    fn blocked_update_remains_visible_beside_the_serving_release() {
+        let operation_id = format!("duop_{}", "b".repeat(28));
+        let blocked = update_operation(
+            &operation_id,
+            DeploymentUpdateOperationStatus::Blocked,
+            Some("Update the deployment setup before retrying"),
+        );
+        let state = DeploymentDetailResponseUpdateState::builder()
+            .active(None::<DeploymentUpdateOperationSummaryInner>)
+            .next(None::<DeploymentUpdateOperationSummaryInner>)
+            .latest(Some(blocked))
+            .try_into()
+            .expect("valid update state");
+
+        let visible = deployment_update_operations(&state);
+
+        assert_eq!(visible.len(), 1);
+        assert_eq!(visible[0].id.as_str(), operation_id);
+        assert_eq!(visible[0].status, DeploymentUpdateOperationStatus::Blocked);
+        assert_eq!(
+            visible[0].action_required.as_deref(),
+            Some("Update the deployment setup before retrying")
         );
     }
 
