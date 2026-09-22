@@ -101,7 +101,7 @@ pub struct DebugArgs {
     /// aws/gcloud/az (kubectl scopes by namespace, derived automatically from
     /// the debugged command). Omit for an unscoped grant covering the whole
     /// deployment's cloud identity.
-    #[arg(long = "access-cloud-scope")]
+    #[arg(long = "access-cloud-scope", requires = "request_access")]
     pub access_cloud_scope: Option<String>,
 
     /// Emit errors as JSON. The spawned command's stdout/stderr are always passed
