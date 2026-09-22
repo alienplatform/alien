@@ -1,3 +1,4 @@
+use std::future::Future;
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
@@ -1585,10 +1586,52 @@ async fn redeploy_platform_deployment_task(
 
 async fn wait_for_platform_update_operation(
     client: &alien_platform_api::Client,
-    mut operation: DeploymentUpdateOperationSummaryInner,
+    operation: DeploymentUpdateOperationSummaryInner,
     options: UpdateOperationWaitOptions<'_>,
 ) -> Result<()> {
+    let (operation, elapsed) = await_update_operation(operation, options, || async {
+        let current = client
+            .get_deployment()
+            .id(options.deployment_id)
+            .workspace(options.workspace)
+            .send()
+            .await
+            .into_sdk_error()
+            .context(ErrorData::ApiRequestFailed {
+                message: format!(
+                    "reading redeploy operation {} for deployment {}",
+                    options.operation_id, options.deployment_id
+                ),
+                url: None,
+            })?
+            .into_inner();
+        find_update_operation(&current, options.operation_id)
+            .cloned()
+            .ok_or_else(|| {
+                AlienError::new(ErrorData::ApiRequestFailed {
+                    message: format!(
+                        "Redeploy operation {} disappeared from deployment {} update state",
+                        options.operation_id, options.deployment_id
+                    ),
+                    url: None,
+                })
+            })
+    })
+    .await?;
+    print_redeploy_result(options.deployment_id, &operation, elapsed, options.json)
+}
+
+async fn await_update_operation<F, Fut>(
+    mut operation: DeploymentUpdateOperationSummaryInner,
+    options: UpdateOperationWaitOptions<'_>,
+    mut poll: F,
+) -> Result<(DeploymentUpdateOperationSummaryInner, Duration)>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<DeploymentUpdateOperationSummaryInner>>,
+{
     let started = Instant::now();
+    let deadline = tokio::time::Instant::now() + options.timeout;
     let mut last_status = None;
     loop {
         if !options.json && last_status != Some(operation.status) {
@@ -1598,12 +1641,7 @@ async fn wait_for_platform_update_operation(
 
         match update_operation_disposition(operation.status) {
             UpdateOperationDisposition::Succeeded => {
-                return print_redeploy_result(
-                    options.deployment_id,
-                    &operation,
-                    started.elapsed(),
-                    options.json,
-                );
+                return Ok((operation, started.elapsed()));
             }
             UpdateOperationDisposition::Failed => {
                 return Err(AlienError::new(ErrorData::ApiRequestFailed {
@@ -1624,52 +1662,34 @@ async fn wait_for_platform_update_operation(
             UpdateOperationDisposition::Pending => {}
         }
 
-        if started.elapsed() >= options.timeout {
-            return Err(AlienError::new(ErrorData::ApiRequestFailed {
-                message: format!(
-                    "Timed out after {:.1}s waiting for redeploy operation {} on deployment {} (last status: {})",
-                    options.timeout.as_secs_f64(),
-                    options.operation_id,
-                    options.deployment_id,
-                    operation.status
-                ),
-                url: None,
-            }));
+        if tokio::time::Instant::now() >= deadline {
+            return Err(redeploy_wait_timeout_error(options, operation.status));
         }
-        tokio::time::sleep(
-            options
-                .interval
-                .min(options.timeout.saturating_sub(started.elapsed())),
-        )
-        .await;
-
-        let current = client
-            .get_deployment()
-            .id(options.deployment_id)
-            .workspace(options.workspace)
-            .send()
+        tokio::time::sleep_until((tokio::time::Instant::now() + options.interval).min(deadline))
+            .await;
+        if tokio::time::Instant::now() >= deadline {
+            return Err(redeploy_wait_timeout_error(options, operation.status));
+        }
+        operation = tokio::time::timeout_at(deadline, poll())
             .await
-            .into_sdk_error()
-            .context(ErrorData::ApiRequestFailed {
-                message: format!(
-                    "reading redeploy operation {} for deployment {}",
-                    options.operation_id, options.deployment_id
-                ),
-                url: None,
-            })?
-            .into_inner();
-        operation = find_update_operation(&current, options.operation_id)
-            .cloned()
-            .ok_or_else(|| {
-                AlienError::new(ErrorData::ApiRequestFailed {
-                    message: format!(
-                        "Redeploy operation {} disappeared from deployment {} update state",
-                        options.operation_id, options.deployment_id
-                    ),
-                    url: None,
-                })
-            })?;
+            .map_err(|_| redeploy_wait_timeout_error(options, operation.status))??;
     }
+}
+
+fn redeploy_wait_timeout_error(
+    options: UpdateOperationWaitOptions<'_>,
+    status: DeploymentUpdateOperationStatus,
+) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ApiRequestFailed {
+        message: format!(
+            "Timed out after {:.1}s waiting for redeploy operation {} on deployment {} (last status: {})",
+            options.timeout.as_secs_f64(),
+            options.operation_id,
+            options.deployment_id,
+            status
+        ),
+        url: None,
+    })
 }
 
 fn find_update_operation<'a>(
@@ -2590,6 +2610,23 @@ mod tests {
     use super::*;
     use alien_manager_api::types::{DeploymentGroupMinimal, Platform};
 
+    fn update_operation(
+        id: &str,
+        status: DeploymentUpdateOperationStatus,
+    ) -> DeploymentUpdateOperationSummaryInner {
+        DeploymentUpdateOperationSummaryInner::builder()
+            .id(id)
+            .status(status)
+            .reasons(vec![
+                alien_platform_api::types::DeploymentUpdateReason::Redeploy,
+            ])
+            .changed_keys(Vec::<String>::new())
+            .requested_at(chrono::Utc::now())
+            .target_release_id(format!("rel_{}", "a".repeat(28)))
+            .try_into()
+            .expect("valid operation")
+    }
+
     fn deployment_with_releases(
         current: Option<&str>,
         desired: Option<&str>,
@@ -2801,26 +2838,13 @@ mod tests {
     fn update_operation_lookup_is_bound_to_the_requested_id() {
         let requested_id = format!("duop_{}", "a".repeat(28));
         let other_id = format!("duop_{}", "b".repeat(28));
-        let operation = |id: &str, status| {
-            alien_platform_api::types::DeploymentUpdateOperationSummaryInner::builder()
-                .id(id)
-                .status(status)
-                .reasons(vec![
-                    alien_platform_api::types::DeploymentUpdateReason::Redeploy,
-                ])
-                .changed_keys(Vec::<String>::new())
-                .requested_at(chrono::Utc::now())
-                .target_release_id(format!("rel_{}", "a".repeat(28)))
-                .try_into()
-                .expect("valid operation")
-        };
         let state = DeploymentDetailResponseUpdateState::builder()
-            .active(Some(operation(
+            .active(Some(update_operation(
                 &other_id,
                 DeploymentUpdateOperationStatus::Applying,
             )))
             .next(None::<DeploymentUpdateOperationSummaryInner>)
-            .latest(Some(operation(
+            .latest(Some(update_operation(
                 &requested_id,
                 DeploymentUpdateOperationStatus::Succeeded,
             )))
@@ -2832,6 +2856,68 @@ mod tests {
         assert_eq!(found.id.as_str(), requested_id);
         assert_eq!(found.status, DeploymentUpdateOperationStatus::Succeeded);
         assert!(find_update_operation_in_state(Some(&state), "duop_missing").is_none());
+    }
+
+    #[tokio::test]
+    async fn correlated_wait_ignores_general_readiness_until_exact_operation_succeeds() {
+        let operation_id = format!("duop_{}", "a".repeat(28));
+        let options = UpdateOperationWaitOptions {
+            workspace: "test-workspace",
+            deployment_id: "dep_test",
+            operation_id: &operation_id,
+            timeout: Duration::from_secs(1),
+            interval: Duration::from_millis(1),
+            json: true,
+        };
+        let mut observations = std::collections::VecDeque::from([
+            update_operation(&operation_id, DeploymentUpdateOperationStatus::Applying),
+            update_operation(&operation_id, DeploymentUpdateOperationStatus::Succeeded),
+        ]);
+        let initial = update_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
+
+        let (completed, _) = await_update_operation(initial, options, || {
+            std::future::ready(Ok(observations
+                .pop_front()
+                .expect("wait should consume the next exact operation observation")))
+        })
+        .await
+        .expect("exact operation should succeed");
+
+        assert_eq!(completed.status, DeploymentUpdateOperationStatus::Succeeded);
+        assert!(observations.is_empty(), "wait must poll through applying");
+    }
+
+    #[tokio::test]
+    async fn correlated_wait_bounds_a_slow_poll_by_the_absolute_deadline() {
+        let operation_id = format!("duop_{}", "a".repeat(28));
+        let timeout = Duration::from_millis(25);
+        let options = UpdateOperationWaitOptions {
+            workspace: "test-workspace",
+            deployment_id: "dep_test",
+            operation_id: &operation_id,
+            timeout,
+            interval: Duration::from_millis(1),
+            json: true,
+        };
+        let initial = update_operation(&operation_id, DeploymentUpdateOperationStatus::Queued);
+        let started = Instant::now();
+
+        let error = await_update_operation(initial, options, || async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(update_operation(
+                &operation_id,
+                DeploymentUpdateOperationStatus::Succeeded,
+            ))
+        })
+        .await
+        .expect_err("slow HTTP-equivalent poll must time out");
+
+        assert_eq!(error.code, "API_REQUEST_FAILED");
+        assert!(error.message.contains("Timed out"));
+        assert!(
+            started.elapsed() < Duration::from_millis(250),
+            "absolute timeout must include the poll await"
+        );
     }
 
     #[test]
