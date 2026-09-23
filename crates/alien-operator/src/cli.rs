@@ -88,6 +88,10 @@ pub struct Args {
     #[arg(long, env = "OPERATOR_NAME")]
     pub operator_name: Option<String>,
 
+    /// Label domain used for operator-owned resources and deployment discovery.
+    #[arg(long, env = "OPERATOR_LABEL_DOMAIN")]
+    pub operator_label_domain: Option<String>,
+
     #[arg(long, env = "OPERATOR_SCOPE")]
     pub operator_scope: Option<String>,
 
@@ -600,11 +604,15 @@ async fn run_operator_cli(
         .maybe_label_selector(args.operator_label_selector)
         .observe_all_namespaces(args.operator_observe_all_namespaces)
         .maybe_app_version(args.operator_release_version)
-        .maybe_label_domain(pinned_legacy_label_domain.or_else(|| {
-            embedded_config
-                .as_ref()
-                .and_then(|config| config.brand.clone().or_else(|| config.label_domain.clone()))
-        }))
+        .maybe_label_domain(
+            args.operator_label_domain
+                .or(pinned_legacy_label_domain)
+                .or_else(|| {
+                    embedded_config.as_ref().and_then(|config| {
+                        config.label_domain.clone().or_else(|| config.brand.clone())
+                    })
+                }),
+        )
         .maybe_collector_token(collector_token)
         .maybe_public_endpoints(public_endpoints)
         .stack_settings(stack_settings)
@@ -1403,6 +1411,20 @@ mod tests {
             InitialDesiredReleaseArg::Active
         );
         assert_eq!(args.operator_permission.as_deref(), Some("observe"));
+    }
+
+    #[test]
+    fn label_domain_is_configurable_at_runtime() {
+        let args = Args::try_parse_from([
+            "operator",
+            "--platform",
+            "kubernetes",
+            "--operator-label-domain",
+            "example.dev",
+        ])
+        .expect("operator arguments should parse");
+
+        assert_eq!(args.operator_label_domain.as_deref(), Some("example.dev"));
     }
 
     #[tokio::test]

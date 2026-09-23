@@ -150,11 +150,27 @@ pub fn append_embedded_config<T: Serialize>(
     binary_data: &[u8],
     config: &T,
 ) -> Result<Vec<u8>, EmbeddedConfigError> {
+    let trailer = encode_embedded_config_trailer(config)?;
+
+    let mut result = Vec::with_capacity(binary_data.len() + trailer.len());
+    result.extend_from_slice(binary_data);
+    result.extend_from_slice(&trailer);
+
+    Ok(result)
+}
+
+/// Encode the self-contained trailer appended to a binary with embedded config.
+///
+/// Writes: JSON payload + 4-byte LE length + magic bytes. Keeping this separate
+/// lets object stores compose an existing binary with a small configuration
+/// object without downloading and uploading the binary again.
+pub fn encode_embedded_config_trailer<T: Serialize>(
+    config: &T,
+) -> Result<Vec<u8>, EmbeddedConfigError> {
     let json_bytes = serde_json::to_vec(config).map_err(EmbeddedConfigError::Deserialization)?;
     let json_len = json_bytes.len() as u32;
 
-    let mut result = Vec::with_capacity(binary_data.len() + json_bytes.len() + FOOTER_SIZE);
-    result.extend_from_slice(binary_data);
+    let mut result = Vec::with_capacity(json_bytes.len() + FOOTER_SIZE);
     result.extend_from_slice(&json_bytes);
     result.extend_from_slice(&json_len.to_le_bytes());
     result.extend_from_slice(MAGIC_BYTES);
@@ -185,6 +201,37 @@ impl std::error::Error for EmbeddedConfigError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoded_trailer_matches_append_output_exactly() {
+        let config = DeployCliConfig {
+            token: Some("secret".into()),
+            deployment_group_id: Some("dg_123".into()),
+            default_platform: Some("aws".into()),
+            api_base_url: Some("https://api.example.com".into()),
+            agent_binary_url: None,
+            machine_bundle_url: None,
+            install_script_url: None,
+            setup_revision: Some("revision".into()),
+            token_env_var: Some("EXAMPLE_TOKEN".into()),
+            name: Some("example-deploy".into()),
+            display_name: Some("Example Deploy".into()),
+        };
+        let binary = b"an existing executable";
+
+        let appended = append_embedded_config(binary, &config).expect("config should append");
+        let trailer = encode_embedded_config_trailer(&config).expect("trailer should encode");
+
+        assert_eq!(appended, [binary.as_slice(), trailer.as_slice()].concat());
+
+        let loaded: DeployCliConfig = load_embedded_config_from_path_bytes(&appended)
+            .expect("appended config should parse")
+            .expect("appended config should exist");
+        assert_eq!(loaded.token, config.token);
+        assert_eq!(loaded.deployment_group_id, config.deployment_group_id);
+        assert_eq!(loaded.setup_revision, config.setup_revision);
+        assert_eq!(loaded.name, config.name);
+    }
 
     #[test]
     fn test_roundtrip_deploy_cli_config() {
