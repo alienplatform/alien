@@ -632,6 +632,7 @@ pub struct SingleControllerExecutorBuilder {
     domain_metadata: Option<DomainMetadata>,
     public_endpoints: Option<alien_core::PublicEndpointUrls>,
     dependencies: Vec<(ResourceRef, Resource, Box<dyn ResourceController>)>,
+    stack_resources: Vec<(Resource, ResourceLifecycle)>,
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
@@ -656,6 +657,7 @@ impl SingleControllerExecutorBuilder {
             domain_metadata: None,
             public_endpoints: None,
             dependencies: Vec::new(),
+            stack_resources: Vec::new(),
             service_provider: None,
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
@@ -747,6 +749,18 @@ impl SingleControllerExecutorBuilder {
         let resource_ref = ResourceRef::new(resource.resource_type(), resource.id());
         self.dependencies
             .push((resource_ref, resource, Box::new(controller)));
+        self
+    }
+
+    /// Adds a resource the stack declares that the main resource does not depend on, not yet
+    /// created. For a controller whose behaviour depends on what else is in the stack.
+    pub fn with_stack_resource<R: ResourceDefinition>(
+        mut self,
+        resource: R,
+        lifecycle: ResourceLifecycle,
+    ) -> Self {
+        self.stack_resources
+            .push((Resource::new(resource), lifecycle));
         self
     }
 
@@ -972,6 +986,28 @@ impl SingleControllerExecutorBuilder {
                 .build();
 
             stack_state.resources.insert(dep_id, stack_resource_state);
+        }
+
+        for (other, lifecycle) in &self.stack_resources {
+            stack_resources.insert(
+                other.id().to_string(),
+                ResourceEntry {
+                    config: other.clone(),
+                    lifecycle: *lifecycle,
+                    dependencies: vec![],
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+            stack_state.resources.insert(
+                other.id().to_string(),
+                StackResourceState::new_pending(
+                    other.resource_type().to_string(),
+                    other.clone(),
+                    Some(*lifecycle),
+                    vec![],
+                ),
+            );
         }
 
         // Add the main resource
