@@ -11,8 +11,8 @@ use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
 use alien_core::{
-    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, ResourceLifecycle,
-    Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
+    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Network, Platform,
+    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SetupScaffolding, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::info;
@@ -40,28 +40,10 @@ pub(super) async fn reconcile(
     let partition = aws_partition(&aws.region);
     let role_name = sandbox_build_role_name(ctx.resource_prefix, &sandbox.id);
     let SandboxCode::Image { image } = &sandbox.code else {
-        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: "an AWS sandbox is built from a prebuilt s3:// bundle, not from source"
-                .to_string(),
-            resource_id: Some(sandbox.id.clone()),
-        }));
+        return Err(not_a_bundle(sandbox));
     };
-    let build_role = SandboxBuildRole::builder()
-        .sandbox_id(&sandbox.id)
-        .partition(partition)
-        .account_id(&aws.account_id)
-        .region(&aws.region)
-        .bundle_uri(image)
-        .runtime_built(lifecycle == ResourceLifecycle::Live)
-        .build();
-    let policy = serde_json::to_value(build_role.policy().context(
-        ErrorData::ResourceConfigInvalid {
-            message: "the sandbox's build role policy cannot be resolved".to_string(),
-            resource_id: Some(sandbox.id.clone()),
-        },
-    )?)
-    .into_alien_error()
-    .context(serialize_failed(&sandbox.id))?;
+    let build_role = build_role(aws, sandbox, image, lifecycle);
+    let policy = build_policy(&build_role, sandbox)?;
     let trust = serde_json::to_value(build_role.trust_policy())
         .into_alien_error()
         .context(serialize_failed(&sandbox.id))?;
@@ -182,6 +164,73 @@ pub(super) async fn applied_policy(
             resource_id: Some(sandbox_id.to_string()),
         }),
     }
+}
+
+fn build_role<'a>(
+    aws: &'a alien_aws_clients::AwsClientConfig,
+    sandbox: &'a Sandbox,
+    bundle_uri: &'a str,
+    lifecycle: ResourceLifecycle,
+) -> SandboxBuildRole<'a> {
+    SandboxBuildRole::builder()
+        .sandbox_id(&sandbox.id)
+        .partition(aws_partition(&aws.region))
+        .account_id(&aws.account_id)
+        .region(&aws.region)
+        .bundle_uri(bundle_uri)
+        .runtime_built(lifecycle == ResourceLifecycle::Live)
+        .build()
+}
+
+fn build_policy(build_role: &SandboxBuildRole<'_>, sandbox: &Sandbox) -> Result<serde_json::Value> {
+    serde_json::to_value(
+        build_role
+            .policy()
+            .context(ErrorData::ResourceConfigInvalid {
+                message: "the sandbox's build role policy cannot be resolved".to_string(),
+                resource_id: Some(sandbox.id.clone()),
+            })?,
+    )
+    .into_alien_error()
+    .context(serialize_failed(&sandbox.id))
+}
+
+fn not_a_bundle(sandbox: &Sandbox) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::ResourceConfigInvalid {
+        message: "an AWS sandbox is built from a prebuilt s3:// bundle, not from source"
+            .to_string(),
+        resource_id: Some(sandbox.id.clone()),
+    })
+}
+
+/// The declared facts [`reconcile`] builds this sandbox's scaffolding from, each with the name a
+/// refused update reports it by. A new bundle under the same stable prefix leaves them unchanged.
+pub(super) fn setup_inputs(
+    client_config: &ClientConfig,
+    stack: &Stack,
+    sandbox: &Sandbox,
+    lifecycle: ResourceLifecycle,
+) -> Result<Vec<(&'static str, serde_json::Value)>> {
+    let aws = aws_config(client_config)?;
+    let SandboxCode::Image { image } = &sandbox.code else {
+        return Err(not_a_bundle(sandbox));
+    };
+    let policy = build_policy(&build_role(aws, sandbox, image, lifecycle), sandbox)?;
+    let egress = serde_json::to_value(&sandbox.egress)
+        .into_alien_error()
+        .context(serialize_failed(&sandbox.id))?;
+    let network = match sandbox.egress {
+        SandboxEgress::Deny => stack
+            .resources()
+            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
+            .map(|(network_id, _)| network_id.clone()),
+        _ => None,
+    };
+    Ok(vec![
+        ("egress", egress),
+        ("egress network", serde_json::json!(network)),
+        ("build role policy", policy),
+    ])
 }
 
 /// What the template setups register for this sandbox, from the build role this step verified
@@ -923,6 +972,118 @@ mod tests {
             .await
             .expect_err("a role that will not delete fails teardown");
         assert_eq!(records, recorded(), "the next attempt still knows the role");
+    }
+
+    fn stack_of(sandbox: Sandbox, network_id: Option<&str>) -> Stack {
+        let mut stack = Stack::new("acme".to_string());
+        if let Some(network_id) = network_id {
+            stack = stack.add(
+                Network::new(network_id.to_string())
+                    .settings(alien_core::NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        stack.add(sandbox, ResourceLifecycle::Live).build()
+    }
+
+    fn changes(installed: &Stack, target: &Stack, platform: Platform) -> Vec<String> {
+        super::super::changes_requiring_setup(&client_config(), installed, target, platform)
+            .unwrap()
+    }
+
+    fn with(egress: SandboxEgress, bundle: &str) -> Sandbox {
+        Sandbox {
+            egress,
+            code: SandboxCode::Image {
+                image: bundle.to_string(),
+            },
+            ..sandbox()
+        }
+    }
+
+    #[test]
+    fn scaffolding_inputs_that_change_need_setup() {
+        let allow = stack_of(sandbox(), Some("net"));
+        let deny = stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("net"));
+        assert_eq!(
+            changes(&allow, &deny, Platform::Aws),
+            vec![
+                "sandbox 'agents' changes its egress",
+                "sandbox 'agents' changes its egress network",
+            ]
+        );
+        assert_eq!(
+            changes(&deny, &allow, Platform::Aws),
+            vec![
+                "sandbox 'agents' changes its egress",
+                "sandbox 'agents' changes its egress network",
+            ]
+        );
+        assert_eq!(
+            changes(
+                &deny,
+                &stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("other-net")),
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' changes its egress network"]
+        );
+        assert_eq!(
+            changes(
+                &allow,
+                &stack_of(
+                    with(
+                        SandboxEgress::Allow,
+                        "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
+                    ),
+                    Some("net")
+                ),
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' changes its build role policy"]
+        );
+        assert_eq!(
+            changes(
+                &Stack::new("acme".to_string()).build(),
+                &allow,
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' is new, and setup creates its build role"]
+        );
+    }
+
+    #[test]
+    fn a_new_bundle_version_or_session_policy_needs_no_setup() {
+        let installed = stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("net"));
+        let target = stack_of(
+            Sandbox {
+                lifecycle: SandboxLifecyclePolicy {
+                    max_lifetime_seconds: Some(3600),
+                    idle_pause_seconds: Some(60),
+                },
+                ..with(
+                    SandboxEgress::Deny,
+                    "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip",
+                )
+            },
+            Some("net"),
+        );
+        assert_eq!(
+            changes(&installed, &target, Platform::Aws),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            changes(
+                &Stack::new("acme".to_string()).build(),
+                &target,
+                Platform::Gcp
+            ),
+            Vec::<String>::new(),
+            "only a platform whose direct setup scaffolds the sandbox is held to it"
+        );
     }
 
     /// The controller passes the role by ARN and this step creates it by name; if the two were

@@ -62,6 +62,60 @@ pub async fn reconcile(
     Ok(progress)
 }
 
+/// Why an update from `installed` to `target` needs setup to run first: a scaffolded resource that
+/// is new, or whose scaffolding would change. An update acts with the runtime identity, which is
+/// never granted what creating or changing scaffolding takes.
+pub fn changes_requiring_setup(
+    client_config: &ClientConfig,
+    installed: &Stack,
+    target: &Stack,
+    platform: Platform,
+) -> Result<Vec<String>> {
+    let mut changes = Vec::new();
+    for (resource_id, entry, scaffolded) in scaffolded(target, platform) {
+        let installed_entry = installed
+            .resources
+            .get(resource_id)
+            .filter(|installed_entry| needs_setup_scaffolding(installed_entry));
+        match scaffolded {
+            #[cfg(feature = "aws")]
+            Scaffolded::AwsSandbox(sandbox) => {
+                let Some((installed_sandbox, installed_lifecycle)) =
+                    installed_entry.and_then(|installed_entry| {
+                        Some((
+                            installed_entry
+                                .config
+                                .downcast_ref::<alien_core::Sandbox>()?,
+                            installed_entry.lifecycle,
+                        ))
+                    })
+                else {
+                    changes.push(format!(
+                        "sandbox '{resource_id}' is new, and setup creates its build role"
+                    ));
+                    continue;
+                };
+                let before = aws_sandbox::setup_inputs(
+                    client_config,
+                    installed,
+                    installed_sandbox,
+                    installed_lifecycle,
+                )?;
+                let after =
+                    aws_sandbox::setup_inputs(client_config, target, sandbox, entry.lifecycle)?;
+                for ((name, was), (_, is)) in before.iter().zip(&after) {
+                    if was != is {
+                        changes.push(format!("sandbox '{resource_id}' changes its {name}"));
+                    }
+                }
+            }
+            #[cfg(not(feature = "aws"))]
+            Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+        }
+    }
+    Ok(changes)
+}
+
 /// The resources a direct setup scaffolds on `platform`; the template setups render the rest.
 fn scaffolded(
     stack: &Stack,
