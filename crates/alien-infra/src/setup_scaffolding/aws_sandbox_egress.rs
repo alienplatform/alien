@@ -2807,6 +2807,84 @@ mod tests {
         assert_eq!(state.resources["agents"].resource_type, "worker");
     }
 
+    /// A serving sandbox's egress mode changes only through setup running again. Each run leaves
+    /// a binding the runtime loads with the declared mode, and the egress objects a switch to
+    /// allow no longer uses stay recorded, so teardown still removes them.
+    #[tokio::test(start_paused = true)]
+    async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
+        use crate::core::ResourceController as _;
+        use crate::sandbox::AwsSandboxController;
+        use alien_core::import::ImportContext;
+
+        let cloud = Shared::default();
+        let allow = stack(SandboxEgress::Allow, created_network());
+        let deny = stack(SandboxEgress::Deny, created_network());
+        let mut state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &allow, &state, &mut records).await;
+        let settings = alien_core::StackSettings::default();
+        let mut serving = crate::ImporterRegistry::built_in()
+            .run(
+                &Sandbox::RESOURCE_TYPE,
+                Platform::Aws,
+                json!({
+                    "imageIdentifier": SERVING_IMAGE_ARN,
+                    "imageArn": SERVING_IMAGE_ARN,
+                    "imageVersion": "1.0",
+                    "allowEgress": true,
+                }),
+                &ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &settings,
+                    management_config: None,
+                    resource: &allow.resources["agents"],
+                },
+            )
+            .unwrap();
+        serving.controller_platform = Some(Platform::Aws);
+        state.resources.insert("agents".to_string(), serving);
+
+        let binding = |state: &StackState| {
+            AwsSandboxController::from_persisted(
+                state.resources["agents"].internal_state.clone().unwrap(),
+            )
+            .unwrap()
+            .get_binding_params()
+            .unwrap()
+            .expect("a serving sandbox keeps its binding")
+        };
+
+        converge(&cloud, &deny, &state, &mut records).await;
+        seed_again(&cloud, &deny, &mut state, &records).unwrap();
+        let connector_arn = cloud.lock().unwrap().connectors[0].0.clone();
+        let denied = binding(&state);
+        assert_eq!(
+            egress_facts(&denied),
+            (false, vec![connector_arn.clone()], vec![])
+        );
+        load(&denied).await.unwrap();
+
+        converge(&cloud, &allow, &state, &mut records).await;
+        seed_again(&cloud, &allow, &mut state, &records).unwrap();
+        let allowed = binding(&state);
+        assert_eq!(egress_facts(&allowed), (true, vec![], vec![]));
+        load(&allowed).await.unwrap();
+        assert_eq!(
+            records["agents"],
+            full_record("sg-1", &connector_arn),
+            "the unused egress objects stay recorded for teardown"
+        );
+
+        let mut calls = 0;
+        while tear_down(&cloud, &mut records).await.unwrap().0 != ScaffoldingProgress::Done {
+            bounded(&mut calls);
+        }
+        let cloud = cloud.lock().unwrap();
+        assert!(cloud.roles.is_empty() && cloud.groups.is_empty() && cloud.connectors.is_empty());
+    }
+
     const SERVING_IMAGE_ARN: &str =
         "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
 
