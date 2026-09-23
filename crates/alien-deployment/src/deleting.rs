@@ -117,7 +117,10 @@ pub async fn handle_deleting(
     )?;
 
     let result = if stack_status == StackStatus::Deleted {
-        let next_status = if has_remaining_setup_resources(&step_result.next_state) {
+        let next_status = if has_remaining_setup_resources(&step_result.next_state)
+            || crate::setup_teardown::has_setup_scaffolding(
+                current_cloned.runtime_metadata.as_ref(),
+            ) {
             DeploymentStatus::TeardownRequired
         } else {
             DeploymentStatus::Deleted
@@ -370,6 +373,104 @@ mod tests {
             StackStatus::Deleted
         );
         assert!(has_remaining_setup_resources(&stack_state));
+    }
+
+    async fn runtime_cleanup_of_an_empty_stack(
+        runtime_metadata: Option<alien_core::RuntimeMetadata>,
+    ) -> DeploymentStatus {
+        let current = DeploymentState {
+            status: DeploymentStatus::Deleting,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::with_resource_prefix(
+                Platform::Aws,
+                "test".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            runtime_metadata,
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        };
+        let config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        handle_deleting(
+            current,
+            config,
+            alien_core::ClientConfig::Aws(Box::new(
+                <alien_aws_clients::AwsClientConfig as alien_aws_clients::AwsClientConfigExt>::mock(
+                ),
+            )),
+            Arc::new(DefaultPlatformServiceProvider::default()),
+        )
+        .await
+        .expect("runtime cleanup of an empty stack completes")
+        .state
+        .status
+    }
+
+    fn scaffolding_record(
+        authority: alien_core::InitialSetupAuthority,
+    ) -> alien_core::RuntimeMetadata {
+        alien_core::RuntimeMetadata {
+            initial_setup_authority: authority,
+            setup_scaffolding: std::collections::BTreeMap::from([(
+                "agents".to_string(),
+                alien_core::SetupScaffolding::AwsSandbox {
+                    build_role_name: "test-agents-build".to_string(),
+                    egress: None,
+                },
+            )]),
+            ..Default::default()
+        }
+    }
+
+    /// A direct setup's scaffolding is not a stack resource, so a stack of only Live resources
+    /// would otherwise read as fully deleted and leave the recorded roles and groups behind.
+    #[tokio::test]
+    async fn recorded_setup_scaffolding_keeps_a_cleaned_up_deployment_for_teardown() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(scaffolding_record(
+                alien_core::InitialSetupAuthority::DirectSetup
+            )))
+            .await,
+            DeploymentStatus::TeardownRequired
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cleaned_up_deployment_with_nothing_left_for_setup_is_deleted() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(None).await,
+            DeploymentStatus::Deleted
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(alien_core::RuntimeMetadata {
+                initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+                ..Default::default()
+            }))
+            .await,
+            DeploymentStatus::Deleted,
+            "an emptied record has nothing left to tear down"
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(alien_core::RuntimeMetadata {
+                initial_setup_authority: alien_core::InitialSetupAuthority::ImportedHandoff,
+                ..Default::default()
+            }))
+            .await,
+            DeploymentStatus::Deleted,
+            "a template setup's scaffolding is its template's to remove"
+        );
     }
 
     #[tokio::test]

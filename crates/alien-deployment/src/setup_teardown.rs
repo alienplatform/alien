@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, InitialSetupAuthority,
-    ResourceLifecycle, StackState, StackStatus,
+    ResourceLifecycle, RuntimeMetadata, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
@@ -290,19 +290,24 @@ async fn run_setup_teardown_after_handoff_inner(
 const SCAFFOLDING_TEARDOWN_DELAY_MS: u64 = 15_000;
 
 /// Only a direct setup records scaffolding; an imported setup's template owns and removes its own.
+pub(crate) fn has_setup_scaffolding(runtime_metadata: Option<&RuntimeMetadata>) -> bool {
+    runtime_metadata.is_some_and(|metadata| {
+        metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
+            && !metadata.setup_scaffolding.is_empty()
+    })
+}
+
 async fn teardown_setup_scaffolding(
     state: &mut DeploymentState,
     client_config: &ClientConfig,
     service_provider: &dyn alien_infra::PlatformServiceProvider,
 ) -> Result<ScaffoldingProgress> {
+    if !has_setup_scaffolding(state.runtime_metadata.as_ref()) {
+        return Ok(ScaffoldingProgress::Done);
+    }
     let Some(runtime_metadata) = state.runtime_metadata.as_mut() else {
         return Ok(ScaffoldingProgress::Done);
     };
-    if runtime_metadata.initial_setup_authority != InitialSetupAuthority::DirectSetup
-        || runtime_metadata.setup_scaffolding.is_empty()
-    {
-        return Ok(ScaffoldingProgress::Done);
-    }
     let resource_prefix = state
         .stack_state
         .as_ref()
@@ -408,9 +413,7 @@ mod tests {
     use crate::transport::StepReconcileResult;
     use alien_aws_clients::iam::MockIamApi;
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
-    use alien_core::{
-        EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding, StackSettings,
-    };
+    use alien_core::{EnvironmentVariablesSnapshot, Platform, SetupScaffolding, StackSettings};
     use alien_infra::MockPlatformServiceProvider;
     use std::collections::BTreeMap;
     use std::sync::Mutex;
