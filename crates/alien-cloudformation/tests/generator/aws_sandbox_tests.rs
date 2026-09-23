@@ -14,6 +14,7 @@ use alien_core::{
     Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
     SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
 };
+use serde_json::Value;
 
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
 /// A Frozen sandbox is built once and needs no such shape, so it keeps the flat key its snapshots
@@ -1367,7 +1368,6 @@ fn resolve_connector(
     value: &serde_json::Value,
     network_mode_create: bool,
 ) -> Option<serde_json::Value> {
-    use serde_json::Value;
     let reference = |name: &str| -> Option<Value> {
         match name {
             "AWS::NoValue" => None,
@@ -1569,7 +1569,6 @@ fn resolve_registration(
     template: &alien_cloudformation::CfTemplate,
     value: &serde_json::Value,
 ) -> serde_json::Value {
-    use serde_json::Value;
     let sub = |text: &str| {
         let resolved = text
             .replace("${AWS::StackName}", PARITY_PREFIX)
