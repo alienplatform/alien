@@ -1,10 +1,11 @@
 use std::{sync::Arc, time::Duration};
 
 use alien_core::{
-    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, ResourceLifecycle,
-    StackState, StackStatus,
+    ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, InitialSetupAuthority,
+    ResourceLifecycle, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
+use alien_infra::setup_scaffolding::{self, SetupScaffoldingContext};
 use alien_infra::{state_utils::StackStateExt, StackExecutor};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -74,6 +75,18 @@ async fn run_setup_teardown_after_handoff_inner(
     state.status = DeploymentStatus::TeardownRequired;
     state.error = None;
 
+    let service_provider = service_provider
+        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
+
+    if let Err(error) =
+        teardown_setup_scaffolding(state, client_config, service_provider.as_ref()).await
+    {
+        fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
+        return Err(error);
+    }
+    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new())
+        .await?;
+
     let mut stack_state = state.stack_state.take().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
             message: "Stack state required for setup teardown".to_string(),
@@ -103,8 +116,6 @@ async fn run_setup_teardown_after_handoff_inner(
     checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new())
         .await?;
 
-    let service_provider = service_provider
-        .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
     let executor = StackExecutor::for_deletion_with_service_provider(
         client_config.clone(),
         config,
@@ -225,6 +236,41 @@ async fn run_setup_teardown_after_handoff_inner(
     }))
 }
 
+/// Only a direct setup records scaffolding; an imported setup's template owns and removes its own.
+async fn teardown_setup_scaffolding(
+    state: &mut DeploymentState,
+    client_config: &ClientConfig,
+    service_provider: &dyn alien_infra::PlatformServiceProvider,
+) -> Result<()> {
+    let Some(runtime_metadata) = state.runtime_metadata.as_mut() else {
+        return Ok(());
+    };
+    if runtime_metadata.initial_setup_authority != InitialSetupAuthority::DirectSetup
+        || runtime_metadata.setup_scaffolding.is_empty()
+    {
+        return Ok(());
+    }
+    let resource_prefix = state
+        .stack_state
+        .as_ref()
+        .map(|stack_state| stack_state.resource_prefix.clone())
+        .ok_or_else(|| {
+            AlienError::new(ErrorData::MissingConfiguration {
+                message: "Stack state required for setup teardown".to_string(),
+            })
+        })?;
+    let ctx = SetupScaffoldingContext {
+        client_config,
+        service_provider,
+        resource_prefix: &resource_prefix,
+    };
+    setup_scaffolding::teardown(&ctx, &mut runtime_metadata.setup_scaffolding)
+        .await
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to delete setup scaffolding".to_string(),
+        })
+}
+
 async fn fail_setup_teardown(
     deployment_id: &str,
     state: &mut DeploymentState,
@@ -301,4 +347,150 @@ fn setup_teardown_status(stack_state: &StackState) -> Result<StackStatus> {
             message: "Failed to compute setup teardown status".to_string(),
         },
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::transport::StepReconcileResult;
+    use alien_aws_clients::iam::MockIamApi;
+    use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
+    use alien_core::{
+        EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding, StackSettings,
+    };
+    use alien_infra::MockPlatformServiceProvider;
+    use std::collections::BTreeMap;
+    use std::sync::Mutex;
+
+    const BUILD_ROLE: &str = "test-agents-build";
+
+    #[derive(Default)]
+    struct RecordingTransport {
+        checkpoints: Mutex<Vec<DeploymentState>>,
+    }
+
+    #[async_trait::async_trait]
+    impl DeploymentLoopTransport for RecordingTransport {
+        async fn reconcile_step(
+            &self,
+            _deployment_id: &str,
+            state: &DeploymentState,
+            _config: &DeploymentConfig,
+            _update_heartbeat: bool,
+            _suggested_delay_ms: Option<u64>,
+            _heartbeats: Vec<alien_core::ResourceHeartbeat>,
+            _observed_inventory_batches: Vec<alien_core::ObservedInventoryBatch>,
+        ) -> std::result::Result<StepReconcileResult, AlienError> {
+            self.checkpoints.lock().unwrap().push(state.clone());
+            Ok(StepReconcileResult {
+                state: None,
+                config: None,
+            })
+        }
+    }
+
+    fn teardown_required(authority: InitialSetupAuthority) -> DeploymentState {
+        DeploymentState {
+            status: DeploymentStatus::TeardownRequired,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::with_resource_prefix(
+                Platform::Aws,
+                "test".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                initial_setup_authority: authority,
+                setup_scaffolding: BTreeMap::from([(
+                    "agents".to_string(),
+                    SetupScaffolding::AwsSandbox {
+                        build_role_name: BUILD_ROLE.to_string(),
+                    },
+                )]),
+                ..Default::default()
+            }),
+        }
+    }
+
+    async fn run(
+        state: &mut DeploymentState,
+        provider: MockPlatformServiceProvider,
+        transport: &RecordingTransport,
+    ) -> Result<Option<RunnerResult>> {
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        run_setup_teardown_after_handoff(
+            state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                ..Default::default()
+            },
+            transport,
+            Some(Arc::new(provider)),
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn direct_teardown_deletes_the_recorded_build_role() {
+        let mut iam = MockIamApi::new();
+        iam.expect_delete_role_policy()
+            .withf(|role, policy| role == BUILD_ROLE && policy == "sandbox-image-build")
+            .times(1)
+            .returning(|_, _| Ok(()));
+        iam.expect_delete_role()
+            .withf(|role| role == BUILD_ROLE)
+            .times(1)
+            .returning(|_| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let transport = RecordingTransport::default();
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+
+        run(&mut state, provider, &transport).await.unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
+        let first = &transport.checkpoints.lock().unwrap()[0];
+        assert!(
+            first
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .setup_scaffolding
+                .is_empty(),
+            "the deleted role leaves the persisted record before anything else is torn down"
+        );
+    }
+
+    /// A provider with no expectations panics on any cloud call.
+    #[tokio::test]
+    async fn imported_teardown_leaves_scaffolding_to_the_template() {
+        let transport = RecordingTransport::default();
+        let mut state = teardown_required(InitialSetupAuthority::ImportedHandoff);
+
+        run(&mut state, MockPlatformServiceProvider::new(), &transport)
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+    }
 }

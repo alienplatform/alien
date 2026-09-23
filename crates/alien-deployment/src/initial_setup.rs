@@ -5,6 +5,7 @@ use alien_core::{
     InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
+use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
 use alien_infra::{StackExecutor, StackStateExt};
 use tracing::{debug, info};
 
@@ -12,9 +13,10 @@ use tracing::{debug, info};
 ///
 /// This step:
 /// 1. Uses the prepared stack from runtime_metadata (mutated in Pending phase)
-/// 2. Executes one deployment step for Frozen resources
-/// 3. Updates stack state with the result
-/// 4. Transitions to Provisioning when Frozen resources are deployed
+/// 2. Under direct setup, advances the setup scaffolding of runtime-owned resources
+/// 3. Executes one deployment step for Frozen resources
+/// 4. Updates stack state with the result
+/// 5. Transitions to Provisioning when Frozen resources are deployed and scaffolding is done
 ///
 /// Note: Stack settings are set during Pending phase and should not change mid-deployment.
 pub async fn handle_initial_setup(
@@ -96,9 +98,10 @@ pub async fn handle_initial_setup(
     // Deploy setup-owned resources during initial setup. Live resources are
     // created later in Provisioning using the permissions granted by setup.
     info!("Deploying frozen resources in initial setup");
+    let client_config_for_scaffolding = client_config.clone();
     let executor = StackExecutor::builder(&target_stack, client_config)
         .deployment_config(&config)
-        .service_provider(service_provider)
+        .service_provider(service_provider.clone())
         .initial_setup_authority(runtime_metadata.initial_setup_authority)
         .lifecycle_filter(vec![ResourceLifecycle::Frozen])
         .step_running_resources(false)
@@ -108,6 +111,21 @@ pub async fn handle_initial_setup(
         .context(ErrorData::StackExecutionFailed {
             message: "Failed to create stack executor for initial setup".to_string(),
         })?;
+
+    let scaffolding = match runtime_metadata.initial_setup_authority {
+        InitialSetupAuthority::DirectSetup => {
+            reconcile_setup_scaffolding(
+                &target_stack,
+                &stack_state,
+                &client_config_for_scaffolding,
+                service_provider.as_ref(),
+                &mut runtime_metadata,
+            )
+            .await?
+        }
+        // An imported setup created the scaffolding itself, from the template.
+        InitialSetupAuthority::ImportedHandoff => ScaffoldingProgress::Done,
+    };
 
     let step_result = match runtime_metadata.initial_setup_authority {
         InitialSetupAuthority::DirectSetup => executor.step(stack_state).await,
@@ -128,8 +146,8 @@ pub async fn handle_initial_setup(
         message: "Failed to compute initial setup status".to_string(),
     })?;
 
-    // Check if all resources are deployed
-    let result = if stack_status == StackStatus::Running {
+    let result = if stack_status == StackStatus::Running && scaffolding == ScaffoldingProgress::Done
+    {
         info!("Initial setup complete (frozen resources deployed), transitioning to Provisioning");
 
         // Debug: log all resources in stack state to diagnose external binding persistence
@@ -210,6 +228,14 @@ pub async fn handle_initial_setup(
             observed_inventory_batches: vec![],
         }
     } else {
+        // Frozen resources may all be Running while scaffolding is not, and a step with no
+        // delay of its own would then re-enter setup at once, ahead of IAM's read-after-write.
+        let suggested_delay_ms = match scaffolding {
+            ScaffoldingProgress::InProgress => step_result
+                .suggested_delay_ms
+                .or(Some(SCAFFOLDING_POLL_DELAY_MS)),
+            ScaffoldingProgress::Done => step_result.suggested_delay_ms,
+        };
         // Still in progress — log which Frozen resources are not yet running.
         let non_running =
             non_running_resources_for_lifecycle(&target_stack, &step_result.next_state);
@@ -224,7 +250,7 @@ pub async fn handle_initial_setup(
 
         DeploymentStepResult {
             state: next,
-            suggested_delay_ms: step_result.suggested_delay_ms,
+            suggested_delay_ms,
             update_heartbeat: false,
             heartbeats: step_result.heartbeats,
             observed_inventory_batches: vec![],
@@ -232,6 +258,32 @@ pub async fn handle_initial_setup(
     };
 
     Ok(result)
+}
+
+const SCAFFOLDING_POLL_DELAY_MS: u64 = 5_000;
+
+async fn reconcile_setup_scaffolding(
+    target_stack: &Stack,
+    stack_state: &StackState,
+    client_config: &alien_core::ClientConfig,
+    service_provider: &dyn alien_infra::PlatformServiceProvider,
+    runtime_metadata: &mut alien_core::RuntimeMetadata,
+) -> Result<ScaffoldingProgress> {
+    let ctx = SetupScaffoldingContext {
+        client_config,
+        service_provider,
+        resource_prefix: &stack_state.resource_prefix,
+    };
+    setup_scaffolding::reconcile(
+        &ctx,
+        target_stack,
+        stack_state.platform,
+        &mut runtime_metadata.setup_scaffolding,
+    )
+    .await
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to create setup scaffolding".to_string(),
+    })
 }
 
 fn compute_lifecycle_status(
@@ -340,11 +392,15 @@ pub async fn handle_initial_setup_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alien_aws_clients::iam::MockIamApi;
     use alien_core::{
-        ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, StackSettings,
-        Storage,
+        ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
+        StackSettings, Storage,
     };
-    use alien_infra::{DefaultPlatformServiceProvider, StackResourceStateExt};
+    use alien_infra::{
+        DefaultPlatformServiceProvider, MockPlatformServiceProvider, StackResourceStateExt,
+    };
+    use std::collections::BTreeMap;
     use std::sync::Arc;
 
     fn config() -> DeploymentConfig {
@@ -419,6 +475,205 @@ mod tests {
                 ..Default::default()
             }),
         }
+    }
+
+    const BUILD_ROLE: &str = "test-agents-build";
+
+    fn live_sandbox_setup(authority: InitialSetupAuthority) -> DeploymentState {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let stack = Stack::new("test".to_string())
+            .add(sandbox, ResourceLifecycle::Live)
+            .build();
+        DeploymentState {
+            status: DeploymentStatus::InitialSetup,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(StackState::with_resource_prefix(
+                Platform::Aws,
+                "test".to_string(),
+            )),
+            error: None,
+            environment_info: None,
+            retry_requested: false,
+            protocol_version: alien_core::DEPLOYMENT_PROTOCOL_VERSION,
+            runtime_metadata: Some(RuntimeMetadata {
+                prepared_stack: Some(stack),
+                initial_setup_authority: authority,
+                ..Default::default()
+            }),
+        }
+    }
+
+    fn aws_client_config() -> ClientConfig {
+        use alien_aws_clients::AwsClientConfigExt as _;
+        ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock()))
+    }
+
+    fn with_iam(iam: MockIamApi) -> Arc<MockPlatformServiceProvider> {
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        Arc::new(provider)
+    }
+
+    fn created_role() -> alien_aws_clients::iam::Role {
+        let trust = serde_json::json!({
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Effect": "Allow",
+                "Principal": { "Service": "lambda.amazonaws.com" },
+                "Action": "sts:AssumeRole",
+                "Condition": { "StringEquals": { "aws:SourceAccount": "123456789012" } }
+            }]
+        });
+        alien_aws_clients::iam::Role {
+            path: "/".to_string(),
+            role_name: BUILD_ROLE.to_string(),
+            role_id: "AROAEXAMPLE".to_string(),
+            arn: format!("arn:aws:iam::123456789012:role/{BUILD_ROLE}"),
+            create_date: "2026-09-23T00:00:00Z".to_string(),
+            assume_role_policy_document: Some(trust.to_string()),
+            description: None,
+            max_session_duration: None,
+            permissions_boundary: None,
+            tags: None,
+            role_last_used: None,
+        }
+    }
+
+    /// A Live sandbox is the only resource, so Frozen setup is finished at once; the build
+    /// role is what holds the handoff until it exists and carries its policy.
+    #[tokio::test]
+    async fn direct_setup_hands_off_only_once_the_build_role_is_ready() {
+        use alien_aws_clients::iam::{
+            CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult,
+            ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult,
+            ListRolePoliciesResponse, ListRolePoliciesResult,
+        };
+
+        let mut absent = MockIamApi::new();
+        absent.expect_get_role().times(1).returning(|name| {
+            Err(alien_error::AlienError::new(
+                alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Resource".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
+        absent
+            .expect_create_role()
+            .withf(|request| request.role_name == BUILD_ROLE)
+            .times(1)
+            .returning(|_| {
+                Ok(CreateRoleResponse {
+                    create_role_result: CreateRoleResult {
+                        role: created_role(),
+                    },
+                })
+            });
+        let first = handle_initial_setup(
+            live_sandbox_setup(InitialSetupAuthority::DirectSetup),
+            config(),
+            aws_client_config(),
+            with_iam(absent),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.state.status, DeploymentStatus::InitialSetup);
+        assert_eq!(first.suggested_delay_ms, Some(SCAFFOLDING_POLL_DELAY_MS));
+        let recorded = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+            },
+        )]);
+        assert_eq!(
+            first
+                .state
+                .runtime_metadata
+                .as_ref()
+                .unwrap()
+                .setup_scaffolding,
+            recorded
+        );
+
+        let mut present = MockIamApi::new();
+        present.expect_get_role().returning(|_| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        present.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        present.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        present
+            .expect_put_role_policy()
+            .withf(|role, policy, _| role == BUILD_ROLE && policy == "sandbox-image-build")
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        let second = handle_initial_setup(
+            first.state,
+            config(),
+            aws_client_config(),
+            with_iam(present),
+        )
+        .await
+        .unwrap();
+        assert_eq!(second.state.status, DeploymentStatus::Provisioning);
+        assert_eq!(
+            second.state.runtime_metadata.unwrap().setup_scaffolding,
+            recorded
+        );
+    }
+
+    /// An imported setup's template already made the role; a provider with no expectations
+    /// panics on any cloud call.
+    #[tokio::test]
+    async fn imported_setup_creates_no_scaffolding() {
+        let result = handle_initial_setup(
+            live_sandbox_setup(InitialSetupAuthority::ImportedHandoff),
+            config(),
+            aws_client_config(),
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+        assert!(result
+            .state
+            .runtime_metadata
+            .unwrap()
+            .setup_scaffolding
+            .is_empty());
     }
 
     #[tokio::test]
