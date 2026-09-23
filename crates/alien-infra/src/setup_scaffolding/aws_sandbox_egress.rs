@@ -15,13 +15,12 @@ use alien_aws_clients::ec2::{
 use alien_aws_clients::iam::{CreateRoleRequest, IamApi};
 use alien_aws_clients::AwsClientConfig;
 use alien_core::sandbox_egress::{
-    sandbox_egress_connector_name, sandbox_egress_name, sandbox_egress_operator_policy,
-    sandbox_egress_operator_trust_policy, SandboxEgressConnector, LOOPBACK_ONLY_CIDR,
-    NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
+    sandbox_egress_connector_name, sandbox_egress_name, sandbox_egress_network,
+    sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy, SandboxEgressConnector,
+    LOOPBACK_ONLY_CIDR, NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
 };
 use alien_core::{
-    AwsSandboxEgressScaffolding, Network, NetworkSettings, ResourceLifecycle, ResourceStatus,
-    Sandbox, SandboxEgress, Stack, StackState,
+    AwsSandboxEgressScaffolding, ResourceLifecycle, ResourceStatus, Sandbox, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
@@ -40,49 +39,29 @@ const IAM_ROLE_NAME_MAX_LEN: usize = 64;
 
 /// The network a deny sandbox's connector attaches to, or `None` for a sandbox that needs none.
 ///
-/// Refuses what the template emitters refuse: a mode with no connector configuration to render,
-/// and a network with no private subnets, where a session would start with no connector and
-/// reach the internet.
+/// Refuses what the template emitters refuse (see [`sandbox_egress_network`]), and a network only
+/// the runtime creates: setup waits for the network to run before creating the connector, and
+/// that one would never run during setup.
 pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<Option<&'a str>> {
-    let refuse = |reason: &str| {
+    let refuse = |message: String| {
         Err(AlienError::new(ErrorData::ResourceConfigInvalid {
-            message: format!(
-                "an AWS sandbox routes session traffic through a VPC egress connector; {reason}"
-            ),
+            message,
             resource_id: Some(sandbox.id.clone()),
         }))
     };
-    match &sandbox.egress {
-        SandboxEgress::Allow => return Ok(None),
-        SandboxEgress::AllowDomains { .. } => {
-            return refuse(
-                "egress 'allowDomains' has no connector configuration to render into. Declare \
-                 egress: deny or egress: allow",
-            )
-        }
-        SandboxEgress::Deny => {}
-    }
-    let Some((network_id, entry, network)) = stack
-        .resources()
-        .find_map(|(id, entry)| Some((id, entry, entry.config.downcast_ref::<Network>()?)))
-    else {
-        return refuse("this stack declares no network for it to attach to");
+    let network = match sandbox_egress_network(stack, &sandbox.egress) {
+        Ok(Some(network)) => network,
+        Ok(None) => return Ok(None),
+        Err(refusal) => return refuse(refusal.to_string()),
     };
-    // Setup waits for the network to run before creating the connector; a network only the
-    // runtime creates would never run during setup.
-    if entry.lifecycle != ResourceLifecycle::Frozen {
-        return refuse("its network must be created by setup, and this one is created at runtime");
+    if network.entry.lifecycle != ResourceLifecycle::Frozen {
+        return refuse(
+            "an AWS sandbox routes session traffic through a VPC egress connector; its network \
+             must be created by setup, and this one is created at runtime"
+                .to_string(),
+        );
     }
-    match &network.settings {
-        NetworkSettings::Create { .. } | NetworkSettings::ByoVpcAws { .. } => {
-            Ok(Some(network_id.as_str()))
-        }
-        NetworkSettings::UseDefault => refuse(
-            "the account's default VPC has only public subnets. Set the network to create or \
-             byo-vpc-aws",
-        ),
-        _ => refuse("this stack's network settings are for another cloud"),
-    }
+    Ok(Some(network.id))
 }
 
 pub(super) async fn reconcile(
@@ -1132,8 +1111,8 @@ mod tests {
     use alien_core::bindings::SandboxBinding;
     use alien_core::import::ImportContext;
     use alien_core::{
-        ClientConfig, Platform, Resource, ResourceLifecycle, ResourceRef, SandboxCode,
-        SandboxLifecyclePolicy, SetupScaffolding, StackResourceState,
+        ClientConfig, Network, NetworkSettings, Platform, Resource, ResourceLifecycle, ResourceRef,
+        SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SetupScaffolding, StackResourceState,
     };
     use serde_json::json;
 

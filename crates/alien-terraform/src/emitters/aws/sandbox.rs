@@ -8,21 +8,22 @@ use crate::{
     block::{attr, resource_block},
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
-        aws_terraform_permission_context, default_network, downcast,
-        emit_iam_role_policy_for_target_with_label, iam_policy_name_sanitize, iam_role_block,
-        iam_role_name_template, iam_role_policy_block, jsonencode, nested_block,
-        private_subnet_ids_expr, required_label, resource_prefix_template,
-        service_assume_role_policy, tags, vpc_id_expr,
+        aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
+        iam_policy_name_sanitize, iam_role_block, iam_role_name_template, iam_role_policy_block,
+        jsonencode, nested_block, private_subnet_ids_expr, required_label,
+        resource_prefix_template, service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
-use alien_core::sandbox_egress::{sandbox_egress_name, LOOPBACK_ONLY_CIDR};
+use alien_core::sandbox_egress::{
+    sandbox_egress_name, sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR,
+};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
-    import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
-    NetworkSettings, RemoteBindings, ResourceLifecycle, Result, Sandbox, SandboxCode,
-    SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY, ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
+    import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData, RemoteBindings,
+    ResourceLifecycle, Result, Sandbox, SandboxCode, SandboxEgress, ALIEN_MANAGED_BY_TAG_KEY,
+    ALIEN_RESOURCE_TAG_KEY, ALIEN_STACK_TAG_KEY,
 };
 use alien_error::AlienError;
 use alien_permissions::BindingTarget;
@@ -72,15 +73,10 @@ impl TfEmitter for AwsSandboxEmitter {
         let sandbox = downcast::<Sandbox>(ctx, Sandbox::RESOURCE_TYPE)?;
         let label = required_label(ctx)?;
         let artifact_uri = artifact_uri(sandbox)?;
-        refuse_unsupported_egress(sandbox)?;
         // An open sandbox routes nothing through a VPC: no subnets, and none of the connector
         // apparatus below exists for it.
-        let open = matches!(sandbox.egress, SandboxEgress::Allow);
-        let subnet_ids = if open {
-            None
-        } else {
-            Some(egress_subnet_ids(ctx, sandbox)?)
-        };
+        let subnet_ids = egress_subnet_ids(ctx, sandbox)?;
+        let open = subnet_ids.is_none();
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
         let tier = sandbox.microvm_tier()?;
@@ -817,44 +813,22 @@ fn operator_statements() -> Vec<Expression> {
     ]
 }
 
-/// The private subnets the connector places its ENIs in.
+/// The private subnets the connector places its ENIs in, or `None` for an open sandbox.
 ///
-/// A connector must name between one and sixteen subnets, and only a created or bring-your-own
-/// VPC yields any. Refusing the other network modes here is what keeps the deny path honest: the
-/// alternative is a connector expression that resolves to an empty list, and a session with no
-/// connector reaches the public internet.
-fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Expression> {
-    let refuse = |reason: String| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
+/// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision; a
+/// created or bring-your-own VPC both render through `private_subnet_ids_expr`.
+fn egress_subnet_ids(ctx: &EmitContext<'_>, sandbox: &Sandbox) -> Result<Option<Expression>> {
+    let network = sandbox_egress_network(ctx.stack, &sandbox.egress).map_err(|refusal| {
+        AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason,
-        }))
-    };
-
-    let Some((_label, network)) = default_network(ctx) else {
-        return refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack declares no network for it to attach to"
-                .to_string(),
-        );
-    };
-
-    match &network.settings {
-        NetworkSettings::Create { .. } | NetworkSettings::ByoVpcAws { .. } => {
-            Ok(private_subnet_ids_expr(ctx))
+            reason: refusal.to_string(),
+        })
+    })?;
+    Ok(network.map(|network| match network.vpc {
+        SandboxEgressVpc::Created | SandboxEgressVpc::BroughtByCustomer => {
+            private_subnet_ids_expr(ctx)
         }
-        NetworkSettings::UseDefault => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, which needs \
-             private subnets; the account's default VPC has only public ones. Set the network \
-             to create or byo-vpc-aws"
-                .to_string(),
-        ),
-        _ => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack's network settings are for another cloud"
-                .to_string(),
-        ),
-    }
+    }))
 }
 
 /// The connectors a session starts with, which an open sandbox has none of.
@@ -869,33 +843,6 @@ fn egress_connector_arns(sandbox: &Sandbox, label: &str) -> Expression {
             label,
             "arn",
         ])]),
-    }
-}
-
-/// Refuses an egress mode the emitted artifact cannot deliver.
-///
-/// `deny` is built from a connector whose security group carries no egress rule. Outbound
-/// allowances are not: AWS has no domain-filtering primitive at the connector, so `allowDomains`
-/// has nothing to render into. `allow` is accepted and emits no connector at all — a MicroVM
-/// without one reaches the internet.
-/// Emitting a template that silently ignores a declared egress policy is worse than refusing it —
-/// the customer would believe outbound access was configured.
-fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
-    let refuse = |mode: &str| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("terraform emit sandbox '{}'", sandbox.id()),
-            reason: format!(
-                "AWS sandboxes reach the network through a VPC egress connector, which this \
-                 module builds to deny outbound traffic; egress '{mode}' has no connector \
-                 configuration to render into. Declare egress: deny for a connector that reaches \
-                 nothing, or egress: allow for no connector at all"
-            ),
-        }))
-    };
-
-    match &sandbox.egress {
-        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
-        SandboxEgress::AllowDomains { .. } => refuse("allowDomains"),
     }
 }
 

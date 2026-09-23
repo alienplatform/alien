@@ -7,19 +7,19 @@
 use crate::{
     emitter::CfEmitter,
     emitters::aws::helpers::{
-        cf_from_json, default_network, private_subnet_ids_expr, required_logical_id,
-        resource_config, service_trust_policy, subnet_refs, tags, vpc_id_expr,
-        CONDITION_NETWORK_MODE_CREATE, PARAM_PRIVATE_SUBNET_IDS,
+        cf_from_json, private_subnet_ids_expr, required_logical_id, resource_config,
+        service_trust_policy, subnet_refs, tags, vpc_id_expr, CONDITION_NETWORK_MODE_CREATE,
+        PARAM_PRIVATE_SUBNET_IDS,
     },
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
 };
 use alien_core::sandbox_build_role::sandbox_build_role_name;
-use alien_core::sandbox_egress::LOOPBACK_ONLY_CIDR;
+use alien_core::sandbox_egress::{sandbox_egress_network, SandboxEgressVpc, LOOPBACK_ONLY_CIDR};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
-    import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, ResourceLifecycle,
-    Result, Sandbox, SandboxCode, SandboxEgress,
+    import::EmitContext, BundleUri, ErrorData, RemoteBindings, ResourceLifecycle, Result, Sandbox,
+    SandboxCode, SandboxEgress,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{generators::AwsCloudFormationPermissionsGenerator, BindingTarget};
@@ -41,7 +41,6 @@ impl CfEmitter for AwsSandboxEmitter {
         let role_id = format!("{image_id}BuildRole");
 
         let artifact_uri = artifact_uri(sandbox)?;
-        refuse_unsupported_egress(sandbox)?;
         let egress = egress_network(ctx, sandbox)?;
         // The size whose peak stays inside the declared ceilings. A MicroVM bursts to four times
         // its baseline with no way to opt out, so the baseline is a quarter of what was declared.
@@ -685,44 +684,38 @@ fn operator_policies() -> CfExpression {
     ])])
 }
 
-/// The VPC and private subnets the connector attaches to.
+/// The VPC and private subnets the connector attaches to, or `None` for an open sandbox.
 ///
-/// A connector must name between one and sixteen subnets, and only a created or bring-your-own
-/// VPC yields any. Refusing the other network modes here is what keeps the deny path honest: the
-/// alternative is a template with no subnets, and a session with no connector reaches the public
-/// internet.
+/// Which network, and which stacks are refused, is [`sandbox_egress_network`]'s decision.
 fn egress_network(
     ctx: &EmitContext<'_>,
     sandbox: &Sandbox,
 ) -> Result<Option<(CfExpression, CfExpression)>> {
     let refuse = |reason: String| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
+        AlienError::new(ErrorData::OperationNotSupported {
             operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
             reason,
-        }))
+        })
     };
-
-    if matches!(sandbox.egress, SandboxEgress::Allow) {
-        // Nothing to attach: a MicroVM started with no connector keeps AWS's managed internet
-        // path, which is what `allow` asks for, and needs no VPC to do it.
+    let Some(network) = sandbox_egress_network(ctx.stack, &sandbox.egress)
+        .map_err(|refusal| refuse(refusal.to_string()))?
+    else {
         return Ok(None);
-    }
-
-    let Some((network_id, network)) = default_network(ctx) else {
-        return refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack declares no network for it to attach to"
-                .to_string(),
-        );
     };
+    let network_id = ctx.name_for(network.id).ok_or_else(|| {
+        refuse(format!(
+            "network '{}' has no logical id in this template",
+            network.id
+        ))
+    })?;
 
-    match &network.settings {
+    Ok(Some(match network.vpc {
         // Deliberately not `private_subnet_ids_expr`: its use-default branch resolves to
         // `AWS::NoValue`, and a connector with no subnets is a required property missing at
         // deploy — cfn-lint rejects it, and worse, it is the case where a session would run with
         // no connector at all. Falling through to the use-existing parameter instead means
         // use-default fails when CloudFormation creates the connector rather than silently.
-        NetworkSettings::Create { .. } => Ok(Some((
+        SandboxEgressVpc::Created => (
             CfExpression::if_(
                 CONDITION_NETWORK_MODE_CREATE,
                 CfExpression::ref_(format!("{network_id}Vpc")),
@@ -733,22 +726,9 @@ fn egress_network(
                 subnet_refs(network_id, "PrivateSubnet"),
                 CfExpression::ref_(PARAM_PRIVATE_SUBNET_IDS),
             ),
-        ))),
-        NetworkSettings::ByoVpcAws { .. } => {
-            Ok(Some((vpc_id_expr(ctx), private_subnet_ids_expr(ctx))))
-        }
-        NetworkSettings::UseDefault => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, which needs \
-             private subnets; the account's default VPC has only public ones. Set the network \
-             to create or byo-vpc-aws"
-                .to_string(),
         ),
-        _ => refuse(
-            "an AWS sandbox routes session traffic through a VPC egress connector, and this \
-             stack's network settings are for another cloud"
-                .to_string(),
-        ),
-    }
+        SandboxEgressVpc::BroughtByCustomer => (vpc_id_expr(ctx), private_subnet_ids_expr(ctx)),
+    }))
 }
 
 /// The connectors a session starts with, which an open sandbox has none of.
@@ -765,32 +745,9 @@ fn egress_connector_arns(sandbox: &Sandbox, image_id: &str) -> CfExpression {
     }
 }
 
-/// Refuses an egress mode the emitted template cannot deliver.
+/// Resolves the S3 bundle the MicroVM image is built from.
 ///
-/// `deny` is built from a connector whose security group permits nothing outbound. Outbound
-/// allowances are not: AWS has no domain-filtering primitive at the connector, so `allowDomains`
-/// has nothing to render into. `allow` is accepted and emits no connector at all — a MicroVM
-/// without one reaches the internet.
-/// A template that silently ignores a declared egress policy is worse than one that refuses it.
-fn refuse_unsupported_egress(sandbox: &Sandbox) -> Result<()> {
-    let refuse = |mode: &str| {
-        Err(AlienError::new(ErrorData::OperationNotSupported {
-            operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
-            reason: format!(
-                "AWS sandboxes reach the network through a VPC egress connector, which this \
-                 template builds to deny outbound traffic; egress '{mode}' has no connector \
-                 configuration to render into. Declare egress: deny for a connector that reaches \
-                 nothing, or egress: allow for no connector at all"
-            ),
-        }))
-    };
-
-    match &sandbox.egress {
-        SandboxEgress::Deny | SandboxEgress::Allow => Ok(()),
-        SandboxEgress::AllowDomains { .. } => refuse("allowDomains"),
-    }
-}
-
+/// A MicroVM image is built from a zip containing a Dockerfile, not from a container image
 /// reference, and Alien has no build step producing one yet. Requiring an `s3://` URI fails at
 /// plan time with something a reader can act on, rather than at the end of a ~160s image build.
 fn artifact_uri(sandbox: &Sandbox) -> Result<BundleUri<'_>> {
