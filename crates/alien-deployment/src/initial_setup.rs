@@ -127,22 +127,13 @@ pub async fn handle_initial_setup(
             .await
             {
                 Ok(progress) => progress,
-                // The record holds what this step created or settled before the error; the
-                // runner's failure path keeps the state from before the step and would drop it.
                 Err(error) => {
-                    let mut next = current_cloned;
-                    next.status = DeploymentStatus::InitialSetupFailed;
-                    next.stack_state = Some(stack_state);
-                    next.error = Some(error.into_generic());
-                    next.retry_requested = false;
-                    next.runtime_metadata = Some(runtime_metadata);
-                    return Ok(DeploymentStepResult {
-                        state: next,
-                        suggested_delay_ms: None,
-                        update_heartbeat: false,
-                        heartbeats: vec![],
-                        observed_inventory_batches: vec![],
-                    });
+                    return Ok(failed_keeping_record(
+                        current_cloned,
+                        stack_state,
+                        runtime_metadata,
+                        error,
+                    ))
                 }
             }
         }
@@ -150,26 +141,44 @@ pub async fn handle_initial_setup(
         InitialSetupAuthority::ImportedHandoff => ScaffoldingProgress::Done,
     };
 
-    let mut step_result = match runtime_metadata.initial_setup_authority {
+    let pre_step_state = stack_state.clone();
+    let mut step_result = match match runtime_metadata.initial_setup_authority {
         InitialSetupAuthority::DirectSetup => executor.step(stack_state).await,
         InitialSetupAuthority::ImportedHandoff => executor.continue_imported(stack_state).await,
     }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to execute deployment step".to_string(),
-    })?;
+    }) {
+        Ok(step_result) => step_result,
+        Err(error) => {
+            return Ok(failed_keeping_record(
+                current_cloned,
+                pre_step_state,
+                runtime_metadata,
+                error,
+            ))
+        }
+    };
 
     // The handoff below requires Done, so no runtime controller starts from an unseeded state.
     if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
         && scaffolding == ScaffoldingProgress::Done
     {
-        seed_setup_scaffolding(
+        if let Err(error) = seed_setup_scaffolding(
             &target_stack,
             &mut step_result.next_state,
             &config,
             &client_config_for_scaffolding,
             service_provider.as_ref(),
             &runtime_metadata,
-        )?;
+        ) {
+            return Ok(failed_keeping_record(
+                current_cloned,
+                step_result.next_state,
+                runtime_metadata,
+                error,
+            ));
+        }
     }
 
     // Compute status only for Frozen resources. A stack with no Frozen
@@ -298,6 +307,30 @@ pub async fn handle_initial_setup(
 }
 
 const SCAFFOLDING_POLL_DELAY_MS: u64 = 5_000;
+
+/// Setup scaffolding records each object in `runtime_metadata` as it is created, and the runner's
+/// failure path would persist the state from before the step, dropping those records. So once
+/// scaffolding has run, a step fails itself with the record it holds.
+fn failed_keeping_record(
+    current: DeploymentState,
+    stack_state: StackState,
+    runtime_metadata: alien_core::RuntimeMetadata,
+    error: AlienError<ErrorData>,
+) -> DeploymentStepResult {
+    let mut next = current;
+    next.status = DeploymentStatus::InitialSetupFailed;
+    next.stack_state = Some(stack_state);
+    next.error = Some(error.into_generic());
+    next.retry_requested = false;
+    next.runtime_metadata = Some(runtime_metadata);
+    DeploymentStepResult {
+        state: next,
+        suggested_delay_ms: None,
+        update_heartbeat: false,
+        heartbeats: vec![],
+        observed_inventory_batches: vec![],
+    }
+}
 
 async fn reconcile_setup_scaffolding(
     target_stack: &Stack,
@@ -924,6 +957,68 @@ mod tests {
         );
     }
 
+    /// Scaffolding creates the build role, then the Frozen step fails on unreadable state. The
+    /// role must stay recorded, or nothing owns it.
+    #[tokio::test]
+    async fn a_failed_frozen_step_keeps_the_scaffolding_it_follows() {
+        let mut state = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
+        let mut unreadable = alien_core::StackResourceState::new_pending(
+            "storage".to_string(),
+            alien_core::Resource::new(Storage::new("store".to_string()).build()),
+            Some(ResourceLifecycle::Frozen),
+            vec![],
+        );
+        unreadable.internal_state = Some(serde_json::json!({}));
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("store".to_string(), unreadable);
+
+        let mut absent = MockIamApi::new();
+        absent.expect_get_role().returning(|name| {
+            Err(alien_error::AlienError::new(
+                alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Resource".to_string(),
+                    resource_name: name.to_string(),
+                },
+            ))
+        });
+        absent
+            .expect_create_role()
+            .withf(|request| request.role_name == BUILD_ROLE)
+            .times(1)
+            .returning(|_| {
+                Ok(CreateRoleResponse {
+                    create_role_result: CreateRoleResult {
+                        role: created_role(),
+                    },
+                })
+            });
+
+        let result = handle_initial_setup(state, config(), aws_client_config(), with_iam(absent))
+            .await
+            .expect("a failed step is a failed setup, not a lost step");
+
+        assert_eq!(result.state.status, DeploymentStatus::InitialSetupFailed);
+        assert!(
+            format!("{:?}", result.state.error).contains("Failed to execute deployment step"),
+            "{:?}",
+            result.state.error
+        );
+        assert_eq!(
+            result.state.runtime_metadata.unwrap().setup_scaffolding,
+            BTreeMap::from([(
+                "agents".to_string(),
+                SetupScaffolding::AwsSandbox {
+                    build_role_name: BUILD_ROLE.to_string(),
+                    egress: None,
+                },
+            )]),
+        );
+    }
+
     /// An imported setup's template already made the role; a provider with no expectations
     /// panics on any cloud call.
     #[tokio::test]
@@ -1186,17 +1281,31 @@ mod tests {
             .unwrap();
         sandbox.internal_state.as_mut().unwrap()["state"] = serde_json::json!("noSuchState");
 
-        let error = handle_initial_setup(
+        let result = handle_initial_setup(
             deployment,
             config(),
             aws_client_config(),
             with_iam(present_role()),
         )
         .await
-        .expect_err("setup must not hand off an unseeded sandbox");
+        .expect("a seed failure is a failed setup, not a lost step");
+        assert_eq!(
+            result.state.status,
+            DeploymentStatus::InitialSetupFailed,
+            "setup must not hand off an unseeded sandbox"
+        );
         assert!(
-            format!("{error:?}").contains("the existing state cannot take the seed"),
-            "the seed's own failure surfaces: {error:?}"
+            format!("{:?}", result.state.error).contains("the existing state cannot take the seed"),
+            "the seed's own failure surfaces: {:?}",
+            result.state.error
+        );
+        assert_eq!(
+            result.state.runtime_metadata.unwrap().setup_scaffolding["agents"],
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
+            },
+            "the build role this step verified stays recorded"
         );
     }
 
