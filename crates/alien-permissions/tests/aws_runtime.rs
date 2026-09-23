@@ -2,6 +2,7 @@ mod common;
 
 use alien_permissions::{
     generators::AwsRuntimePermissionsGenerator, get_permission_set, BindingTarget,
+    PermissionContext,
 };
 use common::*;
 use insta::assert_json_snapshot;
@@ -825,4 +826,55 @@ fn condition_equals(
         .and_then(|condition| condition.get("StringEquals"))
         .and_then(|values| values.get(key))
         .is_some_and(|value| value == expected)
+}
+
+/// The guard only ever refuses, and only on the one sandbox's two setup-created roles. An Allow
+/// slipped in here would reach the management identity for Frozen sandboxes too, because
+/// `management_resource_scope_renders` renders a deny-only set whatever the lifecycle.
+#[test]
+fn the_sandbox_setup_roles_guard_denies_role_writes_on_exactly_two_roles() {
+    let guard = get_permission_set(alien_permissions::SANDBOX_SETUP_ROLES_GUARD)
+        .expect("the guard is registered");
+    assert!(
+        guard.platforms.gcp.is_none() && guard.platforms.azure.is_none(),
+        "the guard is AWS only"
+    );
+    let context = PermissionContext::new()
+        .with_stack_prefix("acme")
+        .with_aws_account_id("123456789012")
+        .with_aws_region("us-east-1")
+        .with_resource_name("agents");
+
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(guard, BindingTarget::Resource, &context)
+        .expect("the guard renders at resource scope");
+
+    assert_eq!(policy.statement.len(), 1);
+    let statement = &policy.statement[0];
+    assert_eq!(statement.effect, "Deny");
+    assert_eq!(
+        statement.action,
+        [
+            "iam:CreateRole",
+            "iam:DeleteRole",
+            "iam:PutRolePolicy",
+            "iam:DeleteRolePolicy",
+            "iam:AttachRolePolicy",
+            "iam:DetachRolePolicy",
+            "iam:UpdateAssumeRolePolicy",
+            "iam:PutRolePermissionsBoundary",
+            "iam:DeleteRolePermissionsBoundary",
+            "iam:UpdateRole",
+            "iam:TagRole",
+            "iam:UntagRole",
+        ]
+    );
+    assert_eq!(
+        statement.resource,
+        [
+            "arn:aws:iam::123456789012:role/acme-agents-build",
+            "arn:aws:iam::123456789012:role/acme-agents-egress",
+        ]
+    );
+    assert_eq!(statement.condition, None);
 }

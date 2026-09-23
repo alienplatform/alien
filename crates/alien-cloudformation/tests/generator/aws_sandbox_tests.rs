@@ -1108,6 +1108,97 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     }
 }
 
+/// Other sets grant role writes on `role/<prefix>-*`; the Deny keeps each sandbox's two setup roles
+/// out of that reach, for a Frozen sandbox as much as a Live one.
+#[test]
+fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
+    let stack = Stack::new("acme-guarded".to_string())
+        .management(alien_core::permissions::ManagementPermissions::extend(
+            alien_core::PermissionProfile::new()
+                .global(["sandbox/provision", "artifact-registry/management"])
+                .resource("agents", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD])
+                .resource("frozen-box", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD]),
+        ))
+        .add(
+            sandbox_fixture_with(
+                SandboxEgress::Allow,
+                "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+            ),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            Sandbox {
+                id: "frozen-box".to_string(),
+                ..sandbox_fixture(SandboxEgress::Allow)
+            },
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            alien_core::RemoteStackManagement::new("management".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "sandbox setup roles guard",
+    );
+
+    let statements: Vec<Value> = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("ManagementRole") && resource.resource_type.contains("Policy")
+        })
+        .flat_map(|(_, resource)| {
+            let properties = serde_json::to_value(&resource.properties).expect("serializes");
+            properties["PolicyDocument"]["Statement"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .collect();
+    let denied: Vec<String> = statements
+        .iter()
+        .filter(|statement| statement["Effect"] == "Deny")
+        .flat_map(|statement| {
+            statement["Resource"]
+                .as_array()
+                .cloned()
+                .unwrap_or_else(|| vec![statement["Resource"].clone()])
+        })
+        .map(|resource| {
+            resource["Fn::Sub"]
+                .as_str()
+                .map_or(resource.to_string(), str::to_string)
+        })
+        .collect();
+    let mut expected: Vec<String> = ["agents", "frozen-box"]
+        .iter()
+        .flat_map(|id| {
+            ["build", "egress"].map(|role| {
+                format!(
+                    "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{id}-{role}"
+                )
+            })
+        })
+        .collect();
+    let mut denied_sorted = denied.clone();
+    denied_sorted.sort();
+    expected.sort();
+    assert_eq!(denied_sorted, expected, "{statements:#?}");
+    assert!(
+        statements
+            .iter()
+            .filter(|statement| statement["Effect"] == "Deny")
+            .all(|statement| !statement.to_string().contains("iam:PassRole")),
+        "the build role must stay passable"
+    );
+}
+
 /// Storage is a remote-binding type too, so the same prefix match stripped `storage/heartbeat`
 /// from every bring-your-own-bucket deployment's management identity.
 #[test]

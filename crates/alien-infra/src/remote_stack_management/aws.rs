@@ -8,8 +8,8 @@ use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
     KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
-    ResourceOutputs, ResourceStatus, Worker,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
+    ResourceStatus, Sandbox, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -678,9 +678,6 @@ impl AwsRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
-            if resource_entry.lifecycle != ResourceLifecycle::Live {
-                continue;
-            }
             let permission_context = Self::resource_scoped_management_permission_context(
                 ctx,
                 base_permission_context,
@@ -700,7 +697,12 @@ impl AwsRemoteStackManagementController {
                 else {
                     continue;
                 };
-                if permission_set.platforms.aws.is_none() {
+                if permission_set.platforms.aws.is_none()
+                    || !alien_permissions::management_resource_scope_renders(
+                        resource_entry,
+                        &permission_set,
+                    )
+                {
                     continue;
                 }
 
@@ -743,6 +745,11 @@ impl AwsRemoteStackManagementController {
             return Ok(
                 context.with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id))
             );
+        }
+
+        // The bare id: sandbox sets name `${stackPrefix}-${resourceName}` themselves.
+        if resource_entry.config.downcast_ref::<Sandbox>().is_some() {
+            return Ok(context.with_resource_name(resource_id.to_string()));
         }
 
         Ok(context)
@@ -1122,4 +1129,150 @@ fn is_remote_not_found(error: &alien_error::AlienError<alien_client_core::ErrorD
         error.error,
         Some(alien_client_core::ErrorData::RemoteResourceNotFound { .. })
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use alien_aws_clients::iam::{
+        CreatePolicyResponse, CreatePolicyResult, CreateRoleResponse, CreateRoleResult,
+        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, MockIamApi, Policy, Role,
+    };
+    use alien_core::{
+        RemoteStackManagement, ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode,
+        SandboxEgress, SandboxLifecyclePolicy,
+    };
+
+    use super::*;
+    use crate::core::controller_test::SingleControllerExecutor;
+    use crate::core::MockPlatformServiceProvider;
+
+    /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
+    /// them on the sandbox's two setup roles and keep the build role passable.
+    #[tokio::test]
+    async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
+        let documents = Arc::new(Mutex::new(Vec::<String>::new()));
+        let mut iam = MockIamApi::new();
+        iam.expect_create_role().returning(|request| {
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: Role {
+                        path: "/".to_string(),
+                        role_name: request.role_name.clone(),
+                        role_id: "AROAEXAMPLE".to_string(),
+                        arn: format!("arn:aws:iam::123456789012:role/{}", request.role_name),
+                        create_date: "2026-09-24T00:00:00Z".to_string(),
+                        assume_role_policy_document: None,
+                        description: None,
+                        max_session_duration: None,
+                        permissions_boundary: None,
+                        tags: None,
+                        role_last_used: None,
+                    },
+                },
+            })
+        });
+        iam.expect_delete_role_policy().returning(|_, _| Ok(()));
+        iam.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let captured = documents.clone();
+        iam.expect_create_policy()
+            .returning(move |name, document, _| {
+                captured.lock().unwrap().push(document.to_string());
+                Ok(CreatePolicyResponse {
+                    create_policy_result: CreatePolicyResult {
+                        policy: Policy {
+                            policy_name: Some(name.to_string()),
+                            policy_id: None,
+                            arn: format!("arn:aws:iam::123456789012:policy/{name}"),
+                            path: None,
+                            default_version_id: None,
+                            attachment_count: None,
+                            is_attachable: None,
+                            create_date: None,
+                            update_date: None,
+                        },
+                    },
+                })
+            });
+        iam.expect_attach_role_policy().returning(|_, _| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+
+        let sandbox = |id: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(RemoteStackManagement::new("management".to_string()).build())
+            .controller(AwsRemoteStackManagementController::default())
+            .platform(Platform::Aws)
+            .service_provider(Arc::new(provider))
+            .with_stack_resource(sandbox("agents"), ResourceLifecycle::Live)
+            .with_stack_resource(sandbox("frozen-box"), ResourceLifecycle::Frozen)
+            .build()
+            .await
+            .expect("executor builds");
+
+        executor.run_until_terminal().await.expect("setup runs");
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let statements: Vec<serde_json::Value> = documents
+            .lock()
+            .unwrap()
+            .iter()
+            .flat_map(|document| {
+                serde_json::from_str::<serde_json::Value>(document).expect("JSON policy")
+                    ["Statement"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default()
+            })
+            .collect();
+        let denies: Vec<&serde_json::Value> = statements
+            .iter()
+            .filter(|statement| statement["Effect"] == "Deny")
+            .collect();
+        let mut denied: Vec<&str> = denies
+            .iter()
+            .flat_map(|statement| statement["Resource"].as_array().expect("resources"))
+            .map(|resource| resource.as_str().expect("an ARN"))
+            .collect();
+        denied.sort();
+        assert_eq!(
+            denied,
+            [
+                "arn:aws:iam::123456789012:role/test-agents-build",
+                "arn:aws:iam::123456789012:role/test-agents-egress",
+                "arn:aws:iam::123456789012:role/test-frozen-box-build",
+                "arn:aws:iam::123456789012:role/test-frozen-box-egress",
+            ],
+            "{statements:#?}"
+        );
+        assert!(
+            denies
+                .iter()
+                .all(|statement| !statement.to_string().contains("iam:PassRole")),
+            "the build role must stay passable"
+        );
+    }
 }

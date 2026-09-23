@@ -5,10 +5,10 @@ use alien_core::{
     ownership_policy_for_resource_type, Container, DeploymentConfig, KubernetesCertificateMode,
     KubernetesCluster, KubernetesExposureSettings, KubernetesHeartbeatMode,
     KubernetesIngressRouteProfile, KubernetesRouteProfile, KubernetesRouteProviderOptions,
-    Platform, ResourceLifecycle, Stack, StackState, Storage, Worker, WorkerTrigger,
+    Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
-use alien_permissions::get_permission_set;
+use alien_permissions::{get_permission_set, SANDBOX_SETUP_ROLES_GUARD};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -165,6 +165,15 @@ fn generate_auto_management_profile(
                 // telemetry, and explicit policy-granted management are added
                 // independently.
             }
+        }
+
+        // Whatever else the profile grants on `role/<prefix>-*`, a sandbox's build and egress
+        // roles stay setup's. Keyed by the sandbox so the Deny names its two roles only.
+        if platform == Platform::Aws && resource_type == Sandbox::RESOURCE_TYPE.as_ref() {
+            resource_permission_set_ids
+                .entry(resource_id.clone())
+                .or_default()
+                .insert(SANDBOX_SETUP_ROLES_GUARD.to_string());
         }
 
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
@@ -483,6 +492,62 @@ mod tests {
             .expect("global management permissions")
             .iter()
             .any(|permission| permission.id() == "email/heartbeat"));
+    }
+
+    #[tokio::test]
+    async fn every_aws_sandbox_keeps_its_setup_roles_out_of_managements_reach() {
+        let sandbox = |id: &str| {
+            Sandbox::new(id.to_string())
+                .code(SandboxCode::Image {
+                    image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                })
+                .egress(SandboxEgress::Allow)
+                .lifecycle(SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+        for platform in [Platform::Aws, Platform::Gcp] {
+            for mode in ["auto", "extend"] {
+                let stack = Stack::new("test-stack".to_string())
+                    .add(sandbox("live-box"), ResourceLifecycle::Live)
+                    .add(sandbox("frozen-box"), ResourceLifecycle::Frozen)
+                    .management(management_permissions_for_test(mode))
+                    .build();
+
+                let result_stack = ManagementPermissionProfileMutation
+                    .mutate(
+                        stack,
+                        &StackState::new(platform),
+                        &deployment_config_for_management_permission_test(),
+                    )
+                    .await
+                    .expect("management permission mutation should succeed");
+                let profile = result_stack
+                    .management()
+                    .profile()
+                    .expect("a management profile is generated");
+
+                for sandbox_id in ["live-box", "frozen-box"] {
+                    let guarded = profile.0.get(sandbox_id).is_some_and(|refs| {
+                        refs.iter()
+                            .any(|permission| permission.id() == SANDBOX_SETUP_ROLES_GUARD)
+                    });
+                    assert_eq!(
+                        guarded,
+                        platform == Platform::Aws,
+                        "{sandbox_id} on {platform:?} in {mode} mode: {profile:?}"
+                    );
+                }
+                assert!(
+                    !profile.0.get("*").is_some_and(|refs| refs
+                        .iter()
+                        .any(|permission| permission.id() == SANDBOX_SETUP_ROLES_GUARD)),
+                    "the guard names one sandbox's roles, so it is never stack-wide"
+                );
+            }
+        }
     }
 
     #[tokio::test]

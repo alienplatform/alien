@@ -2,7 +2,8 @@ use crate::error::Result;
 use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXES;
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
-use alien_core::Stack;
+use alien_core::{Sandbox, Stack};
+use alien_permissions::SANDBOX_SETUP_ROLES_GUARD;
 use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
@@ -137,13 +138,19 @@ fn management_differs_outside_gates(
             ManagementPermissions::Extend(old_profile),
             ManagementPermissions::Extend(new_profile),
         ) => {
-            profiles_differ_outside_gates(old_profile, new_profile, gated)
+            let new_profile = without_added_sandbox_setup_roles_guards(
+                old_stack,
+                new_stack,
+                old_profile,
+                new_profile,
+            );
+            profiles_differ_outside_gates(old_profile, &new_profile, gated)
                 && !(allow_email_heartbeat_migration
                     && is_email_heartbeat_registration_migration(
                         old_stack,
                         new_stack,
                         old_profile,
-                        new_profile,
+                        &new_profile,
                         gated,
                     ))
         }
@@ -153,6 +160,44 @@ fn management_differs_outside_gates(
         ) => profiles_differ_outside_gates(old_profile, new_profile, gated),
         _ => true,
     }
+}
+
+/// The new profile without the sandbox setup-roles guard wherever this update is what adds it.
+///
+/// The guard is a Deny, so adding it only narrows the management identity; every deployment
+/// prepared before it existed gains it on its first update. Only the canonical named reference is
+/// exempt, only under a scope that is a sandbox on both sides, and only where the old scope lacked
+/// it: removing the guard, or changing anything else beside it, still reads as drift.
+fn without_added_sandbox_setup_roles_guards(
+    old_stack: &Stack,
+    new_stack: &Stack,
+    old_profile: &PermissionProfile,
+    new_profile: &PermissionProfile,
+) -> PermissionProfile {
+    let is_sandbox = |stack: &Stack, id: &str| {
+        stack
+            .resources
+            .get(id)
+            .is_some_and(|entry| entry.config.resource_type() == Sandbox::RESOURCE_TYPE)
+    };
+    let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
+    let mut migrated = new_profile.clone();
+    migrated.0.retain(|scope, grants| {
+        let already_guarded = old_profile.0.get(scope).is_some_and(|old| {
+            old.iter()
+                .any(|grant| grant.id() == SANDBOX_SETUP_ROLES_GUARD)
+        });
+        if scope == "*"
+            || already_guarded
+            || !is_sandbox(old_stack, scope)
+            || !is_sandbox(new_stack, scope)
+        {
+            return true;
+        }
+        grants.retain(|grant| grant != &guard);
+        !grants.is_empty() || old_profile.0.contains_key(scope)
+    });
+    migrated
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
@@ -294,6 +339,86 @@ mod tests {
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
     use indexmap::IndexMap;
+
+    fn guarded_sandbox_stack(profile: PermissionProfile) -> Stack {
+        Stack::new("s".to_string())
+            .management(ManagementPermissions::Extend(profile))
+            .add(
+                Sandbox::new("agents".to_string())
+                    .code(alien_core::SandboxCode::Image {
+                        image: "s3://acme/sandbox-bundle/f00d/bundle.zip".to_string(),
+                    })
+                    .egress(alien_core::SandboxEgress::Allow)
+                    .lifecycle(alien_core::SandboxLifecyclePolicy {
+                        max_lifetime_seconds: None,
+                        idle_pause_seconds: None,
+                    })
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Kv::new("cache".to_string()).build(),
+                ResourceLifecycle::Live,
+            )
+            .build()
+    }
+
+    async fn update_passes(old: PermissionProfile, new: PermissionProfile) -> bool {
+        let result = PermissionProfilesUnchangedCheck
+            .check(&guarded_sandbox_stack(old), &guarded_sandbox_stack(new))
+            .await
+            .expect("check should run");
+        result.success
+    }
+
+    /// A deployment prepared before the guard existed gains it on its first update, and a Deny
+    /// cannot escalate, so that one addition is not drift.
+    #[tokio::test]
+    async fn an_update_may_add_the_sandbox_setup_roles_guard() {
+        assert!(
+            update_passes(
+                PermissionProfile::new().global(["sandbox/management"]),
+                PermissionProfile::new()
+                    .global(["sandbox/management"])
+                    .resource("agents", [SANDBOX_SETUP_ROLES_GUARD]),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn an_update_may_not_remove_the_sandbox_setup_roles_guard() {
+        assert!(
+            !update_passes(
+                PermissionProfile::new().resource("agents", [SANDBOX_SETUP_ROLES_GUARD]),
+                PermissionProfile::new(),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn the_guard_does_not_carry_another_grant_in_with_it() {
+        assert!(
+            !update_passes(
+                PermissionProfile::new(),
+                PermissionProfile::new()
+                    .resource("agents", [SANDBOX_SETUP_ROLES_GUARD, "sandbox/execute"]),
+            )
+            .await
+        );
+    }
+
+    #[tokio::test]
+    async fn the_guard_is_exempt_only_under_a_sandbox() {
+        assert!(
+            !update_passes(
+                PermissionProfile::new(),
+                PermissionProfile::new().resource("cache", [SANDBOX_SETUP_ROLES_GUARD]),
+            )
+            .await
+        );
+    }
 
     /// The deployer said no to a gated live resource: its scoped management
     /// grant leaves with it, and the update must not read that as drift.
