@@ -277,7 +277,7 @@ async fn reconcile_setup_scaffolding(
     setup_scaffolding::reconcile(
         &ctx,
         target_stack,
-        stack_state.platform,
+        stack_state,
         &mut runtime_metadata.setup_scaffolding,
     )
     .await
@@ -597,6 +597,7 @@ mod tests {
             "agents".to_string(),
             SetupScaffolding::AwsSandbox {
                 build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
             },
         )]);
         assert_eq!(

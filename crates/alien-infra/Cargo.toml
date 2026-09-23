@@ -82,6 +82,7 @@ console_error_panic_hook = { workspace = true }
 
 [dev-dependencies]
 alien-infra = { path = ".", features = ["test-utils"] }
+tokio = { workspace = true, features = ["test-util"] }
 alien-preflights = { workspace = true }
 alien-aws-clients = { workspace = true }
 alien-gcp-clients = { workspace = true }

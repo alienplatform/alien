@@ -5,7 +5,7 @@ use alien_core::{
     ResourceLifecycle, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::setup_scaffolding::{self, SetupScaffoldingContext};
+use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
 use alien_infra::{state_utils::StackStateExt, StackExecutor};
 use tokio::time::sleep;
 use tracing::{debug, info, warn};
@@ -78,14 +78,64 @@ async fn run_setup_teardown_after_handoff_inner(
     let service_provider = service_provider
         .unwrap_or_else(|| Arc::new(alien_infra::DefaultPlatformServiceProvider::default()));
 
-    if let Err(error) =
-        teardown_setup_scaffolding(state, client_config, service_provider.as_ref()).await
-    {
-        fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-        return Err(error);
-    }
-    checkpoint_setup_teardown_state(deployment_id, state, config, transport, None, Vec::new())
+    // Frozen teardown waits for this: the network cannot go while the scaffolding's group and
+    // connector still hold interfaces in its subnets.
+    let mut scaffolding_steps = 0;
+    loop {
+        scaffolding_steps += 1;
+        let progress =
+            match teardown_setup_scaffolding(state, client_config, service_provider.as_ref()).await
+            {
+                Ok(progress) => progress,
+                Err(error) => {
+                    fail_setup_teardown(deployment_id, state, config, transport, error.clone())
+                        .await?;
+                    return Err(error);
+                }
+            };
+        if progress == ScaffoldingProgress::Done {
+            checkpoint_setup_teardown_state(
+                deployment_id,
+                state,
+                config,
+                transport,
+                None,
+                Vec::new(),
+            )
+            .await?;
+            break;
+        }
+        if scaffolding_steps >= policy.max_steps {
+            let error = AlienError::new(ErrorData::StackExecutionFailed {
+                message: format!(
+                    "Setup scaffolding teardown did not complete within {} steps",
+                    policy.max_steps
+                ),
+            });
+            fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
+            return Err(error);
+        }
+        checkpoint_setup_teardown_state(
+            deployment_id,
+            state,
+            config,
+            transport,
+            Some(SCAFFOLDING_TEARDOWN_DELAY_MS),
+            Vec::new(),
+        )
         .await?;
+        if policy.delay_strategy == DelayStrategy::Yield {
+            return Ok(Some(RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::Delayed,
+                    outcome: LoopOutcome::Neutral,
+                    final_status: state.status,
+                },
+                steps_executed: scaffolding_steps,
+            }));
+        }
+        sleep(Duration::from_millis(SCAFFOLDING_TEARDOWN_DELAY_MS)).await;
+    }
 
     let mut stack_state = state.stack_state.take().ok_or_else(|| {
         AlienError::new(ErrorData::MissingConfiguration {
@@ -236,19 +286,22 @@ async fn run_setup_teardown_after_handoff_inner(
     }))
 }
 
+/// How long to wait before asking again whether AWS has released what holds a scaffolding object.
+const SCAFFOLDING_TEARDOWN_DELAY_MS: u64 = 15_000;
+
 /// Only a direct setup records scaffolding; an imported setup's template owns and removes its own.
 async fn teardown_setup_scaffolding(
     state: &mut DeploymentState,
     client_config: &ClientConfig,
     service_provider: &dyn alien_infra::PlatformServiceProvider,
-) -> Result<()> {
+) -> Result<ScaffoldingProgress> {
     let Some(runtime_metadata) = state.runtime_metadata.as_mut() else {
-        return Ok(());
+        return Ok(ScaffoldingProgress::Done);
     };
     if runtime_metadata.initial_setup_authority != InitialSetupAuthority::DirectSetup
         || runtime_metadata.setup_scaffolding.is_empty()
     {
-        return Ok(());
+        return Ok(ScaffoldingProgress::Done);
     }
     let resource_prefix = state
         .stack_state
@@ -409,6 +462,7 @@ mod tests {
                     "agents".to_string(),
                     SetupScaffolding::AwsSandbox {
                         build_role_name: BUILD_ROLE.to_string(),
+                        egress: None,
                     },
                 )]),
                 ..Default::default()
@@ -420,6 +474,15 @@ mod tests {
         state: &mut DeploymentState,
         provider: MockPlatformServiceProvider,
         transport: &RecordingTransport,
+    ) -> Result<Option<RunnerResult>> {
+        run_with(state, provider, transport, DelayStrategy::Inline).await
+    }
+
+    async fn run_with(
+        state: &mut DeploymentState,
+        provider: MockPlatformServiceProvider,
+        transport: &RecordingTransport,
+        delay_strategy: DelayStrategy,
     ) -> Result<Option<RunnerResult>> {
         let mut config = DeploymentConfig::builder()
             .stack_settings(StackSettings::default())
@@ -438,6 +501,7 @@ mod tests {
             "dep_test",
             &RunnerPolicy {
                 operation: LoopOperation::Delete,
+                delay_strategy,
                 ..Default::default()
             },
             transport,
@@ -492,5 +556,75 @@ mod tests {
             .unwrap();
 
         assert_eq!(state.status, DeploymentStatus::Deleted);
+    }
+
+    /// The network's teardown would fail while the deny group still holds interfaces in its
+    /// subnets, so a group AWS has not released yet stops setup teardown until a later call.
+    #[tokio::test]
+    async fn frozen_teardown_waits_for_a_deny_group_aws_has_not_released() {
+        let mut cloudcontrol = alien_aws_clients::cloudcontrol::MockCloudControlApi::new();
+        cloudcontrol.expect_list_resources().returning(|_, _| {
+            Ok(alien_aws_clients::cloudcontrol::ListResourcesResponse {
+                resource_descriptions: vec![],
+                next_token: None,
+            })
+        });
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .withf(|group| group == "sg-held")
+            .times(1)
+            .returning(|group| {
+                Err(AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteResourceConflict {
+                        message: "DependencyViolation".to_string(),
+                        resource_type: "SecurityGroup".to_string(),
+                        resource_name: group.to_string(),
+                    },
+                ))
+            });
+        let (cloudcontrol, ec2) = (Arc::new(cloudcontrol), Arc::new(ec2));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_cloudcontrol_client()
+            .returning(move |_| Ok(cloudcontrol.clone()));
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        let record = SetupScaffolding::AwsSandbox {
+            build_role_name: BUILD_ROLE.to_string(),
+            egress: Some(alien_core::AwsSandboxEgressScaffolding {
+                operator_role_name: "test-agents-egress".to_string(),
+                security_group_id: Some("sg-held".to_string()),
+                connector_arn: None,
+            }),
+        };
+        state
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .setup_scaffolding
+            .insert("agents".to_string(), record.clone());
+        let transport = RecordingTransport::default();
+
+        let result = run_with(&mut state, provider, &transport, DelayStrategy::Yield)
+            .await
+            .unwrap()
+            .expect("the runner reports why it stopped");
+
+        assert_eq!(result.loop_result.stop_reason, LoopStopReason::Delayed);
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        assert_eq!(
+            state.runtime_metadata.unwrap().setup_scaffolding["agents"],
+            record,
+            "the group stays recorded for the next call"
+        );
+        let checkpoints = transport.checkpoints.lock().unwrap();
+        assert!(
+            checkpoints
+                .iter()
+                .all(|checkpoint| checkpoint.status == DeploymentStatus::TeardownRequired),
+            "nothing past the scaffolding may start"
+        );
     }
 }

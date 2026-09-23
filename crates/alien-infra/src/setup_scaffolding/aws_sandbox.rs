@@ -10,24 +10,31 @@ use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
 use alien_core::{
-    standard_resource_tags, ClientConfig, Platform, ResourceLifecycle, Sandbox, SandboxCode,
-    SetupScaffolding, ALIEN_MANAGED_BY_TAG_KEY,
+    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, ResourceLifecycle,
+    Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::info;
 
+use super::aws_sandbox_egress;
 use super::{ScaffoldingProgress, SetupScaffoldingContext};
 use crate::sandbox::aws_partition;
 use crate::{ErrorData, Result};
 
 /// An existing role is verified before it is adopted: `iam:PassRole` is scoped by name alone, so
 /// a same-named role someone else made would be handed to a build running customer code.
+///
+/// A deny sandbox's egress objects come between verifying the role and applying its policy, so
+/// each call still makes at most one mutating call.
 pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
+    stack: &Stack,
+    stack_state: &StackState,
     sandbox: &Sandbox,
     lifecycle: ResourceLifecycle,
     records: &mut BTreeMap<String, SetupScaffolding>,
 ) -> Result<ScaffoldingProgress> {
+    let egress_network = aws_sandbox_egress::egress_network(stack, sandbox)?;
     let aws = aws_config(ctx.client_config)?;
     let partition = aws_partition(&aws.region);
     let role_name = sandbox_build_role_name(ctx.resource_prefix, &sandbox.id);
@@ -97,7 +104,14 @@ pub(super) async fn reconcile(
 
     let expected_arn =
         sandbox_build_role_arn(partition, &aws.account_id, ctx.resource_prefix, &sandbox.id);
-    let mismatches = adoption_mismatches(iam.as_ref(), &role, &expected_arn, &trust).await?;
+    let mismatches = adoption_mismatches(
+        iam.as_ref(),
+        &role,
+        &expected_arn,
+        &trust,
+        SANDBOX_BUILD_POLICY_NAME,
+    )
+    .await?;
     if !mismatches.is_empty() {
         return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
             resource_id: sandbox.id.clone(),
@@ -109,6 +123,20 @@ pub(super) async fn reconcile(
         }));
     }
 
+    record(records, &sandbox.id, role_name.clone());
+
+    if let Some(network_id) = egress_network {
+        let SetupScaffolding::AwsSandbox { egress, .. } = records
+            .get_mut(&sandbox.id)
+            .unwrap_or_else(|| unreachable!("recorded above"));
+        let progress =
+            aws_sandbox_egress::reconcile(ctx, aws, &sandbox.id, network_id, stack_state, egress)
+                .await?;
+        if progress == ScaffoldingProgress::InProgress {
+            return Ok(progress);
+        }
+    }
+
     iam.put_role_policy(&role_name, SANDBOX_BUILD_POLICY_NAME, &policy)
         .await
         .context(ErrorData::CloudPlatformError {
@@ -118,16 +146,25 @@ pub(super) async fn reconcile(
             ),
             resource_id: Some(sandbox.id.clone()),
         })?;
-    record(records, &sandbox.id, role_name);
     Ok(ScaffoldingProgress::Done)
 }
 
+/// Egress first: its connector, group and operator role, then the build role.
 pub(super) async fn teardown(
     ctx: &SetupScaffoldingContext<'_>,
     resource_id: &str,
     role_name: &str,
-) -> Result<()> {
+    egress: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<ScaffoldingProgress> {
     let aws = aws_config(ctx.client_config)?;
+    if let Some(objects) = egress {
+        if aws_sandbox_egress::teardown(ctx, aws, resource_id, objects).await?
+            == ScaffoldingProgress::InProgress
+        {
+            return Ok(ScaffoldingProgress::InProgress);
+        }
+        *egress = None;
+    }
     let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
 
     match iam
@@ -157,17 +194,18 @@ pub(super) async fn teardown(
         }
     }
     info!(sandbox_id = %resource_id, role = %role_name, "Deleted sandbox build role");
-    Ok(())
+    Ok(ScaffoldingProgress::Done)
 }
 
-/// No inline policy is accepted as well as the build policy alone: that is a role this step created
+/// No inline policy is accepted as well as `policy_name` alone: that is a role this step created
 /// before an interruption. Trust is compared as raw JSON because a typed read drops keys it does
 /// not model, such as an extra `AWS` principal, and would call the two equal.
-async fn adoption_mismatches(
+pub(super) async fn adoption_mismatches(
     iam: &dyn IamApi,
     role: &Role,
     expected_arn: &str,
     expected_trust: &serde_json::Value,
+    policy_name: &str,
 ) -> Result<Vec<String>> {
     let mut mismatches = Vec::new();
 
@@ -205,11 +243,11 @@ async fn adoption_mismatches(
     let foreign_inline: Vec<&str> = inline_names
         .iter()
         .map(String::as_str)
-        .filter(|name| *name != SANDBOX_BUILD_POLICY_NAME)
+        .filter(|name| *name != policy_name)
         .collect();
     if !foreign_inline.is_empty() || inline.is_truncated == Some(true) {
         mismatches.push(format!(
-            "it carries inline policies other than '{SANDBOX_BUILD_POLICY_NAME}': {}",
+            "it carries inline policies other than '{policy_name}': {}",
             foreign_inline.join(", ")
         ));
     }
@@ -242,26 +280,27 @@ async fn adoption_mismatches(
     Ok(mismatches)
 }
 
+/// Keeps whatever egress objects the record already holds.
 fn record(records: &mut BTreeMap<String, SetupScaffolding>, sandbox_id: &str, role_name: String) {
-    records.insert(
-        sandbox_id.to_string(),
-        SetupScaffolding::AwsSandbox {
-            build_role_name: role_name,
-        },
-    );
+    match records.get_mut(sandbox_id) {
+        Some(SetupScaffolding::AwsSandbox {
+            build_role_name, ..
+        }) => *build_role_name = role_name,
+        None => {
+            records.insert(
+                sandbox_id.to_string(),
+                SetupScaffolding::AwsSandbox {
+                    build_role_name: role_name,
+                    egress: None,
+                },
+            );
+        }
+    }
 }
 
-/// The tags the template setups put on this role, with the stack name replaced by the prefix.
-fn setup_tags(resource_prefix: &str, sandbox_id: &str) -> Vec<CreateRoleTag> {
-    let mut tags: BTreeMap<String, String> = standard_resource_tags(resource_prefix, sandbox_id)
+pub(super) fn setup_tags(resource_prefix: &str, sandbox_id: &str) -> Vec<CreateRoleTag> {
+    setup_resource_tags(resource_prefix, sandbox_id, Sandbox::RESOURCE_TYPE.as_ref())
         .into_iter()
-        .collect();
-    tags.insert(ALIEN_MANAGED_BY_TAG_KEY.to_string(), "setup".to_string());
-    tags.insert(
-        "resource-type".to_string(),
-        Sandbox::RESOURCE_TYPE.to_string(),
-    );
-    tags.into_iter()
         .map(|(key, value)| CreateRoleTag { key, value })
         .collect()
 }
@@ -283,14 +322,14 @@ fn serialize_failed(sandbox_id: &str) -> ErrorData {
     }
 }
 
-fn is_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(super) fn is_not_found(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         error.error,
         Some(CloudClientErrorData::RemoteResourceNotFound { .. })
     )
 }
 
-fn is_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
+pub(super) fn is_conflict(error: &AlienError<CloudClientErrorData>) -> bool {
     matches!(
         error.error,
         Some(CloudClientErrorData::RemoteResourceConflict { .. })
@@ -472,13 +511,26 @@ mod tests {
             service_provider: provider,
             resource_prefix: PREFIX,
         };
-        reconcile(&ctx, &sandbox(), ResourceLifecycle::Live, records).await
+        let stack = Stack::new("acme".to_string())
+            .add(sandbox(), ResourceLifecycle::Live)
+            .build();
+        let mut stack_state = StackState::new(Platform::Aws);
+        stack_state.resource_prefix = PREFIX.to_string();
+        reconcile(
+            &ctx,
+            &stack,
+            &stack_state,
+            &sandbox(),
+            ResourceLifecycle::Live,
+            records,
+        )
+        .await
     }
 
     async fn tear_down(
         iam: MockIamApi,
         records: &mut BTreeMap<String, SetupScaffolding>,
-    ) -> Result<()> {
+    ) -> Result<ScaffoldingProgress> {
         let provider = provider(iam);
         let client_config = client_config();
         let ctx = SetupScaffoldingContext {
@@ -494,6 +546,7 @@ mod tests {
             "agents".to_string(),
             SetupScaffolding::AwsSandbox {
                 build_role_name: ROLE_NAME.to_string(),
+                egress: None,
             },
         )])
     }
@@ -705,7 +758,10 @@ mod tests {
             .in_sequence(&mut sequence)
             .returning(|_| Ok(()));
         let mut records = recorded();
-        tear_down(iam, &mut records).await.unwrap();
+        assert_eq!(
+            tear_down(iam, &mut records).await.unwrap(),
+            ScaffoldingProgress::Done
+        );
         assert!(records.is_empty(), "a deleted role leaves the record");
     }
 
@@ -719,7 +775,10 @@ mod tests {
             .times(1)
             .returning(|_| Err(not_found()));
         let mut records = recorded();
-        tear_down(iam, &mut records).await.unwrap();
+        assert_eq!(
+            tear_down(iam, &mut records).await.unwrap(),
+            ScaffoldingProgress::Done
+        );
         assert!(records.is_empty());
     }
 

@@ -122,12 +122,31 @@ pub struct RuntimeMetadata {
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
 #[serde(rename_all = "camelCase", tag = "type")]
 pub enum SetupScaffolding {
-    /// An AWS sandbox's image-build role.
+    /// An AWS sandbox's image-build role, and for `egress: deny` its egress objects.
     #[serde(rename_all = "camelCase")]
     AwsSandbox {
         /// IAM role the image build runs as.
         build_role_name: String,
+        /// What `egress: deny` needs; absent for an open sandbox.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        egress: Option<AwsSandboxEgressScaffolding>,
     },
+}
+
+/// The objects that keep an AWS deny sandbox's sessions inside the VPC. Each id is recorded as
+/// soon as the object exists and cleared once it is deleted.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct AwsSandboxEgressScaffolding {
+    /// IAM role Lambda assumes to place the connector's network interfaces.
+    pub operator_role_name: String,
+    /// Security group permitting egress to loopback only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security_group_id: Option<String>,
+    /// `AWS::Lambda::NetworkConnector` the sessions start with.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector_arn: Option<String>,
 }
 
 /// The cross-account read a manager opened on Alien's registry for one deployment.
@@ -354,7 +373,8 @@ mod tests {
         assert_eq!(
             metadata.setup_scaffolding["agents"],
             SetupScaffolding::AwsSandbox {
-                build_role_name: "acme-agents-build".to_string()
+                build_role_name: "acme-agents-build".to_string(),
+                egress: None,
             }
         );
         assert_eq!(serde_json::to_value(&metadata).unwrap(), persisted);
@@ -362,5 +382,32 @@ mod tests {
             serde_json::to_value(RuntimeMetadata::default()).unwrap()["setupScaffolding"].is_null(),
             "state with no scaffolding serializes as it did before the field existed"
         );
+    }
+
+    /// A deny sandbox's record is written piece by piece, so a partial one must read back as is.
+    #[test]
+    fn a_partial_egress_record_round_trips_in_its_persisted_form() {
+        let persisted = serde_json::json!({
+            "type": "awsSandbox",
+            "buildRoleName": "acme-agents-build",
+            "egress": {
+                "operatorRoleName": "acme-agents-egress",
+                "securityGroupId": "sg-0123"
+            }
+        });
+        let record: SetupScaffolding =
+            serde_json::from_value(persisted.clone()).expect("persisted record reads");
+        assert_eq!(
+            record,
+            SetupScaffolding::AwsSandbox {
+                build_role_name: "acme-agents-build".to_string(),
+                egress: Some(AwsSandboxEgressScaffolding {
+                    operator_role_name: "acme-agents-egress".to_string(),
+                    security_group_id: Some("sg-0123".to_string()),
+                    connector_arn: None,
+                }),
+            }
+        );
+        assert_eq!(serde_json::to_value(&record).unwrap(), persisted);
     }
 }

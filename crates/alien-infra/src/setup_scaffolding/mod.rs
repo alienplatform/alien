@@ -6,13 +6,15 @@ use std::collections::BTreeMap;
 
 use alien_core::{
     ownership_policy_for_resource_type, ClientConfig, Platform, ResourceEntry, SetupScaffolding,
-    Stack,
+    Stack, StackState,
 };
 
 use crate::{PlatformServiceProvider, Result};
 
 #[cfg(feature = "aws")]
 mod aws_sandbox;
+#[cfg(feature = "aws")]
+mod aws_sandbox_egress;
 
 /// The credentials a scaffolding step acts with: setup's, never the runtime identity's.
 pub struct SetupScaffoldingContext<'a> {
@@ -37,7 +39,7 @@ pub fn needs_setup_scaffolding(entry: &ResourceEntry) -> bool {
 pub async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     stack: &Stack,
-    platform: Platform,
+    stack_state: &StackState,
     records: &mut BTreeMap<String, SetupScaffolding>,
 ) -> Result<ScaffoldingProgress> {
     let mut progress = ScaffoldingProgress::Done;
@@ -45,11 +47,19 @@ pub async fn reconcile(
         if !needs_setup_scaffolding(entry) {
             continue;
         }
-        let step = match platform {
+        let step = match stack_state.platform {
             #[cfg(feature = "aws")]
             Platform::Aws => match entry.config.downcast_ref::<alien_core::Sandbox>() {
                 Some(sandbox) => {
-                    aws_sandbox::reconcile(ctx, sandbox, entry.lifecycle, records).await?
+                    aws_sandbox::reconcile(
+                        ctx,
+                        stack,
+                        stack_state,
+                        sandbox,
+                        entry.lifecycle,
+                        records,
+                    )
+                    .await?
                 }
                 None => continue,
             },
@@ -64,20 +74,23 @@ pub async fn reconcile(
     Ok(progress)
 }
 
-/// A record is dropped only once its objects are gone, so a failed teardown keeps the remainder.
+/// A record is dropped only once its objects are gone, so a failed or unfinished teardown keeps
+/// the remainder for the next call.
 pub async fn teardown(
     ctx: &SetupScaffoldingContext<'_>,
     records: &mut BTreeMap<String, SetupScaffolding>,
-) -> Result<()> {
+) -> Result<ScaffoldingProgress> {
+    let mut progress = ScaffoldingProgress::Done;
     let resource_ids: Vec<String> = records.keys().cloned().collect();
     for resource_id in resource_ids {
-        match &records[&resource_id] {
+        let step = match records.get_mut(&resource_id) {
             #[cfg(feature = "aws")]
-            SetupScaffolding::AwsSandbox { build_role_name } => {
-                aws_sandbox::teardown(ctx, &resource_id, build_role_name).await?
-            }
+            Some(SetupScaffolding::AwsSandbox {
+                build_role_name,
+                egress,
+            }) => aws_sandbox::teardown(ctx, &resource_id, build_role_name, egress).await?,
             #[cfg(not(feature = "aws"))]
-            SetupScaffolding::AwsSandbox { .. } => {
+            Some(SetupScaffolding::AwsSandbox { .. }) => {
                 return Err(alien_error::AlienError::new(
                     crate::ErrorData::ControllerNotAvailable {
                         resource_type: alien_core::Sandbox::RESOURCE_TYPE,
@@ -85,8 +98,14 @@ pub async fn teardown(
                     },
                 ))
             }
+            None => continue,
+        };
+        match step {
+            ScaffoldingProgress::Done => {
+                records.remove(&resource_id);
+            }
+            ScaffoldingProgress::InProgress => progress = ScaffoldingProgress::InProgress,
         }
-        records.remove(&resource_id);
     }
-    Ok(())
+    Ok(progress)
 }

@@ -1,0 +1,1928 @@
+//! What keeps an AWS `egress: deny` sandbox's sessions inside the VPC: an operator role Lambda
+//! assumes to place interfaces, a security group permitting only loopback, and the network
+//! connector sessions start with.
+//!
+//! Created in that order, one mutating call per invocation, each recorded as soon as it exists.
+//! A group or role this step did not record is adopted only after it is verified, because the
+//! connector would carry whatever it permits to every session.
+
+use std::time::Duration;
+
+use alien_aws_clients::cloudcontrol::{CloudControlApi, CreateResourceRequest, ProgressEvent};
+use alien_aws_clients::ec2::{
+    AuthorizeSecurityGroupEgressRequest, CreateSecurityGroupRequest, DescribeSecurityGroupsRequest,
+    Ec2Api, Filter, IpPermission, IpPermissionResponse, IpRange, Ipv6Range,
+    RevokeSecurityGroupEgressRequest, SecurityGroup, Tag, TagSpecification, UserIdGroupPair,
+};
+use alien_aws_clients::iam::{CreateRoleRequest, IamApi};
+use alien_aws_clients::AwsClientConfig;
+use alien_core::sandbox_egress::{
+    sandbox_egress_connector_name, sandbox_egress_name, sandbox_egress_operator_policy,
+    sandbox_egress_operator_trust_policy, SandboxEgressConnector, LOOPBACK_ONLY_CIDR,
+    NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
+};
+use alien_core::{
+    AwsSandboxEgressScaffolding, Network, NetworkSettings, ResourceStatus, Sandbox, SandboxEgress,
+    Stack, StackState,
+};
+use alien_error::{AlienError, Context, IntoAlienError};
+use serde_json::Value;
+use tracing::info;
+
+use super::aws_sandbox::{adoption_mismatches, is_conflict, is_not_found, setup_tags};
+use super::{ScaffoldingProgress, SetupScaffoldingContext};
+use crate::network::AwsNetworkController;
+use crate::sandbox::aws_partition;
+use crate::{ErrorData, Result};
+
+const IAM_ROLE_NAME_MAX_LEN: usize = 64;
+
+/// Poll cadence and patience for one Cloud Control request. Past the deadline the step reports
+/// progress and the next call finds the connector again by name.
+const REQUEST_POLL_INTERVAL: Duration = Duration::from_secs(5);
+const REQUEST_DEADLINE: Duration = Duration::from_secs(180);
+
+/// The network a deny sandbox's connector attaches to, or `None` for a sandbox that needs none.
+///
+/// Refuses what the template emitters refuse: a mode with no connector configuration to render,
+/// and a network with no private subnets, where a session would start with no connector and
+/// reach the internet.
+pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<Option<&'a str>> {
+    let refuse = |reason: &str| {
+        Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "an AWS sandbox routes session traffic through a VPC egress connector; {reason}"
+            ),
+            resource_id: Some(sandbox.id.clone()),
+        }))
+    };
+    match &sandbox.egress {
+        SandboxEgress::Allow => return Ok(None),
+        SandboxEgress::AllowDomains { .. } => {
+            return refuse(
+                "egress 'allowDomains' has no connector configuration to render into. Declare \
+                 egress: deny or egress: allow",
+            )
+        }
+        SandboxEgress::Deny => {}
+    }
+    let Some((network_id, network)) = stack
+        .resources()
+        .find_map(|(id, entry)| Some((id, entry.config.downcast_ref::<Network>()?)))
+    else {
+        return refuse("this stack declares no network for it to attach to");
+    };
+    match &network.settings {
+        NetworkSettings::Create { .. } | NetworkSettings::ByoVpcAws { .. } => {
+            Ok(Some(network_id.as_str()))
+        }
+        NetworkSettings::UseDefault => refuse(
+            "the account's default VPC has only public subnets. Set the network to create or \
+             byo-vpc-aws",
+        ),
+        _ => refuse("this stack's network settings are for another cloud"),
+    }
+}
+
+pub(super) async fn reconcile(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &AwsClientConfig,
+    sandbox_id: &str,
+    network_id: &str,
+    stack_state: &StackState,
+    record: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<ScaffoldingProgress> {
+    let Some((vpc_id, private_subnet_ids)) = network_ready(stack_state, network_id, sandbox_id)?
+    else {
+        info!(
+            sandbox_id,
+            network_id, "Waiting for the network before sandbox egress"
+        );
+        return Ok(ScaffoldingProgress::InProgress);
+    };
+    let partition = aws_partition(&aws.region);
+    let name = sandbox_egress_name(ctx.resource_prefix, sandbox_id);
+    if name.len() > IAM_ROLE_NAME_MAX_LEN {
+        return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "the egress operator role name '{name}' is longer than IAM's \
+                 {IAM_ROLE_NAME_MAX_LEN} characters; shorten the sandbox id or the prefix"
+            ),
+            resource_id: Some(sandbox_id.to_string()),
+        }));
+    }
+
+    let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
+    if operator_role(ctx, aws, iam.as_ref(), sandbox_id, &name, record).await?
+        == ScaffoldingProgress::InProgress
+    {
+        return Ok(ScaffoldingProgress::InProgress);
+    }
+
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+    let Some(security_group_id) =
+        deny_security_group(ctx, ec2.as_ref(), sandbox_id, &name, &vpc_id, record).await?
+    else {
+        return Ok(ScaffoldingProgress::InProgress);
+    };
+
+    let operator_role_arn = format!("arn:{partition}:iam::{}:role/{name}", aws.account_id);
+    let desired = SandboxEgressConnector::builder()
+        .resource_prefix(ctx.resource_prefix)
+        .sandbox_id(sandbox_id)
+        .operator_role_arn(&operator_role_arn)
+        .private_subnet_ids(&private_subnet_ids)
+        .security_group_id(&security_group_id)
+        .build()
+        .desired_state();
+    let cloudcontrol = ctx
+        .service_provider
+        .get_aws_cloudcontrol_client(aws)
+        .await?;
+    connector(ctx, cloudcontrol.as_ref(), sandbox_id, &desired, record).await
+}
+
+/// The VPC and private subnets of a network setup has finished creating, or `None` while it has
+/// not.
+fn network_ready(
+    stack_state: &StackState,
+    network_id: &str,
+    sandbox_id: &str,
+) -> Result<Option<(String, Vec<String>)>> {
+    let Some(state) = stack_state.resources.get(network_id) else {
+        return Ok(None);
+    };
+    if state.status != ResourceStatus::Running {
+        return Ok(None);
+    }
+    let Some(internal_state) = &state.internal_state else {
+        return Ok(None);
+    };
+    let network: AwsNetworkController = serde_json::from_value(internal_state.clone())
+        .into_alien_error()
+        .context(ErrorData::ControllerStateTypeMismatch {
+            expected: std::any::type_name::<AwsNetworkController>().to_string(),
+            resource_id: network_id.to_string(),
+        })?;
+    match network.vpc_id {
+        Some(vpc_id) if !network.private_subnet_ids.is_empty() => {
+            Ok(Some((vpc_id, network.private_subnet_ids)))
+        }
+        _ => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+            message: format!(
+                "network '{network_id}' is running with no VPC or no private subnets, so the \
+                 sandbox's egress connector has nowhere to attach"
+            ),
+            resource_id: Some(sandbox_id.to_string()),
+        })),
+    }
+}
+
+async fn operator_role(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &AwsClientConfig,
+    iam: &dyn IamApi,
+    sandbox_id: &str,
+    name: &str,
+    record: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<ScaffoldingProgress> {
+    let trust = sandbox_egress_operator_trust_policy();
+    let role = match iam.get_role(name).await {
+        Ok(response) => response.get_role_result.role,
+        Err(error) if is_not_found(&error) => {
+            let created = iam
+                .create_role(
+                    CreateRoleRequest::builder()
+                        .role_name(name.to_string())
+                        .assume_role_policy_document(trust.to_string())
+                        .tags(setup_tags(ctx.resource_prefix, sandbox_id))
+                        .build(),
+                )
+                .await;
+            return match created {
+                Ok(_) => {
+                    info!(sandbox_id, role = %name, "Created sandbox egress operator role");
+                    *record = Some(AwsSandboxEgressScaffolding {
+                        operator_role_name: name.to_string(),
+                        security_group_id: None,
+                        connector_arn: None,
+                    });
+                    Ok(ScaffoldingProgress::InProgress)
+                }
+                Err(error) if is_conflict(&error) => Ok(ScaffoldingProgress::InProgress),
+                Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create sandbox egress operator role '{name}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                }),
+            };
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read sandbox egress operator role '{name}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+
+    let expected_arn = format!(
+        "arn:{}:iam::{}:role/{name}",
+        aws_partition(&aws.region),
+        aws.account_id
+    );
+    let mismatches = adoption_mismatches(
+        iam,
+        &role,
+        &expected_arn,
+        &trust,
+        SANDBOX_EGRESS_POLICY_NAME,
+    )
+    .await?;
+    if !mismatches.is_empty() {
+        return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+            resource_id: sandbox_id.to_string(),
+            object: format!("IAM role '{name}'"),
+            reason: format!(
+                "{}. Delete or rename it, then run setup again.",
+                mismatches.join("; ")
+            ),
+        }));
+    }
+    if record.is_none() {
+        *record = Some(AwsSandboxEgressScaffolding {
+            operator_role_name: name.to_string(),
+            security_group_id: None,
+            connector_arn: None,
+        });
+    }
+
+    let policy =
+        sandbox_egress_operator_policy(aws_partition(&aws.region), &aws.account_id, &aws.region);
+    let applied = match iam.get_role_policy(name, SANDBOX_EGRESS_POLICY_NAME).await {
+        Ok(response) => {
+            let document = response.get_role_policy_result.policy_document;
+            urlencoding::decode(&document)
+                .ok()
+                .and_then(|decoded| serde_json::from_str::<Value>(&decoded).ok())
+        }
+        Err(error) if is_not_found(&error) => None,
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read policy '{SANDBOX_EGRESS_POLICY_NAME}' of role '{name}'"
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    if applied.as_ref() == Some(&policy) {
+        return Ok(ScaffoldingProgress::Done);
+    }
+    iam.put_role_policy(name, SANDBOX_EGRESS_POLICY_NAME, &policy.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to apply policy '{SANDBOX_EGRESS_POLICY_NAME}' to role '{name}'"
+            ),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    Ok(ScaffoldingProgress::InProgress)
+}
+
+/// The group's id once its egress is exactly loopback, or `None` after a mutating call.
+///
+/// EC2 gives every new group an allow-all egress rule. Only a group this step recorded is
+/// repaired toward loopback-only; any other same-named group must already be exactly that.
+async fn deny_security_group(
+    ctx: &SetupScaffoldingContext<'_>,
+    ec2: &dyn Ec2Api,
+    sandbox_id: &str,
+    name: &str,
+    vpc_id: &str,
+    record: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<Option<String>> {
+    let described = ec2
+        .describe_security_groups(
+            DescribeSecurityGroupsRequest::builder()
+                .filters(vec![
+                    Filter {
+                        name: "group-name".to_string(),
+                        values: vec![name.to_string()],
+                    },
+                    Filter {
+                        name: "vpc-id".to_string(),
+                        values: vec![vpc_id.to_string()],
+                    },
+                ])
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to look up security group '{name}' in VPC '{vpc_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    let group: Option<SecurityGroup> = described
+        .security_group_info
+        .and_then(|groups| groups.items.into_iter().next());
+
+    let Some(group) = group else {
+        let created = ec2
+            .create_security_group(
+                CreateSecurityGroupRequest::builder()
+                    .group_name(name.to_string())
+                    .description(format!("Sandbox {sandbox_id} session egress"))
+                    .vpc_id(vpc_id.to_string())
+                    .tag_specifications(vec![TagSpecification {
+                        resource_type: "security-group".to_string(),
+                        tags: setup_tags(ctx.resource_prefix, sandbox_id)
+                            .into_iter()
+                            .map(|tag| Tag {
+                                key: tag.key,
+                                value: tag.value,
+                            })
+                            .collect(),
+                    }])
+                    .build(),
+            )
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!("Failed to create security group '{name}' in VPC '{vpc_id}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+        let group_id = created.group_id.ok_or_else(|| {
+            AlienError::new(ErrorData::CloudPlatformError {
+                message: format!("CreateSecurityGroup for '{name}' returned no group id"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        })?;
+        info!(sandbox_id, security_group = %group_id, "Created sandbox deny security group");
+        record_group(record, group_id);
+        return Ok(None);
+    };
+
+    let group_id = group.group_id.clone().ok_or_else(|| {
+        AlienError::new(ErrorData::CloudPlatformError {
+            message: format!("DescribeSecurityGroups returned '{name}' with no group id"),
+            resource_id: Some(sandbox_id.to_string()),
+        })
+    })?;
+    let rules: Vec<IpPermissionResponse> = group
+        .ip_permissions_egress
+        .map(|set| set.items)
+        .unwrap_or_default();
+    let recorded = record
+        .as_ref()
+        .and_then(|egress| egress.security_group_id.as_deref())
+        == Some(group_id.as_str());
+
+    if !recorded {
+        if !is_loopback_only(&rules) {
+            return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+                resource_id: sandbox_id.to_string(),
+                object: format!("security group '{group_id}' ('{name}')"),
+                reason: format!(
+                    "its egress is not exactly {LOOPBACK_ONLY_CIDR} for all protocols, so \
+                     sessions would reach past the deny. Delete it, then run setup again."
+                ),
+            }));
+        }
+        record_group(record, group_id.clone());
+        return Ok(Some(group_id));
+    }
+
+    let foreign: Vec<&IpPermissionResponse> = rules
+        .iter()
+        .filter(|rule| !is_loopback_rule(rule))
+        .collect();
+    if !foreign.is_empty() {
+        let revoke = foreign
+            .into_iter()
+            .map(|rule| revocable(rule, &group_id, sandbox_id))
+            .collect::<Result<Vec<_>>>()?;
+        ec2.revoke_security_group_egress(RevokeSecurityGroupEgressRequest {
+            group_id: group_id.clone(),
+            ip_permissions: revoke,
+        })
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to revoke the open egress of security group '{group_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+        info!(sandbox_id, security_group = %group_id, "Revoked open egress from deny group");
+        return Ok(None);
+    }
+    if rules.is_empty() {
+        ec2.authorize_security_group_egress(AuthorizeSecurityGroupEgressRequest {
+            group_id: group_id.clone(),
+            ip_permissions: vec![IpPermission {
+                ip_protocol: "-1".to_string(),
+                from_port: None,
+                to_port: None,
+                ip_ranges: Some(vec![IpRange {
+                    cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
+                    description: Some("Sandbox sessions reach nothing outbound".to_string()),
+                }]),
+                ipv6_ranges: None,
+                user_id_group_pairs: None,
+            }],
+        })
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to allow loopback egress on security group '{group_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+        return Ok(None);
+    }
+    Ok(Some(group_id))
+}
+
+fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: String) {
+    if let Some(egress) = record {
+        egress.security_group_id = Some(group_id);
+    }
+}
+
+/// One all-protocol rule to `127.0.0.1/32` and nothing else on it.
+fn is_loopback_rule(rule: &IpPermissionResponse) -> bool {
+    let cidrs: Vec<Option<&str>> = rule
+        .ip_ranges
+        .iter()
+        .flat_map(|set| &set.items)
+        .map(|range| range.cidr_ip.as_deref())
+        .collect();
+    rule.ip_protocol.as_deref() == Some("-1")
+        && cidrs == [Some(LOOPBACK_ONLY_CIDR)]
+        && rule
+            .ipv6_ranges
+            .as_ref()
+            .is_none_or(|set| set.items.is_empty())
+        && rule.groups.as_ref().is_none_or(|set| set.items.is_empty())
+        && rule
+            .prefix_list_ids
+            .as_ref()
+            .is_none_or(|set| set.items.is_empty())
+}
+
+fn is_loopback_only(rules: &[IpPermissionResponse]) -> bool {
+    matches!(rules, [rule] if is_loopback_rule(rule))
+}
+
+/// The request form of a described rule, so revoking removes exactly it.
+fn revocable(
+    rule: &IpPermissionResponse,
+    group_id: &str,
+    sandbox_id: &str,
+) -> Result<IpPermission> {
+    if rule
+        .prefix_list_ids
+        .as_ref()
+        .is_some_and(|set| !set.items.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+            resource_id: sandbox_id.to_string(),
+            object: format!("security group '{group_id}'"),
+            reason: "an egress rule names a prefix list, which setup cannot revoke. Remove the \
+                     rule or delete the group, then run setup again."
+                .to_string(),
+        }));
+    }
+    Ok(IpPermission {
+        ip_protocol: rule.ip_protocol.clone().unwrap_or_else(|| "-1".to_string()),
+        from_port: rule.from_port,
+        to_port: rule.to_port,
+        ip_ranges: rule.ip_ranges.as_ref().map(|set| {
+            set.items
+                .iter()
+                .filter_map(|range| range.cidr_ip.clone())
+                .map(|cidr_ip| IpRange {
+                    cidr_ip,
+                    description: None,
+                })
+                .collect()
+        }),
+        ipv6_ranges: rule.ipv6_ranges.as_ref().map(|set| {
+            set.items
+                .iter()
+                .filter_map(|range| range.cidr_ipv6.clone())
+                .map(|cidr_ipv6| Ipv6Range {
+                    cidr_ipv6,
+                    description: None,
+                })
+                .collect()
+        }),
+        user_id_group_pairs: rule.groups.as_ref().map(|set| {
+            set.items
+                .iter()
+                .map(|pair| UserIdGroupPair {
+                    group_id: pair.group_id.clone(),
+                    user_id: pair.user_id.clone(),
+                    description: None,
+                })
+                .collect()
+        }),
+    })
+}
+
+async fn connector(
+    ctx: &SetupScaffoldingContext<'_>,
+    cloudcontrol: &dyn CloudControlApi,
+    sandbox_id: &str,
+    desired: &Value,
+    record: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<ScaffoldingProgress> {
+    let name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
+    let recorded_arn = record
+        .as_ref()
+        .and_then(|egress| egress.connector_arn.clone());
+    let existing = find_connector(cloudcontrol, &name, recorded_arn.as_deref(), sandbox_id).await?;
+
+    let Some((arn, properties)) = existing else {
+        let created = cloudcontrol
+            .create_resource(
+                CreateResourceRequest::builder()
+                    .type_name(NETWORK_CONNECTOR_TYPE_NAME.to_string())
+                    .desired_state(desired.to_string())
+                    .build(),
+            )
+            .await;
+        let event = match created {
+            Ok(event) => event,
+            // The name is unique per account and Region: a create that loses a race with an
+            // earlier one is found by name on the next call and verified there.
+            Err(error) if is_conflict(&error) => return Ok(ScaffoldingProgress::InProgress),
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create network connector '{name}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        };
+        let Some(finished) = wait_for_request(cloudcontrol, event, sandbox_id).await? else {
+            return Ok(ScaffoldingProgress::InProgress);
+        };
+        match finished.failure() {
+            None => {
+                if let (Some(arn), Some(egress)) = (finished.identifier, record.as_mut()) {
+                    info!(sandbox_id, connector = %arn, "Created sandbox egress connector");
+                    egress.connector_arn = Some(arn);
+                }
+                return Ok(ScaffoldingProgress::InProgress);
+            }
+            Some(failure) if is_conflict(&failure) => return Ok(ScaffoldingProgress::InProgress),
+            Some(failure) => {
+                return Err(failure).context(ErrorData::CloudPlatformError {
+                    message: format!("Creating network connector '{name}' failed"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        }
+    };
+
+    match properties["State"].as_str() {
+        Some("PENDING") => return Ok(ScaffoldingProgress::InProgress),
+        Some("ACTIVE") => {}
+        other => {
+            return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+                resource_id: sandbox_id.to_string(),
+                object: format!("network connector '{arn}' ('{name}')"),
+                reason: format!(
+                    "it is in state {}, not ACTIVE. Delete it, then run setup again.",
+                    other.unwrap_or("unknown")
+                ),
+            }))
+        }
+    }
+    let mismatches = connector_mismatches(&properties, desired);
+    if !mismatches.is_empty() {
+        return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+            resource_id: sandbox_id.to_string(),
+            object: format!("network connector '{arn}' ('{name}')"),
+            reason: format!(
+                "{}. Delete it, then run setup again.",
+                mismatches.join("; ")
+            ),
+        }));
+    }
+    if let Some(egress) = record.as_mut() {
+        egress.connector_arn = Some(arn);
+    }
+    Ok(ScaffoldingProgress::Done)
+}
+
+/// Tags are not compared: AWS adds its own, and they grant nothing.
+fn connector_mismatches(found: &Value, desired: &Value) -> Vec<String> {
+    let found_vpc = &found["Configuration"]["VpcEgressConfiguration"];
+    let desired_vpc = &desired["Configuration"]["VpcEgressConfiguration"];
+    let mut mismatches = Vec::new();
+    if found["OperatorRole"] != desired["OperatorRole"] {
+        mismatches.push(format!(
+            "its operator role is {}, not {}",
+            found["OperatorRole"], desired["OperatorRole"]
+        ));
+    }
+    for key in [
+        "SecurityGroupIds",
+        "SubnetIds",
+        "AssociatedComputeResourceTypes",
+    ] {
+        if sorted(&found_vpc[key]) != sorted(&desired_vpc[key]) {
+            mismatches.push(format!(
+                "its {key} are {}, not {}",
+                found_vpc[key], desired_vpc[key]
+            ));
+        }
+    }
+    mismatches
+}
+
+fn sorted(list: &Value) -> Option<Vec<String>> {
+    let mut items: Vec<String> = list
+        .as_array()?
+        .iter()
+        .map(|item| item.as_str().map(str::to_string))
+        .collect::<Option<_>>()?;
+    items.sort();
+    Some(items)
+}
+
+/// The connector by its recorded ARN, else by its unique name, with its properties.
+async fn find_connector(
+    cloudcontrol: &dyn CloudControlApi,
+    name: &str,
+    recorded_arn: Option<&str>,
+    sandbox_id: &str,
+) -> Result<Option<(String, Value)>> {
+    if let Some(arn) = recorded_arn {
+        if let Some(found) = read_connector(cloudcontrol, arn, sandbox_id).await? {
+            return Ok(Some(found));
+        }
+    }
+    let mut next_token = None;
+    loop {
+        let page = cloudcontrol
+            .list_resources(NETWORK_CONNECTOR_TYPE_NAME, next_token)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: "Failed to list network connectors".to_string(),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+        for description in page.resource_descriptions {
+            let listed_name = description
+                .properties
+                .as_deref()
+                .and_then(|text| serde_json::from_str::<Value>(text).ok())
+                .and_then(|properties| properties["Name"].as_str().map(str::to_string));
+            if listed_name.as_deref().is_some_and(|listed| listed != name) {
+                continue;
+            }
+            if let Some((arn, properties)) =
+                read_connector(cloudcontrol, &description.identifier, sandbox_id).await?
+            {
+                if properties["Name"].as_str() == Some(name) {
+                    return Ok(Some((arn, properties)));
+                }
+            }
+        }
+        match page.next_token {
+            Some(token) => next_token = Some(token),
+            None => return Ok(None),
+        }
+    }
+}
+
+async fn read_connector(
+    cloudcontrol: &dyn CloudControlApi,
+    identifier: &str,
+    sandbox_id: &str,
+) -> Result<Option<(String, Value)>> {
+    let description = match cloudcontrol
+        .get_resource(NETWORK_CONNECTOR_TYPE_NAME, identifier)
+        .await
+    {
+        Ok(description) => description,
+        Err(error) if is_not_found(&error) => return Ok(None),
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read network connector '{identifier}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    let properties = description
+        .properties
+        .as_deref()
+        .map(serde_json::from_str::<Value>)
+        .transpose()
+        .into_alien_error()
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Network connector '{identifier}' has unreadable properties"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?
+        .unwrap_or(Value::Null);
+    Ok(Some((description.identifier, properties)))
+}
+
+/// The request's terminal event, or `None` if it is still running at the deadline.
+async fn wait_for_request(
+    cloudcontrol: &dyn CloudControlApi,
+    mut event: ProgressEvent,
+    sandbox_id: &str,
+) -> Result<Option<ProgressEvent>> {
+    let deadline = tokio::time::Instant::now() + REQUEST_DEADLINE;
+    while !event.is_terminal() {
+        if tokio::time::Instant::now() >= deadline {
+            return Ok(None);
+        }
+        tokio::time::sleep(REQUEST_POLL_INTERVAL).await;
+        event = cloudcontrol
+            .get_resource_request_status(&event.request_token)
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to read Cloud Control request '{}'",
+                    event.request_token
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            })?;
+    }
+    Ok(Some(event))
+}
+
+/// Connector, then group, then role: the connector's interfaces hold the group, and the group
+/// cannot go until AWS releases them, which it does some time after the connector is gone.
+pub(super) async fn teardown(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &AwsClientConfig,
+    sandbox_id: &str,
+    egress: &mut AwsSandboxEgressScaffolding,
+) -> Result<ScaffoldingProgress> {
+    let cloudcontrol = ctx
+        .service_provider
+        .get_aws_cloudcontrol_client(aws)
+        .await?;
+    let name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
+    if let Some((arn, _)) = find_connector(
+        cloudcontrol.as_ref(),
+        &name,
+        egress.connector_arn.as_deref(),
+        sandbox_id,
+    )
+    .await?
+    {
+        let deleted = match cloudcontrol
+            .delete_resource(NETWORK_CONNECTOR_TYPE_NAME, &arn)
+            .await
+        {
+            Ok(event) => match wait_for_request(cloudcontrol.as_ref(), event, sandbox_id).await? {
+                None => return Ok(ScaffoldingProgress::InProgress),
+                Some(finished) => finished.failure().map_or(Ok(()), Err),
+            },
+            Err(error) => Err(error),
+        };
+        match deleted {
+            Ok(()) => info!(sandbox_id, connector = %arn, "Deleted sandbox egress connector"),
+            Err(error) if is_not_found(&error) => {}
+            // Another delete of the same connector is still running.
+            Err(error) if is_conflict(&error) => return Ok(ScaffoldingProgress::InProgress),
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete network connector '{arn}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        }
+    }
+    egress.connector_arn = None;
+
+    if let Some(group_id) = egress.security_group_id.clone() {
+        let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+        match ec2.delete_security_group(&group_id).await {
+            Ok(()) => info!(sandbox_id, security_group = %group_id, "Deleted deny group"),
+            Err(error) if is_not_found(&error) => {}
+            // EC2's DependencyViolation, which the client maps to a conflict.
+            Err(error) if is_conflict(&error) => {
+                info!(
+                    sandbox_id,
+                    security_group = %group_id,
+                    "Deny group still has network interfaces; retrying on the next call"
+                );
+                return Ok(ScaffoldingProgress::InProgress);
+            }
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete security group '{group_id}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        }
+        egress.security_group_id = None;
+    }
+
+    let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
+    let role = egress.operator_role_name.as_str();
+    match iam
+        .delete_role_policy(role, SANDBOX_EGRESS_POLICY_NAME)
+        .await
+    {
+        Ok(()) => {}
+        Err(error) if is_not_found(&error) => {}
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to delete policy '{SANDBOX_EGRESS_POLICY_NAME}' from role '{role}'"
+                ),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    }
+    match iam.delete_role(role).await {
+        Ok(()) => {}
+        Err(error) if is_not_found(&error) => {}
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to delete sandbox egress operator role '{role}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    }
+    info!(sandbox_id, role = %role, "Deleted sandbox egress operator role");
+    Ok(ScaffoldingProgress::Done)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+    use crate::core::MockPlatformServiceProvider;
+    use crate::setup_scaffolding::{reconcile as reconcile_all, teardown as teardown_all};
+    use alien_aws_clients::cloudcontrol::{
+        ListResourcesResponse, MockCloudControlApi, OperationStatus, ResourceDescription,
+    };
+    use alien_aws_clients::ec2::{
+        CreateSecurityGroupResponse, DescribeSecurityGroupsResponse, IpPermissionSet,
+        IpRangeResponse, IpRangeSet, MockEc2Api, PrefixListIdResponse, PrefixListIdSet,
+        SecurityGroupSet,
+    };
+    use alien_aws_clients::iam::{
+        AttachedPolicies, CreateRoleResponse, CreateRoleResult, GetRolePolicyResponse,
+        GetRolePolicyResult, GetRoleResponse, GetRoleResult, ListAttachedRolePoliciesResponse,
+        ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
+        MockIamApi, PolicyNames, Role,
+    };
+    use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_client_core::ErrorData as CloudError;
+    use alien_core::{
+        ClientConfig, Platform, Resource, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy,
+        SetupScaffolding, StackResourceState,
+    };
+    use serde_json::json;
+
+    const PREFIX: &str = "test";
+    const ACCOUNT: &str = "123456789012";
+    const BUILD_ROLE: &str = "test-agents-build";
+    const EGRESS_NAME: &str = "test-agents-egress";
+    const OPERATOR_ARN: &str = "arn:aws:iam::123456789012:role/test-agents-egress";
+    const VPC: &str = "vpc-0sandbox";
+
+    fn subnets() -> Vec<String> {
+        vec!["subnet-a".to_string(), "subnet-b".to_string()]
+    }
+
+    /// One egress rule as EC2 describes it.
+    #[derive(Debug, Clone, PartialEq)]
+    struct Rule {
+        protocol: String,
+        cidrs: Vec<String>,
+        prefix_lists: Vec<String>,
+    }
+
+    fn rule(cidr: &str) -> Rule {
+        Rule {
+            protocol: "-1".to_string(),
+            cidrs: vec![cidr.to_string()],
+            prefix_lists: vec![],
+        }
+    }
+
+    #[derive(Debug, Clone)]
+    struct Group {
+        id: String,
+        name: String,
+        vpc: String,
+        egress: Vec<Rule>,
+    }
+
+    /// An in-memory account: what exists, and every mutating call made against it, in order.
+    #[derive(Default)]
+    struct Cloud {
+        roles: BTreeMap<String, Value>,
+        inline: BTreeMap<(String, String), String>,
+        attached: BTreeMap<String, Vec<String>>,
+        groups: Vec<Group>,
+        connectors: Vec<(String, Value)>,
+        requests: BTreeMap<String, ProgressEvent>,
+        mutations: Vec<String>,
+        dependency_violations: usize,
+        next_id: usize,
+    }
+
+    type Shared = Arc<Mutex<Cloud>>;
+
+    fn not_found(name: &str) -> AlienError<CloudError> {
+        AlienError::new(CloudError::RemoteResourceNotFound {
+            resource_type: "fake".to_string(),
+            resource_name: name.to_string(),
+        })
+    }
+
+    fn event(token: &str, status: OperationStatus, arn: Option<&str>) -> ProgressEvent {
+        ProgressEvent {
+            type_name: Some(NETWORK_CONNECTOR_TYPE_NAME.to_string()),
+            identifier: arn.map(str::to_string),
+            request_token: token.to_string(),
+            operation: None,
+            operation_status: status,
+            status_message: None,
+            error_code: None,
+        }
+    }
+
+    fn role(name: &str, trust: &Value) -> Role {
+        Role {
+            path: "/".to_string(),
+            role_name: name.to_string(),
+            role_id: "AROAEXAMPLE".to_string(),
+            arn: format!("arn:aws:iam::{ACCOUNT}:role/{name}"),
+            create_date: "2026-09-23T00:00:00Z".to_string(),
+            assume_role_policy_document: Some(urlencoding::encode(&trust.to_string()).into()),
+            description: None,
+            max_session_duration: None,
+            permissions_boundary: None,
+            tags: None,
+            role_last_used: None,
+        }
+    }
+
+    fn iam(cloud: &Shared) -> MockIamApi {
+        let mut iam = MockIamApi::new();
+        let c = cloud.clone();
+        iam.expect_get_role().returning(move |name| {
+            let cloud = c.lock().unwrap();
+            let trust = cloud.roles.get(name).ok_or_else(|| not_found(name))?;
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: role(name, trust),
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_create_role().returning(move |request| {
+            let mut cloud = c.lock().unwrap();
+            let trust: Value = serde_json::from_str(&request.assume_role_policy_document).unwrap();
+            cloud
+                .mutations
+                .push(format!("iam:CreateRole {}", request.role_name));
+            cloud.roles.insert(request.role_name.clone(), trust.clone());
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: role(&request.role_name, &trust),
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_list_role_policies().returning(move |name| {
+            let cloud = c.lock().unwrap();
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: cloud
+                            .inline
+                            .keys()
+                            .filter(|(r, _)| r == name)
+                            .map(|(_, p)| p.clone())
+                            .collect(),
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_list_attached_role_policies()
+            .returning(move |name| {
+                let cloud = c.lock().unwrap();
+                Ok(ListAttachedRolePoliciesResponse {
+                    list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                        attached_policies: Some(AttachedPolicies {
+                            member: cloud
+                                .attached
+                                .get(name)
+                                .into_iter()
+                                .flatten()
+                                .map(|arn| alien_aws_clients::iam::AttachedPolicy {
+                                    policy_name: "p".to_string(),
+                                    policy_arn: arn.clone(),
+                                })
+                                .collect(),
+                        }),
+                        is_truncated: Some(false),
+                        marker: None,
+                    },
+                })
+            });
+        let c = cloud.clone();
+        iam.expect_get_role_policy().returning(move |role, policy| {
+            let cloud = c.lock().unwrap();
+            let document = cloud
+                .inline
+                .get(&(role.to_string(), policy.to_string()))
+                .ok_or_else(|| not_found(policy))?;
+            Ok(GetRolePolicyResponse {
+                get_role_policy_result: GetRolePolicyResult {
+                    role_name: role.to_string(),
+                    policy_name: policy.to_string(),
+                    policy_document: urlencoding::encode(document).into(),
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_put_role_policy()
+            .returning(move |role, policy, document| {
+                let mut cloud = c.lock().unwrap();
+                cloud
+                    .mutations
+                    .push(format!("iam:PutRolePolicy {role} {policy}"));
+                cloud
+                    .inline
+                    .insert((role.to_string(), policy.to_string()), document.to_string());
+                Ok(())
+            });
+        let c = cloud.clone();
+        iam.expect_delete_role_policy()
+            .returning(move |role, policy| {
+                let mut cloud = c.lock().unwrap();
+                cloud
+                    .mutations
+                    .push(format!("iam:DeleteRolePolicy {role} {policy}"));
+                cloud
+                    .inline
+                    .remove(&(role.to_string(), policy.to_string()))
+                    .map(|_| ())
+                    .ok_or_else(|| not_found(policy))
+            });
+        let c = cloud.clone();
+        iam.expect_delete_role().returning(move |role| {
+            let mut cloud = c.lock().unwrap();
+            cloud.mutations.push(format!("iam:DeleteRole {role}"));
+            cloud
+                .roles
+                .remove(role)
+                .map(|_| ())
+                .ok_or_else(|| not_found(role))
+        });
+        iam
+    }
+
+    fn described(group: &Group) -> SecurityGroup {
+        SecurityGroup {
+            group_id: Some(group.id.clone()),
+            group_name: Some(group.name.clone()),
+            vpc_id: Some(group.vpc.clone()),
+            owner_id: None,
+            group_description: None,
+            ip_permissions: None,
+            ip_permissions_egress: Some(IpPermissionSet {
+                items: group
+                    .egress
+                    .iter()
+                    .map(|rule| IpPermissionResponse {
+                        ip_protocol: Some(rule.protocol.clone()),
+                        from_port: None,
+                        to_port: None,
+                        ip_ranges: Some(IpRangeSet {
+                            items: rule
+                                .cidrs
+                                .iter()
+                                .map(|cidr| IpRangeResponse {
+                                    cidr_ip: Some(cidr.clone()),
+                                    description: None,
+                                })
+                                .collect(),
+                        }),
+                        ipv6_ranges: None,
+                        groups: None,
+                        prefix_list_ids: Some(PrefixListIdSet {
+                            items: rule
+                                .prefix_lists
+                                .iter()
+                                .map(|id| PrefixListIdResponse {
+                                    prefix_list_id: Some(id.clone()),
+                                    description: None,
+                                })
+                                .collect(),
+                        }),
+                    })
+                    .collect(),
+            }),
+            tag_set: None,
+        }
+    }
+
+    fn requested(permissions: &[IpPermission]) -> Vec<Rule> {
+        permissions
+            .iter()
+            .map(|permission| Rule {
+                protocol: permission.ip_protocol.clone(),
+                cidrs: permission
+                    .ip_ranges
+                    .iter()
+                    .flatten()
+                    .map(|range| range.cidr_ip.clone())
+                    .collect(),
+                prefix_lists: vec![],
+            })
+            .collect()
+    }
+
+    fn ec2(cloud: &Shared) -> MockEc2Api {
+        let mut ec2 = MockEc2Api::new();
+        let c = cloud.clone();
+        ec2.expect_describe_security_groups()
+            .returning(move |request| {
+                let filter = |key: &str| {
+                    request
+                        .filters
+                        .iter()
+                        .flatten()
+                        .find(|f| f.name == key)
+                        .map(|f| f.values.clone())
+                        .unwrap_or_else(|| panic!("the lookup must filter by {key}"))
+                };
+                let (names, vpcs) = (filter("group-name"), filter("vpc-id"));
+                let cloud = c.lock().unwrap();
+                Ok(DescribeSecurityGroupsResponse {
+                    security_group_info: Some(SecurityGroupSet {
+                        items: cloud
+                            .groups
+                            .iter()
+                            .filter(|g| names.contains(&g.name) && vpcs.contains(&g.vpc))
+                            .map(described)
+                            .collect(),
+                    }),
+                    next_token: None,
+                })
+            });
+        let c = cloud.clone();
+        ec2.expect_create_security_group()
+            .returning(move |request| {
+                let mut cloud = c.lock().unwrap();
+                cloud.next_id += 1;
+                let id = format!("sg-{}", cloud.next_id);
+                cloud
+                    .mutations
+                    .push(format!("ec2:CreateSecurityGroup {}", request.group_name));
+                // EC2's default for any new group.
+                cloud.groups.push(Group {
+                    id: id.clone(),
+                    name: request.group_name,
+                    vpc: request.vpc_id,
+                    egress: vec![rule("0.0.0.0/0")],
+                });
+                Ok(CreateSecurityGroupResponse { group_id: Some(id) })
+            });
+        let c = cloud.clone();
+        ec2.expect_revoke_security_group_egress()
+            .returning(move |request| {
+                let mut cloud = c.lock().unwrap();
+                let revoked = requested(&request.ip_permissions);
+                cloud.mutations.push(format!(
+                    "ec2:RevokeSecurityGroupEgress {:?}",
+                    revoked
+                        .iter()
+                        .flat_map(|r| r.cidrs.clone())
+                        .collect::<Vec<_>>()
+                ));
+                let group = cloud
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.id == request.group_id)
+                    .ok_or_else(|| not_found(&request.group_id))?;
+                group.egress.retain(|rule| !revoked.contains(rule));
+                Ok(())
+            });
+        let c = cloud.clone();
+        ec2.expect_authorize_security_group_egress()
+            .returning(move |request| {
+                let mut cloud = c.lock().unwrap();
+                let added = requested(&request.ip_permissions);
+                cloud.mutations.push(format!(
+                    "ec2:AuthorizeSecurityGroupEgress {:?}",
+                    added
+                        .iter()
+                        .flat_map(|r| r.cidrs.clone())
+                        .collect::<Vec<_>>()
+                ));
+                let group = cloud
+                    .groups
+                    .iter_mut()
+                    .find(|g| g.id == request.group_id)
+                    .ok_or_else(|| not_found(&request.group_id))?;
+                group.egress.extend(added);
+                Ok(())
+            });
+        let c = cloud.clone();
+        ec2.expect_delete_security_group()
+            .returning(move |group_id| {
+                let mut cloud = c.lock().unwrap();
+                cloud
+                    .mutations
+                    .push(format!("ec2:DeleteSecurityGroup {group_id}"));
+                if cloud.dependency_violations > 0 {
+                    cloud.dependency_violations -= 1;
+                    return Err(AlienError::new(CloudError::RemoteResourceConflict {
+                        message: "DependencyViolation: resource has a dependent object".to_string(),
+                        resource_type: "SecurityGroup".to_string(),
+                        resource_name: group_id.to_string(),
+                    }));
+                }
+                let before = cloud.groups.len();
+                cloud.groups.retain(|g| g.id != group_id);
+                if cloud.groups.len() == before {
+                    return Err(not_found(group_id));
+                }
+                Ok(())
+            });
+        ec2
+    }
+
+    fn cloudcontrol(cloud: &Shared) -> MockCloudControlApi {
+        let mut cc = MockCloudControlApi::new();
+        let c = cloud.clone();
+        cc.expect_create_resource().returning(move |request| {
+            let mut cloud = c.lock().unwrap();
+            assert_eq!(request.type_name, NETWORK_CONNECTOR_TYPE_NAME);
+            cloud.next_id += 1;
+            let arn = format!(
+                "arn:aws:lambda:us-east-1:{ACCOUNT}:network-connector:nc-{}",
+                cloud.next_id
+            );
+            let token = format!("create-{}", cloud.next_id);
+            cloud.mutations.push(format!(
+                "cloudcontrol:CreateResource {}",
+                request.desired_state
+            ));
+            let mut properties: Value = serde_json::from_str(&request.desired_state).unwrap();
+            properties["Arn"] = json!(arn);
+            properties["State"] = json!("ACTIVE");
+            cloud.connectors.push((arn.clone(), properties));
+            cloud.requests.insert(
+                token.clone(),
+                event(&token, OperationStatus::Success, Some(&arn)),
+            );
+            Ok(event(&token, OperationStatus::InProgress, None))
+        });
+        let c = cloud.clone();
+        cc.expect_get_resource_request_status()
+            .returning(move |token| {
+                let cloud = c.lock().unwrap();
+                cloud
+                    .requests
+                    .get(token)
+                    .cloned()
+                    .ok_or_else(|| not_found(token))
+            });
+        let c = cloud.clone();
+        cc.expect_get_resource().returning(move |_, identifier| {
+            let cloud = c.lock().unwrap();
+            let (arn, properties) = cloud
+                .connectors
+                .iter()
+                .find(|(arn, _)| arn == identifier)
+                .ok_or_else(|| not_found(identifier))?;
+            Ok(ResourceDescription {
+                identifier: arn.clone(),
+                properties: Some(properties.to_string()),
+            })
+        });
+        let c = cloud.clone();
+        cc.expect_list_resources().returning(move |_, _| {
+            let cloud = c.lock().unwrap();
+            // The list handler returns state only, so a caller must read each one for its name.
+            Ok(ListResourcesResponse {
+                resource_descriptions: cloud
+                    .connectors
+                    .iter()
+                    .map(|(arn, properties)| ResourceDescription {
+                        identifier: arn.clone(),
+                        properties: Some(
+                            json!({ "Arn": arn, "State": properties["State"] }).to_string(),
+                        ),
+                    })
+                    .collect(),
+                next_token: None,
+            })
+        });
+        let c = cloud.clone();
+        cc.expect_delete_resource().returning(move |_, identifier| {
+            let mut cloud = c.lock().unwrap();
+            cloud
+                .mutations
+                .push(format!("cloudcontrol:DeleteResource {identifier}"));
+            let before = cloud.connectors.len();
+            cloud.connectors.retain(|(arn, _)| arn != identifier);
+            if cloud.connectors.len() == before {
+                return Err(not_found(identifier));
+            }
+            let token = format!("delete-{identifier}");
+            cloud.requests.insert(
+                token.clone(),
+                event(&token, OperationStatus::Success, Some(identifier)),
+            );
+            Ok(event(&token, OperationStatus::InProgress, None))
+        });
+        cc
+    }
+
+    fn provider(cloud: &Shared) -> MockPlatformServiceProvider {
+        let (iam, ec2, cc) = (
+            Arc::new(iam(cloud)),
+            Arc::new(ec2(cloud)),
+            Arc::new(cloudcontrol(cloud)),
+        );
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_cloudcontrol_client()
+            .returning(move |_| Ok(cc.clone()));
+        provider
+    }
+
+    fn sandbox(egress: SandboxEgress) -> Sandbox {
+        Sandbox::new("agents".to_string())
+            .code(SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(egress)
+            .lifecycle(SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build()
+    }
+
+    fn stack(egress: SandboxEgress, network: Option<NetworkSettings>) -> Stack {
+        let mut stack = Stack::new("acme".to_string());
+        if let Some(settings) = network {
+            stack = stack.add(
+                Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        stack.add(sandbox(egress), ResourceLifecycle::Live).build()
+    }
+
+    fn created_network() -> Option<NetworkSettings> {
+        Some(NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        })
+    }
+
+    fn stack_state(network_status: Option<ResourceStatus>) -> StackState {
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = PREFIX.to_string();
+        if let Some(status) = network_status {
+            let controller = AwsNetworkController {
+                vpc_id: Some(VPC.to_string()),
+                private_subnet_ids: subnets(),
+                ..Default::default()
+            };
+            state.resources.insert(
+                "default-network".to_string(),
+                StackResourceState::builder()
+                    .resource_type(Network::RESOURCE_TYPE.to_string())
+                    .status(status)
+                    .config(Resource::new(
+                        Network::new("default-network".to_string())
+                            .settings(created_network().unwrap())
+                            .build(),
+                    ))
+                    .internal_state(serde_json::to_value(controller).unwrap())
+                    .lifecycle(ResourceLifecycle::Frozen)
+                    .build(),
+            );
+        }
+        state
+    }
+
+    fn client_config() -> ClientConfig {
+        ClientConfig::Aws(Box::new(AwsClientConfig::mock()))
+    }
+
+    /// One reconcile call, and the mutating calls it made.
+    async fn step(
+        cloud: &Shared,
+        stack: &Stack,
+        state: &StackState,
+        records: &mut BTreeMap<String, SetupScaffolding>,
+    ) -> Result<(ScaffoldingProgress, Vec<String>)> {
+        let provider = provider(cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let before = cloud.lock().unwrap().mutations.len();
+        let progress = reconcile_all(&ctx, stack, state, records).await?;
+        let made = cloud.lock().unwrap().mutations[before..].to_vec();
+        Ok((progress, made))
+    }
+
+    /// Calls reconcile until it reports Done, asserting each call made at most one mutation.
+    async fn converge(
+        cloud: &Shared,
+        stack: &Stack,
+        state: &StackState,
+        records: &mut BTreeMap<String, SetupScaffolding>,
+    ) -> Vec<String> {
+        let mut made = Vec::new();
+        for _ in 0..20 {
+            let (progress, calls) = step(cloud, stack, state, records).await.unwrap();
+            assert!(
+                calls.len() <= 1,
+                "one mutating call per invocation: {calls:?}"
+            );
+            made.extend(calls);
+            if progress == ScaffoldingProgress::Done {
+                return made;
+            }
+        }
+        panic!("setup scaffolding never converged: {made:?}");
+    }
+
+    async fn tear_down(
+        cloud: &Shared,
+        records: &mut BTreeMap<String, SetupScaffolding>,
+    ) -> Result<(ScaffoldingProgress, Vec<String>)> {
+        let provider = provider(cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let before = cloud.lock().unwrap().mutations.len();
+        let progress = teardown_all(&ctx, records).await?;
+        let made = cloud.lock().unwrap().mutations[before..].to_vec();
+        Ok((progress, made))
+    }
+
+    fn desired_connector(security_group_id: &str) -> Value {
+        SandboxEgressConnector::builder()
+            .resource_prefix(PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(OPERATOR_ARN)
+            .private_subnet_ids(&subnets())
+            .security_group_id(security_group_id)
+            .build()
+            .desired_state()
+    }
+
+    fn full_record(security_group_id: &str, connector_arn: &str) -> SetupScaffolding {
+        SetupScaffolding::AwsSandbox {
+            build_role_name: BUILD_ROLE.to_string(),
+            egress: Some(AwsSandboxEgressScaffolding {
+                operator_role_name: EGRESS_NAME.to_string(),
+                security_group_id: Some(security_group_id.to_string()),
+                connector_arn: Some(connector_arn.to_string()),
+            }),
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn deny_builds_role_then_a_loopback_only_group_then_the_connector() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        let desired = desired_connector("sg-1");
+        assert_eq!(
+            made,
+            vec![
+                format!("iam:CreateRole {BUILD_ROLE}"),
+                format!("iam:CreateRole {EGRESS_NAME}"),
+                format!("iam:PutRolePolicy {EGRESS_NAME} {SANDBOX_EGRESS_POLICY_NAME}"),
+                format!("ec2:CreateSecurityGroup {EGRESS_NAME}"),
+                "ec2:RevokeSecurityGroupEgress [\"0.0.0.0/0\"]".to_string(),
+                "ec2:AuthorizeSecurityGroupEgress [\"127.0.0.1/32\"]".to_string(),
+                format!("cloudcontrol:CreateResource {desired}"),
+                format!("iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"),
+            ]
+        );
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(cloud.groups.len(), 1);
+        assert_eq!(
+            cloud.groups[0].egress,
+            vec![rule("127.0.0.1/32")],
+            "the deny group must reach nothing but loopback"
+        );
+        assert_eq!(cloud.groups[0].vpc, VPC);
+        assert_eq!(
+            cloud.roles[EGRESS_NAME],
+            sandbox_egress_operator_trust_policy()
+        );
+        assert_eq!(
+            serde_json::from_str::<Value>(
+                &cloud.inline[&(
+                    EGRESS_NAME.to_string(),
+                    SANDBOX_EGRESS_POLICY_NAME.to_string()
+                )]
+            )
+            .unwrap(),
+            sandbox_egress_operator_policy("aws", ACCOUNT, "us-east-1")
+        );
+        assert_eq!(cloud.connectors.len(), 1);
+        let connector_arn = cloud.connectors[0].0.clone();
+        assert_eq!(
+            records,
+            BTreeMap::from([("agents".to_string(), full_record("sg-1", &connector_arn))])
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_converged_deny_sandbox_changes_nothing_but_the_build_policy() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let converged = records.clone();
+
+        let (progress, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+
+        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(
+            made,
+            vec![format!(
+                "iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"
+            )]
+        );
+        assert_eq!(records, converged);
+    }
+
+    #[tokio::test]
+    async fn allow_creates_no_egress_objects() {
+        let mut provider = MockPlatformServiceProvider::new();
+        let cloud = Shared::default();
+        let iam = Arc::new(iam(&cloud));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider.expect_get_aws_ec2_client().times(0);
+        provider.expect_get_aws_cloudcontrol_client().times(0);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let stack = stack(SandboxEgress::Allow, None);
+        let state = stack_state(None);
+        let mut records = BTreeMap::new();
+
+        for _ in 0..2 {
+            reconcile_all(&ctx, &stack, &state, &mut records)
+                .await
+                .unwrap();
+        }
+
+        assert_eq!(
+            records,
+            BTreeMap::from([(
+                "agents".to_string(),
+                SetupScaffolding::AwsSandbox {
+                    build_role_name: BUILD_ROLE.to_string(),
+                    egress: None
+                }
+            )])
+        );
+        assert_eq!(cloud.lock().unwrap().roles.len(), 1, "the build role only");
+    }
+
+    #[tokio::test]
+    async fn deny_waits_for_its_network_without_creating_egress_objects() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let mut records = BTreeMap::new();
+        for network in [None, Some(ResourceStatus::Provisioning)] {
+            let state = stack_state(network);
+            for _ in 0..3 {
+                let (progress, _) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+                assert_eq!(progress, ScaffoldingProgress::InProgress);
+            }
+        }
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(
+            cloud.mutations,
+            vec![format!("iam:CreateRole {BUILD_ROLE}")],
+            "nothing past the build role before the network is running"
+        );
+    }
+
+    async fn assert_refused_before_any_call(stack: Stack, expected: &str) {
+        let provider = MockPlatformServiceProvider::new();
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let mut records = BTreeMap::new();
+        let error = reconcile_all(
+            &ctx,
+            &stack,
+            &stack_state(Some(ResourceStatus::Running)),
+            &mut records,
+        )
+        .await
+        .expect_err("the direct path must refuse what the templates refuse");
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(error.message.contains(expected), "{}", error.message);
+        assert!(records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deny_is_refused_on_a_network_with_no_private_subnets() {
+        assert_refused_before_any_call(
+            stack(SandboxEgress::Deny, Some(NetworkSettings::UseDefault)),
+            "only public subnets",
+        )
+        .await;
+        assert_refused_before_any_call(stack(SandboxEgress::Deny, None), "declares no network")
+            .await;
+        assert_refused_before_any_call(
+            stack(
+                SandboxEgress::AllowDomains {
+                    domains: vec!["example.com".to_string()],
+                },
+                created_network(),
+            ),
+            "allowDomains",
+        )
+        .await;
+    }
+
+    async fn assert_not_adoptable(cloud: &Shared, expected: &str) {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        let connectors_before = cloud.lock().unwrap().connectors.len();
+        let error = loop {
+            match step(cloud, &stack, &state, &mut records).await {
+                Ok((ScaffoldingProgress::InProgress, _)) => continue,
+                Ok((ScaffoldingProgress::Done, made)) => {
+                    panic!("adopted what it must refuse: {made:?}")
+                }
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error.code, "SETUP_SCAFFOLDING_NOT_ADOPTABLE");
+        assert!(error.message.contains(expected), "{}", error.message);
+        assert_eq!(
+            cloud.lock().unwrap().connectors.len(),
+            connectors_before,
+            "no connector may carry an unverified object"
+        );
+    }
+
+    fn preexisting_group(egress: Vec<Rule>) -> Shared {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().groups.push(Group {
+            id: "sg-foreign".to_string(),
+            name: EGRESS_NAME.to_string(),
+            vpc: VPC.to_string(),
+            egress,
+        });
+        cloud
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_group_with_open_egress_is_refused() {
+        let cloud = preexisting_group(vec![rule("0.0.0.0/0")]);
+        assert_not_adoptable(&cloud, "sg-foreign").await;
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(
+            cloud.groups[0].egress,
+            vec![rule("0.0.0.0/0")],
+            "a group setup did not create is never rewritten"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_group_reaching_a_prefix_list_is_refused() {
+        let mut loopback_and_s3 = rule("127.0.0.1/32");
+        loopback_and_s3.prefix_lists = vec!["pl-63a5400a".to_string()];
+        assert_not_adoptable(&preexisting_group(vec![loopback_and_s3]), "sg-foreign").await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unrecorded_loopback_only_group_is_adopted() {
+        let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        assert!(
+            !made.iter().any(|call| call.starts_with("ec2:")),
+            "an adopted group is used as is: {made:?}"
+        );
+        let arn = cloud.lock().unwrap().connectors[0].0.clone();
+        assert_eq!(records["agents"], full_record("sg-foreign", &arn));
+    }
+
+    #[tokio::test]
+    async fn an_operator_role_with_a_foreign_policy_is_refused() {
+        let cloud = Shared::default();
+        {
+            let mut c = cloud.lock().unwrap();
+            c.roles.insert(
+                EGRESS_NAME.to_string(),
+                sandbox_egress_operator_trust_policy(),
+            );
+            c.inline.insert(
+                (EGRESS_NAME.to_string(), "admin".to_string()),
+                "{}".to_string(),
+            );
+        }
+        assert_not_adoptable(
+            &cloud,
+            "inline policies other than 'sandbox-egress-connector'",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn an_operator_role_trusting_another_principal_is_refused() {
+        let cloud = Shared::default();
+        let mut trust = sandbox_egress_operator_trust_policy();
+        trust["Statement"][0]["Principal"]["AWS"] = json!("arn:aws:iam::999999999999:root");
+        cloud
+            .lock()
+            .unwrap()
+            .roles
+            .insert(EGRESS_NAME.to_string(), trust);
+        assert_not_adoptable(&cloud, "trust policy").await;
+    }
+
+    /// The connector's ARN is assigned by AWS, so a crash between its create and the record
+    /// leaves only its name to find it by.
+    #[tokio::test(start_paused = true)]
+    async fn a_connector_created_before_a_crash_is_found_not_created_again() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        loop {
+            let (_, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+            if made
+                .iter()
+                .any(|call| call.starts_with("cloudcontrol:CreateResource"))
+            {
+                break;
+            }
+        }
+        let SetupScaffolding::AwsSandbox { egress, .. } = records.get_mut("agents").unwrap();
+        egress.as_mut().unwrap().connector_arn = None;
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        assert_eq!(
+            made,
+            vec![format!(
+                "iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"
+            )]
+        );
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(cloud.connectors.len(), 1, "one connector, not two");
+        assert_eq!(
+            records["agents"],
+            full_record("sg-1", &cloud.connectors[0].0)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_same_named_connector_on_another_group_is_refused() {
+        let cloud = Shared::default();
+        {
+            let mut c = cloud.lock().unwrap();
+            c.roles.insert(
+                EGRESS_NAME.to_string(),
+                sandbox_egress_operator_trust_policy(),
+            );
+            c.groups.push(Group {
+                id: "sg-1".to_string(),
+                name: EGRESS_NAME.to_string(),
+                vpc: VPC.to_string(),
+                egress: vec![rule("127.0.0.1/32")],
+            });
+            let mut properties = desired_connector("sg-open");
+            properties["State"] = json!("ACTIVE");
+            c.connectors.push((
+                format!("arn:aws:lambda:us-east-1:{ACCOUNT}:network-connector:other"),
+                properties,
+            ));
+        }
+        assert_not_adoptable(&cloud, "SecurityGroupIds").await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn teardown_deletes_connector_then_group_then_roles_and_waits_out_the_group() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let connector_arn = cloud.lock().unwrap().connectors[0].0.clone();
+        cloud.lock().unwrap().dependency_violations = 1;
+
+        let (progress, made) = tear_down(&cloud, &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+        assert_eq!(
+            made,
+            vec![
+                format!("cloudcontrol:DeleteResource {connector_arn}"),
+                "ec2:DeleteSecurityGroup sg-1".to_string(),
+            ]
+        );
+        assert_eq!(
+            records["agents"],
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: Some(AwsSandboxEgressScaffolding {
+                    operator_role_name: EGRESS_NAME.to_string(),
+                    security_group_id: Some("sg-1".to_string()),
+                    connector_arn: None,
+                }),
+            },
+            "a group still held by interfaces stays recorded"
+        );
+
+        let (progress, made) = tear_down(&cloud, &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(
+            made,
+            vec![
+                "ec2:DeleteSecurityGroup sg-1".to_string(),
+                format!("iam:DeleteRolePolicy {EGRESS_NAME} {SANDBOX_EGRESS_POLICY_NAME}"),
+                format!("iam:DeleteRole {EGRESS_NAME}"),
+                format!("iam:DeleteRolePolicy {BUILD_ROLE} sandbox-image-build"),
+                format!("iam:DeleteRole {BUILD_ROLE}"),
+            ]
+        );
+        assert!(records.is_empty());
+        let cloud = cloud.lock().unwrap();
+        assert!(cloud.connectors.is_empty() && cloud.groups.is_empty() && cloud.roles.is_empty());
+    }
+
+    #[tokio::test]
+    async fn teardown_of_egress_already_gone_succeeds() {
+        let cloud = Shared::default();
+        let mut records = BTreeMap::from([(
+            "agents".to_string(),
+            full_record(
+                "sg-gone",
+                &format!("arn:aws:lambda:us-east-1:{ACCOUNT}:network-connector:gone"),
+            ),
+        )]);
+
+        let (progress, made) = tear_down(&cloud, &mut records).await.unwrap();
+
+        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(
+            made,
+            vec![
+                "ec2:DeleteSecurityGroup sg-gone".to_string(),
+                format!("iam:DeleteRolePolicy {EGRESS_NAME} {SANDBOX_EGRESS_POLICY_NAME}"),
+                format!("iam:DeleteRole {EGRESS_NAME}"),
+                format!("iam:DeleteRolePolicy {BUILD_ROLE} sandbox-image-build"),
+                format!("iam:DeleteRole {BUILD_ROLE}"),
+            ],
+            "a connector no longer listed is not deleted again"
+        );
+        assert!(records.is_empty());
+    }
+}
