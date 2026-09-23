@@ -133,7 +133,7 @@ pub(super) async fn reconcile(
         return Ok(ScaffoldingProgress::InProgress);
     };
 
-    let operator_role_arn = format!("arn:{partition}:iam::{}:role/{name}", aws.account_id);
+    let operator_role_arn = operator_role_arn(aws, &name);
     let desired = SandboxEgressConnector::builder()
         .resource_prefix(ctx.resource_prefix)
         .sandbox_id(sandbox_id)
@@ -866,10 +866,16 @@ pub(super) async fn recover(
         .get_aws_cloudcontrol_client(aws)
         .await?;
     let connector_name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
+    let operator_role_arn = operator_role_arn(aws, &name);
     let connector_arn = find_connector(cloudcontrol.as_ref(), &connector_name, None, sandbox_id)
         .await?
         .filter(|(_, properties)| {
-            connector_carries_setup_tags(properties, ctx.resource_prefix, sandbox_id)
+            is_setups_connector(
+                properties,
+                ctx.resource_prefix,
+                sandbox_id,
+                &operator_role_arn,
+            )
         })
         .map(|(arn, _)| arn);
 
@@ -880,15 +886,27 @@ pub(super) async fn recover(
     }))
 }
 
-fn connector_carries_setup_tags(
+fn operator_role_arn(aws: &AwsClientConfig, name: &str) -> String {
+    format!(
+        "arn:{}:iam::{}:role/{name}",
+        aws_partition(&aws.region),
+        aws.account_id
+    )
+}
+
+/// Setup's tags, or the operator role setup made for this sandbox: either marks a same-named
+/// connector as setup's. The role holds whether or not Cloud Control reads the tags back.
+fn is_setups_connector(
     properties: &Value,
     resource_prefix: &str,
     sandbox_id: &str,
+    operator_role_arn: &str,
 ) -> bool {
     let tags = properties["Tags"].as_array().cloned().unwrap_or_default();
-    setup_tags(resource_prefix, sandbox_id)
-        .into_iter()
-        .all(|tag| tags.contains(&serde_json::json!({ "Key": tag.key, "Value": tag.value })))
+    properties["OperatorRole"].as_str() == Some(operator_role_arn)
+        || setup_tags(resource_prefix, sandbox_id)
+            .into_iter()
+            .all(|tag| tags.contains(&serde_json::json!({ "Key": tag.key, "Value": tag.value })))
 }
 
 pub(super) async fn carries_setup_role_tags(
@@ -932,8 +950,9 @@ pub(super) async fn teardown(
         .get_aws_cloudcontrol_client(aws)
         .await?;
     let name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
-    // Found by name, a connector is deleted only if it is the recorded one or carries setup's
-    // tags: the name alone does not make it setup's.
+    // Found by name, a connector is deleted only if it is the recorded one or setup's by
+    // `is_setups_connector`: the name alone does not make it setup's.
+    let operator_role_arn = operator_role_arn(aws, &egress.operator_role_name);
     let found = find_connector(
         cloudcontrol.as_ref(),
         &name,
@@ -943,7 +962,12 @@ pub(super) async fn teardown(
     .await?
     .filter(|(arn, properties)| {
         egress.connector_arn.as_deref() == Some(arn.as_str())
-            || connector_carries_setup_tags(properties, ctx.resource_prefix, sandbox_id)
+            || is_setups_connector(
+                properties,
+                ctx.resource_prefix,
+                sandbox_id,
+                &operator_role_arn,
+            )
     });
     if let Some((arn, _)) = found {
         let deleted = match cloudcontrol
@@ -3002,6 +3026,24 @@ mod tests {
             assert!(cloud.groups.is_empty(), "after call {made}");
             assert!(cloud.connectors.is_empty(), "after call {made}");
         }
+    }
+
+    /// Should Cloud Control not read a connector's tags back, its operator role still marks it.
+    #[tokio::test(start_paused = true)]
+    async fn a_destroy_deletes_an_unrecorded_connector_by_its_operator_role() {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let cloud = Shared::default();
+        converge(&cloud, &stack, &state, &mut BTreeMap::new()).await;
+        for (_, properties) in cloud.lock().unwrap().connectors.iter_mut() {
+            properties.as_object_mut().unwrap().remove("Tags");
+        }
+
+        destroy(&cloud, &stack, &mut BTreeMap::new()).await;
+
+        let cloud = cloud.lock().unwrap();
+        assert!(cloud.connectors.is_empty());
+        assert!(cloud.groups.is_empty() && cloud.roles.is_empty());
     }
 
     /// Recovery claims by name only what also carries setup's tags for this sandbox.
