@@ -3883,7 +3883,10 @@ mod volume_operation_tests {
             addresses.items[0].allocation_id.as_deref(),
             Some("eipalloc-1")
         );
-        assert_eq!(addresses.items[0].public_ipv4_pool.as_deref(), Some("amazon"));
+        assert_eq!(
+            addresses.items[0].public_ipv4_pool.as_deref(),
+            Some("amazon")
+        );
         assert!(addresses
             .items
             .iter()
