@@ -39,6 +39,15 @@ Follow the [Quickstart](https://www.alien.dev/docs/quickstart) guide to build an
 
 Or [try it with Claude Code, Codex, or Cursor](https://www.alien.dev#prompt).
 
+For local secrets, prefer file or inherited-environment sources so values do not appear in command arguments or shell history:
+
+```bash
+alien dev --secret-file API_TOKEN="$HOME/.config/example/api-token"
+alien dev --secret-env API_TOKEN=SOURCE_API_TOKEN
+```
+
+See the [CLI local-secret reference](crates/alien-cli/README.md#local-secrets) for resource scoping and file handling.
+
 ### CLI automation
 
 Every platform workflow has a non-interactive form. Link a directory once, then
