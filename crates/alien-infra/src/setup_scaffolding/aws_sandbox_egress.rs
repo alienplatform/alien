@@ -22,8 +22,8 @@ use alien_core::sandbox_egress::{
     NETWORK_CONNECTOR_TYPE_NAME, SANDBOX_EGRESS_POLICY_NAME,
 };
 use alien_core::{
-    AwsSandboxEgressScaffolding, Network, NetworkSettings, ResourceStatus, Sandbox, SandboxEgress,
-    Stack, StackState,
+    AwsSandboxEgressScaffolding, Network, NetworkSettings, ResourceLifecycle, ResourceStatus,
+    Sandbox, SandboxEgress, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
@@ -66,12 +66,17 @@ pub(super) fn egress_network<'a>(stack: &'a Stack, sandbox: &Sandbox) -> Result<
         }
         SandboxEgress::Deny => {}
     }
-    let Some((network_id, network)) = stack
+    let Some((network_id, entry, network)) = stack
         .resources()
-        .find_map(|(id, entry)| Some((id, entry.config.downcast_ref::<Network>()?)))
+        .find_map(|(id, entry)| Some((id, entry, entry.config.downcast_ref::<Network>()?)))
     else {
         return refuse("this stack declares no network for it to attach to");
     };
+    // Setup waits for the network to run before creating the connector; a network only the
+    // runtime creates would never run during setup.
+    if entry.lifecycle != ResourceLifecycle::Frozen {
+        return refuse("its network must be created by setup, and this one is created at runtime");
+    }
     match &network.settings {
         NetworkSettings::Create { .. } | NetworkSettings::ByoVpcAws { .. } => {
             Ok(Some(network_id.as_str()))
@@ -924,6 +929,10 @@ mod tests {
         requests: BTreeMap<String, ProgressEvent>,
         mutations: Vec<String>,
         dependency_violations: usize,
+        /// The handler code and message the next create's request ends FAILED with.
+        failing_create: Option<(String, String)>,
+        /// The state a created connector reports.
+        created_state: Option<&'static str>,
         next_id: usize,
     }
 
@@ -1272,9 +1281,16 @@ mod tests {
                 "cloudcontrol:CreateResource {}",
                 request.desired_state
             ));
+            if let Some((code, message)) = cloud.failing_create.take() {
+                let mut failed = event(&token, OperationStatus::Failed, None);
+                failed.error_code = Some(code);
+                failed.status_message = Some(message);
+                cloud.requests.insert(token.clone(), failed);
+                return Ok(event(&token, OperationStatus::InProgress, None));
+            }
             let mut properties: Value = serde_json::from_str(&request.desired_state).unwrap();
             properties["Arn"] = json!(arn);
-            properties["State"] = json!("ACTIVE");
+            properties["State"] = json!(cloud.created_state.unwrap_or("ACTIVE"));
             cloud.connectors.push((arn.clone(), properties));
             cloud.requests.insert(
                 token.clone(),
@@ -1377,16 +1393,29 @@ mod tests {
     }
 
     fn stack(egress: SandboxEgress, network: Option<NetworkSettings>) -> Stack {
+        stack_with(egress, network, ResourceLifecycle::Frozen, "agents")
+    }
+
+    fn stack_with(
+        egress: SandboxEgress,
+        network: Option<NetworkSettings>,
+        network_lifecycle: ResourceLifecycle,
+        sandbox_id: &str,
+    ) -> Stack {
         let mut stack = Stack::new("acme".to_string());
         if let Some(settings) = network {
             stack = stack.add(
                 Network::new("default-network".to_string())
                     .settings(settings)
                     .build(),
-                ResourceLifecycle::Frozen,
+                network_lifecycle,
             );
         }
-        stack.add(sandbox(egress), ResourceLifecycle::Live).build()
+        let sandbox = Sandbox {
+            id: sandbox_id.to_string(),
+            ..sandbox(egress)
+        };
+        stack.add(sandbox, ResourceLifecycle::Live).build()
     }
 
     fn created_network() -> Option<NetworkSettings> {
@@ -1397,12 +1426,19 @@ mod tests {
     }
 
     fn stack_state(network_status: Option<ResourceStatus>) -> StackState {
+        stack_state_with(network_status, subnets())
+    }
+
+    fn stack_state_with(
+        network_status: Option<ResourceStatus>,
+        private_subnet_ids: Vec<String>,
+    ) -> StackState {
         let mut state = StackState::new(Platform::Aws);
         state.resource_prefix = PREFIX.to_string();
         if let Some(status) = network_status {
             let controller = AwsNetworkController {
                 vpc_id: Some(VPC.to_string()),
-                private_subnet_ids: subnets(),
+                private_subnet_ids,
                 ..Default::default()
             };
             state.resources.insert(
@@ -1425,6 +1461,12 @@ mod tests {
 
     fn client_config() -> ClientConfig {
         ClientConfig::Aws(Box::new(AwsClientConfig::mock()))
+    }
+
+    /// Fails a loop that would otherwise spin forever on a step that never settles.
+    fn bounded(calls: &mut usize) {
+        *calls += 1;
+        assert!(*calls <= 20, "setup scaffolding never settled");
     }
 
     /// One reconcile call, and the mutating calls it made.
@@ -1689,7 +1731,9 @@ mod tests {
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
         let connectors_before = cloud.lock().unwrap().connectors.len();
+        let mut calls = 0;
         let error = loop {
+            bounded(&mut calls);
             match step(cloud, &stack, &state, &mut records).await {
                 Ok((ScaffoldingProgress::InProgress, _)) => continue,
                 Ok((ScaffoldingProgress::Done, made)) => {
@@ -1796,7 +1840,9 @@ mod tests {
         let stack = stack(SandboxEgress::Deny, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
         let mut records = BTreeMap::new();
+        let mut calls = 0;
         loop {
+            bounded(&mut calls);
             let (_, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
             if made
                 .iter()
@@ -1924,5 +1970,158 @@ mod tests {
             "a connector no longer listed is not deleted again"
         );
         assert!(records.is_empty());
+    }
+
+    async fn drive_to_connector_create(
+        cloud: &Shared,
+        records: &mut BTreeMap<String, SetupScaffolding>,
+    ) -> Result<ScaffoldingProgress> {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut calls = 0;
+        loop {
+            bounded(&mut calls);
+            let (progress, made) = step(cloud, &stack, &state, records).await?;
+            if made
+                .iter()
+                .any(|call| call.starts_with("cloudcontrol:CreateResource"))
+            {
+                return Ok(progress);
+            }
+        }
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_failed_connector_create_surfaces_aws_status_message() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().failing_create = Some((
+            "InvalidRequest".to_string(),
+            "unable to assume the provided NetworkConnectorOperatorRole".to_string(),
+        ));
+        let mut records = BTreeMap::new();
+
+        let error = drive_to_connector_create(&cloud, &mut records)
+            .await
+            .expect_err("a FAILED create is an error");
+
+        let chain = format!("{error:?}");
+        assert!(
+            chain.contains("InvalidRequest")
+                && chain.contains("unable to assume the provided NetworkConnectorOperatorRole"),
+            "{chain}"
+        );
+        assert!(cloud.lock().unwrap().connectors.is_empty());
+    }
+
+    /// Names are unique per account and Region, so this is an earlier create of the same one.
+    #[tokio::test(start_paused = true)]
+    async fn a_create_refused_as_already_existing_waits_for_the_next_call() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().failing_create =
+            Some(("AlreadyExists".to_string(), "exists".to_string()));
+        let mut records = BTreeMap::new();
+
+        let progress = drive_to_connector_create(&cloud, &mut records)
+            .await
+            .unwrap();
+
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_pending_connector_is_waited_for_not_recreated() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().created_state = Some("PENDING");
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        drive_to_connector_create(&cloud, &mut records)
+            .await
+            .unwrap();
+
+        for _ in 0..3 {
+            let (progress, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+            assert_eq!(progress, ScaffoldingProgress::InProgress);
+            assert!(made.is_empty(), "{made:?}");
+        }
+
+        cloud.lock().unwrap().connectors[0].1["State"] = json!("ACTIVE");
+        let (progress, _) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::Done);
+    }
+
+    #[tokio::test]
+    async fn an_operator_role_name_past_iams_limit_is_refused() {
+        let cloud = Shared::default();
+        let stack = stack_with(
+            SandboxEgress::Deny,
+            created_network(),
+            ResourceLifecycle::Frozen,
+            "a-sandbox-id-long-enough-to-push-the-egress-name-over",
+        );
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+
+        let mut calls = 0;
+        let error = loop {
+            bounded(&mut calls);
+            match step(&cloud, &stack, &state, &mut records).await {
+                Ok((ScaffoldingProgress::InProgress, _)) => continue,
+                Ok((ScaffoldingProgress::Done, _)) => panic!("an over-long name was used"),
+                Err(error) => break error,
+            }
+        };
+
+        assert_eq!(error.code, "RESOURCE_CONFIG_INVALID");
+        assert!(
+            error.message.contains("longer than IAM's 64"),
+            "{}",
+            error.message
+        );
+        assert!(cloud
+            .lock()
+            .unwrap()
+            .roles
+            .keys()
+            .all(|name| name.ends_with("-build")));
+    }
+
+    #[tokio::test]
+    async fn a_running_network_with_no_private_subnets_is_refused() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state_with(Some(ResourceStatus::Running), vec![]);
+        let mut records = BTreeMap::new();
+
+        let mut calls = 0;
+        let error = loop {
+            bounded(&mut calls);
+            match step(&cloud, &stack, &state, &mut records).await {
+                Ok((ScaffoldingProgress::InProgress, _)) => continue,
+                Ok((ScaffoldingProgress::Done, _)) => panic!("a connector with no subnets"),
+                Err(error) => break error,
+            }
+        };
+
+        assert!(
+            error.message.contains("no private subnets"),
+            "{}",
+            error.message
+        );
+        assert!(cloud.lock().unwrap().groups.is_empty());
+    }
+
+    #[tokio::test]
+    async fn deny_is_refused_on_a_network_the_runtime_creates() {
+        assert_refused_before_any_call(
+            stack_with(
+                SandboxEgress::Deny,
+                created_network(),
+                ResourceLifecycle::Live,
+                "agents",
+            ),
+            "created at runtime",
+        )
+        .await;
     }
 }
