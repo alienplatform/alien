@@ -713,6 +713,7 @@ mod tests {
                 operator_role_name: "test-agents-egress".to_string(),
                 security_group_id: Some("sg-held".to_string()),
                 connector_arn: None,
+                connector_request: None,
             }),
         };
         state
@@ -790,6 +791,7 @@ mod tests {
                 operator_role_name: "test-agents-egress".to_string(),
                 security_group_id: Some("sg-held".to_string()),
                 connector_arn: None,
+                connector_request: None,
             }),
         };
         state.runtime_metadata.as_mut().unwrap().setup_scaffolding =
@@ -899,9 +901,19 @@ mod tests {
                 Ok(())
             });
         let mut cloudcontrol = alien_aws_clients::cloudcontrol::MockCloudControlApi::new();
+        let connector_deleted = Arc::new(Mutex::new(false));
+        let deleted = connector_deleted.clone();
         cloudcontrol
             .expect_get_resource()
-            .returning(|_, identifier| {
+            .returning(move |_, identifier| {
+                if *deleted.lock().unwrap() {
+                    return Err(alien_error::AlienError::new(
+                        alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                            resource_type: "network connector".to_string(),
+                            resource_name: identifier.to_string(),
+                        },
+                    ));
+                }
                 Ok(alien_aws_clients::cloudcontrol::ResourceDescription {
                     identifier: identifier.to_string(),
                     properties: Some(
@@ -909,10 +921,31 @@ mod tests {
                     ),
                 })
             });
+        cloudcontrol.expect_list_resources().returning(|_, _| {
+            Ok(alien_aws_clients::cloudcontrol::ListResourcesResponse {
+                resource_descriptions: vec![],
+                next_token: None,
+            })
+        });
+        cloudcontrol
+            .expect_get_resource_request_status()
+            .returning(|token| {
+                Ok(alien_aws_clients::cloudcontrol::ProgressEvent {
+                    type_name: None,
+                    identifier: None,
+                    request_token: token.to_string(),
+                    operation: None,
+                    operation_status: alien_aws_clients::cloudcontrol::OperationStatus::Success,
+                    status_message: None,
+                    error_code: None,
+                })
+            });
         let l = log.clone();
+        let deleted = connector_deleted.clone();
         cloudcontrol
             .expect_delete_resource()
             .returning(move |_, identifier| {
+                *deleted.lock().unwrap() = true;
                 l.lock()
                     .unwrap()
                     .push(format!("cloudcontrol:DeleteResource {identifier}"));
@@ -992,6 +1025,7 @@ mod tests {
                     operator_role_name: "test-agents-egress".to_string(),
                     security_group_id: Some("sg-deny".to_string()),
                     connector_arn: Some(CONNECTOR.to_string()),
+                    connector_request: None,
                 }),
             },
         )]);

@@ -147,6 +147,10 @@ pub struct AwsSandboxEgressScaffolding {
     /// `AWS::Lambda::NetworkConnector` the sessions start with.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub connector_arn: Option<String>,
+    /// Cloud Control request creating or deleting the connector that AWS has not finished. Kept
+    /// so the request's outcome, and AWS's reason when it fails, is read on a later call.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub connector_request: Option<String>,
 }
 
 /// The cross-account read a manager opened on Alien's registry for one deployment.
@@ -405,6 +409,7 @@ mod tests {
                     operator_role_name: "acme-agents-egress".to_string(),
                     security_group_id: Some("sg-0123".to_string()),
                     connector_arn: None,
+                    connector_request: None,
                 }),
             }
         );
