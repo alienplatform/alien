@@ -6,6 +6,10 @@
 //! recompilation.
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use std::path::Path;
+
+/// Default location of the operator configuration packaged in a container image.
+pub const OPERATOR_CONFIG_PATH: &str = "/etc/alien/operator-config.json";
 
 /// Magic bytes at the end of a binary with embedded config.
 pub const MAGIC_BYTES: &[u8; 8] = b"WLCFG001";
@@ -103,6 +107,12 @@ fn default_sync_interval() -> u64 {
 pub fn load_embedded_config<T: DeserializeOwned>() -> Result<Option<T>, EmbeddedConfigError> {
     let exe_path = std::env::current_exe().map_err(EmbeddedConfigError::Io)?;
     load_embedded_config_from_path(&exe_path)
+}
+
+/// Load a JSON configuration file.
+pub fn load_config_file<T: DeserializeOwned>(path: &Path) -> Result<T, EmbeddedConfigError> {
+    let data = std::fs::read(path).map_err(EmbeddedConfigError::Io)?;
+    serde_json::from_slice(&data).map_err(EmbeddedConfigError::Deserialization)
 }
 
 /// Load embedded configuration from a specific binary path.
@@ -306,6 +316,37 @@ mod tests {
         assert_eq!(loaded.display_name, config.display_name);
         assert_eq!(loaded.env_prefix, config.env_prefix);
         assert_eq!(loaded.label_domain, config.label_domain);
+    }
+
+    #[test]
+    fn operator_config_roundtrips_through_packaged_file() {
+        let config = OperatorConfig {
+            manager_url: None,
+            token: None,
+            deployment_id: None,
+            sync_interval_secs: 17,
+            name: Some("acme-operator".into()),
+            brand: Some("acme".into()),
+            display_name: Some("Acme Operator".into()),
+            env_prefix: Some("ACME".into()),
+            label_domain: Some("acme.dev".into()),
+        };
+        let directory = tempfile::tempdir().expect("create config directory");
+        let path = directory.path().join("operator-config.json");
+        std::fs::write(
+            &path,
+            serde_json::to_vec(&config).expect("serialize operator config"),
+        )
+        .expect("write operator config");
+
+        let loaded: OperatorConfig = load_config_file(&path).expect("load operator config");
+
+        assert_eq!(loaded.sync_interval_secs, 17);
+        assert_eq!(loaded.name.as_deref(), Some("acme-operator"));
+        assert_eq!(loaded.brand.as_deref(), Some("acme"));
+        assert_eq!(loaded.display_name.as_deref(), Some("Acme Operator"));
+        assert_eq!(loaded.env_prefix.as_deref(), Some("ACME"));
+        assert_eq!(loaded.label_domain.as_deref(), Some("acme.dev"));
     }
 
     /// Helper that works on in-memory bytes (for tests that don't need files).

@@ -2719,9 +2719,6 @@ fn operator_deployment_doc(
     }
     append_env_value(&mut yaml, "OPERATOR_NAME", environment_name);
     append_env_value(&mut yaml, "KUBERNETES_NAMESPACE", namespace);
-    if let Some(label_domain) = options.label_domain {
-        append_env_value(&mut yaml, "OPERATOR_LABEL_DOMAIN", label_domain);
-    }
     append_env_value(&mut yaml, "OPERATOR_SCOPE", observed_namespace);
     // Cluster scope observes every namespace; namespace scope stays in its own.
     // The selector (if any) filters within whichever scope is chosen.
@@ -6802,16 +6799,6 @@ mod tests {
         })
         .expect("branded operator manifest should render");
         let docs = parse_manifest_docs(&manifest);
-
-        let deployment = docs_by_kind(&docs, "Deployment")
-            .into_iter()
-            .next()
-            .expect("manifest should include the operator deployment");
-        assert_eq!(
-            operator_env_value(&deployment, "OPERATOR_LABEL_DOMAIN"),
-            Some("acme.dev"),
-            "the shared operator image must receive the project label domain at runtime"
-        );
 
         let crd = docs_by_kind(&docs, "CustomResourceDefinition")
             .into_iter()

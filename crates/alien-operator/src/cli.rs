@@ -11,7 +11,10 @@ use crate::{
     run_operator_with_cancel_and_loops_and_runtime, InstanceLock, OperatorConfig,
     OperatorRuntimeOptions,
 };
-use alien_core::embedded_config::{load_embedded_config, OperatorConfig as EmbeddedOperatorConfig};
+use alien_core::embedded_config::{
+    load_config_file, load_embedded_config, OperatorConfig as EmbeddedOperatorConfig,
+    OPERATOR_CONFIG_PATH,
+};
 use alien_core::{
     sync::{OperatorImageReport, OperatorImageSource},
     validate_public_endpoint_urls, DeploymentState, DeploymentStatus, Platform, PublicEndpointUrls,
@@ -157,8 +160,8 @@ pub struct Args {
     #[arg(long, env = "ALIEN_LOCAL_DEBUG_SHELL_COMMAND")]
     pub local_debug_shell_command: Option<String>,
 
-    #[arg(long, env = "SYNC_INTERVAL", default_value = "30")]
-    pub sync_interval: u64,
+    #[arg(long, env = "SYNC_INTERVAL")]
+    pub sync_interval: Option<u64>,
 
     #[arg(long, env = "OTLP_PORT", default_value = "4318")]
     pub otlp_port: u16,
@@ -358,9 +361,16 @@ async fn run_operator_cli(
     operations_exec_loop_hook: OperationsExecLoopHook,
     operations_sync_handler_hook: OperationsSyncHandlerHook,
 ) -> Result<()> {
-    let embedded_config: Option<EmbeddedOperatorConfig> = load_embedded_config().ok().flatten();
+    let packaged_config = load_operator_package_config()?;
 
-    args.operator_name = args.operator_name.or_else(|| env_string("OPERATOR_NAME"));
+    args.operator_name = args
+        .operator_name
+        .or_else(|| env_string("OPERATOR_NAME"))
+        .or_else(|| {
+            packaged_config
+                .as_ref()
+                .and_then(|config| config.name.clone())
+        });
     args.encryption_key_file = args
         .encryption_key_file
         .or_else(|| env_path("OPERATOR_ENCRYPTION_KEY_FILE"));
@@ -369,6 +379,17 @@ async fn run_operator_cli(
         .or_else(|| env_path("COLLECTOR_TOKEN_FILE"));
 
     setup_tracing(args.verbose);
+
+    if let Some(config) = packaged_config.as_ref() {
+        info!(
+            name = ?config.name,
+            display_name = ?config.display_name,
+            brand = ?config.brand,
+            env_prefix = ?config.env_prefix,
+            label_domain = ?config.label_domain,
+            "Loaded packaged operator configuration"
+        );
+    }
 
     let operator_image = parse_operator_image_report(&operator_image_args)?;
 
@@ -400,11 +421,11 @@ async fn run_operator_cli(
 
     let effective_sync_url = args
         .sync_url
-        .or_else(|| embedded_config.as_ref().and_then(|c| c.manager_url.clone()));
+        .or_else(|| packaged_config.as_ref().and_then(|c| c.manager_url.clone()));
     let effective_sync_token =
-        cli_sync_token.or_else(|| embedded_config.as_ref().and_then(|c| c.token.clone()));
+        cli_sync_token.or_else(|| packaged_config.as_ref().and_then(|c| c.token.clone()));
     let configured_deployment_id = args.deployment_id.or_else(|| {
-        embedded_config
+        packaged_config
             .as_ref()
             .and_then(|c| c.deployment_id.clone())
     });
@@ -597,7 +618,15 @@ async fn run_operator_cli(
         .maybe_sync(sync_config)
         .data_dir(data_dir)
         .encryption_key(encryption_key)
-        .sync_interval_seconds(args.sync_interval)
+        .sync_interval_seconds(
+            args.sync_interval
+                .or_else(|| {
+                    packaged_config
+                        .as_ref()
+                        .map(|config| config.sync_interval_secs)
+                })
+                .unwrap_or(30),
+        )
         .otlp_server_port(args.otlp_port)
         .otlp_server_host(args.otlp_host)
         .maybe_namespace(args.namespace)
@@ -608,7 +637,7 @@ async fn run_operator_cli(
             args.operator_label_domain
                 .or(pinned_legacy_label_domain)
                 .or_else(|| {
-                    embedded_config.as_ref().and_then(|config| {
+                    packaged_config.as_ref().and_then(|config| {
                         config.label_domain.clone().or_else(|| config.brand.clone())
                     })
                 }),
@@ -1165,6 +1194,31 @@ fn env_path(name: &str) -> Option<PathBuf> {
     env_string(name).map(PathBuf::from)
 }
 
+fn load_operator_package_config() -> Result<Option<EmbeddedOperatorConfig>> {
+    let configured_path = env_path("OPERATOR_CONFIG_FILE");
+    let path = configured_path
+        .clone()
+        .unwrap_or_else(|| PathBuf::from(OPERATOR_CONFIG_PATH));
+
+    if configured_path.is_some() || path.exists() {
+        return load_config_file(&path)
+            .map(Some)
+            .into_alien_error()
+            .context(ErrorData::ConfigurationError {
+                message: format!(
+                    "Failed to load packaged operator configuration from '{}'",
+                    path.display()
+                ),
+            });
+    }
+
+    load_embedded_config()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: "Failed to load legacy embedded operator configuration".to_string(),
+        })
+}
+
 fn parse_operator_image_report(args: &OperatorImageArgs) -> Result<Option<OperatorImageReport>> {
     let optional_value = |value: &Option<String>| {
         value
@@ -1256,10 +1310,11 @@ async fn load_collector_token(file: Option<&std::path::Path>) -> Result<Option<S
 #[cfg(all(test, unix))]
 mod tests {
     use super::{
-        has_deployment_token_prefix, is_secret_file_mode_allowed, observe_only_initial_state,
-        parse_operator_image_report, persist_initialized_manager_identity, run_operator_cli,
-        select_startup_deployment_id, Args, InitialDesiredReleaseArg, OperatorCliArgs,
-        StartupDeploymentId, NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
+        has_deployment_token_prefix, is_secret_file_mode_allowed, load_operator_package_config,
+        observe_only_initial_state, parse_operator_image_report,
+        persist_initialized_manager_identity, run_operator_cli, select_startup_deployment_id, Args,
+        InitialDesiredReleaseArg, OperatorCliArgs, StartupDeploymentId,
+        NOOP_ACCESS_REQUEST_LOOP_HOOK, NOOP_DEBUG_LOOP_HOOK, NOOP_INIT,
         NOOP_OPERATIONS_EXEC_LOOP_HOOK, NOOP_OPERATIONS_SYNC_HANDLER_HOOK,
     };
     use alien_core::{sync::OperatorImageSource, DeploymentStatus, Platform};
@@ -1427,6 +1482,29 @@ mod tests {
         assert_eq!(args.operator_label_domain.as_deref(), Some("example.dev"));
     }
 
+    #[test]
+    fn loads_all_packaged_operator_fields_from_config_file() {
+        let directory = tempfile::tempdir().expect("create config directory");
+        let path = directory.path().join("operator-config.json");
+        std::fs::write(
+            &path,
+            r#"{"syncIntervalSecs":7,"name":"acme-operator","brand":"acme","displayName":"Acme Operator","envPrefix":"ACME","labelDomain":"acme.dev"}"#,
+        )
+        .expect("write packaged config");
+
+        temp_env::with_var("OPERATOR_CONFIG_FILE", Some(path.as_os_str()), || {
+            let config = load_operator_package_config()
+                .expect("packaged config should load")
+                .expect("packaged config should exist");
+            assert_eq!(config.sync_interval_secs, 7);
+            assert_eq!(config.name.as_deref(), Some("acme-operator"));
+            assert_eq!(config.brand.as_deref(), Some("acme"));
+            assert_eq!(config.display_name.as_deref(), Some("Acme Operator"));
+            assert_eq!(config.env_prefix.as_deref(), Some("ACME"));
+            assert_eq!(config.label_domain.as_deref(), Some("acme.dev"));
+        });
+    }
+
     #[tokio::test]
     async fn cli_persists_identity_before_later_runtime_config_errors() {
         let temp = tempfile::tempdir().expect("create temporary operator directory");
@@ -1520,8 +1598,9 @@ mod tests {
             "ALIEN_OPERATOR_IMAGE",
             Some("registry.example.com/operator:installer-override"),
             || {
-                let args = OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
-                    .expect("operator arguments should parse");
+                let args =
+                    OperatorCliArgs::try_parse_from(["operator", "--platform", "kubernetes"])
+                        .expect("operator arguments should parse");
 
                 assert!(parse_operator_image_report(&args.operator_image)
                     .expect("installer override must not parse as a receipt")
