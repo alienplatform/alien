@@ -490,10 +490,16 @@ async fn delete_remote_secret(
     secret_name: &str,
 ) -> Result<()> {
     let url = format!(
-        "{manager_url}/v1/deployments/{deployment_id}/vault/{vault_name}/secrets/{secret_name}"
+        "{manager_url}/v1/deployments/{}/vault/{}/secrets/{}",
+        urlencoding::encode(deployment_id),
+        urlencoding::encode(vault_name),
+        urlencoding::encode(secret_name),
     );
-    let error_url =
-        format!("{manager_url}/v1/deployments/{deployment_id}/vault/{vault_name}/secrets");
+    let error_url = format!(
+        "{manager_url}/v1/deployments/{}/vault/{}/secrets",
+        urlencoding::encode(deployment_id),
+        urlencoding::encode(vault_name),
+    );
     let resp = http
         .delete(url)
         .send()
@@ -507,9 +513,8 @@ async fn delete_remote_secret(
 
     if !resp.status().is_success() {
         let status = resp.status();
-        let body = resp.text().await.unwrap_or_default();
         return Err(AlienError::new(ErrorData::ApiRequestFailed {
-            message: format!("Failed to delete secret ({status}): {body}"),
+            message: format!("Failed to delete secret ({status})"),
             url: Some(error_url),
         }));
     }
@@ -519,7 +524,7 @@ async fn delete_remote_secret(
 
 #[cfg(test)]
 mod tests {
-    use axum::{http::StatusCode, routing::delete, Router};
+    use axum::{extract::Path, http::StatusCode, routing::delete, Router};
     use clap::Parser;
     use tempfile::TempDir;
 
@@ -596,7 +601,12 @@ mod tests {
             .expect("listener should have an address");
         let app = Router::new().route(
             "/v1/deployments/{id}/vault/{vault}/secrets/{key}",
-            delete(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+            delete(|| async {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "/v1/deployments/deployment-id/vault/application-vault/secrets/private-secret-name",
+                )
+            }),
         );
         let server = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -632,7 +642,15 @@ mod tests {
             .expect("listener should have an address");
         let app = Router::new().route(
             "/v1/deployments/{id}/vault/{vault}/secrets/{key}",
-            delete(|| async { StatusCode::OK }),
+            delete(
+                |Path((_deployment, _vault, key)): Path<(String, String, String)>| async move {
+                    if key == "API?KEY#fragment" {
+                        StatusCode::OK
+                    } else {
+                        StatusCode::BAD_REQUEST
+                    }
+                },
+            ),
         );
         let server = tokio::spawn(async move {
             axum::serve(listener, app)
@@ -645,7 +663,7 @@ mod tests {
             &format!("http://{address}"),
             "deployment-id",
             "application-vault",
-            "API_KEY",
+            "API?KEY#fragment",
         )
         .await
         .expect("DELETE request should succeed");
