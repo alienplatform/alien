@@ -746,6 +746,71 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
     );
 }
 
+/// The connector attaches where `sandbox_egress_network` says, which is the stack's first network,
+/// whichever of the two is created and whichever is brought.
+#[test]
+fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
+    let created = || NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    let brought = || NetworkSettings::ByoVpcAws {
+        vpc_id: "vpc-0brought".to_string(),
+        public_subnet_ids: vec!["subnet-public-a".to_string()],
+        private_subnet_ids: vec!["subnet-private-a".to_string()],
+        security_group_ids: vec!["sg-0network".to_string()],
+    };
+    for (first, second, expected) in [
+        (created(), brought(), "aws_subnet.first_net_private[*].id"),
+        (brought(), created(), "var.first_net_private_subnet_ids"),
+    ] {
+        let stack = Stack::new("acme-sandbox-two-networks".to_string())
+            .add(
+                Network::new("first-net".to_string())
+                    .settings(first.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("second-net".to_string())
+                    .settings(second)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let chosen =
+            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
+                .expect("both networks are attachable")
+                .expect("deny attaches to a network");
+        assert_eq!(chosen.id, "first-net");
+
+        let module = render(
+            &stack,
+            TerraformTarget::Aws,
+            StackSettings {
+                network: Some(first),
+                ..StackSettings::default()
+            },
+        );
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders")).expect("parses");
+        let connector = resource_blocks(&sandbox_file, "awscc_lambda_network_connector")
+            .next()
+            .expect("the connector renders");
+        let configuration = block_attribute(connector, "configuration")
+            .expr()
+            .to_string();
+        assert!(
+            configuration.contains(expected) && !configuration.contains("second_net"),
+            "expected the subnets to be {expected}: {configuration}"
+        );
+    }
+}
+
 /// Without a VPC there are no subnets, and a connector needs between one and sixteen.
 ///
 /// Rendering one anyway would produce either an apply-time failure the reader cannot act on or —

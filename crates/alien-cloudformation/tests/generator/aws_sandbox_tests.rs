@@ -550,6 +550,77 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
     );
 }
 
+/// The connector attaches where `sandbox_egress_network` says, which is the stack's first network.
+/// A created network is the one whose subnets the template names by logical id, so the connector
+/// names them exactly when the created network is the first one.
+#[test]
+fn a_deny_sandbox_attaches_to_the_first_of_two_networks() {
+    let created = || NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    let brought = || NetworkSettings::ByoVpcAws {
+        vpc_id: "vpc-0brought".to_string(),
+        public_subnet_ids: vec!["subnet-public-a".to_string()],
+        private_subnet_ids: existing_subnets(),
+        security_group_ids: vec!["sg-0network".to_string()],
+    };
+    for (first, second) in [(created(), brought()), (brought(), created())] {
+        let stack = Stack::new("acme-sandbox-two-networks".to_string())
+            .add(
+                Network::new("first-net".to_string())
+                    .settings(first.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                Network::new("second-net".to_string())
+                    .settings(second.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(
+                sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+                ResourceLifecycle::Live,
+            )
+            .build();
+        let chosen =
+            alien_core::sandbox_egress::sandbox_egress_network(&stack, &SandboxEgress::Deny)
+                .expect("both networks are attachable")
+                .expect("deny attaches to a network");
+        assert_eq!(chosen.id, "first-net");
+
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings {
+                network: Some(first.clone()),
+                ..StackSettings::default()
+            },
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &format!("deny sandbox on {first:?} then {second:?}"),
+        );
+        let subnets = serde_json::to_string(
+            &emitted_properties(&template, "AgentsEgressConnector")["Configuration"]
+                ["VpcEgressConfiguration"]["SubnetIds"],
+        )
+        .expect("serializes");
+        let names_created_subnets =
+            |network: &str| subnets.contains(&format!("{network}PrivateSubnet"));
+        match first {
+            NetworkSettings::Create { .. } => assert!(
+                names_created_subnets("FirstNet") && !names_created_subnets("SecondNet"),
+                "the first network is the created one: {subnets}"
+            ),
+            _ => assert!(
+                !names_created_subnets("FirstNet") && !names_created_subnets("SecondNet"),
+                "the first network is brought, so no created subnet is named: {subnets}"
+            ),
+        }
+    }
+}
+
 /// Without a VPC there are no subnets, and a connector needs between one and sixteen.
 ///
 /// Rendering one anyway would produce either a deploy-time failure the reader cannot act on or —

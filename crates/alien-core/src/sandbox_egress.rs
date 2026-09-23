@@ -232,6 +232,39 @@ mod tests {
     }
 
     #[test]
+    fn a_deny_sandbox_attaches_to_the_stacks_first_network() {
+        let create = || NetworkSettings::Create {
+            cidr: None,
+            availability_zones: 2,
+        };
+        let byo_aws = || NetworkSettings::ByoVpcAws {
+            vpc_id: "vpc-1".to_string(),
+            public_subnet_ids: vec!["subnet-pub".to_string()],
+            private_subnet_ids: vec!["subnet-priv".to_string()],
+            security_group_ids: vec![],
+        };
+        for (first, second, expected) in [
+            (create(), byo_aws(), Created),
+            (byo_aws(), create(), BroughtByCustomer),
+        ] {
+            let stack = Stack::new("acme".to_string())
+                .add(
+                    Network::new("first".to_string()).settings(first).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .add(
+                    Network::new("second".to_string()).settings(second).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            let found = sandbox_egress_network(&stack, &SandboxEgress::Deny)
+                .expect("a created or brought VPC is attachable")
+                .expect("deny attaches to a network");
+            assert_eq!((found.id, found.vpc), ("first", expected));
+        }
+    }
+
+    #[test]
     fn the_operator_role_tags_only_the_interface_it_is_creating() {
         let policy = sandbox_egress_operator_policy("aws", "123456789012", "us-east-1");
         let tagging = policy["Statement"]
