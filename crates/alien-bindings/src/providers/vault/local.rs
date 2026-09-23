@@ -134,9 +134,9 @@ impl crate::traits::Vault for LocalVault {
     /// Delete a secret
     async fn delete_secret(&self, secret_name: &str) -> Result<()> {
         let mut secrets = self.load_secrets().await?;
-
-        secrets.remove(secret_name);
-
+        if secrets.remove(secret_name).is_none() {
+            return Ok(());
+        }
         self.save_secrets(&secrets).await
     }
 
@@ -208,6 +208,21 @@ mod tests {
             names,
             vec!["keep".to_string()],
             "deleted secret must be gone"
+        );
+    }
+
+    #[tokio::test]
+    async fn deleting_missing_secret_does_not_create_vault_state() {
+        let (vault, temp_dir) = test_vault();
+
+        vault
+            .delete_secret("missing")
+            .await
+            .expect("deleting a missing secret should succeed");
+
+        assert!(
+            !temp_dir.path().join("secrets.json").exists(),
+            "a no-op delete must not create a secrets file"
         );
     }
 }

@@ -31,6 +31,9 @@ EXAMPLES:
     
     # Get a secret
     alien dev vault get customer-secrets GITHUB_TOKEN
+
+    # Delete a secret
+    alien dev vault delete customer-secrets GITHUB_TOKEN
     
     # List all secrets in a vault
     alien dev vault list customer-secrets
@@ -74,6 +77,13 @@ pub enum VaultAction {
         /// Secret name
         secret_name: String,
     },
+    /// Delete a secret from a vault
+    Delete {
+        /// Vault name
+        vault_name: String,
+        /// Secret name
+        secret_name: String,
+    },
     /// List all secrets in a vault
     List {
         /// Vault name
@@ -91,10 +101,7 @@ fn validate_vault_name(name: &str) -> Result<()> {
     {
         return Err(AlienError::new(ErrorData::ValidationError {
             field: "name".to_string(),
-            message: format!(
-                "Invalid name '{}': must not contain path separators or start with '.'",
-                name
-            ),
+            message: "Invalid name: must not contain path separators or start with '.'".to_string(),
         }));
     }
     Ok(())
@@ -145,6 +152,18 @@ pub async fn vault_task(args: VaultArgs, port: u16) -> Result<()> {
             validate_vault_name(&secret_name)?;
             let value = get_secret(&vault_name, &secret_name, &vault_path).await?;
             println!("{}", value);
+        }
+        VaultAction::Delete {
+            vault_name,
+            secret_name,
+        } => {
+            validate_vault_name(&vault_name)?;
+            validate_vault_name(&secret_name)?;
+            delete_secret(&vault_name, &secret_name, &vault_path).await?;
+            println!(
+                "✅ Secret '{}' deleted from vault '{}' for deployment '{}'",
+                secret_name, vault_name, args.deployment
+            );
         }
         VaultAction::List { vault_name } => {
             validate_vault_name(&vault_name)?;
@@ -257,6 +276,24 @@ async fn get_secret(
     Ok(value)
 }
 
+/// Delete a secret from a vault.
+async fn delete_secret(
+    vault_name: &str,
+    secret_name: &str,
+    vault_base_path: &PathBuf,
+) -> Result<()> {
+    let vault_path = vault_base_path.join(vault_name);
+    let vault = LocalVault::new(vault_name.to_string(), vault_path);
+    vault
+        .delete_secret(secret_name)
+        .await
+        .into_alien_error()
+        .context(ErrorData::LocalServiceFailed {
+            service: "vault".to_string(),
+            reason: format!("Failed to delete a secret from vault '{}'", vault_name),
+        })
+}
+
 /// List all secrets in a vault
 async fn list_secrets(vault_name: &str, vault_base_path: &PathBuf) -> Result<Vec<String>> {
     let vault_path = vault_base_path.join(vault_name);
@@ -305,6 +342,9 @@ EXAMPLES:
 
     # Get a secret
     alien vault get --deployment my-deployment customer-secrets GITHUB_TOKEN
+
+    # Delete a secret
+    alien vault delete --deployment my-deployment customer-secrets GITHUB_TOKEN
 
 See also: https://alien.dev/docs/vaults"
 )]
@@ -409,6 +449,26 @@ pub async fn vault_remote_task(
                 }));
             }
         }
+        VaultAction::Delete {
+            vault_name,
+            secret_name,
+        } => {
+            validate_vault_name(&vault_name)?;
+            validate_vault_name(&secret_name)?;
+            delete_remote_secret(
+                &http,
+                &manager_url,
+                &deployment_id,
+                &vault_name,
+                &secret_name,
+            )
+            .await?;
+
+            println!(
+                "Secret '{}' deleted from vault '{}' for deployment '{}'",
+                secret_name, vault_name, args.deployment,
+            );
+        }
         VaultAction::List { vault_name } => {
             validate_vault_name(&vault_name)?;
             let _ = vault_name; // consumed by validation above
@@ -420,6 +480,177 @@ pub async fn vault_remote_task(
     }
 
     Ok(())
+}
+
+async fn delete_remote_secret(
+    http: &reqwest::Client,
+    manager_url: &str,
+    deployment_id: &str,
+    vault_name: &str,
+    secret_name: &str,
+) -> Result<()> {
+    let url = format!(
+        "{manager_url}/v1/deployments/{deployment_id}/vault/{vault_name}/secrets/{secret_name}"
+    );
+    let error_url =
+        format!("{manager_url}/v1/deployments/{deployment_id}/vault/{vault_name}/secrets");
+    let resp = http
+        .delete(url)
+        .send()
+        .await
+        .map_err(reqwest::Error::without_url)
+        .into_alien_error()
+        .context(ErrorData::ApiRequestFailed {
+            message: "Failed to delete vault secret".to_string(),
+            url: Some(error_url.clone()),
+        })?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        return Err(AlienError::new(ErrorData::ApiRequestFailed {
+            message: format!("Failed to delete secret ({status}): {body}"),
+            url: Some(error_url),
+        }));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::{http::StatusCode, routing::delete, Router};
+    use clap::Parser;
+    use tempfile::TempDir;
+
+    use super::*;
+
+    #[test]
+    fn delete_action_parses_for_local_and_remote_commands() {
+        let local = VaultArgs::try_parse_from(["vault", "delete", "app", "API_KEY"])
+            .expect("local delete action should parse");
+        let remote = VaultRemoteArgs::try_parse_from([
+            "vault",
+            "--deployment",
+            "production",
+            "delete",
+            "app",
+            "API_KEY",
+        ])
+        .expect("remote delete action should parse");
+
+        assert!(matches!(
+            local.action,
+            VaultAction::Delete { vault_name, secret_name }
+                if vault_name == "app" && secret_name == "API_KEY"
+        ));
+        assert!(matches!(
+            remote.action,
+            VaultAction::Delete { vault_name, secret_name }
+                if vault_name == "app" && secret_name == "API_KEY"
+        ));
+    }
+
+    #[test]
+    fn invalid_name_error_does_not_echo_input() {
+        let invalid_name = "../private-secret-name";
+        let error = validate_vault_name(invalid_name).expect_err("name should be rejected");
+
+        assert!(
+            !format!("{error:?}").contains(invalid_name),
+            "validation error must not echo the rejected name"
+        );
+    }
+
+    #[tokio::test]
+    async fn delete_secret_removes_value_and_is_idempotent() {
+        let temp_dir = TempDir::new().expect("temporary vault directory should be created");
+        let vault_base_path = temp_dir.path().to_path_buf();
+
+        let secret_value = "private-value";
+        set_secret("app", "API_KEY", secret_value, &vault_base_path)
+            .await
+            .expect("secret should be set");
+        delete_secret("app", "API_KEY", &vault_base_path)
+            .await
+            .expect("secret should be deleted");
+        delete_secret("app", "API_KEY", &vault_base_path)
+            .await
+            .expect("repeated delete should succeed");
+
+        assert!(
+            get_secret("app", "API_KEY", &vault_base_path)
+                .await
+                .is_err(),
+            "deleted secret should no longer be readable"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_delete_sanitizes_failure_context() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let app = Router::new().route(
+            "/v1/deployments/{id}/vault/{vault}/secrets/{key}",
+            delete(|| async { StatusCode::INTERNAL_SERVER_ERROR }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test server should run");
+        });
+
+        let secret_name = "private-secret-name";
+        let error = delete_remote_secret(
+            &reqwest::Client::new(),
+            &format!("http://{address}"),
+            "deployment-id",
+            "application-vault",
+            secret_name,
+        )
+        .await
+        .expect_err("server failure should be returned");
+        server.abort();
+
+        assert!(
+            !format!("{error:?}").contains(secret_name),
+            "structured error must not contain the secret name"
+        );
+    }
+
+    #[tokio::test]
+    async fn remote_delete_sends_http_delete_request() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("test listener should bind");
+        let address = listener
+            .local_addr()
+            .expect("listener should have an address");
+        let app = Router::new().route(
+            "/v1/deployments/{id}/vault/{vault}/secrets/{key}",
+            delete(|| async { StatusCode::OK }),
+        );
+        let server = tokio::spawn(async move {
+            axum::serve(listener, app)
+                .await
+                .expect("test server should run");
+        });
+
+        delete_remote_secret(
+            &reqwest::Client::new(),
+            &format!("http://{address}"),
+            "deployment-id",
+            "application-vault",
+            "API_KEY",
+        )
+        .await
+        .expect("DELETE request should succeed");
+        server.abort();
+    }
 }
 
 /// Resolve a deployment ID from a name or ID string.
