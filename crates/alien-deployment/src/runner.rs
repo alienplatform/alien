@@ -397,12 +397,15 @@ async fn run_step_loop_body(
             "Running deployment step"
         );
 
-        let step_result = step(
+        // `step` dispatches every deployment phase and therefore has a large async
+        // state machine. Keep that future off Tokio's worker stack: complex stacks can
+        // otherwise cross the default thread-stack limit while entering Pending.
+        let step_result = Box::pin(step(
             state.clone(),
             config.clone(),
             client_config.clone(),
             service_provider.clone(),
-        )
+        ))
         .await;
 
         let step_result = match step_result {
@@ -615,8 +618,9 @@ mod tests {
     use super::*;
     use crate::transport::{DeploymentLoopTransport, StepReconcileResult};
     use alien_core::{
-        EnvironmentVariablesSnapshot, Platform, ReleaseInfo, ResourceEntry, ResourceLifecycle,
-        Stack, StackSettings, StackState, Worker, WorkerCode, DEPLOYMENT_PROTOCOL_VERSION,
+        Container, ContainerCode, EnvironmentVariablesSnapshot, Platform, ReleaseInfo,
+        ResourceEntry, ResourceLifecycle, ResourceSpec, Stack, StackSettings, StackState, Worker,
+        WorkerCode, DEPLOYMENT_PROTOCOL_VERSION,
     };
     use alien_error::AlienErrorData;
     use async_trait::async_trait;
@@ -825,6 +829,70 @@ mod tests {
         }
     }
 
+    fn linked_container_state() -> DeploymentState {
+        let backend = Container::new("backend".to_string())
+            .code(ContainerCode::Image {
+                image: "backend:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .port(8080)
+            .permissions("default".to_string())
+            .build();
+        let frontend = Container::new("frontend".to_string())
+            .code(ContainerCode::Image {
+                image: "frontend:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.25".to_string(),
+                desired: "0.5".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "256Mi".to_string(),
+                desired: "512Mi".to_string(),
+            })
+            .port(8080)
+            .permissions("default".to_string())
+            .link(&backend)
+            .build();
+        let stack = Stack::new("linked-containers".to_string())
+            .permissions({
+                let mut profiles = IndexMap::new();
+                profiles.insert("default".to_string(), alien_core::PermissionProfile::new());
+                alien_core::PermissionsConfig {
+                    profiles,
+                    management: alien_core::ManagementPermissions::Auto,
+                }
+            })
+            .add(backend, ResourceLifecycle::Live)
+            .add(frontend, ResourceLifecycle::Live)
+            .build();
+
+        DeploymentState {
+            status: DeploymentStatus::Pending,
+            platform: Platform::Test,
+            current_release: None,
+            target_release: Some(ReleaseInfo {
+                release_id: Some("rel_linked".to_string()),
+                version: None,
+                description: None,
+                stack,
+            }),
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
     fn test_config() -> DeploymentConfig {
         DeploymentConfig {
             input_values: Default::default(),
@@ -850,6 +918,51 @@ mod tests {
             deployment_token: None,
             native_image_host: None,
         }
+    }
+
+    #[test]
+    fn linked_containers_enter_initial_setup_on_bounded_tokio_worker_stack() {
+        // The test build's deployment future is smaller than the fully featured CLI
+        // future that originally overflowed Tokio's 2 MiB default. A smaller worker
+        // stack preserves enough headroom to make the same boundary regression fail
+        // before `step` is boxed, while still exercising the real linked graph.
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .thread_stack_size(1536 * 1024)
+            .enable_all()
+            .build()
+            .expect("bounded Tokio runtime should build");
+
+        let task = runtime.spawn(async {
+            let transport = CountingRenewalTransport::default();
+            let mut state = linked_container_state();
+            let mut config = test_config();
+            let policy = RunnerPolicy {
+                max_steps: 1,
+                operation: LoopOperation::Deploy,
+                delay_strategy: DelayStrategy::Inline,
+            };
+
+            let result = run_step_loop(
+                &mut state,
+                &mut config,
+                &ClientConfig::Test,
+                "dep_linked",
+                &policy,
+                &transport,
+                None,
+                None,
+            )
+            .await
+            .expect("linked deployment should complete its pending step");
+
+            assert_eq!(result.steps_executed, 1);
+            assert_eq!(state.status, DeploymentStatus::InitialSetup);
+        });
+
+        runtime
+            .block_on(task)
+            .expect("Tokio worker should not overflow its stack");
     }
 
     #[tokio::test(start_paused = true)]

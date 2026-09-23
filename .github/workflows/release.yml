@@ -834,6 +834,208 @@ jobs:
           publish_tarball "qualified/client-sdks/alienplatform-platform-api-${VERSION}.tgz" "@alienplatform/platform-api"
           publish_tarball "qualified/client-sdks/alienplatform-manager-api-${VERSION}.tgz" "@alienplatform/manager-api"
 
+  # Python distributions are built during qualification and those exact wheels
+  # are promoted during publication. abi3-py310 covers supported CPython 3.10+.
+  build-python-wheels:
+    needs: prepare
+    if: inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'qualification'
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: depot-ubuntu-24.04-16
+            target: x86_64
+            manylinux: "2014"
+            artifact: linux-x86_64
+            smoke: true
+          - runner: depot-ubuntu-24.04-arm-16
+            target: aarch64
+            manylinux: "2_28"
+            artifact: linux-aarch64
+            smoke: true
+          - runner: depot-macos-15
+            target: aarch64
+            manylinux: "off"
+            artifact: macos-aarch64
+            smoke: true
+          - runner: depot-macos-15
+            target: x86_64
+            manylinux: "off"
+            artifact: macos-x86_64
+            smoke: false
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.prepare.outputs.source_ref }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build Python wheel (${{ matrix.artifact }})
+        uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms
+
+      - name: Validate wheel identity
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python - <<'PY'
+          import email
+          import glob
+          import os
+          import zipfile
+
+          wheels = glob.glob("dist/*.whl")
+          if len(wheels) != 1:
+              raise SystemExit(f"expected one wheel, found {wheels}")
+          wheel = wheels[0]
+          with zipfile.ZipFile(wheel) as archive:
+              paths = [name for name in archive.namelist() if name.endswith(".dist-info/METADATA")]
+              if len(paths) != 1:
+                  raise SystemExit(f"expected one METADATA file, found {paths}")
+              metadata = email.message_from_bytes(archive.read(paths[0]))
+          if metadata["Name"] != "alienplatform":
+              raise SystemExit(f"unexpected package name: {metadata['Name']}")
+          if metadata["Version"] != os.environ["VERSION"]:
+              raise SystemExit(
+                  f"wheel version {metadata['Version']} does not match release {os.environ['VERSION']}"
+              )
+          if "-abi3-" not in os.path.basename(wheel):
+              raise SystemExit(f"wheel is not abi3: {wheel}")
+          print(os.path.basename(wheel))
+          PY
+
+      - name: Smoke-test installed wheel
+        if: matrix.smoke
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          python -c 'import alienplatform; import alienplatform._native'
+
+      - name: Upload qualified Python wheel
+        uses: actions/upload-artifact@v7
+        with:
+          name: qualified-python-${{ matrix.artifact }}
+          retention-days: 30
+          if-no-files-found: error
+          path: dist/*.whl
+
+  publish-python:
+    needs: prepare
+    if: ${{ inputs.mode == 'stable' && needs.prepare.outputs.ready == 'true' && inputs.stable_action == 'publish' && !inputs.dry_run }}
+    runs-on: depot-ubuntu-24.04-arm
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/alienplatform
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download qualified Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          run-id: ${{ needs.prepare.outputs.qualification_run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          pattern: qualified-python-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check qualified wheels against PyPI
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          python - <<'PY'
+          import glob
+          import hashlib
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          if len(wheels) != 4:
+              raise SystemExit(f"expected four qualified wheels, found {wheels}")
+          expected = {
+              os.path.basename(path): hashlib.sha256(open(path, "rb").read()).hexdigest()
+              for path in wheels
+          }
+          url = f"https://pypi.org/pypi/alienplatform/{os.environ['VERSION']}/json"
+          try:
+              with urllib.request.urlopen(url) as response:
+                  published = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              published = {"urls": []}
+          existing = {
+              item["filename"]: item["digests"]["sha256"]
+              for item in published["urls"]
+              if item["filename"] in expected
+          }
+          mismatched = {
+              name: (expected[name], digest)
+              for name, digest in existing.items()
+              if expected[name] != digest
+          }
+          if mismatched:
+              raise SystemExit(f"PyPI already contains different wheel contents: {mismatched}")
+          print(f"qualified wheels: {sorted(expected)}")
+          print(f"already published with matching hashes: {sorted(existing)}")
+          PY
+
+      # Resuming a partially completed upload is safe because the preceding
+      # checksum check rejects an existing filename with different contents.
+      - name: Publish qualified Python wheels
+        uses: pypa/gh-action-pypi-publish@106e0b0b7c337fa67ed433972f777c6357f78598
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+      - name: Verify published wheel hashes
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if python - <<'PY'
+          import glob
+          import hashlib
+          import json
+          import os
+          import urllib.request
+
+          expected = {
+              os.path.basename(path): hashlib.sha256(open(path, "rb").read()).hexdigest()
+              for path in glob.glob("dist/*.whl")
+          }
+          with urllib.request.urlopen(
+              f"https://pypi.org/pypi/alienplatform/{os.environ['VERSION']}/json"
+          ) as response:
+              published = json.load(response)
+          actual = {item["filename"]: item["digests"]["sha256"] for item in published["urls"]}
+          if any(actual.get(name) != digest for name, digest in expected.items()):
+              raise SystemExit(1)
+          print(f"verified {len(expected)} wheels on PyPI")
+          PY
+            then
+              exit 0
+            fi
+            echo "Waiting for PyPI metadata propagation (${attempt}/30)..."
+            sleep 10
+          done
+          echo "::error::Published Python wheels did not appear with their qualified hashes"
+          exit 1
+
   # ─── Native addon prebuilds (@alienplatform/bindings) ──────────────
   #
   # The bindings addon publishes as a thin wrapper plus per-platform prebuild
@@ -2160,6 +2362,7 @@ jobs:
       - publish-crates
       - publish-npm
       - publish-client-sdks
+      - publish-python
       - publish-bindings
       - publish-ai-gateway
       - upload-binaries

@@ -1,0 +1,5 @@
+[project]
+name = "alien-python-container-example"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []

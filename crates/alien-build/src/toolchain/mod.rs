@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub mod cache_utils;
 pub mod docker;
 pub(crate) mod native_addon;
+pub mod python;
 pub mod rust;
 pub mod typescript;
 
@@ -303,6 +304,15 @@ pub fn create_toolchain(config: &ToolchainConfig) -> Box<dyn Toolchain> {
         }),
         ToolchainConfig::TypeScript { binary_name } => Box::new(typescript::TypeScriptToolchain {
             binary_name: binary_name.clone(),
+        }),
+        ToolchainConfig::Python {
+            python_version,
+            package,
+            command,
+        } => Box::new(python::PythonToolchain {
+            python_version: python_version.clone(),
+            package: package.clone(),
+            command: command.clone(),
         }),
         ToolchainConfig::Docker {
             dockerfile,

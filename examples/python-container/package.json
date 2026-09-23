@@ -1,0 +1,8 @@
+{
+  "name": "@alienplatform/example-python-container",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@alienplatform/core": "link:../../packages/core"
+  }
+}

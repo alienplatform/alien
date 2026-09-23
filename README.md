@@ -84,7 +84,7 @@ outputs.
 ## Features
 
 - **[AWS, GCP, and Azure support](https://www.alien.dev/docs/how-alien-works)** - Deploy to all major clouds. 
-- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/worker/toolchains)** — First-class support for both. Python and arbitrary containers coming soon.
+- **[TypeScript & Rust](https://alien.dev/docs/infrastructure/worker/toolchains)** — First-class source builds, plus Python source containers and arbitrary Docker containers.
 - **[Real-time Heartbeat](https://alien.dev/docs/how-alien-works)** — Know the instant a deployment goes down. 
 - **[Auto Updates & Rollbacks](https://alien.dev/docs/releases)** — Push a release and every remote environment picks it up automatically. 
 - **[Local-first Development](https://alien.dev/docs/local-development)** — Build and test on your machine. Local equivalents for every cloud resource.

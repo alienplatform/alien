@@ -78,6 +78,8 @@ export interface StoragePutAttributes {
 
 /** Options for {@link Storage.put}. */
 export interface StoragePutOptions {
+  /** Atomic write precondition. `"absent"` creates only when the path does not exist. */
+  condition?: "absent"
   attributes?: StoragePutAttributes
 }
 
@@ -377,7 +379,13 @@ export interface Vault {
 
 /** A live sandbox. */
 export interface SandboxInstance {
-  /** Sandbox id, which is what every later call addresses. */
+  /**
+   * Provider-scoped sandbox id, which is what every later call addresses.
+   *
+   * This returned value is authoritative: a provider may allocate an id different from the one
+   * requested at creation. Persist it durably before starting work so a replacement process can
+   * reconnect with `get` or `getOrCreate`, or clean up with `terminate`.
+   */
   sandboxId: string
   /** Lifecycle state. */
   state: "starting" | "running" | "paused" | "terminated"
@@ -395,6 +403,14 @@ export interface ResolvedSandbox {
 
 /** What a sandbox is created with. */
 export interface CreateSandboxOptions {
+  /**
+   * A provider-scoped id to reconnect to when passed to `getOrCreate`, or a requested id when a
+   * sandbox is created.
+   *
+   * Providers are not required to honor a requested creation id. Always read and persist the
+   * `SandboxInstance.sandboxId` returned by `create` or `getOrCreate`; do not assume this value is
+   * the id of the resulting sandbox.
+   */
   sandboxId?: string
   tenantKey?: string
   /** Environment every command in the sandbox starts with. */

@@ -59,9 +59,8 @@ impl RemoteStorageHandle {
         let payload = PutPayload::from(data.to_vec());
         let result = match options {
             Some(options) => {
-                self.inner
-                    .put_opts(&path, payload, object_store_put_options(options))
-                    .await
+                let options = object_store_put_options(options)?;
+                self.inner.put_opts(&path, payload, options).await
             }
             None => self.inner.put(&path, payload).await,
         }

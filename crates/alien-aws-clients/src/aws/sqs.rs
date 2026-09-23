@@ -814,6 +814,7 @@ pub struct MessageSystemAttributeValue {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Message {
+    #[serde(rename = "Attribute", default, deserialize_with = "message_attributes")]
     pub attributes: Option<HashMap<String, String>>,
     pub body: String,
     #[serde(rename = "MD5OfBody")]
@@ -823,4 +824,58 @@ pub struct Message {
     pub message_attributes: Option<HashMap<String, MessageAttributeValue>>,
     pub message_id: String,
     pub receipt_handle: String,
+}
+
+fn message_attributes<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<HashMap<String, String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let attributes = Vec::<Attribute>::deserialize(deserializer)?;
+    Ok(Some(
+        attributes
+            .into_iter()
+            .map(|attribute| (attribute.name, attribute.value))
+            .collect(),
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receive_message_decodes_repeated_sqs_system_attributes() {
+        let xml = r#"<ReceiveMessageResponse>
+            <ReceiveMessageResult><Message>
+                <MessageId>message-1</MessageId>
+                <ReceiptHandle>receipt-1</ReceiptHandle>
+                <MD5OfBody>unused</MD5OfBody>
+                <Body>payload</Body>
+                <Attribute><Name>SenderId</Name><Value>sender</Value></Attribute>
+                <Attribute><Name>ApproximateReceiveCount</Name><Value>2</Value></Attribute>
+            </Message></ReceiveMessageResult>
+        </ReceiveMessageResponse>"#;
+        let response: ReceiveMessageResponse = quick_xml::de::from_str(xml).expect("SQS XML");
+        let message = &response.receive_message_result.messages[0];
+        let attributes = message.attributes.as_ref().expect("system attributes");
+        assert_eq!(attributes.len(), 2);
+        assert_eq!(
+            attributes.get("ApproximateReceiveCount"),
+            Some(&"2".to_string())
+        );
+    }
+
+    #[test]
+    fn receive_message_without_system_attributes_keeps_none() {
+        let xml = r#"<ReceiveMessageResponse><ReceiveMessageResult><Message>
+            <MessageId>message-1</MessageId><ReceiptHandle>receipt-1</ReceiptHandle>
+            <MD5OfBody>unused</MD5OfBody><Body>payload</Body>
+        </Message></ReceiveMessageResult></ReceiveMessageResponse>"#;
+        let response: ReceiveMessageResponse = quick_xml::de::from_str(xml).expect("SQS XML");
+        assert!(response.receive_message_result.messages[0]
+            .attributes
+            .is_none());
+    }
 }
