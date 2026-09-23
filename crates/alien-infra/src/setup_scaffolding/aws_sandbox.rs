@@ -54,7 +54,7 @@ pub(super) async fn reconcile(
         .bundle_uri(image)
         .runtime_built(lifecycle == ResourceLifecycle::Live)
         .build();
-    let policy = serde_json::to_string(&build_role.policy().context(
+    let policy = serde_json::to_value(build_role.policy().context(
         ErrorData::ResourceConfigInvalid {
             message: "the sandbox's build role policy cannot be resolved".to_string(),
             resource_id: Some(sandbox.id.clone()),
@@ -138,7 +138,19 @@ pub(super) async fn reconcile(
         }
     }
 
-    iam.put_role_policy(&role_name, SANDBOX_BUILD_POLICY_NAME, &policy)
+    if applied_policy(
+        iam.as_ref(),
+        &role_name,
+        SANDBOX_BUILD_POLICY_NAME,
+        &sandbox.id,
+    )
+    .await?
+    .as_ref()
+        == Some(&policy)
+    {
+        return Ok(ScaffoldingProgress::Done);
+    }
+    iam.put_role_policy(&role_name, SANDBOX_BUILD_POLICY_NAME, &policy.to_string())
         .await
         .context(ErrorData::CloudPlatformError {
             message: format!(
@@ -148,6 +160,28 @@ pub(super) async fn reconcile(
             resource_id: Some(sandbox.id.clone()),
         })?;
     Ok(ScaffoldingProgress::Done)
+}
+
+/// The inline policy as IAM holds it, or `None` when the role carries none by that name.
+pub(super) async fn applied_policy(
+    iam: &dyn IamApi,
+    role_name: &str,
+    policy_name: &str,
+    sandbox_id: &str,
+) -> Result<Option<serde_json::Value>> {
+    match iam.get_role_policy(role_name, policy_name).await {
+        Ok(response) => {
+            let document = response.get_role_policy_result.policy_document;
+            Ok(urlencoding::decode(&document)
+                .ok()
+                .and_then(|decoded| serde_json::from_str(&decoded).ok()))
+        }
+        Err(error) if is_not_found(&error) => Ok(None),
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to read policy '{policy_name}' of role '{role_name}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        }),
+    }
 }
 
 /// What the template setups register for this sandbox, from the build role this step verified
@@ -384,9 +418,10 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
     use crate::sandbox::AwsSandboxController;
     use alien_aws_clients::iam::{
-        AttachedPolicies, AttachedPolicy, CreateRoleResponse, CreateRoleResult, GetRoleResponse,
-        GetRoleResult, ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult,
-        ListRolePoliciesResponse, ListRolePoliciesResult, MockIamApi, PolicyNames,
+        AttachedPolicies, AttachedPolicy, CreateRoleResponse, CreateRoleResult,
+        GetRolePolicyResponse, GetRolePolicyResult, GetRoleResponse, GetRoleResult,
+        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, ListRolePoliciesResponse,
+        ListRolePoliciesResult, MockIamApi, PolicyNames,
     };
     use alien_aws_clients::lambda_microvms::{
         CreateMicrovmImageRequest, CreateMicrovmImageResponse, MockLambdaMicrovmsApi,
@@ -492,6 +527,7 @@ mod tests {
     }
 
     /// An IAM client holding one existing role; `put_role_policy` is expected exactly `puts` times.
+    /// The build policy it holds is the expected one whenever `inline_names` names it.
     fn existing(
         arn: &str,
         trust: Value,
@@ -499,7 +535,35 @@ mod tests {
         attached_arns: &[&str],
         puts: usize,
     ) -> MockIamApi {
+        let applied = inline_names
+            .contains(&SANDBOX_BUILD_POLICY_NAME)
+            .then(expected_policy);
+        existing_with_policy(arn, trust, inline_names, attached_arns, applied, puts)
+    }
+
+    fn existing_with_policy(
+        arn: &str,
+        trust: Value,
+        inline_names: &[&str],
+        attached_arns: &[&str],
+        applied: Option<Value>,
+        puts: usize,
+    ) -> MockIamApi {
         let mut iam = MockIamApi::new();
+        iam.expect_get_role_policy()
+            .withf(|role_name, policy_name| {
+                role_name == ROLE_NAME && policy_name == SANDBOX_BUILD_POLICY_NAME
+            })
+            .returning(move |role_name, policy_name| {
+                let document = applied.clone().ok_or_else(not_found)?;
+                Ok(GetRolePolicyResponse {
+                    get_role_policy_result: GetRolePolicyResult {
+                        role_name: role_name.to_string(),
+                        policy_name: policy_name.to_string(),
+                        policy_document: urlencoding::encode(&document.to_string()).into(),
+                    },
+                })
+            });
         let arn = arn.to_string();
         iam.expect_get_role().returning(move |_| {
             Ok(GetRoleResponse {
@@ -650,13 +714,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_matching_role_is_adopted_and_its_policy_reapplied_on_every_run() {
+    async fn a_matching_role_holding_its_policy_is_adopted_without_a_write() {
         let iam = existing(
             ROLE_ARN,
             expected_trust(),
             &[SANDBOX_BUILD_POLICY_NAME],
             &[],
-            2,
+            0,
         );
         let provider = provider(iam);
         let mut records = BTreeMap::new();
@@ -665,6 +729,24 @@ mod tests {
             assert_eq!(progress, ScaffoldingProgress::Done);
             assert_eq!(records, recorded());
         }
+    }
+
+    #[tokio::test]
+    async fn a_build_policy_that_differs_is_rewritten() {
+        let mut stale = expected_policy();
+        stale["Statement"][0]["Resource"] = json!("arn:aws:s3:::another-bucket/*");
+        let iam = existing_with_policy(
+            ROLE_ARN,
+            expected_trust(),
+            &[SANDBOX_BUILD_POLICY_NAME],
+            &[],
+            Some(stale),
+            1,
+        );
+        let mut records = BTreeMap::new();
+        let progress = step(&provider(iam), &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(records, recorded());
     }
 
     #[tokio::test]

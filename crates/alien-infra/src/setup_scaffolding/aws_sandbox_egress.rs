@@ -29,7 +29,9 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use serde_json::Value;
 use tracing::info;
 
-use super::aws_sandbox::{adoption_mismatches, is_conflict, is_not_found, setup_tags};
+use super::aws_sandbox::{
+    adoption_mismatches, applied_policy, is_conflict, is_not_found, setup_tags,
+};
 use super::{ScaffoldingProgress, SetupScaffoldingContext};
 use crate::network::AwsNetworkController;
 use crate::sandbox::aws_partition;
@@ -262,23 +264,7 @@ async fn operator_role(
 
     let policy =
         sandbox_egress_operator_policy(aws_partition(&aws.region), &aws.account_id, &aws.region);
-    let applied = match iam.get_role_policy(name, SANDBOX_EGRESS_POLICY_NAME).await {
-        Ok(response) => {
-            let document = response.get_role_policy_result.policy_document;
-            urlencoding::decode(&document)
-                .ok()
-                .and_then(|decoded| serde_json::from_str::<Value>(&decoded).ok())
-        }
-        Err(error) if is_not_found(&error) => None,
-        Err(error) => {
-            return Err(error).context(ErrorData::CloudPlatformError {
-                message: format!(
-                    "Failed to read policy '{SANDBOX_EGRESS_POLICY_NAME}' of role '{name}'"
-                ),
-                resource_id: Some(sandbox_id.to_string()),
-            })
-        }
-    };
+    let applied = applied_policy(iam, name, SANDBOX_EGRESS_POLICY_NAME, sandbox_id).await?;
     if applied.as_ref() == Some(&policy) {
         return Ok(ScaffoldingProgress::Done);
     }
@@ -1630,7 +1616,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_converged_deny_sandbox_changes_nothing_but_the_build_policy() {
+    async fn a_converged_deny_sandbox_changes_nothing() {
         let cloud = Shared::default();
         let stack = stack(SandboxEgress::Deny, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
@@ -1641,12 +1627,7 @@ mod tests {
         let (progress, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
 
         assert_eq!(progress, ScaffoldingProgress::Done);
-        assert_eq!(
-            made,
-            vec![format!(
-                "iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"
-            )]
-        );
+        assert_eq!(made, Vec::<String>::new());
         assert_eq!(records, converged);
     }
 

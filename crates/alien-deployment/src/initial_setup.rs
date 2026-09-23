@@ -642,6 +642,14 @@ mod tests {
                 },
             })
         });
+        present.expect_get_role_policy().returning(|_, policy| {
+            Err(alien_error::AlienError::new(
+                alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                    resource_type: "IAM Resource".to_string(),
+                    resource_name: policy.to_string(),
+                },
+            ))
+        });
         present
             .expect_put_role_policy()
             .withf(|role, policy, _| role == BUILD_ROLE && policy == "sandbox-image-build")
