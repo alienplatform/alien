@@ -273,6 +273,33 @@ pub(super) fn seed(
     })
 }
 
+/// What setup created for this sandbox without recording it, found by name and setup's tags. A
+/// role that lacks the tags is never claimed: teardown deletes a recorded role by name.
+pub(super) async fn recover(
+    ctx: &SetupScaffoldingContext<'_>,
+    sandbox: &Sandbox,
+) -> Result<Option<SetupScaffolding>> {
+    let aws = aws_config(ctx.client_config)?;
+    let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
+    let build_role_name = sandbox_build_role_name(ctx.resource_prefix, &sandbox.id);
+    if !aws_sandbox_egress::carries_setup_role_tags(
+        iam.as_ref(),
+        &build_role_name,
+        ctx.resource_prefix,
+        &sandbox.id,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+    let egress = aws_sandbox_egress::recover(ctx, aws, iam.as_ref(), &sandbox.id).await?;
+    info!(sandbox_id = %sandbox.id, "Recovered setup scaffolding the record did not hold");
+    Ok(Some(SetupScaffolding::AwsSandbox {
+        build_role_name,
+        egress,
+    }))
+}
+
 /// Egress first: its connector, group and operator role, then the build role.
 pub(super) async fn teardown(
     ctx: &SetupScaffoldingContext<'_>,

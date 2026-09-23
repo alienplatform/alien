@@ -289,11 +289,19 @@ async fn run_setup_teardown_after_handoff_inner(
 /// How long to wait before asking again whether AWS has released what holds a scaffolding object.
 const SCAFFOLDING_TEARDOWN_DELAY_MS: u64 = 15_000;
 
-/// Only a direct setup records scaffolding; an imported setup's template owns and removes its own.
-pub(crate) fn has_setup_scaffolding(runtime_metadata: Option<&RuntimeMetadata>) -> bool {
+/// Only a direct setup scaffolds; an imported setup's template owns and removes its own. A stack
+/// that scaffolds anything counts even with an empty record, which a lost checkpoint can leave.
+pub(crate) fn has_setup_scaffolding(
+    runtime_metadata: Option<&RuntimeMetadata>,
+    platform: alien_core::Platform,
+) -> bool {
     runtime_metadata.is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
-            && !metadata.setup_scaffolding.is_empty()
+            && (!metadata.setup_scaffolding.is_empty()
+                || metadata
+                    .prepared_stack
+                    .as_ref()
+                    .is_some_and(|stack| setup_scaffolding::scaffolds_any(stack, platform)))
     })
 }
 
@@ -302,7 +310,8 @@ async fn teardown_setup_scaffolding(
     client_config: &ClientConfig,
     service_provider: &dyn alien_infra::PlatformServiceProvider,
 ) -> Result<ScaffoldingProgress> {
-    if !has_setup_scaffolding(state.runtime_metadata.as_ref()) {
+    let platform = state.platform;
+    if !has_setup_scaffolding(state.runtime_metadata.as_ref(), platform) {
         return Ok(ScaffoldingProgress::Done);
     }
     let Some(runtime_metadata) = state.runtime_metadata.as_mut() else {
@@ -322,6 +331,18 @@ async fn teardown_setup_scaffolding(
         service_provider,
         resource_prefix: &resource_prefix,
     };
+    if let Some(stack) = runtime_metadata.prepared_stack.as_ref() {
+        setup_scaffolding::recover_unrecorded(
+            &ctx,
+            stack,
+            platform,
+            &mut runtime_metadata.setup_scaffolding,
+        )
+        .await
+        .context(ErrorData::StackExecutionFailed {
+            message: "Failed to look for setup scaffolding the record does not hold".to_string(),
+        })?;
+    }
     setup_scaffolding::teardown(&ctx, &mut runtime_metadata.setup_scaffolding)
         .await
         .context(ErrorData::StackExecutionFailed {
@@ -546,6 +567,92 @@ mod tests {
                 .is_empty(),
             "the deleted role leaves the persisted record before anything else is torn down"
         );
+    }
+
+    /// The record lost the role's name to a checkpoint that never landed; its setup tags still
+    /// mark it as this deployment's.
+    #[tokio::test]
+    async fn direct_teardown_deletes_a_tagged_build_role_the_record_never_held() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role()
+            .withf(|role| role == BUILD_ROLE)
+            .returning(|role| {
+                Ok(alien_aws_clients::iam::GetRoleResponse {
+                    get_role_result: alien_aws_clients::iam::GetRoleResult {
+                        role: alien_aws_clients::iam::Role {
+                            path: "/".to_string(),
+                            role_name: role.to_string(),
+                            role_id: "AROAEXAMPLE".to_string(),
+                            arn: format!("arn:aws:iam::123456789012:role/{role}"),
+                            create_date: "2026-09-23T00:00:00Z".to_string(),
+                            assume_role_policy_document: None,
+                            description: None,
+                            max_session_duration: None,
+                            permissions_boundary: None,
+                            tags: Some(alien_aws_clients::iam::Tags {
+                                member: alien_core::setup_resource_tags(
+                                    "test", "agents", "sandbox",
+                                )
+                                .into_iter()
+                                .map(|(key, value)| alien_aws_clients::iam::Tag { key, value })
+                                .collect(),
+                            }),
+                            role_last_used: None,
+                        },
+                    },
+                })
+            });
+        iam.expect_get_role()
+            .withf(|role| role == "test-agents-egress")
+            .returning(|role| {
+                Err(AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                        resource_type: "IAM Resource".to_string(),
+                        resource_name: role.to_string(),
+                    },
+                ))
+            });
+        iam.expect_delete_role_policy()
+            .withf(|role, _| role == BUILD_ROLE)
+            .times(1)
+            .returning(|_, _| Ok(()));
+        iam.expect_delete_role()
+            .withf(|role| role == BUILD_ROLE)
+            .times(1)
+            .returning(|_| Ok(()));
+        let iam = Arc::new(iam);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        metadata.setup_scaffolding.clear();
+        metadata.prepared_stack = Some(
+            alien_core::Stack::new("acme".to_string())
+                .add(
+                    alien_core::Sandbox::new("agents".to_string())
+                        .code(alien_core::SandboxCode::Image {
+                            image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip"
+                                .to_string(),
+                        })
+                        .egress(alien_core::SandboxEgress::Allow)
+                        .lifecycle(alien_core::SandboxLifecyclePolicy {
+                            max_lifetime_seconds: None,
+                            idle_pause_seconds: None,
+                        })
+                        .build(),
+                    ResourceLifecycle::Live,
+                )
+                .build(),
+        );
+
+        run(&mut state, provider, &RecordingTransport::default())
+            .await
+            .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
     }
 
     /// A provider with no expectations panics on any cloud call.

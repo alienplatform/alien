@@ -120,6 +120,7 @@ pub async fn handle_deleting(
         let next_status = if has_remaining_setup_resources(&step_result.next_state)
             || crate::setup_teardown::has_setup_scaffolding(
                 current_cloned.runtime_metadata.as_ref(),
+                current_cloned.platform,
             ) {
             DeploymentStatus::TeardownRequired
         } else {
@@ -444,6 +445,50 @@ mod tests {
             )))
             .await,
             DeploymentStatus::TeardownRequired
+        );
+    }
+
+    fn prepared_with_a_sandbox(
+        authority: alien_core::InitialSetupAuthority,
+    ) -> alien_core::RuntimeMetadata {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        alien_core::RuntimeMetadata {
+            initial_setup_authority: authority,
+            prepared_stack: Some(
+                alien_core::Stack::new("acme".to_string())
+                    .add(sandbox, ResourceLifecycle::Live)
+                    .build(),
+            ),
+            ..Default::default()
+        }
+    }
+
+    /// A step whose checkpoint never landed can leave scaffolding the record does not name, so
+    /// setup teardown still runs to look for it.
+    #[tokio::test]
+    async fn a_scaffolded_stack_with_an_empty_record_is_kept_for_teardown() {
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(prepared_with_a_sandbox(
+                alien_core::InitialSetupAuthority::DirectSetup
+            )))
+            .await,
+            DeploymentStatus::TeardownRequired
+        );
+        assert_eq!(
+            runtime_cleanup_of_an_empty_stack(Some(prepared_with_a_sandbox(
+                alien_core::InitialSetupAuthority::ImportedHandoff
+            )))
+            .await,
+            DeploymentStatus::Deleted
         );
     }
 

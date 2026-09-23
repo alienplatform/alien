@@ -250,6 +250,37 @@ pub fn apply_seeds(
     Ok(())
 }
 
+/// Whether a direct setup of `stack` on `platform` scaffolds anything.
+pub fn scaffolds_any(stack: &Stack, platform: Platform) -> bool {
+    scaffolded(stack, platform).next().is_some()
+}
+
+/// Records what setup created for a scaffolded resource the record does not name. A step whose
+/// checkpoint never landed, from a crash or a later error in the same step, created objects only
+/// the cloud knows of; they are found by their names and the tags setup creates them with.
+pub async fn recover_unrecorded(
+    ctx: &SetupScaffoldingContext<'_>,
+    stack: &Stack,
+    platform: Platform,
+    records: &mut BTreeMap<String, SetupScaffolding>,
+) -> Result<()> {
+    for (resource_id, _, scaffolded) in scaffolded(stack, platform) {
+        if records.contains_key(resource_id) {
+            continue;
+        }
+        let recovered = match scaffolded {
+            #[cfg(feature = "aws")]
+            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::recover(ctx, sandbox).await?,
+            #[cfg(not(feature = "aws"))]
+            Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
+        };
+        if let Some(record) = recovered {
+            records.insert(resource_id.clone(), record);
+        }
+    }
+    Ok(())
+}
+
 /// A record is dropped only once its objects are gone, so a failed or unfinished teardown keeps
 /// the remainder for the next call.
 pub async fn teardown(

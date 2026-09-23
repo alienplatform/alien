@@ -819,6 +819,107 @@ async fn wait_for_request(
     Ok(Some(event))
 }
 
+/// The egress objects setup created for this sandbox, found by their names and setup's tags, for
+/// a record that never learned of them. `None` without the operator role, which setup creates
+/// first and teardown deletes by name.
+pub(super) async fn recover(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &AwsClientConfig,
+    iam: &dyn IamApi,
+    sandbox_id: &str,
+) -> Result<Option<AwsSandboxEgressScaffolding>> {
+    let name = sandbox_egress_name(ctx.resource_prefix, sandbox_id);
+    if !carries_setup_role_tags(iam, &name, ctx.resource_prefix, sandbox_id).await? {
+        return Ok(None);
+    }
+
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+    let mut filters = vec![Filter {
+        name: "group-name".to_string(),
+        values: vec![name.clone()],
+    }];
+    filters.extend(
+        setup_tags(ctx.resource_prefix, sandbox_id)
+            .into_iter()
+            .map(|tag| Filter {
+                name: format!("tag:{}", tag.key),
+                values: vec![tag.value],
+            }),
+    );
+    let security_group_id = ec2
+        .describe_security_groups(
+            DescribeSecurityGroupsRequest::builder()
+                .filters(filters)
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to look up security group '{name}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?
+        .security_group_info
+        .and_then(|groups| groups.items.into_iter().next())
+        .and_then(|group| group.group_id);
+
+    let cloudcontrol = ctx
+        .service_provider
+        .get_aws_cloudcontrol_client(aws)
+        .await?;
+    let connector_name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
+    let connector_arn = find_connector(cloudcontrol.as_ref(), &connector_name, None, sandbox_id)
+        .await?
+        .filter(|(_, properties)| {
+            connector_carries_setup_tags(properties, ctx.resource_prefix, sandbox_id)
+        })
+        .map(|(arn, _)| arn);
+
+    Ok(Some(AwsSandboxEgressScaffolding {
+        operator_role_name: name,
+        security_group_id,
+        connector_arn,
+    }))
+}
+
+fn connector_carries_setup_tags(
+    properties: &Value,
+    resource_prefix: &str,
+    sandbox_id: &str,
+) -> bool {
+    let tags = properties["Tags"].as_array().cloned().unwrap_or_default();
+    setup_tags(resource_prefix, sandbox_id)
+        .into_iter()
+        .all(|tag| tags.contains(&serde_json::json!({ "Key": tag.key, "Value": tag.value })))
+}
+
+/// Whether the role exists and carries every tag setup creates its roles with.
+pub(super) async fn carries_setup_role_tags(
+    iam: &dyn IamApi,
+    role_name: &str,
+    resource_prefix: &str,
+    sandbox_id: &str,
+) -> Result<bool> {
+    let role = match iam.get_role(role_name).await {
+        Ok(response) => response.get_role_result.role,
+        Err(error) if is_not_found(&error) => return Ok(false),
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to read role '{role_name}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    let tags: Vec<(String, String)> = role
+        .tags
+        .map(|tags| tags.member)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|tag| (tag.key, tag.value))
+        .collect();
+    Ok(setup_tags(resource_prefix, sandbox_id)
+        .into_iter()
+        .all(|expected| tags.contains(&(expected.key, expected.value))))
+}
+
 /// Connector, then group, then role: the connector's interfaces hold the group, and the group
 /// cannot go until AWS releases them, which it does some time after the connector is gone.
 pub(super) async fn teardown(
@@ -832,14 +933,20 @@ pub(super) async fn teardown(
         .get_aws_cloudcontrol_client(aws)
         .await?;
     let name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
-    if let Some((arn, _)) = find_connector(
+    // Found by name, a connector is deleted only if it is the recorded one or carries setup's
+    // tags: the name alone does not make it setup's.
+    let found = find_connector(
         cloudcontrol.as_ref(),
         &name,
         egress.connector_arn.as_deref(),
         sandbox_id,
     )
     .await?
-    {
+    .filter(|(arn, properties)| {
+        egress.connector_arn.as_deref() == Some(arn.as_str())
+            || connector_carries_setup_tags(properties, ctx.resource_prefix, sandbox_id)
+    });
+    if let Some((arn, _)) = found {
         let deleted = match cloudcontrol
             .delete_resource(NETWORK_CONNECTOR_TYPE_NAME, &arn)
             .await
@@ -995,6 +1102,7 @@ mod tests {
     #[derive(Default)]
     struct Cloud {
         roles: BTreeMap<String, Value>,
+        role_tags: BTreeMap<String, Vec<(String, String)>>,
         inline: BTreeMap<(String, String), String>,
         attached: BTreeMap<String, Vec<String>>,
         groups: Vec<Group>,
@@ -1045,6 +1153,21 @@ mod tests {
         }
     }
 
+    fn tagged_role(name: &str, trust: &Value, tags: &[(String, String)]) -> Role {
+        Role {
+            tags: Some(alien_aws_clients::iam::Tags {
+                member: tags
+                    .iter()
+                    .map(|(key, value)| alien_aws_clients::iam::Tag {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            }),
+            ..role(name, trust)
+        }
+    }
+
     fn role(name: &str, trust: &Value) -> Role {
         Role {
             path: "/".to_string(),
@@ -1067,9 +1190,10 @@ mod tests {
         iam.expect_get_role().returning(move |name| {
             let cloud = c.lock().unwrap();
             let trust = cloud.roles.get(name).ok_or_else(|| not_found(name))?;
+            let tags = cloud.role_tags.get(name).cloned().unwrap_or_default();
             Ok(GetRoleResponse {
                 get_role_result: GetRoleResult {
-                    role: role(name, trust),
+                    role: tagged_role(name, trust, &tags),
                 },
             })
         });
@@ -1081,6 +1205,13 @@ mod tests {
                 .mutations
                 .push(format!("iam:CreateRole {}", request.role_name));
             cloud.roles.insert(request.role_name.clone(), trust.clone());
+            let tags = request
+                .tags
+                .iter()
+                .flatten()
+                .map(|tag| (tag.key.clone(), tag.value.clone()))
+                .collect();
+            cloud.role_tags.insert(request.role_name.clone(), tags);
             cloud.respond()?;
             Ok(CreateRoleResponse {
                 create_role_result: CreateRoleResult {
@@ -1174,6 +1305,7 @@ mod tests {
             let mut cloud = c.lock().unwrap();
             cloud.mutations.push(format!("iam:DeleteRole {role}"));
             cloud.roles.remove(role).ok_or_else(|| not_found(role))?;
+            cloud.role_tags.remove(role);
             cloud.respond()
         });
         iam
@@ -1297,11 +1429,25 @@ mod tests {
                         .collect(),
                     None => {
                         let names = filter("group-name").expect("the lookup filters by name");
-                        let vpcs = filter("vpc-id").expect("the lookup filters by VPC");
+                        let vpcs = filter("vpc-id");
+                        let tags: Vec<(String, Vec<String>)> = request
+                            .filters
+                            .iter()
+                            .flatten()
+                            .filter_map(|f| {
+                                Some((f.name.strip_prefix("tag:")?.to_string(), f.values.clone()))
+                            })
+                            .collect();
                         cloud
                             .groups
                             .iter()
-                            .filter(|g| names.contains(&g.name) && vpcs.contains(&g.vpc))
+                            .filter(|g| {
+                                names.contains(&g.name)
+                                    && vpcs.as_ref().is_none_or(|vpcs| vpcs.contains(&g.vpc))
+                                    && tags.iter().all(|(key, values)| {
+                                        g.tags.iter().any(|(k, v)| k == key && values.contains(v))
+                                    })
+                            })
                             .map(described)
                             .collect()
                     }
@@ -1665,6 +1811,31 @@ mod tests {
         let progress = teardown_all(&ctx, records).await?;
         let made = cloud.lock().unwrap().mutations[before..].to_vec();
         Ok((progress, made))
+    }
+
+    /// Teardown as a destroy runs it: first recovering what the record does not name.
+    async fn destroy(
+        cloud: &Shared,
+        stack: &Stack,
+        records: &mut BTreeMap<String, SetupScaffolding>,
+    ) {
+        let provider = provider(cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let mut calls = 0;
+        loop {
+            bounded(&mut calls);
+            crate::setup_scaffolding::recover_unrecorded(&ctx, stack, Platform::Aws, records)
+                .await
+                .unwrap();
+            if teardown_all(&ctx, records).await.unwrap() == ScaffoldingProgress::Done {
+                return;
+            }
+        }
     }
 
     fn desired_connector(security_group_id: &str) -> Value {
@@ -2805,6 +2976,77 @@ mod tests {
             "{error}"
         );
         assert_eq!(state.resources["agents"].resource_type, "worker");
+    }
+
+    /// Setup makes each object, then the checkpoint holding its record never lands and the
+    /// deployment is destroyed rather than set up again. Teardown still finds and deletes it.
+    #[tokio::test(start_paused = true)]
+    async fn a_destroy_after_a_lost_checkpoint_deletes_what_setup_made() {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        for made in 1..=8 {
+            let cloud = Shared::default();
+            let mut records = BTreeMap::new();
+            while cloud.lock().unwrap().mutations.len() < made {
+                step(&cloud, &stack, &state, &mut records).await.unwrap();
+            }
+
+            destroy(&cloud, &stack, &mut BTreeMap::new()).await;
+
+            let cloud = cloud.lock().unwrap();
+            assert!(
+                cloud.roles.is_empty(),
+                "after call {made}: {:?}",
+                cloud.roles
+            );
+            assert!(cloud.inline.is_empty(), "after call {made}");
+            assert!(cloud.groups.is_empty(), "after call {made}");
+            assert!(cloud.connectors.is_empty(), "after call {made}");
+        }
+    }
+
+    /// Recovery claims by name only what also carries setup's tags for this sandbox.
+    #[tokio::test]
+    async fn a_destroy_leaves_same_named_objects_setup_did_not_tag() {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let with_roles = |tagged: &[&str]| {
+            let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
+            let mut c = cloud.lock().unwrap();
+            for name in [BUILD_ROLE, EGRESS_NAME] {
+                c.roles.insert(name.to_string(), json!({}));
+                if tagged.contains(&name) {
+                    c.role_tags
+                        .insert(name.to_string(), tags_for(PREFIX, "agents"));
+                }
+            }
+            drop(c);
+            cloud
+        };
+
+        let foreign_build_role = with_roles(&[EGRESS_NAME]);
+        destroy(&foreign_build_role, &stack, &mut BTreeMap::new()).await;
+        assert_eq!(
+            foreign_build_role.lock().unwrap().mutations,
+            Vec::<String>::new()
+        );
+
+        let foreign_group = with_roles(&[BUILD_ROLE, EGRESS_NAME]);
+        foreign_group.lock().unwrap().connectors.push((
+            format!("arn:aws:lambda:us-east-1:{ACCOUNT}:network-connector:foreign"),
+            json!({
+                "Name": sandbox_egress_connector_name(PREFIX, "agents"),
+                "State": "ACTIVE",
+            }),
+        ));
+        destroy(&foreign_group, &stack, &mut BTreeMap::new()).await;
+        let cloud = foreign_group.lock().unwrap();
+        assert!(cloud.roles.is_empty(), "both roles carry setup's tags");
+        assert_eq!(cloud.groups.len(), 1, "the untagged group is not setup's");
+        assert_eq!(
+            cloud.connectors.len(),
+            1,
+            "the untagged connector is not setup's"
+        );
     }
 
     /// A serving sandbox's egress mode changes only through setup running again. Each run leaves
