@@ -655,6 +655,60 @@ mod tests {
         );
     }
 
+    /// A role the step refuses to adopt must stop setup, not be read as done: handing off would
+    /// let the controller pass that role to a build running a customer's Dockerfile.
+    #[tokio::test]
+    async fn a_refused_build_role_stops_setup_instead_of_handing_off() {
+        use alien_aws_clients::iam::{
+            GetRoleResponse, GetRoleResult, ListAttachedRolePoliciesResponse,
+            ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
+            PolicyNames,
+        };
+
+        let mut foreign = MockIamApi::new();
+        foreign.expect_get_role().returning(|_| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        foreign.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec!["admin".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        foreign.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        foreign.expect_put_role_policy().never();
+
+        let error = handle_initial_setup(
+            live_sandbox_setup(InitialSetupAuthority::DirectSetup),
+            config(),
+            aws_client_config(),
+            with_iam(foreign),
+        )
+        .await
+        .expect_err("a refused role must not let setup reach Provisioning");
+        assert!(
+            format!("{error:?}").contains("SETUP_SCAFFOLDING_NOT_ADOPTABLE"),
+            "the refusal surfaces as itself: {error:?}"
+        );
+    }
+
     /// An imported setup's template already made the role; a provider with no expectations
     /// panics on any cloud call.
     #[tokio::test]
