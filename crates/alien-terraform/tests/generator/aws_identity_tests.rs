@@ -7,6 +7,10 @@ use super::helpers::{
 };
 use alien_core::{
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    sandbox_egress::{
+        sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
+        SANDBOX_EGRESS_POLICY_NAME,
+    },
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Worker, WorkerCode,
@@ -990,4 +994,37 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             "{case}: trust policy"
         );
     }
+}
+
+/// A direct deploy creates the operator role through the IAM API from the shared builder, so a
+/// grant changed in the module alone would give the two install paths different roles.
+#[test]
+fn the_emitted_operator_role_matches_the_shared_builder() {
+    let (stack, settings) = sandbox_stack("acme-sandbox-egress-parity", SandboxEgress::Deny);
+    let module = render(&stack, TerraformTarget::Aws, settings);
+    let sandbox_file: hcl::Body = hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+        .unwrap_or_else(|error| panic!("agents.tf parses: {error}"));
+
+    let policies: Vec<_> = resource_blocks(&sandbox_file, "aws_iam_role_policy")
+        .filter(|block| {
+            block_attribute(block, "name").expr()
+                == &hcl::Expression::String(SANDBOX_EGRESS_POLICY_NAME.to_string())
+        })
+        .collect();
+    assert_eq!(policies.len(), 1, "one operator policy");
+    let role_label = policies[0].labels()[1].as_str();
+    let role = resource_blocks(&sandbox_file, "aws_iam_role")
+        .find(|block| block.labels()[1].as_str() == role_label)
+        .unwrap_or_else(|| panic!("the operator role {role_label} renders"));
+
+    assert_eq!(
+        evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
+        sandbox_egress_operator_policy(PARITY_PARTITION, PARITY_ACCOUNT, PARITY_REGION),
+        "permission policy"
+    );
+    assert_eq!(
+        evaluate_policy_expression(jsonencoded(block_attribute(role, "assume_role_policy"))),
+        sandbox_egress_operator_trust_policy(),
+        "trust policy"
+    );
 }

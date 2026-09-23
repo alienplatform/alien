@@ -7,6 +7,10 @@ use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
     import::data::AwsSandboxImportData,
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    sandbox_egress::{
+        sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
+        SandboxEgressConnector, SANDBOX_EGRESS_POLICY_NAME,
+    },
     Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
     SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
 };
@@ -1289,6 +1293,222 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             resolve_intrinsics(&properties["AssumeRolePolicyDocument"]),
             serde_json::to_value(expected.trust_policy()).expect("serializes"),
             "{case}: trust policy"
+        );
+    }
+}
+
+const PARITY_PREFIX: &str = "acme-parity";
+const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
+const PARITY_SECURITY_GROUP: &str = "sg-0parity";
+
+/// The two network modes `egress: deny` accepts, each with the private subnets its connector must
+/// name once the template's parameters and conditions are resolved.
+fn egress_parity_cases() -> [(NetworkSettings, Vec<String>); 2] {
+    [
+        (
+            NetworkSettings::Create {
+                cidr: None,
+                availability_zones: 2,
+            },
+            vec![
+                "subnet-created-1".to_string(),
+                "subnet-created-2".to_string(),
+            ],
+        ),
+        (
+            NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0parity".to_string(),
+                public_subnet_ids: vec!["subnet-public-a".to_string()],
+                private_subnet_ids: vec![
+                    "subnet-private-a".to_string(),
+                    "subnet-private-b".to_string(),
+                ],
+                security_group_ids: vec!["sg-0network".to_string()],
+            },
+            vec![
+                "subnet-private-a".to_string(),
+                "subnet-private-b".to_string(),
+            ],
+        ),
+    ]
+}
+
+fn deny_template(network: &NetworkSettings) -> alien_cloudformation::CfTemplate {
+    let settings = StackSettings {
+        network: Some(network.clone()),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-egress-parity".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(network.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        &format!("deny sandbox on {network:?}"),
+    );
+    template
+}
+
+fn emitted_properties(
+    template: &alien_cloudformation::CfTemplate,
+    logical_id: &str,
+) -> serde_json::Value {
+    serde_json::to_value(
+        template
+            .resources
+            .get(logical_id)
+            .unwrap_or_else(|| panic!("{logical_id} must render")),
+    )
+    .expect("serializes")["Properties"]
+        .clone()
+}
+
+/// Resolves every intrinsic the connector uses to the value it takes in a deployed stack. An
+/// intrinsic outside these tables panics, so a new reference cannot compare equal unchecked.
+fn resolve_connector(value: &serde_json::Value, subnets: &[String]) -> Option<serde_json::Value> {
+    use serde_json::Value;
+    let reference = |name: &str| -> Option<Value> {
+        match name {
+            "AWS::NoValue" => None,
+            "AWS::StackName" => Some(Value::from(PARITY_PREFIX)),
+            "DefaultNetworkPrivateSubnet1" => Some(Value::from("subnet-created-1")),
+            "DefaultNetworkPrivateSubnet2" => Some(Value::from("subnet-created-2")),
+            "PrivateSubnetIds" => Some(serde_json::json!(subnets)),
+            other => panic!("the parity test cannot resolve Ref {other}"),
+        }
+    };
+    let condition = |name: &str| match name {
+        "NetworkModeCreate" | "NetworkCreateUseAz2" => true,
+        "NetworkCreateUseAz3" => false,
+        other => panic!("the parity test cannot evaluate condition {other}"),
+    };
+    match value {
+        Value::Object(map) if map.len() == 1 && map.contains_key("Ref") => {
+            reference(map["Ref"].as_str().expect("Ref names a string"))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::GetAtt") => {
+            let target = map["Fn::GetAtt"]
+                .as_array()
+                .expect("GetAtt takes a pair")
+                .iter()
+                .map(|part| part.as_str().expect("GetAtt parts are strings"))
+                .collect::<Vec<_>>();
+            Some(Value::from(match target.as_slice() {
+                ["AgentsEgressOperatorRole", "Arn"] => PARITY_OPERATOR_ARN,
+                ["AgentsEgressSecurityGroup", "GroupId"] => PARITY_SECURITY_GROUP,
+                other => panic!("the parity test cannot resolve GetAtt {other:?}"),
+            }))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::If") => {
+            let branches = map["Fn::If"].as_array().expect("If takes three items");
+            let name = branches[0].as_str().expect("If names a condition");
+            resolve_connector(&branches[if condition(name) { 1 } else { 2 }], subnets)
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            let text = map["Fn::Sub"].as_str().expect("the string form of Sub");
+            let resolved = text.replace("${AWS::StackName}", PARITY_PREFIX);
+            assert!(!resolved.contains("${"), "unresolved Sub in {text}");
+            Some(Value::from(resolved))
+        }
+        Value::Object(map) => {
+            if let Some(key) = map.keys().find(|key| key.starts_with("Fn::")) {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            Some(Value::Object(
+                map.iter()
+                    .filter_map(|(k, v)| resolve_connector(v, subnets).map(|v| (k.clone(), v)))
+                    .collect(),
+            ))
+        }
+        Value::Array(items) => Some(Value::Array(
+            items
+                .iter()
+                .filter_map(|item| resolve_connector(item, subnets))
+                .flat_map(|item| match item {
+                    // A list parameter referenced inside a list stands for its members.
+                    Value::Array(members) => members,
+                    one => vec![one],
+                })
+                .collect(),
+        )),
+        other => Some(other.clone()),
+    }
+}
+
+/// Tags carry `insertionOrder: false` in the connector's schema, so their order is not state.
+fn tags_sorted(mut properties: serde_json::Value) -> serde_json::Value {
+    if let Some(tags) = properties["Tags"].as_array_mut() {
+        tags.sort_by(|a, b| a["Key"].as_str().cmp(&b["Key"].as_str()));
+    }
+    properties
+}
+
+/// A direct deploy creates the operator role through the IAM API from the shared builder, so a
+/// grant changed in the emitter alone would give the two install paths different roles.
+#[test]
+fn the_emitted_operator_role_matches_the_shared_builder() {
+    for (network, _) in egress_parity_cases() {
+        let template = deny_template(&network);
+        let properties = emitted_properties(&template, "AgentsEgressOperatorRole");
+        let policies = properties["Policies"]
+            .as_array()
+            .unwrap_or_else(|| panic!("Policies must be a list: {properties:#}"));
+
+        assert_eq!(policies.len(), 1, "one inline policy: {properties:#}");
+        assert_eq!(
+            policies[0]["PolicyName"],
+            serde_json::json!(SANDBOX_EGRESS_POLICY_NAME)
+        );
+        assert_eq!(
+            resolve_intrinsics(&policies[0]["PolicyDocument"]),
+            sandbox_egress_operator_policy(PARITY_PARTITION, PARITY_ACCOUNT, PARITY_REGION),
+            "permission policy"
+        );
+        assert_eq!(
+            resolve_intrinsics(&properties["AssumeRolePolicyDocument"]),
+            sandbox_egress_operator_trust_policy(),
+            "trust policy"
+        );
+    }
+}
+
+/// A direct deploy sends this builder's output to Cloud Control as the connector's desired state;
+/// it must be the resource CloudFormation creates for the same sandbox.
+#[test]
+fn the_emitted_connector_matches_the_direct_desired_state() {
+    for (network, subnets) in egress_parity_cases() {
+        let template = deny_template(&network);
+        let emitted = resolve_connector(
+            &emitted_properties(&template, "AgentsEgressConnector"),
+            &subnets,
+        )
+        .expect("the connector's properties resolve to a value");
+
+        let direct = SandboxEgressConnector::builder()
+            .resource_prefix(PARITY_PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(PARITY_OPERATOR_ARN)
+            .private_subnet_ids(&subnets)
+            .security_group_id(PARITY_SECURITY_GROUP)
+            .build()
+            .desired_state();
+
+        assert_eq!(
+            tags_sorted(emitted),
+            tags_sorted(direct),
+            "connector on {network:?}"
         );
     }
 }
