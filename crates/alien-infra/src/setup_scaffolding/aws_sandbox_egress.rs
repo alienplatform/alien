@@ -6,7 +6,7 @@
 //! A group or role this step did not record is adopted only after it is verified, because the
 //! connector would carry whatever it permits to every session.
 
-use alien_aws_clients::cloudcontrol::{CloudControlApi, CreateResourceRequest};
+use alien_aws_clients::cloudcontrol::{CloudControlApi, CreateResourceRequest, ProgressEvent};
 use alien_aws_clients::ec2::{
     AuthorizeSecurityGroupEgressRequest, CreateSecurityGroupRequest, DescribeSecurityGroupsRequest,
     Ec2Api, Filter, IpPermission, IpPermissionResponse, IpRange, Ipv6Range,
@@ -597,7 +597,7 @@ async fn connector(
     let Some(egress) = record.as_mut() else {
         unreachable!("the operator role step records the egress objects first")
     };
-    if settle_connector_request(cloudcontrol, egress, &name, sandbox_id).await?
+    if settle_connector_request(cloudcontrol, egress, &name, sandbox_id, SettleFor::Setup).await?
         == ScaffoldingProgress::InProgress
     {
         return Ok(ScaffoldingProgress::InProgress);
@@ -664,18 +664,39 @@ async fn connector(
     Ok(ScaffoldingProgress::Done)
 }
 
+/// Which failed connector requests leave nothing to report, because reading the connector next
+/// settles what they tried: a create that found the connector already there during setup; a
+/// delete that found it gone, or during teardown any create at all, since it made nothing.
+#[derive(Clone, Copy)]
+enum SettleFor {
+    Setup,
+    Teardown,
+}
+
+impl SettleFor {
+    fn accepts(self, failed: &ProgressEvent) -> bool {
+        let code = failed.error_code.as_deref();
+        match failed.operation.as_deref() {
+            Some("CREATE") => matches!(self, SettleFor::Teardown) || code == Some("AlreadyExists"),
+            Some("DELETE") => code == Some("NotFound"),
+            _ => false,
+        }
+    }
+}
+
 /// Reads the outcome of the connector's pending Cloud Control request, once. `InProgress` while
 /// AWS still runs it; `Done` when there is none left and the connector itself can be read.
 ///
-/// A FAILED request is an error carrying AWS's code and message. Its token is cleared first, and
-/// callers persist the record on error, so the next run starts a new request instead of reading
-/// the same failure again. `AlreadyExists` and `NotFound` outcomes are what reading the connector
-/// settles anyway. Cloud Control forgets old requests; a token it no longer knows is dropped.
+/// Any other FAILED request is an error carrying AWS's code and message. Its token is cleared
+/// first, and callers persist the record on error, so the next run starts a new request instead of
+/// reading the same failure again. Cloud Control forgets old requests; a token it no longer knows
+/// is dropped.
 async fn settle_connector_request(
     cloudcontrol: &dyn CloudControlApi,
     egress: &mut AwsSandboxEgressScaffolding,
     name: &str,
     sandbox_id: &str,
+    settle_for: SettleFor,
 ) -> Result<ScaffoldingProgress> {
     let Some(token) = egress.connector_request.clone() else {
         return Ok(ScaffoldingProgress::Done);
@@ -699,9 +720,7 @@ async fn settle_connector_request(
     egress.connector_request = None;
     match event.failure() {
         None => Ok(ScaffoldingProgress::Done),
-        Some(failure) if is_conflict(&failure) || is_not_found(&failure) => {
-            Ok(ScaffoldingProgress::Done)
-        }
+        Some(_) if settle_for.accepts(&event) => Ok(ScaffoldingProgress::Done),
         Some(failure) => Err(failure).context(ErrorData::CloudPlatformError {
             message: format!("Cloud Control request for network connector '{name}' failed"),
             resource_id: Some(sandbox_id.to_string()),
@@ -945,7 +964,14 @@ pub(super) async fn teardown(
         .get_aws_cloudcontrol_client(aws)
         .await?;
     let name = sandbox_egress_connector_name(ctx.resource_prefix, sandbox_id);
-    if settle_connector_request(cloudcontrol.as_ref(), egress, &name, sandbox_id).await?
+    if settle_connector_request(
+        cloudcontrol.as_ref(),
+        egress,
+        &name,
+        sandbox_id,
+        SettleFor::Teardown,
+    )
+    .await?
         == ScaffoldingProgress::InProgress
     {
         return Ok(ScaffoldingProgress::InProgress);
@@ -1145,6 +1171,9 @@ mod tests {
         dependency_violations: usize,
         /// The handler code and message the next create's request ends FAILED with.
         failing_create: Option<(String, String)>,
+        /// The handler code and message the next delete's request ends FAILED with, leaving the
+        /// connector in place.
+        failing_delete: Option<(String, String)>,
         /// The state a created connector reports.
         created_state: Option<&'static str>,
         next_id: usize,
@@ -1181,7 +1210,10 @@ mod tests {
             type_name: Some(NETWORK_CONNECTOR_TYPE_NAME.to_string()),
             identifier: arn.map(str::to_string),
             request_token: token.to_string(),
-            operation: None,
+            operation: token
+                .split('-')
+                .next()
+                .map(|operation| operation.to_uppercase()),
             operation_status: status,
             status_message: None,
             error_code: None,
@@ -1693,6 +1725,14 @@ mod tests {
             cloud
                 .mutations
                 .push(format!("cloudcontrol:DeleteResource {identifier}"));
+            if let Some((code, message)) = cloud.failing_delete.take() {
+                let token = format!("delete-{identifier}");
+                let mut failed = event(&token, OperationStatus::Failed, Some(identifier));
+                failed.error_code = Some(code);
+                failed.status_message = Some(message);
+                cloud.requests.insert(token.clone(), failed);
+                return Ok(event(&token, OperationStatus::InProgress, None));
+            }
             let before = cloud.connectors.len();
             cloud.connectors.retain(|(arn, _)| arn != identifier);
             if cloud.connectors.len() == before {
@@ -2745,6 +2785,103 @@ mod tests {
         assert_eq!(pending_request(&records), None);
     }
 
+    /// Only an already-existing connector settles a failed create; a conflict with an operation in
+    /// flight is AWS's to explain.
+    #[tokio::test]
+    async fn a_create_failed_on_a_busy_resource_is_an_error() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().failing_create =
+            Some(("ResourceConflict".to_string(), "busy".to_string()));
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        drive_to_connector_create(&cloud, &mut records)
+            .await
+            .unwrap();
+
+        let error = step(&cloud, &stack, &state, &mut records)
+            .await
+            .expect_err("a conflict is not the connector already existing");
+
+        assert!(format!("{error:?}").contains("busy"), "{error:?}");
+    }
+
+    /// Destroy runs after a setup whose connector create failed: the create made nothing.
+    #[tokio::test]
+    async fn teardown_passes_a_connector_create_that_failed() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().failing_create =
+            Some(("InvalidRequest".to_string(), "bad role".to_string()));
+        let mut records = BTreeMap::new();
+        drive_to_connector_create(&cloud, &mut records)
+            .await
+            .unwrap();
+        assert!(pending_request(&records).is_some());
+
+        let mut calls = 0;
+        loop {
+            bounded(&mut calls);
+            let (progress, _) = tear_down(&cloud, &mut records)
+                .await
+                .expect("a failed create leaves nothing for teardown to report");
+            if progress == ScaffoldingProgress::Done {
+                break;
+            }
+        }
+        assert!(records.is_empty());
+        let cloud = cloud.lock().unwrap();
+        assert!(cloud.groups.is_empty() && cloud.roles.is_empty());
+    }
+
+    /// Another delete of the same connector got there first.
+    #[tokio::test]
+    async fn a_connector_delete_that_found_it_gone_is_not_an_error() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        cloud.lock().unwrap().failing_delete = Some(("NotFound".to_string(), "gone".to_string()));
+
+        let mut calls = 0;
+        loop {
+            bounded(&mut calls);
+            let (progress, _) = tear_down(&cloud, &mut records)
+                .await
+                .expect("a connector already gone is what the delete wanted");
+            if progress == ScaffoldingProgress::Done {
+                break;
+            }
+        }
+        assert!(records.is_empty());
+    }
+
+    /// A delete AWS refused must say why, not be issued again until the step budget runs out.
+    #[tokio::test]
+    async fn a_failed_connector_delete_surfaces_aws_status_message() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        cloud.lock().unwrap().failing_delete = Some((
+            "ResourceConflict".to_string(),
+            "network connector is in use".to_string(),
+        ));
+
+        let (progress, _) = tear_down(&cloud, &mut records).await.unwrap();
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+        let error = tear_down(&cloud, &mut records)
+            .await
+            .expect_err("a refused delete is an error");
+
+        assert!(
+            format!("{error:?}").contains("network connector is in use"),
+            "{error:?}"
+        );
+        assert_eq!(cloud.lock().unwrap().connectors.len(), 1);
+    }
+
     fn pending_request(records: &BTreeMap<String, SetupScaffolding>) -> Option<&str> {
         let SetupScaffolding::AwsSandbox {
             egress: Some(egress),
@@ -2767,8 +2904,12 @@ mod tests {
         let progress = drive_to_connector_create(&cloud, &mut records)
             .await
             .unwrap();
-
         assert_eq!(progress, ScaffoldingProgress::InProgress);
+
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        converge(&cloud, &stack, &state, &mut records).await;
+        assert_eq!(cloud.lock().unwrap().connectors.len(), 1);
     }
 
     #[tokio::test]
