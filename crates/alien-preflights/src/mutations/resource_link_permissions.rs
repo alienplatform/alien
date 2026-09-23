@@ -326,6 +326,13 @@ mod tests {
         let receiver = container("receiver", true);
         let automatic = container("automatic", true);
         let no_access = container("no-access", false);
+        let triggered = Worker::new("triggered".to_string())
+            .permissions("triggered".to_string())
+            .code(WorkerCode::Image {
+                image: "example.com/worker:latest".to_string(),
+            })
+            .trigger(WorkerTrigger::queue(&queue))
+            .build();
 
         let stack = Stack::new("test-stack".to_string())
             .add(storage, ResourceLifecycle::Frozen)
@@ -334,6 +341,7 @@ mod tests {
             .add(receiver, ResourceLifecycle::Live)
             .add(automatic, ResourceLifecycle::Live)
             .add(no_access, ResourceLifecycle::Live)
+            .add(triggered, ResourceLifecycle::Live)
             .permission(
                 "sender",
                 PermissionProfile::new()
@@ -350,6 +358,10 @@ mod tests {
             .permission(
                 "no-access",
                 PermissionProfile::new().resource("objects", Vec::<&str>::new()),
+            )
+            .permission(
+                "triggered",
+                PermissionProfile::new().resource("messages", ["queue/data-write"]),
             )
             .build();
 
@@ -386,6 +398,10 @@ mod tests {
             ["queue/data-read", "queue/data-write"]
         );
         assert!(permission_ids("no-access", "objects").is_empty());
+        assert_eq!(
+            permission_ids("triggered", "messages"),
+            ["queue/data-write"]
+        );
 
         for consumer in ["sender", "receiver", "automatic", "no-access"] {
             let container = mutated.resources[consumer]
@@ -397,5 +413,12 @@ mod tests {
                 assert!(container.links.iter().any(|link| link.id() == "messages"));
             }
         }
+        let worker = mutated.resources["triggered"]
+            .config
+            .downcast_ref::<Worker>()
+            .expect("triggered resource should remain a worker");
+        assert!(worker.triggers.iter().any(|trigger| {
+            matches!(trigger, WorkerTrigger::Queue { queue } if queue.id() == "messages")
+        }));
     }
 }
