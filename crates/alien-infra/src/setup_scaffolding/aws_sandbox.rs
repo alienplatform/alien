@@ -190,6 +190,7 @@ fn build_role<'a>(
         .region(&aws.region)
         .bundle_uri(bundle_uri)
         .runtime_built(lifecycle == ResourceLifecycle::Live)
+        .maybe_private_base_image(sandbox.private_base_image.as_deref())
         .build()
 }
 
@@ -1136,6 +1137,39 @@ mod tests {
                 Platform::Aws
             ),
             vec!["sandbox 'agents' changes its build role policy"]
+        );
+        let with_base = |image: &str| {
+            stack_of(
+                Sandbox {
+                    private_base_image: Some(image.to_string()),
+                    ..sandbox()
+                },
+                Some("net"),
+            )
+        };
+        let base = "123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/base:1.0";
+        assert_eq!(
+            changes(&allow, &with_base(base), Platform::Aws),
+            vec!["sandbox 'agents' changes its build role policy"],
+            "declaring a private base opens its repository to the build role"
+        );
+        assert_eq!(
+            changes(
+                &with_base(base),
+                &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/other:1.0"),
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' changes its build role policy"],
+            "another repository is another grant"
+        );
+        assert_eq!(
+            changes(
+                &with_base(base),
+                &with_base("123456789012.dkr.ecr.us-east-1.amazonaws.com/acme/base:2.0"),
+                Platform::Aws
+            ),
+            Vec::<String>::new(),
+            "a new tag of the same repository is the same grant"
         );
         assert_eq!(
             changes(

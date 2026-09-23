@@ -465,66 +465,74 @@ fn preview_ports(sandbox: &Sandbox) -> CfExpression {
     )
 }
 
-/// What the build role may do: read the bundle, write its own build logs, and — only when the
-/// image is built at runtime — authenticate to ECR for its base image.
+/// What the build role may do: read the bundle, and pull the declared private base image.
 ///
 /// A setup-baked image is built once, from the bundle the template names, so its role reads that
 /// one object; a runtime-built image reads the prefix instead — see `artifact_prefix_arn`.
 ///
-/// A setup-baked image builds from a public base and pulls it anonymously, so the Frozen role
-/// carries no ECR grant; a runtime-built image's base is a private registry image.
+/// With no `privateBaseImage` the base is public and pulled anonymously, so there is no ECR grant.
 fn build_policies(
     sandbox: &Sandbox,
     artifact_uri: BundleUri<'_>,
     runtime_built: bool,
 ) -> Result<CfExpression> {
-    let mut statements = vec![
-        CfExpression::object([
-            (
-                "Sid",
-                CfExpression::from(if runtime_built {
-                    "ReadSandboxBundlePrefix"
-                } else {
-                    "ReadSandboxBundle"
-                }),
-            ),
+    let mut statements = vec![CfExpression::object([
+        (
+            "Sid",
+            CfExpression::from(if runtime_built {
+                "ReadSandboxBundlePrefix"
+            } else {
+                "ReadSandboxBundle"
+            }),
+        ),
+        ("Effect", CfExpression::from("Allow")),
+        (
+            "Action",
+            CfExpression::list([CfExpression::from("s3:GetObject")]),
+        ),
+        (
+            "Resource",
+            if runtime_built {
+                artifact_prefix_arn(sandbox, artifact_uri)?
+            } else {
+                artifact_object_arn(artifact_uri)
+            },
+        ),
+    ])];
+    if let Some(image) = sandbox.private_base_image.as_deref() {
+        let repository = alien_core::parse_ecr_image_repository(image).map_err(|reason| {
+            AlienError::new(ErrorData::OperationNotSupported {
+                operation: format!("cloudformation emit sandbox '{}'", sandbox.id()),
+                reason,
+            })
+        })?;
+        // A live build was observed to be denied without these in its own policy: the
+        // registry's repository policy alone does not authorize the pull.
+        statements.push(CfExpression::object([
+            ("Sid", CfExpression::from("AuthorizeSandboxBaseImagePull")),
             ("Effect", CfExpression::from("Allow")),
             (
                 "Action",
-                CfExpression::list([CfExpression::from("s3:GetObject")]),
+                CfExpression::list([CfExpression::from("ecr:GetAuthorizationToken")]),
             ),
-            (
-                "Resource",
-                if runtime_built {
-                    artifact_prefix_arn(sandbox, artifact_uri)?
-                } else {
-                    artifact_object_arn(artifact_uri)
-                },
-            ),
-        ]),
-    ];
-    if runtime_built {
+            ("Resource", CfExpression::from("*")),
+        ]));
         statements.push(CfExpression::object([
             ("Sid", CfExpression::from("PullSandboxBaseImage")),
             ("Effect", CfExpression::from("Allow")),
             (
                 "Action",
-                // The token call plus the two pull actions a live build was observed to be
-                // denied without — the registry's repository policy alone did not authorize it.
                 CfExpression::list([
-                    CfExpression::from("ecr:GetAuthorizationToken"),
                     CfExpression::from("ecr:BatchGetImage"),
                     CfExpression::from("ecr:GetDownloadUrlForLayer"),
                 ]),
             ),
-            // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting the
-            // base image is unknown when the template is generated, so the pull pair is `*` too;
-            // the Deny below is what stops it reading this account's own private repositories.
-            ("Resource", CfExpression::from("*")),
+            (
+                "Resource",
+                CfExpression::sub(repository.arn("${AWS::Partition}", "${AWS::Region}")),
+            ),
         ]));
-        // Same-account pulls are authorized by identity policy alone — no repository policy
-        // participates — and this role runs a customer-authored Dockerfile. The base image is
-        // cross-account by construction, so a same-account pull is never legitimate.
+        // See `SandboxBuildRole::policy` for why a same-account base is refused.
         statements.push(CfExpression::object([
             ("Sid", CfExpression::from("DenySameAccountImagePull")),
             ("Effect", CfExpression::from("Deny")),

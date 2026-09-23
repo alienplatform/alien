@@ -1156,6 +1156,104 @@ pub fn parse_bundle_uri(uri: &str) -> std::result::Result<BundleUri<'_>, String>
     })
 }
 
+/// Where a private ECR image's region comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EcrImageRegion<'a> {
+    /// A region named in the host.
+    Literal(&'a str),
+    /// [`BUNDLE_REGION_TOKEN`] in the host: the region the deployment renders.
+    Deployment,
+}
+
+/// The ECR repository a private image reference is pulled from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct EcrImageRepository<'a> {
+    pub account_id: &'a str,
+    pub region: EcrImageRegion<'a>,
+    /// The repository name, which may carry `/`; never a tag or digest.
+    pub repository: &'a str,
+}
+
+impl EcrImageRepository<'_> {
+    /// The repository's ARN, with `region` standing in for a region the host leaves to the
+    /// deployment. The partition is the deployment's: a GovCloud host ends `.amazonaws.com` too.
+    pub fn arn(&self, partition: &str, region: &str) -> String {
+        let region = match self.region {
+            EcrImageRegion::Literal(region) => region,
+            EcrImageRegion::Deployment => region,
+        };
+        format!(
+            "arn:{partition}:ecr:{region}:{}:repository/{}",
+            self.account_id, self.repository
+        )
+    }
+}
+
+/// Reads `privateBaseImage` as the one repository a build role may pull from.
+///
+/// The name is interpolated into an IAM ARN, so it is held to ECR's own repository grammar: that
+/// refuses `*` and `?`, which would widen the grant, and `$` and braces, which a CloudFormation
+/// `Sub` or a Terraform template would read as an expression.
+pub fn parse_ecr_image_repository(
+    image: &str,
+) -> std::result::Result<EcrImageRepository<'_>, String> {
+    let refuse = |reason: &str| format!("privateBaseImage '{image}' {reason}");
+    let (host, path) = image
+        .split_once('/')
+        .ok_or_else(|| refuse("names no repository"))?;
+    let (account_id, rest) = host.split_once(".dkr.ecr.").ok_or_else(|| {
+        refuse("is not served by a private ECR registry (<account>.dkr.ecr.<region>.amazonaws.com)")
+    })?;
+    // `.com.cn` first: a China host ends with the shorter suffix too.
+    let region = rest
+        .strip_suffix(".amazonaws.com.cn")
+        .or_else(|| rest.strip_suffix(".amazonaws.com"))
+        .ok_or_else(|| refuse("is not served by a private ECR registry (<account>.dkr.ecr.<region>.amazonaws.com)"))?;
+    if account_id.len() != 12 || !account_id.bytes().all(|b| b.is_ascii_digit()) {
+        return Err(refuse("names no 12-digit account in its registry host"));
+    }
+    let region = if region == BUNDLE_REGION_TOKEN {
+        EcrImageRegion::Deployment
+    } else if !region.is_empty()
+        && region
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    {
+        EcrImageRegion::Literal(region)
+    } else {
+        return Err(refuse(&format!(
+            "names no region in its registry host; give one or {BUNDLE_REGION_TOKEN}"
+        )));
+    };
+
+    let repository = match path.split_once('@') {
+        Some((repository, _digest)) => repository,
+        None => match path.rsplit_once('/') {
+            Some((parent, last)) => match last.split_once(':') {
+                Some((name, _tag)) => &path[..parent.len() + 1 + name.len()],
+                None => path,
+            },
+            None => path.split_once(':').map_or(path, |(name, _tag)| name),
+        },
+    };
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && segment.bytes().all(|b| {
+                b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
+            })
+    };
+    if !repository.split('/').all(valid_segment) {
+        return Err(refuse(
+            "names a repository outside ECR's grammar (lowercase letters, digits, '.', '_', '-', and '/' between them)",
+        ));
+    }
+    Ok(EcrImageRepository {
+        account_id,
+        region,
+        repository,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1179,6 +1277,90 @@ mod tests {
             &crate::Stack::new("empty".to_string()).build(),
             false,
         ));
+    }
+
+    #[test]
+    fn a_private_base_image_names_one_repository() {
+        let deployment = EcrImageRegion::Deployment;
+        let literal = EcrImageRegion::Literal;
+        let accepted = [
+            (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
+                literal("us-east-1"),
+                "base",
+            ),
+            (
+                "123456789012.dkr.ecr.us-east-1.amazonaws.com/team/agents/base:1.0",
+                literal("us-east-1"),
+                "team/agents/base",
+            ),
+            (
+                "123456789012.dkr.ecr.{region}.amazonaws.com/team/base@sha256:abc123",
+                deployment,
+                "team/base",
+            ),
+            (
+                "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/base",
+                literal("cn-north-1"),
+                "base",
+            ),
+            (
+                "123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/my.base_image-x",
+                literal("us-gov-west-1"),
+                "my.base_image-x",
+            ),
+        ];
+        for (image, region, repository) in accepted {
+            assert_eq!(
+                parse_ecr_image_repository(image),
+                Ok(EcrImageRepository {
+                    account_id: "123456789012",
+                    region,
+                    repository,
+                }),
+                "{image}"
+            );
+        }
+
+        for refused in [
+            "public.ecr.aws/docker/library/alpine:3.20",
+            "docker.io/library/alpine:3.20",
+            "https://123456789012.dkr.ecr.us-east-1.amazonaws.com/base:1.0",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/",
+            "12345.dkr.ecr.us-east-1.amazonaws.com/base",
+            "123456789012.dkr.ecr..amazonaws.com/base",
+            "123456789012.dkr.ecr.{account}.amazonaws.com/base",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/*",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/ba?e",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/${AWS::AccountId}",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/{region}/base",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/Base:1.0",
+            "123456789012.dkr.ecr.us-east-1.amazonaws.com/team//base",
+        ] {
+            assert!(
+                parse_ecr_image_repository(refused).is_err(),
+                "{refused} must be refused"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repository_arn_takes_the_deployment_region_only_where_the_host_leaves_it() {
+        let regional =
+            parse_ecr_image_repository("123456789012.dkr.ecr.{region}.amazonaws.com/team/base:1")
+                .expect("parses");
+        let pinned =
+            parse_ecr_image_repository("123456789012.dkr.ecr.eu-west-1.amazonaws.com/team/base:1")
+                .expect("parses");
+        assert_eq!(
+            regional.arn("aws-us-gov", "us-gov-west-1"),
+            "arn:aws-us-gov:ecr:us-gov-west-1:123456789012:repository/team/base"
+        );
+        assert_eq!(
+            pinned.arn("aws", "us-east-1"),
+            "arn:aws:ecr:eu-west-1:123456789012:repository/team/base"
+        );
     }
 
     /// A wildcard reaching the grant would widen it past the bundle, and it widens the Frozen

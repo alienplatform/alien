@@ -6,7 +6,10 @@
 //!
 //! Field names are PascalCase because that is the IAM policy wire format.
 
-use crate::{parse_bundle_uri, stable_bundle_key_prefix, BundleUri, ErrorData, Result};
+use crate::{
+    parse_bundle_uri, parse_ecr_image_repository, stable_bundle_key_prefix, BundleUri, ErrorData,
+    Result,
+};
 use alien_error::AlienError;
 use serde::{Deserialize, Serialize};
 
@@ -106,13 +109,15 @@ pub struct SandboxBuildRole<'a> {
     region: &'a str,
     /// The sandbox's `code.image` as declared; a `{region}` token resolves to `region`.
     bundle_uri: &'a str,
-    /// A Live sandbox, whose image the runtime builds and rebuilds from a private base image.
+    /// A Live sandbox, whose image the runtime rebuilds from each new bundle.
     runtime_built: bool,
+    /// The sandbox's `privateBaseImage`; a `{region}` token in its host resolves to `region`.
+    private_base_image: Option<&'a str>,
 }
 
 impl SandboxBuildRole<'_> {
-    /// Read the bundle, and for a runtime-built image pull its base image. No logs grant: every
-    /// path builds the image with logging disabled.
+    /// Read the bundle, and pull the declared private base image. No logs grant: every path
+    /// builds the image with logging disabled.
     ///
     /// A Frozen image is built once from the named object; a runtime rebuild reads a new key under
     /// the same stable prefix, so a Live role reads the prefix and is refused when there is none.
@@ -145,19 +150,24 @@ impl SandboxBuildRole<'_> {
         };
 
         let mut statement = vec![bundle_grant];
-        if self.runtime_built {
-            // GetAuthorizationToken accepts only `*`, and the base image's registry is not known
-            // here; the Deny keeps the `*` pull from reaching this account's own repositories,
-            // which identity policy alone would authorize for a customer-authored Dockerfile.
+        // No declared base means a public one, pulled anonymously, so no ECR grant at all.
+        if let Some(image) = self.private_base_image {
+            let repository =
+                parse_ecr_image_repository(image).map_err(|reason| self.refuse(reason))?;
+            // GetAuthorizationToken has no resource type, so it can only be granted on `*`.
             statement.push(allow(
-                "PullSandboxBaseImage",
-                &[
-                    "ecr:GetAuthorizationToken",
-                    "ecr:BatchGetImage",
-                    "ecr:GetDownloadUrlForLayer",
-                ],
+                "AuthorizeSandboxBaseImagePull",
+                &["ecr:GetAuthorizationToken"],
                 "*".to_string(),
             ));
+            statement.push(allow(
+                "PullSandboxBaseImage",
+                &["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                repository.arn(partition, self.region),
+            ));
+            // The registry serves the base cross-account, so a base in this account is outside the
+            // contract and would let the build read this account's own repositories. The templates
+            // cannot know the account when they render, so a Deny refuses it on every path.
             statement.push(SandboxBuildStatement {
                 sid: Some("DenySameAccountImagePull".to_string()),
                 effect: IamEffect::Deny,
@@ -233,7 +243,17 @@ mod tests {
     const ACCOUNT: &str = "210987654321";
     const REGION: &str = "us-gov-west-1";
 
+    const BASE_IMAGE: &str = "123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base:1.4";
+
     fn role(bundle_uri: &str, runtime_built: bool) -> SandboxBuildRole<'_> {
+        role_with_base(bundle_uri, runtime_built, None)
+    }
+
+    fn role_with_base<'a>(
+        bundle_uri: &'a str,
+        runtime_built: bool,
+        private_base_image: Option<&'a str>,
+    ) -> SandboxBuildRole<'a> {
         SandboxBuildRole::builder()
             .sandbox_id("agents")
             .partition(PARTITION)
@@ -241,12 +261,21 @@ mod tests {
             .region(REGION)
             .bundle_uri(bundle_uri)
             .runtime_built(runtime_built)
+            .maybe_private_base_image(private_base_image)
             .build()
     }
 
     fn policy_json(bundle_uri: &str, runtime_built: bool) -> serde_json::Value {
+        policy_json_with_base(bundle_uri, runtime_built, None)
+    }
+
+    fn policy_json_with_base(
+        bundle_uri: &str,
+        runtime_built: bool,
+        private_base_image: Option<&str>,
+    ) -> serde_json::Value {
         serde_json::to_value(
-            role(bundle_uri, runtime_built)
+            role_with_base(bundle_uri, runtime_built, private_base_image)
                 .policy()
                 .expect("policy builds"),
         )
@@ -272,7 +301,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_role_reads_the_prefix_and_pulls_only_cross_account() {
+    fn a_live_role_with_no_private_base_pulls_nothing() {
         assert_eq!(
             policy_json(
                 "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
@@ -286,16 +315,40 @@ mod tests {
                         "Effect": "Allow",
                         "Action": ["s3:GetObject"],
                         "Resource": "arn:aws-us-gov:s3:::acme-artifacts/sandbox-bundle/*"
+                    }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn a_private_base_is_pulled_from_its_one_repository_and_never_this_account() {
+        assert_eq!(
+            policy_json_with_base(
+                "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+                true,
+                Some(BASE_IMAGE)
+            ),
+            json!({
+                "Version": "2012-10-17",
+                "Statement": [
+                    {
+                        "Sid": "ReadSandboxBundlePrefix",
+                        "Effect": "Allow",
+                        "Action": ["s3:GetObject"],
+                        "Resource": "arn:aws-us-gov:s3:::acme-artifacts/sandbox-bundle/*"
+                    },
+                    {
+                        "Sid": "AuthorizeSandboxBaseImagePull",
+                        "Effect": "Allow",
+                        "Action": ["ecr:GetAuthorizationToken"],
+                        "Resource": "*"
                     },
                     {
                         "Sid": "PullSandboxBaseImage",
                         "Effect": "Allow",
-                        "Action": [
-                            "ecr:GetAuthorizationToken",
-                            "ecr:BatchGetImage",
-                            "ecr:GetDownloadUrlForLayer"
-                        ],
-                        "Resource": "*"
+                        "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                        "Resource": "arn:aws-us-gov:ecr:us-gov-west-1:123456789012:repository/acme/agents-base"
                     },
                     {
                         "Sid": "DenySameAccountImagePull",
@@ -306,6 +359,18 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn a_private_base_outside_ecr_is_refused() {
+        let error = role_with_base(
+            "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+            true,
+            Some("docker.io/library/alpine:3.20"),
+        )
+        .policy()
+        .expect_err("only an ECR repository can be granted");
+        assert_eq!(error.code, "OPERATION_NOT_SUPPORTED");
     }
 
     #[test]

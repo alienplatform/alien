@@ -99,40 +99,59 @@ impl TfEmitter for AwsSandboxEmitter {
         // rejects with MalformedPolicyDocument. `terraform validate` cannot see it — the HCL
         // and the string are both well-formed — so it only shows up at apply.
         let runtime_built = provisioned_at_runtime(ctx);
-        let mut build_statements = vec![
-            Expression::from_iter([
+        let mut build_statements = vec![Expression::from_iter([
+            (
+                "Sid",
+                Expression::String(
+                    if runtime_built {
+                        "ReadSandboxBundlePrefix"
+                    } else {
+                        "ReadSandboxBundle"
+                    }
+                    .to_string(),
+                ),
+            ),
+            ("Effect", Expression::String("Allow".to_string())),
+            (
+                "Action",
+                Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+            ),
+            (
+                "Resource",
+                // A template for the same reason the operator policy's ARNs are: a plain
+                // string literal has its `${` escaped, so the partition would reach IAM as
+                // literal text and the grant would match nothing.
+                expr::template(if runtime_built {
+                    artifact_prefix_arn(sandbox, artifact_uri)?
+                } else {
+                    artifact_object_arn(artifact_uri)
+                }),
+            ),
+        ])];
+        // With no `privateBaseImage` the base is public and pulled anonymously: no ECR grant.
+        if let Some(image) = sandbox.private_base_image.as_deref() {
+            let repository = alien_core::parse_ecr_image_repository(image).map_err(|reason| {
+                AlienError::new(ErrorData::OperationNotSupported {
+                    operation: format!("terraform emit sandbox '{}'", sandbox.id()),
+                    reason,
+                })
+            })?;
+            // A live build was observed to be denied without these in its own policy: the
+            // registry's repository policy alone does not authorize the pull.
+            build_statements.push(Expression::from_iter([
                 (
                     "Sid",
-                    Expression::String(
-                        if runtime_built {
-                            "ReadSandboxBundlePrefix"
-                        } else {
-                            "ReadSandboxBundle"
-                        }
-                        .to_string(),
-                    ),
+                    Expression::String("AuthorizeSandboxBaseImagePull".to_string()),
                 ),
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
-                    Expression::from(vec![Expression::String("s3:GetObject".to_string())]),
+                    Expression::from(vec![Expression::String(
+                        "ecr:GetAuthorizationToken".to_string(),
+                    )]),
                 ),
-                (
-                    "Resource",
-                    // A template for the same reason the operator policy's ARNs are: a plain
-                    // string literal has its `${` escaped, so the partition would reach IAM as
-                    // literal text and the grant would match nothing.
-                    expr::template(if runtime_built {
-                        artifact_prefix_arn(sandbox, artifact_uri)?
-                    } else {
-                        artifact_object_arn(artifact_uri)
-                    }),
-                ),
-            ]),
-        ];
-        // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
-        // role carries no ECR grant; a runtime-built image's base is a private registry image.
-        if runtime_built {
+                ("Resource", Expression::String("*".to_string())),
+            ]));
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",
@@ -141,22 +160,20 @@ impl TfEmitter for AwsSandboxEmitter {
                 ("Effect", Expression::String("Allow".to_string())),
                 (
                     "Action",
-                    // The token call plus the two pull actions a live build was observed to be
-                    // denied without — the registry's repository policy alone did not authorize it.
                     Expression::from(vec![
-                        Expression::String("ecr:GetAuthorizationToken".to_string()),
                         Expression::String("ecr:BatchGetImage".to_string()),
                         Expression::String("ecr:GetDownloadUrlForLayer".to_string()),
                     ]),
                 ),
-                // AWS accepts GetAuthorizationToken only against `*`, and the registry hosting
-                // the base image is unknown when the module is rendered, so the pull pair is `*`
-                // too; the Deny below stops it reading this account's own private repositories.
-                ("Resource", Expression::String("*".to_string())),
+                (
+                    "Resource",
+                    expr::template(repository.arn(
+                        "${data.aws_partition.current.partition}",
+                        "${data.aws_region.current.region}",
+                    )),
+                ),
             ]));
-            // Same-account pulls are authorized by identity policy alone — no repository policy
-            // participates — and this role runs a customer-authored Dockerfile. The base image
-            // is cross-account by construction, so a same-account pull is never legitimate.
+            // See `SandboxBuildRole::policy` for why a same-account base is refused.
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",

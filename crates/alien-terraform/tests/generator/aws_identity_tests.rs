@@ -484,7 +484,14 @@ fn live_sandbox_stack(name: &str, egress: SandboxEgress) -> (Stack, StackSetting
 /// declares.
 #[test]
 fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
-    let (stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    let (mut stack, settings) = live_sandbox_stack("acme-sandbox-live", SandboxEgress::Deny);
+    stack
+        .resources
+        .get_mut("agents")
+        .and_then(|entry| entry.config.downcast_mut::<Sandbox>())
+        .expect("the sandbox is in the stack")
+        .private_base_image =
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base:1.4".to_string());
     let module = render(&stack, TerraformTarget::Aws, settings);
     assert_terraform_valid(&module, "live sandbox module");
 
@@ -521,50 +528,38 @@ fn a_live_sandbox_module_keeps_the_build_role_and_drops_the_image() {
         "a Live role reads the prefix the moving key stays inside, not the one object"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
-    let allow = statements
+    // The declared base is the one repository the build may pull, in the deployment's region
+    // because its host names `{region}`; the token call has no resource type, so it is `*`.
+    let ecr: Vec<_> = statements
         .iter()
-        .find(|statement| statement["Sid"] == "PullSandboxBaseImage")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
-    assert_eq!(allow["Effect"], "Allow");
+        .filter(|statement| statement["Sid"] != "ReadSandboxBundlePrefix")
+        .collect();
     assert_eq!(
-        allow["Action"],
-        serde_json::json!([
-            "ecr:GetAuthorizationToken",
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-        ]),
-        "exactly the token call and the two pull actions, nothing wider"
-    );
-    assert_eq!(
-        allow["Resource"],
-        serde_json::json!("*"),
-        "GetAuthorizationToken is only accepted against `*`"
-    );
-    // Same-account pulls are authorized by identity policy alone, so without this Deny the
-    // Allow above makes a customer-authored Dockerfile a reader of every private repository
-    // in the customer's own account. The token call must stay out of the deny.
-    let deny = statements
-        .iter()
-        .find(|statement| statement["Effect"] == "Deny")
-        .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
-        });
-    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
-    assert_eq!(
-        deny["Action"],
-        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-        "the deny covers exactly the two pull actions — never the token call, which the \
-         cross-account login needs"
-    );
-    assert_eq!(
-        deny["Resource"],
-        serde_json::json!(
-            "arn:${data.aws_partition.current.partition}:ecr:*:\
-             ${data.aws_caller_identity.current.account_id}:repository/*"
-        ),
-        "the deny must name this account's repositories through data sources, not literals"
+        ecr,
+        [
+            &serde_json::json!({
+                "Sid": "AuthorizeSandboxBaseImagePull",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*"
+            }),
+            &serde_json::json!({
+                "Sid": "PullSandboxBaseImage",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": "arn:${data.aws_partition.current.partition}:ecr:\
+                             ${data.aws_region.current.region}:123456789012:repository/acme/agents-base"
+            }),
+            &serde_json::json!({
+                "Sid": "DenySameAccountImagePull",
+                "Effect": "Deny",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": "arn:${data.aws_partition.current.partition}:ecr:*:\
+                             ${data.aws_caller_identity.current.account_id}:repository/*"
+            }),
+        ],
+        "the token call on `*`, the pull on exactly the declared repository, and no pull from \
+         this account"
     );
 }
 
@@ -873,24 +868,39 @@ const PARITY_PARTITION: &str = "aws-us-gov";
 const PARITY_ACCOUNT: &str = "987654321098";
 const PARITY_REGION: &str = "us-gov-east-1";
 
-/// Every combination the build role's grant branches on: lifecycle, and whether the bundle URI
-/// carries the region token.
-const PARITY_CASES: [(ResourceLifecycle, &str); 4] = [
+/// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
+/// carries the region token, and whether a private base image is declared and where its region
+/// comes from.
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts/agents/bundle.zip",
+        None,
     ),
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts-{region}/agents/bundle.zip",
+        None,
     ),
     (
         ResourceLifecycle::Live,
         "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
     ),
     (
         ResourceLifecycle::Live,
         "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        Some("123456789012.dkr.ecr.eu-west-1.amazonaws.com/acme/agents-base:1.4"),
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
     ),
 ];
 
@@ -977,14 +987,18 @@ fn block_attribute<'a>(block: &'a hcl::Block, key: &str) -> &'a hcl::Attribute {
 /// grant changed in the module alone would give the two install paths different roles.
 #[test]
 fn the_emitted_build_role_matches_the_shared_policy_builder() {
-    for (lifecycle, bundle_uri) in PARITY_CASES {
+    for (lifecycle, bundle_uri, private_base_image) in PARITY_CASES {
         let stack = Stack::new("acme-sandbox-parity".to_string())
             .add(
-                sandbox_fixture_with(SandboxEgress::Allow, bundle_uri),
+                Sandbox {
+                    private_base_image: private_base_image.map(str::to_string),
+                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
+                },
                 lifecycle,
             )
             .build();
-        let case = format!("{lifecycle:?} sandbox built from {bundle_uri}");
+        let case =
+            format!("{lifecycle:?} sandbox built from {bundle_uri} on base {private_base_image:?}");
         let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
         let sandbox_file: hcl::Body =
             hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
@@ -1009,6 +1023,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .region(PARITY_REGION)
             .bundle_uri(bundle_uri)
             .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .maybe_private_base_image(private_base_image)
             .build();
 
         assert_eq!(

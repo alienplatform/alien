@@ -256,54 +256,71 @@ fn a_live_sandbox_ships_its_build_role_but_not_its_image() {
         "the controller is handed the bundle it builds from: {import_data:#}"
     );
 
-    // The runtime build's base image comes from a private registry, and the identity itself
-    // needs all three actions — a repository policy on the registry side is not enough.
+    // No `privateBaseImage`, so the base is public and pulled anonymously.
     let statements = build_role_statements(&template);
-    let ecr = statements
-        .iter()
-        .find(|statement| grants_ecr(statement) && statement["Effect"] == "Allow")
-        .unwrap_or_else(|| panic!("a Live build role must authenticate to ECR: {statements:#?}"));
-    assert_eq!(
-        ecr["Sid"], "PullSandboxBaseImage",
-        "the statement a security reviewer reads must say what it is for"
+    assert!(
+        !statements.iter().any(grants_ecr),
+        "a build with no private base must hold no ECR grant: {statements:#?}"
     );
-    assert_eq!(
-        ecr["Action"],
-        serde_json::json!([
-            "ecr:GetAuthorizationToken",
-            "ecr:BatchGetImage",
-            "ecr:GetDownloadUrlForLayer"
-        ]),
-        "exactly the token call and the two pull actions, nothing wider"
+}
+
+/// The declared base is the one repository the build may pull, in whichever region the host
+/// names or the deployment's own when it names `{region}`.
+#[test]
+fn a_declared_private_base_is_the_only_repository_a_live_build_pulls() {
+    let (stack, settings) = sandbox_stack_with_lifecycle(
+        "acme-sandbox-live-base",
+        SandboxEgress::Allow,
+        ResourceLifecycle::Live,
     );
-    assert_eq!(
-        ecr["Resource"],
-        serde_json::json!("*"),
-        "GetAuthorizationToken is only accepted against `*`"
+    let mut stack = stack;
+    let sandbox = stack
+        .resources
+        .get_mut("agents")
+        .and_then(|entry| entry.config.downcast_mut::<Sandbox>())
+        .expect("the sandbox is in the stack");
+    sandbox.private_base_image =
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base:1.4".to_string());
+    let (template, _yaml) = render_built_ins_template(
+        &stack,
+        settings,
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live sandbox with a private base",
     );
 
-    // Same-account pulls are authorized by identity policy alone, so without this Deny the
-    // Allow above makes a customer-authored Dockerfile a reader of every private repository
-    // in the customer's own account.
-    let deny = statements
-        .iter()
-        .find(|statement| statement["Effect"] == "Deny")
-        .unwrap_or_else(|| {
-            panic!("same-account pulls must be denied on a Live build role: {statements:#?}")
-        });
-    assert_eq!(deny["Sid"], "DenySameAccountImagePull");
+    let statements = build_role_statements(&template);
+    let ecr: Vec<_> = statements.iter().filter(|s| grants_ecr(s)).collect();
     assert_eq!(
-        deny["Action"],
-        serde_json::json!(["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]),
-        "the deny covers exactly the two pull actions — never the token call, which the \
-         cross-account login needs"
-    );
-    assert_eq!(
-        deny["Resource"],
-        serde_json::json!({
-            "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
-        }),
-        "the deny must name this account's repositories through pseudo parameters, not literals"
+        ecr,
+        [
+            &serde_json::json!({
+                "Sid": "AuthorizeSandboxBaseImagePull",
+                "Effect": "Allow",
+                "Action": ["ecr:GetAuthorizationToken"],
+                "Resource": "*"
+            }),
+            &serde_json::json!({
+                "Sid": "PullSandboxBaseImage",
+                "Effect": "Allow",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": {
+                    "Fn::Sub":
+                        "arn:${AWS::Partition}:ecr:${AWS::Region}:123456789012:repository/acme/agents-base"
+                }
+            }),
+            &serde_json::json!({
+                "Sid": "DenySameAccountImagePull",
+                "Effect": "Deny",
+                "Action": ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
+                "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ecr:*:${AWS::AccountId}:repository/*"
+                }
+            }),
+        ],
+        "the token call on `*`, the pull on exactly the declared repository, and no pull from \
+         this account"
     );
 }
 
@@ -1211,21 +1228,35 @@ const PARITY_PARTITION: &str = "aws-us-gov";
 const PARITY_ACCOUNT: &str = "987654321098";
 const PARITY_REGION: &str = "us-gov-east-1";
 
-/// Every combination the build role's grant branches on: lifecycle, and whether the bundle URI
-/// carries the region token.
-const PARITY_CASES: [(ResourceLifecycle, &str); 4] = [
+/// Every combination the build role's grant branches on: lifecycle, whether the bundle URI
+/// carries the region token, and whether a private base image is declared and where its region
+/// comes from.
+const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts/agents/bundle.zip",
+        None,
     ),
     (
         ResourceLifecycle::Frozen,
         "s3://acme-artifacts-{region}/agents/bundle.zip",
+        None,
     ),
-    (ResourceLifecycle::Live, LIVE_BUNDLE),
+    (ResourceLifecycle::Live, LIVE_BUNDLE, None),
     (
         ResourceLifecycle::Live,
         "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        None,
+    ),
+    (
+        ResourceLifecycle::Live,
+        LIVE_BUNDLE,
+        Some("123456789012.dkr.ecr.eu-west-1.amazonaws.com/acme/agents-base:1.4"),
+    ),
+    (
+        ResourceLifecycle::Live,
+        LIVE_BUNDLE,
+        Some("123456789012.dkr.ecr.{region}.amazonaws.com/acme/agents-base@sha256:f00d"),
     ),
 ];
 
@@ -1282,14 +1313,18 @@ fn resolve_intrinsics(value: &serde_json::Value) -> serde_json::Value {
 /// grant changed in the emitter alone would give the two install paths different roles.
 #[test]
 fn the_emitted_build_role_matches_the_shared_policy_builder() {
-    for (lifecycle, bundle_uri) in PARITY_CASES {
+    for (lifecycle, bundle_uri, private_base_image) in PARITY_CASES {
         let stack = Stack::new("acme-sandbox-parity".to_string())
             .add(
-                sandbox_fixture_with(SandboxEgress::Allow, bundle_uri),
+                Sandbox {
+                    private_base_image: private_base_image.map(str::to_string),
+                    ..sandbox_fixture_with(SandboxEgress::Allow, bundle_uri)
+                },
                 lifecycle,
             )
             .build();
-        let case = format!("{lifecycle:?} sandbox built from {bundle_uri}");
+        let case =
+            format!("{lifecycle:?} sandbox built from {bundle_uri} on base {private_base_image:?}");
         let (template, _yaml) = render_built_ins_template(
             &stack,
             StackSettings::default(),
@@ -1317,6 +1352,7 @@ fn the_emitted_build_role_matches_the_shared_policy_builder() {
             .region(PARITY_REGION)
             .bundle_uri(bundle_uri)
             .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .maybe_private_base_image(private_base_image)
             .build();
 
         assert_eq!(policies.len(), 1, "{case}: one inline policy: {role:#}");
