@@ -1,9 +1,9 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, Stack};
+use alien_core::{Platform, SECRETS_VAULT_ID, Stack};
 use std::collections::HashSet;
 
-/// Ensures the stack contains only allowed user-defined resources.
+/// Ensures the stack contains only allowed user-defined resource types and IDs.
 ///
 /// Some resources like `AzureResourceGroup` and `RemoteStackManagement`
 /// are system-managed and should not be manually added.
@@ -15,7 +15,7 @@ pub struct AllowedUserResourcesCheck;
 #[async_trait::async_trait]
 impl CompileTimeCheck for AllowedUserResourcesCheck {
     fn description(&self) -> &'static str {
-        "Stack should contain only allowed user-defined resources"
+        "Stack should contain only allowed user-defined resource types and IDs"
     }
 
     fn should_run(&self, _stack: &Stack, _platform: Platform) -> bool {
@@ -50,6 +50,21 @@ impl CompileTimeCheck for AllowedUserResourcesCheck {
         for (resource_id, resource_entry) in stack.resources() {
             let resource_type_value = resource_entry.config.resource_type();
             let resource_type = resource_type_value.0.as_ref();
+            let configured_id = resource_entry.config.id();
+
+            if resource_id != configured_id {
+                errors.push(format!(
+                    "Resource map key '{resource_id}' does not match its configured ID '{configured_id}'"
+                ));
+                continue;
+            }
+
+            if resource_id == SECRETS_VAULT_ID {
+                errors.push(format!(
+                    "Resource ID '{SECRETS_VAULT_ID}' is reserved for deployment secret delivery. Choose a different ID for the application resource"
+                ));
+                continue;
+            }
 
             let is_allowed_user_type = allowed_user_types.contains(resource_type);
 
@@ -196,6 +211,83 @@ mod tests {
         assert!(!result.success);
         assert!(!result.errors.is_empty());
         assert!(result.errors[0].contains("network"));
+    }
+
+    #[tokio::test]
+    async fn rejects_the_reserved_deployment_secrets_id() {
+        let vault = alien_core::Vault::new(SECRETS_VAULT_ID.to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("reserved-id validation should run");
+
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("reserved for deployment secret delivery"));
+        assert!(result.errors[0].contains("different ID"));
+    }
+
+    #[tokio::test]
+    async fn rejects_a_reserved_embedded_id_hidden_behind_another_map_key() {
+        let vault = alien_core::Vault::new(SECRETS_VAULT_ID.to_string()).build();
+        let mut resources = IndexMap::new();
+        resources.insert(
+            SECRETS_VAULT_ID.to_string(),
+            ResourceEntry {
+                config: alien_core::Resource::new(vault),
+                lifecycle: ResourceLifecycle::Frozen,
+                dependencies: Vec::new(),
+                remote_access: false,
+                enabled_when: None,
+            },
+        );
+        let stack = Stack {
+            id: "test-stack".to_string(),
+            resources,
+            permissions: alien_core::permissions::PermissionsConfig::default(),
+            supported_platforms: None,
+            inputs: vec![],
+        };
+        let mut encoded = serde_json::to_value(stack).expect("stack should serialize");
+        let encoded_resources = encoded
+            .get_mut("resources")
+            .and_then(serde_json::Value::as_object_mut)
+            .expect("stack resources should be an object");
+        let vault = encoded_resources
+            .remove(SECRETS_VAULT_ID)
+            .expect("serialized stack should contain its vault");
+        encoded_resources.insert("application-vault".to_string(), vault);
+        let stack: Stack =
+            serde_json::from_value(encoded).expect("mismatched resource identity can deserialize");
+
+        let result = AllowedUserResourcesCheck
+            .check(&stack, Platform::Aws)
+            .await
+            .expect("resource identity validation should run");
+
+        assert!(!result.success);
+        assert_eq!(result.errors.len(), 1);
+        assert!(result.errors[0].contains("map key 'application-vault'"));
+        assert!(result.errors[0].contains("configured ID 'secrets'"));
     }
 
     #[tokio::test]
