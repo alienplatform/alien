@@ -250,7 +250,6 @@ pub fn apply_seeds(
     Ok(())
 }
 
-/// Whether a direct setup of `stack` on `platform` scaffolds anything.
 pub fn scaffolds_any(stack: &Stack, platform: Platform) -> bool {
     scaffolded(stack, platform).next().is_some()
 }

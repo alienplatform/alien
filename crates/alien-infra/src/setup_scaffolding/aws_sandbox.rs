@@ -144,7 +144,6 @@ pub(super) async fn reconcile(
     Ok(ScaffoldingProgress::Done)
 }
 
-/// The inline policy as IAM holds it, or `None` when the role carries none by that name.
 pub(super) async fn applied_policy(
     iam: &dyn IamApi,
     role_name: &str,

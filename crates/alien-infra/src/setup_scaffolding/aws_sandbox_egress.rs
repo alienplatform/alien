@@ -891,7 +891,6 @@ fn connector_carries_setup_tags(
         .all(|tag| tags.contains(&serde_json::json!({ "Key": tag.key, "Value": tag.value })))
 }
 
-/// Whether the role exists and carries every tag setup creates its roles with.
 pub(super) async fn carries_setup_role_tags(
     iam: &dyn IamApi,
     role_name: &str,
