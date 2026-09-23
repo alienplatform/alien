@@ -165,9 +165,8 @@ fn receive_count(message: &Message) -> Result<u32> {
     };
     let raw = message
         .attributes
-        .iter()
-        .find(|attribute| attribute.name == "ApproximateReceiveCount")
-        .map(|attribute| &attribute.value)
+        .as_ref()
+        .and_then(|attributes| attributes.get("ApproximateReceiveCount"))
         .ok_or_else(|| AlienError::new(reason()))?;
     let count = raw.parse::<u32>().into_alien_error().context(reason())?;
     if count == 0 {
@@ -179,18 +178,13 @@ fn receive_count(message: &Message) -> Result<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::sqs::Attribute;
+    use std::collections::HashMap;
 
     fn message(count: Option<&str>) -> Message {
         Message {
-            attributes: count
-                .map(|count| {
-                    vec![Attribute {
-                        name: "ApproximateReceiveCount".to_string(),
-                        value: count.to_string(),
-                    }]
-                })
-                .unwrap_or_default(),
+            attributes: count.map(|count| {
+                HashMap::from([("ApproximateReceiveCount".to_string(), count.to_string())])
+            }),
             body: "payload".to_string(),
             md5_of_body: "unused".to_string(),
             md5_of_message_attributes: None,
