@@ -232,18 +232,39 @@ fn event_details(data: &Value, state: &Value) -> String {
 fn failure_details(data: &Value, state: &Value) -> String {
     let phase = data.get("phase").and_then(Value::as_str);
     let error = data.get("error").or_else(|| state.pointer("/failed/error"));
-    let code = error
-        .and_then(|value| value.get("code"))
-        .and_then(Value::as_str);
-    let message = error
-        .and_then(|value| value.get("message"))
-        .and_then(Value::as_str);
+    let error = error.map(error_chain_details).unwrap_or_default();
 
-    [phase, code, message]
-        .into_iter()
-        .flatten()
-        .collect::<Vec<_>>()
-        .join(": ")
+    match (phase, error.is_empty()) {
+        (Some(phase), false) => format!("{phase}: {error}"),
+        (Some(phase), true) => phase.to_string(),
+        (None, _) => error,
+    }
+}
+
+fn error_chain_details(error: &Value) -> String {
+    let mut layers = Vec::new();
+    let mut current = Some(error);
+    while let Some(layer) = current {
+        let code = layer.get("code").and_then(Value::as_str);
+        let message = layer.get("message").and_then(Value::as_str);
+        let hint = layer.get("hint").and_then(Value::as_str);
+        let mut summary = [code, message]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join(": ");
+        if let Some(hint) = hint {
+            if !summary.is_empty() {
+                summary.push_str(" — ");
+            }
+            summary.push_str(hint);
+        }
+        if !summary.is_empty() {
+            layers.push(summary);
+        }
+        current = layer.get("source").filter(|source| !source.is_null());
+    }
+    layers.join(" → ")
 }
 
 fn generic_event_details(data: &Value) -> String {
@@ -369,6 +390,36 @@ mod tests {
         assert_eq!(
             row.details,
             "updating: UPDATE_FAILED: candidate did not become ready"
+        );
+    }
+
+    #[test]
+    fn failed_event_includes_nested_cause_and_remediation() {
+        let row = EventDisplayRow::try_new(
+            "event_nested".to_string(),
+            Utc::now(),
+            &serde_json::json!({
+                "type": "DeploymentFailed",
+                "phase": "updating",
+                "error": {
+                    "code": "PREFLIGHT_CHECKS_FAILED",
+                    "message": "Preflight checks failed",
+                    "source": {
+                        "code": "DEPLOYMENT_SETUP_REQUIRED",
+                        "message": "The target release requires additional setup resources",
+                        "hint": "Update the deployment setup before retrying"
+                    }
+                }
+            }),
+            &serde_json::json!({ "failed": { "error": null } }),
+        )
+        .expect("event should format");
+
+        assert_eq!(
+            row.details,
+            "updating: PREFLIGHT_CHECKS_FAILED: Preflight checks failed → \
+             DEPLOYMENT_SETUP_REQUIRED: The target release requires additional setup resources — \
+             Update the deployment setup before retrying"
         );
     }
 }
