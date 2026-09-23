@@ -2045,14 +2045,6 @@ mod tests {
         assert!(controller.retired_versions.is_empty());
     }
 
-    /// State written before a sandbox's image could be rebuilt carried one version field and no
-    /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
-    /// active version" would withdraw the binding of a deployment that never changed.
-    ///
-    /// Only settled `Ready` state carries across. The transient states such a record could also
-    /// hold name a build or a delete that was already in flight, and resuming one from a
-    /// different controller's notion of progress is not something this can honour.
-    #[test]
     /// The two state names an earlier controller version wrote that this one lacks must still
     /// load, and land where their meaning survives: a not-yet-observed setup image becomes a
     /// Ready that re-reads it; an in-flight delete resumes at the sweep.
@@ -2090,6 +2082,14 @@ mod tests {
         assert!(unknown.is_err(), "no other unknown state is guessed at");
     }
 
+    /// State written before a sandbox's image could be rebuilt carried one version field and no
+    /// notion of an active one. It must re-hydrate with that version serving: reading it as "no
+    /// active version" would withdraw the binding of a deployment that never changed.
+    ///
+    /// Only settled `Ready` state carries across. The transient states such a record could also
+    /// hold name a build or a delete that was already in flight, and resuming one from a
+    /// different controller's notion of progress is not something this can honour.
+    #[test]
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({
             "_controllerStateVersion": 1,
