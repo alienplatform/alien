@@ -866,8 +866,9 @@ mod tests {
     };
     use alien_aws_clients::ec2::{
         CreateSecurityGroupResponse, DescribeSecurityGroupsResponse, IpPermissionSet,
-        IpRangeResponse, IpRangeSet, MockEc2Api, PrefixListIdResponse, PrefixListIdSet,
-        SecurityGroupSet,
+        IpRangeResponse, IpRangeSet, Ipv6RangeResponse, Ipv6RangeSet, MockEc2Api,
+        PrefixListIdResponse, PrefixListIdSet, SecurityGroupSet, UserIdGroupPairResponse,
+        UserIdGroupPairSet,
     };
     use alien_aws_clients::iam::{
         AttachedPolicies, CreateRoleResponse, CreateRoleResult, GetRolePolicyResponse,
@@ -899,6 +900,8 @@ mod tests {
     struct Rule {
         protocol: String,
         cidrs: Vec<String>,
+        ipv6_cidrs: Vec<String>,
+        groups: Vec<String>,
         prefix_lists: Vec<String>,
     }
 
@@ -906,6 +909,8 @@ mod tests {
         Rule {
             protocol: "-1".to_string(),
             cidrs: vec![cidr.to_string()],
+            ipv6_cidrs: vec![],
+            groups: vec![],
             prefix_lists: vec![],
         }
     }
@@ -1119,8 +1124,27 @@ mod tests {
                                 })
                                 .collect(),
                         }),
-                        ipv6_ranges: None,
-                        groups: None,
+                        ipv6_ranges: Some(Ipv6RangeSet {
+                            items: rule
+                                .ipv6_cidrs
+                                .iter()
+                                .map(|cidr| Ipv6RangeResponse {
+                                    cidr_ipv6: Some(cidr.clone()),
+                                    description: None,
+                                })
+                                .collect(),
+                        }),
+                        groups: Some(UserIdGroupPairSet {
+                            items: rule
+                                .groups
+                                .iter()
+                                .map(|id| UserIdGroupPairResponse {
+                                    group_id: Some(id.clone()),
+                                    user_id: None,
+                                    description: None,
+                                })
+                                .collect(),
+                        }),
                         prefix_list_ids: Some(PrefixListIdSet {
                             items: rule
                                 .prefix_lists
@@ -1149,6 +1173,8 @@ mod tests {
                     .flatten()
                     .map(|range| range.cidr_ip.clone())
                     .collect(),
+                ipv6_cidrs: vec![],
+                groups: vec![],
                 prefix_lists: vec![],
             })
             .collect()
@@ -1779,6 +1805,20 @@ mod tests {
         let mut loopback_and_s3 = rule("127.0.0.1/32");
         loopback_and_s3.prefix_lists = vec!["pl-63a5400a".to_string()];
         assert_not_adoptable(&preexisting_group(vec![loopback_and_s3]), "sg-foreign").await;
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_group_also_reaching_ipv6_is_refused() {
+        let mut loopback_and_v6 = rule("127.0.0.1/32");
+        loopback_and_v6.ipv6_cidrs = vec!["::/0".to_string()];
+        assert_not_adoptable(&preexisting_group(vec![loopback_and_v6]), "sg-foreign").await;
+    }
+
+    #[tokio::test]
+    async fn an_unrecorded_group_also_reaching_another_group_is_refused() {
+        let mut loopback_and_peer = rule("127.0.0.1/32");
+        loopback_and_peer.groups = vec!["sg-peer".to_string()];
+        assert_not_adoptable(&preexisting_group(vec![loopback_and_peer]), "sg-foreign").await;
     }
 
     #[tokio::test(start_paused = true)]
