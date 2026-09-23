@@ -11,8 +11,8 @@ use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
 use alien_core::{
-    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Network, Platform,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SetupScaffolding, Stack, StackState,
+    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, ResourceLifecycle,
+    Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::info;
@@ -218,13 +218,7 @@ pub(super) fn setup_inputs(
     let egress = serde_json::to_value(&sandbox.egress)
         .into_alien_error()
         .context(serialize_failed(&sandbox.id))?;
-    let network = match sandbox.egress {
-        SandboxEgress::Deny => stack
-            .resources()
-            .find(|(_, entry)| entry.config.downcast_ref::<Network>().is_some())
-            .map(|(network_id, _)| network_id.clone()),
-        _ => None,
-    };
+    let network = aws_sandbox_egress::egress_network(stack, sandbox)?;
     Ok(vec![
         ("egress", egress),
         ("egress network", serde_json::json!(network)),
@@ -502,7 +496,7 @@ mod tests {
         CreateMicrovmImageRequest, CreateMicrovmImageResponse, MockLambdaMicrovmsApi,
     };
     use alien_aws_clients::{AwsClientConfig, AwsClientConfigExt as _};
-    use alien_core::{SandboxEgress, SandboxLifecyclePolicy};
+    use alien_core::{Network, SandboxEgress, SandboxLifecyclePolicy};
     use serde_json::{json, Value};
     use std::sync::{Arc, Mutex};
 

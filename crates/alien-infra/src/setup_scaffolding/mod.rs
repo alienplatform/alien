@@ -296,14 +296,7 @@ pub async fn teardown(
                 egress,
             }) => aws_sandbox::teardown(ctx, &resource_id, build_role_name, egress).await?,
             #[cfg(not(feature = "aws"))]
-            Some(SetupScaffolding::AwsSandbox { .. }) => {
-                return Err(alien_error::AlienError::new(
-                    crate::ErrorData::ControllerNotAvailable {
-                        resource_type: alien_core::Sandbox::RESOURCE_TYPE,
-                        platform: Platform::Aws,
-                    },
-                ))
-            }
+            Some(SetupScaffolding::AwsSandbox { .. }) => return Err(aws_not_built()),
             None => continue,
         };
         match step {
