@@ -300,9 +300,10 @@ async fn deny_security_group(
         .as_ref()
         .and_then(|egress| egress.security_group_id.clone());
     if let Some(recorded_id) = recorded_id {
-        if group.as_ref().and_then(|group| group.group_id.as_deref()) != Some(&recorded_id) {
-            forget_a_recorded_group_that_is_gone(ec2, sandbox_id, &recorded_id, vpc_id, record)
-                .await?;
+        if group.as_ref().and_then(|group| group.group_id.as_deref()) != Some(&recorded_id)
+            && !recorded_group_is_gone(ec2, sandbox_id, &recorded_id, vpc_id, record).await?
+        {
+            return Ok(None);
         }
     }
 
@@ -325,11 +326,19 @@ async fn deny_security_group(
                     }])
                     .build(),
             )
-            .await
-            .context(ErrorData::CloudPlatformError {
-                message: format!("Failed to create security group '{name}' in VPC '{vpc_id}'"),
-                resource_id: Some(sandbox_id.to_string()),
-            })?;
+            .await;
+        let created = match created {
+            Ok(created) => created,
+            // A group this step created a moment ago that the lookup above could not see yet;
+            // it carries setup's tags, so the next call recognises it.
+            Err(error) if is_conflict(&error) => return Ok(None),
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to create security group '{name}' in VPC '{vpc_id}'"),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        };
         let group_id = created.group_id.ok_or_else(|| {
             AlienError::new(ErrorData::CloudPlatformError {
                 message: format!("CreateSecurityGroup for '{name}' returned no group id"),
@@ -458,49 +467,55 @@ fn carries_setup_tags(group: &SecurityGroup, resource_prefix: &str, sandbox_id: 
         .all(|expected| tags.contains(&(expected.key.as_str(), expected.value.as_str())))
 }
 
-/// A recorded group that is gone leaves the record, so setup makes a new one. One that
-/// still exists outside this network's VPC cannot follow the sandbox there, and is refused.
-async fn forget_a_recorded_group_that_is_gone(
+/// Whether the recorded group is gone, in which case it leaves the record and setup makes a new
+/// one. Only EC2's own not-found answers that: a lookup by name can miss a group created a moment
+/// ago. One that still exists outside this network's VPC cannot follow the sandbox there.
+async fn recorded_group_is_gone(
     ec2: &dyn Ec2Api,
     sandbox_id: &str,
     recorded_id: &str,
     vpc_id: &str,
     record: &mut Option<AwsSandboxEgressScaffolding>,
-) -> Result<()> {
-    let described = ec2
+) -> Result<bool> {
+    let described = match ec2
         .describe_security_groups(
             DescribeSecurityGroupsRequest::builder()
-                .filters(vec![Filter {
-                    name: "group-id".to_string(),
-                    values: vec![recorded_id.to_string()],
-                }])
+                .group_ids(vec![recorded_id.to_string()])
                 .build(),
         )
         .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to look up recorded security group '{recorded_id}'"),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
-    let still_there = described
+    {
+        Ok(described) => described,
+        Err(error) if is_not_found(&error) => {
+            info!(sandbox_id, security_group = %recorded_id, "Recorded deny group is gone");
+            if let Some(egress) = record {
+                egress.security_group_id = None;
+            }
+            return Ok(true);
+        }
+        Err(error) => {
+            return Err(error).context(ErrorData::CloudPlatformError {
+                message: format!("Failed to look up recorded security group '{recorded_id}'"),
+                resource_id: Some(sandbox_id.to_string()),
+            })
+        }
+    };
+    let found_vpc = described
         .security_group_info
-        .and_then(|groups| groups.items.into_iter().next());
-    if let Some(group) = still_there {
+        .and_then(|groups| groups.items.into_iter().next())
+        .and_then(|group| group.vpc_id);
+    if let Some(found_vpc) = found_vpc.filter(|found_vpc| found_vpc != vpc_id) {
         return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
             resource_id: sandbox_id.to_string(),
             object: format!("security group '{recorded_id}'"),
             reason: format!(
-                "setup recorded it for this sandbox in VPC '{}', and the sandbox's network is \
-                 now VPC '{vpc_id}'. Its egress objects cannot move to another network: destroy \
-                 the deployment and deploy it again.",
-                group.vpc_id.as_deref().unwrap_or("unknown")
+                "setup recorded it for this sandbox in VPC '{found_vpc}', and the sandbox's \
+                 network is now VPC '{vpc_id}'. Its egress objects cannot move to another \
+                 network: destroy the deployment and deploy it again."
             ),
         }));
     }
-    info!(sandbox_id, security_group = %recorded_id, "Recorded deny group is gone");
-    if let Some(egress) = record {
-        egress.security_group_id = None;
-    }
-    Ok(())
+    Ok(false)
 }
 
 fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: String) {
@@ -1181,6 +1196,8 @@ mod tests {
         lose_response_to: Option<usize>,
         /// Cloud Control reports every request as still running.
         requests_in_flight: bool,
+        /// How many lookups by name still miss a group, as EC2's reads can lag its writes.
+        name_lookup_lags: usize,
     }
 
     impl Cloud {
@@ -1507,11 +1524,24 @@ mod tests {
                         .find(|f| f.name == key)
                         .map(|f| f.values.clone())
                 };
-                assert!(
-                    request.group_ids.is_none(),
-                    "GroupIds fails on a missing group; look it up by the group-id filter"
-                );
-                let cloud = c.lock().unwrap();
+                let mut cloud = c.lock().unwrap();
+                if let Some(ids) = &request.group_ids {
+                    let found: Vec<SecurityGroup> = ids
+                        .iter()
+                        .map(|id| {
+                            cloud
+                                .groups
+                                .iter()
+                                .find(|g| &g.id == id)
+                                .map(described)
+                                .ok_or_else(|| not_found(id))
+                        })
+                        .collect::<std::result::Result<_, _>>()?;
+                    return Ok(DescribeSecurityGroupsResponse {
+                        security_group_info: Some(SecurityGroupSet { items: found }),
+                        next_token: None,
+                    });
+                }
                 let matching: Vec<SecurityGroup> = match filter("group-id") {
                     Some(ids) => cloud
                         .groups
@@ -1519,6 +1549,10 @@ mod tests {
                         .filter(|g| ids.contains(&g.id))
                         .map(described)
                         .collect(),
+                    None if cloud.name_lookup_lags > 0 => {
+                        cloud.name_lookup_lags -= 1;
+                        vec![]
+                    }
                     None => {
                         let names = filter("group-name").expect("the lookup filters by name");
                         let vpcs = filter("vpc-id");
@@ -1553,11 +1587,22 @@ mod tests {
         ec2.expect_create_security_group()
             .returning(move |request| {
                 let mut cloud = c.lock().unwrap();
-                cloud.next_id += 1;
-                let id = format!("sg-{}", cloud.next_id);
                 cloud
                     .mutations
                     .push(format!("ec2:CreateSecurityGroup {}", request.group_name));
+                if cloud
+                    .groups
+                    .iter()
+                    .any(|g| g.name == request.group_name && g.vpc == request.vpc_id)
+                {
+                    return Err(AlienError::new(CloudError::RemoteResourceConflict {
+                        resource_type: "security group".to_string(),
+                        resource_name: request.group_name.clone(),
+                        message: "InvalidGroup.Duplicate".to_string(),
+                    }));
+                }
+                cloud.next_id += 1;
+                let id = format!("sg-{}", cloud.next_id);
                 // EC2's default for any new group.
                 cloud.groups.push(Group {
                     id: id.clone(),
@@ -2172,6 +2217,57 @@ mod tests {
             inbound: false,
         });
         cloud
+    }
+
+    /// A lookup by name can miss a group made a moment ago; that is not the group being gone.
+    #[tokio::test]
+    async fn a_recorded_group_the_name_lookup_misses_is_kept() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let recorded = records.clone();
+        cloud.lock().unwrap().name_lookup_lags = 1;
+
+        let (progress, made) = step(&cloud, &stack, &state, &mut records).await.unwrap();
+
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+        assert!(made.is_empty(), "{made:?}");
+        assert_eq!(records, recorded);
+        converge(&cloud, &stack, &state, &mut records).await;
+        assert_eq!(records, recorded);
+        assert_eq!(cloud.lock().unwrap().groups.len(), 1);
+    }
+
+    /// The create's response was lost and the next lookup lagged, so setup creates again: EC2
+    /// refuses the duplicate name, and the call after finds the group by its tags.
+    #[tokio::test]
+    async fn a_duplicate_group_name_waits_for_the_group_to_be_seen() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        {
+            let mut c = cloud.lock().unwrap();
+            c.groups.push(Group {
+                id: "sg-lost".to_string(),
+                name: EGRESS_NAME.to_string(),
+                vpc: VPC.to_string(),
+                egress: vec![rule("0.0.0.0/0")],
+                tags: tags_for(PREFIX, "agents"),
+                inbound: false,
+            });
+            c.name_lookup_lags = 1;
+        }
+
+        converge(&cloud, &stack, &state, &mut records).await;
+
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(cloud.groups.len(), 1);
+        assert_eq!(cloud.groups[0].egress, vec![rule("127.0.0.1/32")]);
+        let connector_arn = cloud.connectors[0].0.clone();
+        assert_eq!(records["agents"], full_record("sg-lost", &connector_arn));
     }
 
     /// Loopback-only is the strongest case: even a group that already denies is not claimed, since
