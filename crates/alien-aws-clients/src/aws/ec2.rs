@@ -2849,6 +2849,22 @@ pub struct IpPermissionResponse {
     pub ipv6_ranges: Option<Ipv6RangeSet>,
     #[serde(rename = "groups")]
     pub groups: Option<UserIdGroupPairSet>,
+    #[serde(rename = "prefixListIds")]
+    pub prefix_list_ids: Option<PrefixListIdSet>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixListIdSet {
+    #[serde(rename = "item", default)]
+    pub items: Vec<PrefixListIdResponse>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrefixListIdResponse {
+    pub prefix_list_id: Option<String>,
+    pub description: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -3912,6 +3928,33 @@ impl GetConsoleOutputResponse {
 
 #[cfg(test)]
 mod tests {
+
+    /// A rule that names a prefix list carries no CIDR, so a reader that dropped the list would
+    /// see an egress rule reaching nothing where one reaches a whole AWS service.
+    #[test]
+    fn egress_prefix_lists_are_read() {
+        let response: DescribeSecurityGroupsResponse = quick_xml::de::from_str(
+            r#"<DescribeSecurityGroupsResponse>
+                <securityGroupInfo><item>
+                    <groupId>sg-1</groupId>
+                    <ipPermissionsEgress><item>
+                        <ipProtocol>-1</ipProtocol>
+                        <ipRanges><item><cidrIp>127.0.0.1/32</cidrIp></item></ipRanges>
+                        <prefixListIds><item><prefixListId>pl-63a5400a</prefixListId></item></prefixListIds>
+                    </item></ipPermissionsEgress>
+                </item></securityGroupInfo>
+            </DescribeSecurityGroupsResponse>"#,
+        )
+        .expect("parses");
+        let group = &response.security_group_info.expect("groups").items[0];
+        let rule = &group.ip_permissions_egress.as_ref().expect("egress").items[0];
+        assert_eq!(
+            rule.prefix_list_ids.as_ref().expect("prefix lists").items[0]
+                .prefix_list_id
+                .as_deref(),
+            Some("pl-63a5400a")
+        );
+    }
     use super::*;
 
     #[test]

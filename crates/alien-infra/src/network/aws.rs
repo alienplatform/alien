@@ -289,6 +289,7 @@ mod tests {
             }),
             ipv6_ranges: None,
             groups: None,
+            prefix_list_ids: None,
         }];
 
         assert!(has_ipv4_all_protocol_rule(
@@ -312,6 +313,7 @@ mod tests {
                 }),
                 ipv6_ranges: None,
                 groups: None,
+                prefix_list_ids: None,
             },
             IpPermissionResponse {
                 ip_protocol: Some("-1".to_string()),
@@ -325,6 +327,7 @@ mod tests {
                 }),
                 ipv6_ranges: None,
                 groups: None,
+                prefix_list_ids: None,
             },
         ];
 
