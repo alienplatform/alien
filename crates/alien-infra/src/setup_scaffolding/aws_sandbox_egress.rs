@@ -107,7 +107,6 @@ pub(super) async fn reconcile(
         );
         return Ok(ScaffoldingProgress::InProgress);
     };
-    let partition = aws_partition(&aws.region);
     let name = sandbox_egress_name(ctx.resource_prefix, sandbox_id);
     if name.len() > IAM_ROLE_NAME_MAX_LEN {
         return Err(AlienError::new(ErrorData::ResourceConfigInvalid {
