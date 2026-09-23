@@ -161,9 +161,13 @@ pub(super) async fn applied_policy(
     match iam.get_role_policy(role_name, policy_name).await {
         Ok(response) => {
             let document = response.get_role_policy_result.policy_document;
-            Ok(urlencoding::decode(&document)
-                .ok()
-                .and_then(|decoded| serde_json::from_str(&decoded).ok()))
+            let decoded = urlencoding::decode(&document)
+                .into_alien_error()
+                .context(unreadable_policy(role_name, policy_name, sandbox_id))?;
+            serde_json::from_str(&decoded)
+                .map(Some)
+                .into_alien_error()
+                .context(unreadable_policy(role_name, policy_name, sandbox_id))
         }
         Err(error) if is_not_found(&error) => Ok(None),
         Err(error) => Err(error).context(ErrorData::CloudPlatformError {
@@ -492,8 +496,16 @@ fn aws_config(client_config: &ClientConfig) -> Result<&alien_aws_clients::AwsCli
 }
 
 fn serialize_failed(sandbox_id: &str) -> ErrorData {
-    ErrorData::ResourceConfigInvalid {
+    ErrorData::InfrastructureError {
         message: "the sandbox's build role documents cannot be serialized".to_string(),
+        operation: Some("serialize setup scaffolding".to_string()),
+        resource_id: Some(sandbox_id.to_string()),
+    }
+}
+
+fn unreadable_policy(role_name: &str, policy_name: &str, sandbox_id: &str) -> ErrorData {
+    ErrorData::CloudPlatformError {
+        message: format!("Policy '{policy_name}' of role '{role_name}' is not readable JSON"),
         resource_id: Some(sandbox_id.to_string()),
     }
 }

@@ -375,7 +375,8 @@ pub enum ErrorData {
         code = "SETUP_SCAFFOLDING_NOT_ADOPTABLE",
         message = "Cannot adopt existing {object} for resource '{resource_id}': {reason}",
         retryable = "false",
-        internal = "false"
+        internal = "false",
+        http_status_code = 409
     )]
     SetupScaffoldingNotAdoptable {
         /// Resource the scaffolding was being created for

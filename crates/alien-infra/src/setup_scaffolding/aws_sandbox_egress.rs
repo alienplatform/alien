@@ -748,6 +748,13 @@ fn connector_mismatches(found: &Value, desired: &Value) -> Vec<String> {
     let found_vpc = &found["Configuration"]["VpcEgressConfiguration"];
     let desired_vpc = &desired["Configuration"]["VpcEgressConfiguration"];
     let mut mismatches = Vec::new();
+    // The deny group matches IPv4 only, so a dual-stack connector would reach past it.
+    if found_vpc["NetworkProtocol"] != desired_vpc["NetworkProtocol"] {
+        mismatches.push(format!(
+            "its NetworkProtocol is {}, not {}",
+            found_vpc["NetworkProtocol"], desired_vpc["NetworkProtocol"]
+        ));
+    }
     if found["OperatorRole"] != desired["OperatorRole"] {
         mismatches.push(format!(
             "its operator role is {}, not {}",
@@ -2563,6 +2570,91 @@ mod tests {
             assert!(cloud.groups.is_empty(), "call {lost}");
             assert!(cloud.connectors.is_empty(), "call {lost}");
         }
+    }
+
+    /// The deny group matches IPv4 only.
+    #[tokio::test]
+    async fn a_dual_stack_connector_is_refused() {
+        let cloud = Shared::default();
+        {
+            let mut c = cloud.lock().unwrap();
+            c.roles.insert(
+                EGRESS_NAME.to_string(),
+                sandbox_egress_operator_trust_policy(),
+            );
+            c.role_tags
+                .insert(EGRESS_NAME.to_string(), tags_for(PREFIX, "agents"));
+            c.inline.insert(
+                (
+                    EGRESS_NAME.to_string(),
+                    SANDBOX_EGRESS_POLICY_NAME.to_string(),
+                ),
+                sandbox_egress_operator_policy("aws", ACCOUNT, "us-east-1").to_string(),
+            );
+            c.groups.push(Group {
+                id: "sg-1".to_string(),
+                name: EGRESS_NAME.to_string(),
+                vpc: VPC.to_string(),
+                egress: vec![rule("127.0.0.1/32")],
+                tags: tags_for(PREFIX, "agents"),
+                inbound: false,
+            });
+            let mut properties = desired_connector("sg-1");
+            properties["State"] = json!("ACTIVE");
+            properties["Configuration"]["VpcEgressConfiguration"]["NetworkProtocol"] =
+                json!("DualStack");
+            c.connectors.push((
+                format!("arn:aws:lambda:us-east-1:{ACCOUNT}:network-connector:dual"),
+                properties,
+            ));
+        }
+        assert_not_adoptable(&cloud, "NetworkProtocol").await;
+    }
+
+    /// An unreadable policy is not a reason to overwrite it unseen.
+    #[tokio::test]
+    async fn an_operator_policy_that_is_not_json_is_an_error() {
+        let cloud = Shared::default();
+        {
+            let mut c = cloud.lock().unwrap();
+            c.roles.insert(
+                EGRESS_NAME.to_string(),
+                sandbox_egress_operator_trust_policy(),
+            );
+            c.role_tags
+                .insert(EGRESS_NAME.to_string(), tags_for(PREFIX, "agents"));
+            c.inline.insert(
+                (
+                    EGRESS_NAME.to_string(),
+                    SANDBOX_EGRESS_POLICY_NAME.to_string(),
+                ),
+                "{not json".to_string(),
+            );
+        }
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        let mut calls = 0;
+        let error = loop {
+            bounded(&mut calls);
+            match step(&cloud, &stack, &state, &mut records).await {
+                Ok(_) => continue,
+                Err(error) => break error,
+            }
+        };
+        assert!(
+            format!("{error:?}").contains("is not readable JSON"),
+            "{error:?}"
+        );
+        assert!(
+            !cloud
+                .lock()
+                .unwrap()
+                .mutations
+                .iter()
+                .any(|call| call.contains(&format!("PutRolePolicy {EGRESS_NAME}"))),
+            "the unreadable policy is left for a person to look at"
+        );
     }
 
     #[tokio::test]
