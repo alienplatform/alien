@@ -5,8 +5,10 @@ use alien_core::{
     InitialSetupAuthority, ResourceLifecycle, ResourceStatus, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
-use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
-use alien_infra::{StackExecutor, StackStateExt};
+use alien_infra::setup_scaffolding::{
+    self, ScaffoldingProgress, SeedContext, SetupScaffoldingContext,
+};
+use alien_infra::{ImporterRegistry, StackExecutor, StackStateExt};
 use tracing::{debug, info};
 
 /// Handle InitialSetup status (deploy setup-owned Frozen resources)
@@ -14,7 +16,8 @@ use tracing::{debug, info};
 /// This step:
 /// 1. Uses the prepared stack from runtime_metadata (mutated in Pending phase)
 /// 2. Under direct setup, advances the setup scaffolding of runtime-owned resources
-/// 3. Executes one deployment step for Frozen resources
+/// 3. Executes one deployment step for Frozen resources, then seeds the scaffolded resources'
+///    controller state once their scaffolding is done
 /// 4. Updates stack state with the result
 /// 5. Transitions to Provisioning when Frozen resources are deployed and scaffolding is done
 ///
@@ -127,13 +130,27 @@ pub async fn handle_initial_setup(
         InitialSetupAuthority::ImportedHandoff => ScaffoldingProgress::Done,
     };
 
-    let step_result = match runtime_metadata.initial_setup_authority {
+    let mut step_result = match runtime_metadata.initial_setup_authority {
         InitialSetupAuthority::DirectSetup => executor.step(stack_state).await,
         InitialSetupAuthority::ImportedHandoff => executor.continue_imported(stack_state).await,
     }
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to execute deployment step".to_string(),
     })?;
+
+    // The handoff below requires Done, so no runtime controller starts from an unseeded state.
+    if runtime_metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
+        && scaffolding == ScaffoldingProgress::Done
+    {
+        seed_setup_scaffolding(
+            &target_stack,
+            &mut step_result.next_state,
+            &config,
+            &client_config_for_scaffolding,
+            service_provider.as_ref(),
+            &runtime_metadata,
+        )?;
+    }
 
     // Compute status only for Frozen resources. A stack with no Frozen
     // resources can hand off immediately to Provisioning.
@@ -283,6 +300,44 @@ async fn reconcile_setup_scaffolding(
     .await
     .context(ErrorData::StackExecutionFailed {
         message: "Failed to create setup scaffolding".to_string(),
+    })
+}
+
+/// Hands each scaffolded resource the facts a template setup would have registered for it.
+fn seed_setup_scaffolding(
+    target_stack: &Stack,
+    stack_state: &mut StackState,
+    config: &DeploymentConfig,
+    client_config: &alien_core::ClientConfig,
+    service_provider: &dyn alien_infra::PlatformServiceProvider,
+    runtime_metadata: &alien_core::RuntimeMetadata,
+) -> Result<()> {
+    let seeds = setup_scaffolding::seeds(
+        &SetupScaffoldingContext {
+            client_config,
+            service_provider,
+            resource_prefix: &stack_state.resource_prefix,
+        },
+        target_stack,
+        stack_state,
+        &runtime_metadata.setup_scaffolding,
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to resolve setup scaffolding seeds".to_string(),
+    })?;
+    let registry = ImporterRegistry::built_in();
+    setup_scaffolding::apply_seeds(
+        &SeedContext {
+            registry: &registry,
+            stack_settings: &config.stack_settings,
+            management_config: config.management_config.as_ref(),
+        },
+        target_stack,
+        stack_state,
+        seeds,
+    )
+    .context(ErrorData::StackExecutionFailed {
+        message: "Failed to seed resources from setup scaffolding".to_string(),
     })
 }
 
@@ -478,17 +533,19 @@ mod tests {
     }
 
     const BUILD_ROLE: &str = "test-agents-build";
+    const BUNDLE_URI: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
 
     fn live_sandbox_setup(authority: InitialSetupAuthority) -> DeploymentState {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
-                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+                image: BUNDLE_URI.to_string(),
             })
             .egress(alien_core::SandboxEgress::Allow)
             .lifecycle(alien_core::SandboxLifecyclePolicy {
                 max_lifetime_seconds: None,
                 idle_pause_seconds: None,
             })
+            .preview_ports(vec![8080])
             .build();
         let stack = Stack::new("test".to_string())
             .add(sandbox, ResourceLifecycle::Live)
@@ -553,15 +610,51 @@ mod tests {
         }
     }
 
+    /// The build role as this step created it, before or after its policy landed.
+    fn present_role() -> MockIamApi {
+        use alien_aws_clients::iam::{
+            GetRoleResponse, GetRoleResult, ListAttachedRolePoliciesResponse,
+            ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
+        };
+        let mut present = MockIamApi::new();
+        present.expect_get_role().returning(|_| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        present.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        present.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        present
+            .expect_put_role_policy()
+            .withf(|role, policy, _| role == BUILD_ROLE && policy == "sandbox-image-build")
+            .times(1)
+            .returning(|_, _, _| Ok(()));
+        present
+    }
+
     /// A Live sandbox is the only resource, so Frozen setup is finished at once; the build
     /// role is what holds the handoff until it exists and carries its policy.
     #[tokio::test]
     async fn direct_setup_hands_off_only_once_the_build_role_is_ready() {
-        use alien_aws_clients::iam::{
-            CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult,
-            ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult,
-            ListRolePoliciesResponse, ListRolePoliciesResult,
-        };
+        use alien_aws_clients::iam::{CreateRoleResponse, CreateRoleResult};
 
         let mut absent = MockIamApi::new();
         absent.expect_get_role().times(1).returning(|name| {
@@ -610,46 +703,37 @@ mod tests {
             recorded
         );
 
-        let mut present = MockIamApi::new();
-        present.expect_get_role().returning(|_| {
-            Ok(GetRoleResponse {
-                get_role_result: GetRoleResult {
-                    role: created_role(),
-                },
-            })
-        });
-        present.expect_list_role_policies().returning(|_| {
-            Ok(ListRolePoliciesResponse {
-                list_role_policies_result: ListRolePoliciesResult {
-                    policy_names: None,
-                    is_truncated: Some(false),
-                    marker: None,
-                },
-            })
-        });
-        present.expect_list_attached_role_policies().returning(|_| {
-            Ok(ListAttachedRolePoliciesResponse {
-                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
-                    attached_policies: None,
-                    is_truncated: Some(false),
-                    marker: None,
-                },
-            })
-        });
-        present
-            .expect_put_role_policy()
-            .withf(|role, policy, _| role == BUILD_ROLE && policy == "sandbox-image-build")
-            .times(1)
-            .returning(|_, _, _| Ok(()));
+        assert!(
+            !first
+                .state
+                .stack_state
+                .as_ref()
+                .unwrap()
+                .resources
+                .contains_key("agents"),
+            "no controller state before its build role is ready"
+        );
+
         let second = handle_initial_setup(
             first.state,
             config(),
             aws_client_config(),
-            with_iam(present),
+            with_iam(present_role()),
         )
         .await
         .unwrap();
         assert_eq!(second.state.status, DeploymentStatus::Provisioning);
+        let seeded = &second.state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(seeded.status, ResourceStatus::Provisioning);
+        let controller = seeded.internal_state.as_ref().unwrap();
+        assert_eq!(controller["state"], "creatingImage");
+        assert_eq!(
+            controller["buildRoleArn"],
+            format!("arn:aws:iam::123456789012:role/{BUILD_ROLE}")
+        );
+        assert_eq!(controller["bundleUri"], BUNDLE_URI);
+        assert_eq!(controller["allowEgress"], true);
+        assert_eq!(controller["previewPorts"], serde_json::json!([8080]));
         assert_eq!(
             second.state.runtime_metadata.unwrap().setup_scaffolding,
             recorded
@@ -729,6 +813,267 @@ mod tests {
             .unwrap()
             .setup_scaffolding
             .is_empty());
+    }
+
+    const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+
+    /// The binding a linked workload is handed, from the controller state as persisted.
+    fn published_binding(sandbox: &alien_core::StackResourceState) -> serde_json::Value {
+        sandbox
+            .get_internal_controller()
+            .unwrap()
+            .expect("a sandbox has controller state")
+            .get_binding_params()
+            .unwrap()
+            .expect("a sandbox with an ACTIVE image publishes a binding")
+    }
+
+    /// Loads a binding the way the application's runtime does.
+    async fn load_binding(binding: &serde_json::Value) -> std::result::Result<(), String> {
+        use alien_bindings::{BindingsProvider, BindingsProviderApi};
+        let env = std::collections::HashMap::from([
+            (
+                alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("AWS_REGION".to_string(), "us-east-1".to_string()),
+            ("AWS_ACCOUNT_ID".to_string(), "123456789012".to_string()),
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+            ("ALIEN_AGENTS_BINDING".to_string(), binding.to_string()),
+        ]);
+        BindingsProvider::from_env(env)
+            .await
+            .map_err(|error| error.to_string())?
+            .load_sandbox("agents")
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    /// A MicroVM API that builds one image and reports it ACTIVE.
+    fn building_microvms() -> Arc<MockPlatformServiceProvider> {
+        use alien_aws_clients::lambda_microvms::{
+            CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
+        };
+        let built = Arc::new(std::sync::Mutex::new(false));
+        let probe = built.clone();
+        let mut microvms = MockLambdaMicrovmsApi::new();
+        microvms.expect_get_microvm_image().returning(move |_| {
+            if !*probe.lock().unwrap() {
+                return Err(alien_error::AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                        resource_type: "Microvm".to_string(),
+                        resource_name: "test-agents".to_string(),
+                    },
+                ));
+            }
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        microvms
+            .expect_create_microvm_image()
+            .withf(|request| {
+                request.build_role_arn == format!("arn:aws:iam::123456789012:role/{BUILD_ROLE}")
+                    && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(move |_| {
+                *built.lock().unwrap() = true;
+                Ok(CreateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("CREATING".to_string()),
+                    image_version: Some("1.0".to_string()),
+                })
+            });
+        microvms
+            .expect_get_microvm_image_version()
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("SUCCESSFUL".to_string()),
+                    status: Some("ACTIVE".to_string()),
+                    state_reason: None,
+                })
+            });
+        let microvms = Arc::new(microvms);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(microvms.clone()));
+        Arc::new(provider)
+    }
+
+    /// Runtime provisioning continues from the seed rather than from a controller's defaults,
+    /// which on this path would publish a binding with no connector and no open egress.
+    #[tokio::test]
+    async fn a_directly_set_up_sandbox_provisions_to_a_binding_the_runtime_loads() {
+        let mut deployment = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
+        deployment
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .setup_scaffolding = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
+            },
+        )]);
+        let mut state = handle_initial_setup(
+            deployment,
+            config(),
+            aws_client_config(),
+            with_iam(present_role()),
+        )
+        .await
+        .unwrap()
+        .state;
+        assert_eq!(state.status, DeploymentStatus::Provisioning);
+
+        let provider = building_microvms();
+        for _ in 0..20 {
+            if state.status != DeploymentStatus::Provisioning {
+                break;
+            }
+            state = crate::provisioning::handle_provisioning(
+                state,
+                config(),
+                aws_client_config(),
+                provider.clone(),
+            )
+            .await
+            .unwrap()
+            .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::Running);
+
+        let sandbox = &state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let binding = &published_binding(sandbox);
+        load_binding(binding)
+            .await
+            .unwrap_or_else(|error| panic!("the binding must load: {error}\n{binding}"));
+        assert_eq!(binding["allowEgress"], true);
+        assert_eq!(binding["previewPorts"], serde_json::json!([8080]));
+    }
+
+    /// A sandbox as a direct deploy left it before setup seeded one: serving, but with none of
+    /// the registration's egress or preview facts.
+    async fn with_serving_sandbox(mut deployment: DeploymentState) -> DeploymentState {
+        let stack = deployment
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .clone()
+            .unwrap();
+        let mut serving = alien_infra::ImporterRegistry::built_in()
+            .run(
+                &alien_core::Sandbox::RESOURCE_TYPE,
+                Platform::Aws,
+                serde_json::json!({
+                    "imageIdentifier": IMAGE_ARN,
+                    "imageArn": IMAGE_ARN,
+                    "imageVersion": "1.0",
+                }),
+                &alien_core::import::ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &StackSettings::default(),
+                    management_config: None,
+                    resource: &stack.resources["agents"],
+                },
+            )
+            .unwrap();
+        serving.controller_platform = Some(Platform::Aws);
+        assert!(
+            load_binding(&published_binding(&serving)).await.is_err(),
+            "the fixture must start from the binding the runtime refuses"
+        );
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("agents".to_string(), serving);
+        deployment
+            .runtime_metadata
+            .as_mut()
+            .unwrap()
+            .setup_scaffolding = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
+            },
+        )]);
+        deployment
+    }
+
+    /// Setup runs again on a refresh. Registering the sandbox afresh would reset it to its create
+    /// state and withdraw the binding of an image that is serving.
+    #[tokio::test]
+    async fn a_second_setup_pass_keeps_a_serving_sandbox_and_corrects_its_facts() {
+        let result = handle_initial_setup(
+            with_serving_sandbox(live_sandbox_setup(InitialSetupAuthority::DirectSetup)).await,
+            config(),
+            aws_client_config(),
+            with_iam(present_role()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+        let sandbox = &result.state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let controller = sandbox.internal_state.as_ref().unwrap();
+        assert_eq!(controller["state"], "ready");
+        assert_eq!(controller["imageArn"], IMAGE_ARN);
+        assert_eq!(controller["activeVersion"], "1.0");
+        assert_eq!(controller["allowEgress"], true);
+        assert_eq!(controller["previewPorts"], serde_json::json!([8080]));
+        let binding = &published_binding(sandbox);
+        load_binding(binding)
+            .await
+            .unwrap_or_else(|error| panic!("the corrected binding must load: {error}\n{binding}"));
+        assert_eq!(binding["imageVersion"], "1.0");
+    }
+
+    /// A seed that cannot be applied must stop setup: handing off would start the runtime
+    /// controller from a state setup never registered.
+    #[tokio::test]
+    async fn a_seed_that_cannot_be_applied_stops_setup_before_handoff() {
+        let mut deployment =
+            with_serving_sandbox(live_sandbox_setup(InitialSetupAuthority::DirectSetup)).await;
+        let sandbox = deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .get_mut("agents")
+            .unwrap();
+        sandbox.internal_state.as_mut().unwrap()["state"] = serde_json::json!("noSuchState");
+
+        let error = handle_initial_setup(
+            deployment,
+            config(),
+            aws_client_config(),
+            with_iam(present_role()),
+        )
+        .await
+        .expect_err("setup must not hand off an unseeded sandbox");
+        assert!(
+            format!("{error:?}").contains("the existing state cannot take the seed"),
+            "the seed's own failure surfaces: {error:?}"
+        );
     }
 
     #[tokio::test]
