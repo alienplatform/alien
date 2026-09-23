@@ -75,7 +75,8 @@ pub struct DeploymentRecord {
     pub deployment_token: Option<String>,
     /// Deployer-provided stack input values, keyed by input id. Gated live
     /// resources resolve against these on every reconcile; without them a
-    /// stored deployment would fall back to declared defaults.
+    /// stored deployment would fall back to declared defaults. Values can be
+    /// sensitive and must not be included in diagnostics.
     #[serde(default)]
     pub input_values: HashMap<String, serde_json::Value>,
     pub retry_requested: bool,
@@ -112,7 +113,10 @@ impl std::fmt::Debug for DeploymentRecord {
             .field("setup_fingerprint_version", &self.setup_fingerprint_version)
             .field(
                 "user_environment_variables",
-                &self.user_environment_variables,
+                &self
+                    .user_environment_variables
+                    .as_ref()
+                    .map(|_| "[REDACTED]"),
             )
             .field("management_config", &self.management_config)
             .field(
@@ -123,7 +127,7 @@ impl std::fmt::Debug for DeploymentRecord {
                 "deployment_token",
                 &self.deployment_token.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("input_values", &self.input_values)
+            .field("input_values", &"[REDACTED]")
             .field("retry_requested", &self.retry_requested)
             .field("locked_by", &self.locked_by)
             .field("locked_at", &self.locked_at)

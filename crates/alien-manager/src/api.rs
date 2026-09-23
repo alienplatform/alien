@@ -68,6 +68,10 @@ impl Modify for BearerSecurity {
         crate::routes::credentials::mint_credentials,
         // Remote bindings
         crate::routes::bindings::resolve_binding,
+        // Vault secrets
+        crate::routes::vault::set_secret,
+        crate::routes::vault::get_secret,
+        crate::routes::vault::delete_secret,
     ),
     components(schemas(
         // Deployment types
@@ -119,6 +123,10 @@ impl Modify for BearerSecurity {
         // Remote binding types
         crate::routes::bindings::ResolveBindingRequest,
         crate::routes::bindings::ResolveBindingResponse,
+        // Vault types
+        crate::routes::vault::SetSecretRequest,
+        crate::routes::vault::GetSecretResponse,
+        crate::routes::vault::VaultMutationResponse,
         // Identity types
         crate::routes::whoami::WhoamiResponse,
         // Health types
@@ -137,6 +145,7 @@ impl Modify for BearerSecurity {
         (name = "sync", description = "Agent sync and state reconciliation"),
         (name = "credentials", description = "Credential resolution for deployments"),
         (name = "bindings", description = "Remote resource binding resolution"),
+        (name = "vault", description = "Deployment Vault secret management"),
         (name = "telemetry", description = "OTLP telemetry ingestion"),
     )
 )]
@@ -171,5 +180,20 @@ mod tests {
             document.pointer("/paths/~1v1~1bindings~1resolve/post/security/0/bearer"),
             Some(&json!([]))
         );
+    }
+
+    #[test]
+    fn openapi_exposes_authenticated_vault_secret_operations() {
+        let document = serde_json::to_value(ApiDoc::openapi())
+            .expect("manager OpenAPI should serialize as JSON");
+        let path = "/paths/~1v1~1deployments~1{id}~1vault~1{vault_name}~1secrets~1{key}";
+
+        for method in ["put", "get", "delete"] {
+            assert_eq!(
+                document.pointer(&format!("{path}/{method}/security/0/bearer")),
+                Some(&json!([])),
+                "{method} must require bearer authentication"
+            );
+        }
     }
 }

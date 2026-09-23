@@ -443,6 +443,7 @@ describe("createFactories method mapping", () => {
     }
     const { storage } = createFactories(() => addonForStorage(storageHandle))
     const options = {
+      condition: "absent" as const,
       attributes: {
         contentType: "text/plain",
         contentDisposition: 'attachment; filename="note.txt"',
@@ -637,14 +638,14 @@ describe("createFactories postgres surface", () => {
 })
 
 describe("sandbox create", () => {
-  it("carries the id and the lifetime through to the addon, and reads the id back", async () => {
-    const create = vi.fn<RawSandboxHandle["create"]>(async sandboxId => ({
-      sandboxId: sandboxId ?? "s1",
+  it("carries the requested id and lifetime to the addon, but trusts its returned id", async () => {
+    const create = vi.fn<RawSandboxHandle["create"]>(async () => ({
+      sandboxId: "provider-assigned",
       state: "running",
       generation: 1,
     }))
-    const getOrCreate = vi.fn<RawSandboxHandle["getOrCreate"]>(async sandboxId => ({
-      sandbox: { sandboxId: sandboxId ?? "s1", state: "running", generation: 1 },
+    const getOrCreate = vi.fn<RawSandboxHandle["getOrCreate"]>(async () => ({
+      sandbox: { sandboxId: "provider-recovered", state: "running", generation: 1 },
       created: true,
     }))
     const { addon } = fakeAddon()
@@ -663,15 +664,18 @@ describe("sandbox create", () => {
     const handle = sandbox("sbx")
 
     const created = await handle.create({ sandboxId: "mine", timeoutMs: 600_000 })
-    expect(created.sandboxId).toBe("mine")
+    expect(created.sandboxId).toBe("provider-assigned")
     // Positional, because the addon takes them positionally: a lifetime that arrives as the
     // tenant key, or not at all, is a sandbox with no deadline and no error to show for it.
     expect(create).toHaveBeenCalledWith("mine", null, null, 600_000)
 
-    const resolved = await handle.getOrCreate({ timeoutMs: 1_000 })
-    expect(resolved.sandbox.sandboxId).toBe("s1")
+    const resolved = await handle.getOrCreate({ sandboxId: "requested", timeoutMs: 1_000 })
+    expect(resolved.sandbox.sandboxId).toBe("provider-recovered")
     expect(resolved.created).toBe(true)
-    expect(getOrCreate).toHaveBeenCalledWith(null, null, null, 1_000)
+    expect(getOrCreate).toHaveBeenCalledWith("requested", null, null, 1_000)
+
+    await handle.getOrCreate({ timeoutMs: 2_000 })
+    expect(getOrCreate).toHaveBeenNthCalledWith(2, null, null, null, 2_000)
   })
 })
 

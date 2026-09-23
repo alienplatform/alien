@@ -72,6 +72,7 @@ async fn publishes_declared_tcp_backend_and_reports_tcp_binding() {
                     protocol: ExposeProtocol::Tcp,
                     names: vec!["database".to_string()],
                 }),
+                health_check_port: None,
                 env_vars: HashMap::new(),
                 stateful: false,
                 ordinal: None,

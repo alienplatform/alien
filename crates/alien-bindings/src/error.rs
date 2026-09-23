@@ -129,6 +129,21 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// A create-only storage write found an existing object.
+    #[error(
+        code = "STORAGE_OBJECT_ALREADY_EXISTS",
+        message = "Storage object already exists for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StorageObjectAlreadyExists {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
+        operation: String,
+    },
+
     /// Build operation failed due to provider issues.
     #[error(
         code = "BUILD_OPERATION_FAILED",
@@ -792,6 +807,19 @@ pub enum ErrorData {
         /// The queue operation that failed
         operation: String,
         /// Reason for the operation failure
+        reason: String,
+    },
+
+    /// A queue provider returned invalid message metadata required by the binding contract.
+    #[error(
+        code = "QUEUE_PROVIDER_RESPONSE_INVALID",
+        message = "Queue provider response is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    QueueProviderResponseInvalid {
+        /// Safe description of the missing or invalid provider field.
         reason: String,
     },
 

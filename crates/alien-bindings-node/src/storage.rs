@@ -11,7 +11,7 @@ use napi::bindgen_prelude::Buffer;
 use napi_derive::napi;
 use object_store::path::Path;
 use object_store::{
-    Attribute, Attributes, GetOptions, ObjectMeta, PutOptions, PutPayload, PutResult,
+    Attribute, Attributes, GetOptions, ObjectMeta, PutMode, PutOptions, PutPayload, PutResult,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -65,6 +65,8 @@ pub struct StoragePutAttributesJs {
 pub struct StoragePutOptionsJs {
     /// Object attributes to persist with the payload.
     pub attributes: Option<StoragePutAttributesJs>,
+    /// Atomic write precondition. The only supported value is `"absent"`.
+    pub condition: Option<String>,
 }
 
 /// Provider-neutral attributes returned with a stored object.
@@ -101,29 +103,40 @@ pub struct StoragePutResultJs {
     pub version: Option<String>,
 }
 
-pub(crate) fn object_store_put_options(options: StoragePutOptionsJs) -> PutOptions {
-    let Some(options) = options.attributes else {
-        return PutOptions::default();
+pub(crate) fn object_store_put_options(options: StoragePutOptionsJs) -> napi::Result<PutOptions> {
+    let mode = match options.condition.as_deref() {
+        None => PutMode::Overwrite,
+        Some("absent") => PutMode::Create,
+        Some(condition) => {
+            return Err(map_alien_error(AlienError::new(ErrorData::InvalidInput {
+                operation_context: "storage.put".to_string(),
+                details: format!("unsupported condition '{condition}', expected 'absent'"),
+                field_name: Some("condition".to_string()),
+            })));
+        }
     };
     let mut attributes = Attributes::new();
-    for (attribute, value) in [
-        (Attribute::ContentType, options.content_type),
-        (Attribute::ContentDisposition, options.content_disposition),
-        (Attribute::ContentEncoding, options.content_encoding),
-        (Attribute::ContentLanguage, options.content_language),
-        (Attribute::CacheControl, options.cache_control),
-    ] {
-        if let Some(value) = value {
-            attributes.insert(attribute, value.into());
+    if let Some(options) = options.attributes {
+        for (attribute, value) in [
+            (Attribute::ContentType, options.content_type),
+            (Attribute::ContentDisposition, options.content_disposition),
+            (Attribute::ContentEncoding, options.content_encoding),
+            (Attribute::ContentLanguage, options.content_language),
+            (Attribute::CacheControl, options.cache_control),
+        ] {
+            if let Some(value) = value {
+                attributes.insert(attribute, value.into());
+            }
+        }
+        for (key, value) in options.metadata.unwrap_or_default() {
+            attributes.insert(Attribute::Metadata(key.into()), value.into());
         }
     }
-    for (key, value) in options.metadata.unwrap_or_default() {
-        attributes.insert(Attribute::Metadata(key.into()), value.into());
-    }
-    PutOptions {
+    Ok(PutOptions {
+        mode,
         attributes,
         ..Default::default()
-    }
+    })
 }
 
 pub(crate) fn object_attributes_to_js(attributes: &Attributes) -> StorageObjectAttributesJs {
@@ -242,9 +255,8 @@ impl StorageHandle {
         let payload = PutPayload::from(data.to_vec());
         let result = match options {
             Some(options) => {
-                store
-                    .put_opts(&location, payload, object_store_put_options(options))
-                    .await
+                let options = object_store_put_options(options)?;
+                store.put_opts(&location, payload, options).await
             }
             None => store.put(&location, payload).await,
         }
@@ -449,7 +461,9 @@ mod tests {
                     ("source".to_string(), "inbound".to_string()),
                 ])),
             }),
-        });
+            condition: Some("absent".to_string()),
+        })
+        .expect("valid storage options");
 
         let expected = Attributes::from_iter([
             (
@@ -477,6 +491,21 @@ mod tests {
         ]);
 
         assert_eq!(options.attributes, expected);
+        assert_eq!(options.mode, PutMode::Create);
+    }
+
+    #[test]
+    fn storage_put_options_reject_unknown_conditions() {
+        let error = object_store_put_options(StoragePutOptionsJs {
+            attributes: None,
+            condition: Some("changed".to_string()),
+        })
+        .expect_err("unknown conditions must fail before writing");
+
+        let envelope: serde_json::Value =
+            serde_json::from_str(&error.reason).expect("structured error envelope");
+        assert_eq!(envelope["code"], "INVALID_INPUT");
+        assert_eq!(envelope["context"]["field_name"], "condition");
     }
 
     #[test]

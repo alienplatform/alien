@@ -1003,6 +1003,201 @@
         }
       }
     },
+    "/v1/deployments/{id}/vault/{vault_name}/secrets/{key}": {
+      "get": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "get_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetSecretResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment or secret not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "put": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "set_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetSecretRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Secret set",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "delete": {
+        "tags": [
+          "vault"
+        ],
+        "operationId": "delete_secret",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Deployment ID",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vault_name",
+            "in": "path",
+            "description": "Vault name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "description": "Secret name",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Secret deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VaultMutationResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden"
+          },
+          "404": {
+            "description": "Deployment not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
     "/v1/initialize": {
       "post": {
         "tags": [
@@ -1253,7 +1448,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentSyncRequest"
+                "$ref": "#/components/schemas/AgentSyncWireRequest"
               }
             }
           },
@@ -1573,17 +1768,6 @@
               }
             ]
           },
-          "operatorImage": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/OperatorImageReport",
-                "description": "Exact immutable Operator image identity reported by the running process.\nOpaque to OSS beyond forwarding it to `reconcile()`."
-              }
-            ]
-          },
           "operatorVersion": {
             "type": [
               "string",
@@ -1641,6 +1825,30 @@
             ]
           }
         }
+      },
+      "AgentSyncWireRequest": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/AgentSyncRequest"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "operatorImage": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperatorImageReport",
+                    "description": "Exact immutable Operator image identity reported by the running process."
+                  }
+                ]
+              }
+            }
+          }
+        ],
+        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
       },
       "AiAccessTest": {
         "type": "string",
@@ -9385,6 +9593,18 @@
           }
         }
       },
+      "GetSecretResponse": {
+        "type": "object",
+        "description": "Response body for getting a secret.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "GitMetadata": {
         "type": "object",
         "properties": {
@@ -16479,6 +16699,18 @@
           }
         }
       },
+      "SetSecretRequest": {
+        "type": "object",
+        "description": "Request body for setting a secret.",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "StackByPlatform": {
         "type": "object",
         "description": "The release API accepts stacks keyed by platform.\nOnly one platform stack needs to be present.",
@@ -17278,6 +17510,18 @@
           }
         }
       },
+      "VaultMutationResponse": {
+        "type": "object",
+        "description": "Response body for successful Vault mutations.",
+        "required": [
+          "ok"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
       "WhoamiResponse": {
         "type": "object",
         "required": [
@@ -17552,6 +17796,10 @@
     {
       "name": "bindings",
       "description": "Remote resource binding resolution"
+    },
+    {
+      "name": "vault",
+      "description": "Deployment Vault secret management"
     },
     {
       "name": "telemetry",

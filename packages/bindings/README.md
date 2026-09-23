@@ -23,6 +23,7 @@ const bindings = await Bindings.forRemoteDeployment({
 
 const archive = bindings.storage("archive")
 const write = await archive.put("reports/latest.json", Buffer.from(JSON.stringify({ ready: true })), {
+  condition: "absent",
   attributes: {
     contentType: "application/json",
     cacheControl: "private, max-age=60",
@@ -44,6 +45,10 @@ provider rejects attribute-bearing writes because it cannot represent them.
 GCS also rejects `contentEncoding: "gzip"`: its decompressive transcoding omits
 the response length required for byte-exact reads. Other GCS encodings, such as
 `br`, are preserved.
+
+`condition: "absent"` makes `put` an atomic create-only write. If the object
+already exists, the operation fails with `STORAGE_OBJECT_ALREADY_EXISTS`
+instead of replacing it.
 
 Remote Storage exposes `get`, `put`, `head`, `list`, and `delete`. It does not
 expose copy or signed URLs. The same `Bindings` and Storage handles remain valid
