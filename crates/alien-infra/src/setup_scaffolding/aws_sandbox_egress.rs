@@ -1058,8 +1058,12 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
-    use crate::core::MockPlatformServiceProvider;
-    use crate::setup_scaffolding::{reconcile as reconcile_all, teardown as teardown_all};
+    use crate::controller_test::SingleControllerExecutor;
+    use crate::core::{MockPlatformServiceProvider, ResourceController as _};
+    use crate::sandbox::AwsSandboxController;
+    use crate::setup_scaffolding::{
+        apply_seeds, reconcile as reconcile_all, seeds, teardown as teardown_all, SeedContext,
+    };
     use alien_aws_clients::cloudcontrol::{
         ListResourcesResponse, MockCloudControlApi, OperationStatus, ProgressEvent,
         ResourceDescription,
@@ -1076,8 +1080,14 @@ mod tests {
         ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
         MockIamApi, PolicyNames, Role,
     };
+    use alien_aws_clients::lambda_microvms::{
+        CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
+    };
     use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_client_core::ErrorData as CloudError;
+    use alien_core::bindings::SandboxBinding;
+    use alien_core::import::ImportContext;
     use alien_core::{
         ClientConfig, Platform, Resource, ResourceLifecycle, ResourceRef, SandboxCode,
         SandboxLifecyclePolicy, SetupScaffolding, StackResourceState,
@@ -2820,14 +2830,8 @@ mod tests {
     /// Converges direct setup, seeds the sandbox through the registered importer, then runs its
     /// controller from that seed alone until the image is ACTIVE.
     async fn serve_from_seed(sandbox: Sandbox, network: Option<NetworkSettings>) -> Served {
-        use crate::controller_test::SingleControllerExecutor;
         use crate::core::ResourceController as _;
-        use crate::sandbox::AwsSandboxController;
         use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
-        use alien_aws_clients::lambda_microvms::{
-            CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
-        };
-
         const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
         let cloud = Shared::default();
         let mut stack = Stack::new("acme".to_string());
@@ -2948,7 +2952,6 @@ mod tests {
     }
 
     async fn load(binding: &Value) -> std::result::Result<(), String> {
-        use alien_bindings::{BindingsProvider, BindingsProviderApi};
         let env = std::collections::HashMap::from([
             (
                 alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
@@ -2975,7 +2978,6 @@ mod tests {
 
     /// The binding as the runtime deserializes it: (allowEgress, connectors, preview ports).
     fn egress_facts(binding: &Value) -> (bool, Vec<String>, Vec<u16>) {
-        use alien_core::bindings::SandboxBinding;
         let SandboxBinding::Aws(aws) = serde_json::from_value(binding.clone()).unwrap() else {
             panic!("an AWS sandbox publishes an AWS binding: {binding}");
         };
@@ -3048,7 +3050,6 @@ mod tests {
     /// its sessions on the connector setup recorded, not on the empty list it was serving with.
     #[tokio::test]
     async fn a_second_seed_keeps_a_serving_deny_sandbox_and_hands_it_the_connector() {
-        use crate::core::ResourceController as _;
         use crate::sandbox::AwsSandboxController;
 
         let (cloud, stack, mut state, records) = serving_deny_sandbox().await;
@@ -3203,10 +3204,7 @@ mod tests {
     /// allow leaves unused stay recorded, so teardown still removes them.
     #[tokio::test]
     async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
-        use crate::core::ResourceController as _;
         use crate::sandbox::AwsSandboxController;
-        use alien_core::import::ImportContext;
-
         let cloud = Shared::default();
         let allow = stack(SandboxEgress::Allow, created_network());
         let deny = stack(SandboxEgress::Deny, created_network());
@@ -3286,8 +3284,6 @@ mod tests {
         StackState,
         BTreeMap<String, SetupScaffolding>,
     ) {
-        use alien_core::import::ImportContext;
-
         let cloud = Shared::default();
         let stack = stack(SandboxEgress::Deny, created_network());
         let mut state = stack_state(Some(ResourceStatus::Running));
@@ -3324,8 +3320,6 @@ mod tests {
         state: &mut StackState,
         records: &BTreeMap<String, SetupScaffolding>,
     ) -> Result<()> {
-        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
-
         let provider = provider(cloud);
         let client_config = client_config();
         let ctx = SetupScaffoldingContext {
