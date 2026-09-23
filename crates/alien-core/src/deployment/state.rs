@@ -153,6 +153,33 @@ pub struct AwsSandboxEgressScaffolding {
     pub connector_request: Option<String>,
 }
 
+impl SetupScaffolding {
+    /// Takes each object `found` names that this record does not, and keeps every one it does:
+    /// a recorded id is what setup last saw, and teardown must delete that one.
+    pub fn fill_missing(&mut self, found: SetupScaffolding) {
+        match (self, found) {
+            (
+                SetupScaffolding::AwsSandbox { egress, .. },
+                SetupScaffolding::AwsSandbox {
+                    egress: found_egress,
+                    ..
+                },
+            ) => match (egress.as_mut(), found_egress) {
+                (None, found_egress) => *egress = found_egress,
+                (Some(recorded), Some(found)) => {
+                    if recorded.security_group_id.is_none() {
+                        recorded.security_group_id = found.security_group_id;
+                    }
+                    if recorded.connector_arn.is_none() {
+                        recorded.connector_arn = found.connector_arn;
+                    }
+                }
+                (Some(_), None) => {}
+            },
+        }
+    }
+}
+
 /// The cross-account read a manager opened on Alien's registry for one deployment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -386,6 +413,32 @@ mod tests {
             serde_json::to_value(RuntimeMetadata::default()).unwrap()["setupScaffolding"].is_null(),
             "state with no scaffolding serializes as it did before the field existed"
         );
+    }
+
+    #[test]
+    fn filling_a_record_takes_only_what_it_lacks() {
+        let egress = |group: Option<&str>, connector: Option<&str>| AwsSandboxEgressScaffolding {
+            operator_role_name: "acme-agents-egress".to_string(),
+            security_group_id: group.map(str::to_string),
+            connector_arn: connector.map(str::to_string),
+            connector_request: None,
+        };
+        let record = |egress| SetupScaffolding::AwsSandbox {
+            build_role_name: "acme-agents-build".to_string(),
+            egress,
+        };
+
+        let mut partial = record(Some(egress(Some("sg-recorded"), None)));
+        partial.fill_missing(record(Some(egress(Some("sg-found"), Some("arn:found")))));
+        assert_eq!(
+            partial,
+            record(Some(egress(Some("sg-recorded"), Some("arn:found")))),
+            "a recorded id is the one teardown deletes"
+        );
+
+        let mut role_only = record(None);
+        role_only.fill_missing(record(Some(egress(Some("sg-found"), None))));
+        assert_eq!(role_only, record(Some(egress(Some("sg-found"), None))));
     }
 
     /// A deny sandbox's record is written piece by piece, so a partial one must read back as is.

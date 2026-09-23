@@ -3187,6 +3187,40 @@ mod tests {
         }
     }
 
+    /// A lost checkpoint leaves the record from the step before it, which already names the
+    /// sandbox: what the lost step created must still be found and deleted.
+    #[tokio::test]
+    async fn a_destroy_from_the_record_before_a_lost_checkpoint_deletes_what_setup_made() {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        for made in 1..=8 {
+            let cloud = Shared::default();
+            let mut records = BTreeMap::new();
+            let mut persisted = records.clone();
+            while cloud.lock().unwrap().mutations.len() < made {
+                persisted = records.clone();
+                step(&cloud, &stack, &state, &mut records).await.unwrap();
+            }
+
+            destroy(&cloud, &stack, &mut persisted).await;
+
+            let cloud = cloud.lock().unwrap();
+            assert!(
+                cloud.roles.is_empty(),
+                "after call {made}: {:?}",
+                cloud.roles
+            );
+            assert!(cloud.inline.is_empty(), "after call {made}");
+            assert!(
+                cloud.groups.is_empty(),
+                "after call {made}: {:?}",
+                cloud.groups
+            );
+            assert!(cloud.connectors.is_empty(), "after call {made}");
+            assert!(persisted.is_empty(), "after call {made}: {persisted:?}");
+        }
+    }
+
     /// Should Cloud Control not read a connector's tags back, its operator role still marks it.
     #[tokio::test]
     async fn a_destroy_deletes_an_unrecorded_connector_by_its_operator_role() {
