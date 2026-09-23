@@ -5,9 +5,10 @@ use super::helpers::{
 };
 use alien_cloudformation::CloudFormationTarget;
 use alien_core::{
-    import::data::AwsSandboxImportData, Network, NetworkSettings, RemoteBindings,
-    ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, Stack,
-    StackSettings, Worker, WorkerCode,
+    import::data::AwsSandboxImportData,
+    sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
+    Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
+    SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
 };
 
 /// A bundle key a runtime rebuild can be granted: the version segment moves, the prefix does not.
@@ -1157,4 +1158,137 @@ fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
         document.contains("microvm-image:${AWS::StackName}-agents"),
         "the grant must name this sandbox's own image: {document}"
     );
+}
+
+/// Values no emitter could get right by hardcoding a default.
+const PARITY_PARTITION: &str = "aws-us-gov";
+const PARITY_ACCOUNT: &str = "987654321098";
+const PARITY_REGION: &str = "us-gov-east-1";
+
+/// Every combination the build role's grant branches on: lifecycle, and whether the bundle URI
+/// carries the region token.
+const PARITY_CASES: [(ResourceLifecycle, &str); 4] = [
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts/agents/bundle.zip",
+    ),
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts-{region}/agents/bundle.zip",
+    ),
+    (ResourceLifecycle::Live, LIVE_BUNDLE),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+    ),
+];
+
+/// Resolves the intrinsics the build role uses to the fixed parity values, and panics on any
+/// other: a placeholder would let both sides compare equal without either being checked.
+fn resolve_intrinsics(value: &serde_json::Value) -> serde_json::Value {
+    let pseudo = |name: &str| match name {
+        "AWS::Partition" => PARITY_PARTITION,
+        "AWS::AccountId" => PARITY_ACCOUNT,
+        "AWS::Region" => PARITY_REGION,
+        other => panic!("the build role references {other}, which the parity test cannot resolve"),
+    };
+    match value {
+        serde_json::Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            let text = map["Fn::Sub"].as_str().unwrap_or_else(|| {
+                panic!("only the string form of Fn::Sub is resolvable: {value}")
+            });
+            let resolved = ["AWS::Partition", "AWS::AccountId", "AWS::Region"]
+                .into_iter()
+                .fold(text.to_string(), |acc, name| {
+                    acc.replace(&format!("${{{name}}}"), pseudo(name))
+                });
+            assert!(
+                !resolved.contains("${"),
+                "unresolved substitution left in {resolved}"
+            );
+            serde_json::Value::String(resolved)
+        }
+        serde_json::Value::Object(map) if map.len() == 1 && map.contains_key("Ref") => {
+            let name = map["Ref"].as_str().expect("Ref names a string");
+            serde_json::Value::String(pseudo(name).to_string())
+        }
+        serde_json::Value::Object(map) => {
+            if let Some(key) = map
+                .keys()
+                .find(|key| key.starts_with("Fn::") || *key == "Ref")
+            {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            serde_json::Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), resolve_intrinsics(v)))
+                    .collect(),
+            )
+        }
+        serde_json::Value::Array(items) => {
+            serde_json::Value::Array(items.iter().map(resolve_intrinsics).collect())
+        }
+        other => other.clone(),
+    }
+}
+
+/// A direct deploy creates the build role through the IAM API from `SandboxBuildRole`, so a
+/// grant changed in the emitter alone would give the two install paths different roles.
+#[test]
+fn the_emitted_build_role_matches_the_shared_policy_builder() {
+    for (lifecycle, bundle_uri) in PARITY_CASES {
+        let stack = Stack::new("acme-sandbox-parity".to_string())
+            .add(
+                sandbox_fixture_with(SandboxEgress::Allow, bundle_uri),
+                lifecycle,
+            )
+            .build();
+        let case = format!("{lifecycle:?} sandbox built from {bundle_uri}");
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings::default(),
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &case,
+        );
+        let role = serde_json::to_value(
+            template
+                .resources
+                .get("AgentsBuildRole")
+                .expect("the build role must render"),
+        )
+        .expect("serializes");
+        let properties = &role["Properties"];
+        let policies = properties["Policies"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{case}: Policies must be a list: {role:#}"));
+
+        let expected = SandboxBuildRole::builder()
+            .sandbox_id("agents")
+            .partition(PARITY_PARTITION)
+            .account_id(PARITY_ACCOUNT)
+            .region(PARITY_REGION)
+            .bundle_uri(bundle_uri)
+            .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .build();
+
+        assert_eq!(policies.len(), 1, "{case}: one inline policy: {role:#}");
+        assert_eq!(
+            policies[0]["PolicyName"],
+            serde_json::json!(SANDBOX_BUILD_POLICY_NAME),
+            "{case}"
+        );
+        assert_eq!(
+            resolve_intrinsics(&policies[0]["PolicyDocument"]),
+            serde_json::to_value(expected.policy().expect("the builder accepts the fixture"))
+                .expect("serializes"),
+            "{case}: permission policy"
+        );
+        assert_eq!(
+            resolve_intrinsics(&properties["AssumeRolePolicyDocument"]),
+            serde_json::to_value(expected.trust_policy()).expect("serializes"),
+            "{case}: trust policy"
+        );
+    }
 }

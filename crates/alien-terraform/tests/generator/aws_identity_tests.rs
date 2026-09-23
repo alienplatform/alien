@@ -6,6 +6,7 @@ use super::helpers::{
     snapshot_module, try_render,
 };
 use alien_core::{
+    sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Worker, WorkerCode,
@@ -833,4 +834,160 @@ fn an_open_sandbox_leaves_the_default_network_selectable() {
         !variables.contains("must name subnets"),
         "an open sandbox must not restrict the network mode:\n{variables}"
     );
+}
+
+const PARITY_PARTITION: &str = "aws-us-gov";
+const PARITY_ACCOUNT: &str = "987654321098";
+const PARITY_REGION: &str = "us-gov-east-1";
+
+/// Every combination the build role's grant branches on: lifecycle, and whether the bundle URI
+/// carries the region token.
+const PARITY_CASES: [(ResourceLifecycle, &str); 4] = [
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts/agents/bundle.zip",
+    ),
+    (
+        ResourceLifecycle::Frozen,
+        "s3://acme-artifacts-{region}/agents/bundle.zip",
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+    ),
+    (
+        ResourceLifecycle::Live,
+        "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+    ),
+];
+
+/// Evaluates the `jsonencode` argument an IAM document is written as, resolving the data sources
+/// the build role reads to the fixed parity values and panicking on anything else: a placeholder
+/// would let both sides compare equal without either being checked.
+fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value {
+    let resolve_template = |text: &str| {
+        let resolved = text
+            .replace("${data.aws_partition.current.partition}", PARITY_PARTITION)
+            .replace("${data.aws_region.current.region}", PARITY_REGION)
+            .replace(
+                "${data.aws_caller_identity.current.account_id}",
+                PARITY_ACCOUNT,
+            );
+        assert!(
+            !resolved.contains("${"),
+            "unresolved interpolation left in {resolved}"
+        );
+        serde_json::Value::String(resolved)
+    };
+    match expression {
+        hcl::Expression::String(text) => resolve_template(text),
+        hcl::Expression::TemplateExpr(template) => match template.as_ref() {
+            hcl::TemplateExpr::QuotedString(text) => resolve_template(text),
+            heredoc => panic!("the parity test cannot evaluate a heredoc: {heredoc:?}"),
+        },
+        hcl::Expression::Array(items) => {
+            serde_json::Value::Array(items.iter().map(evaluate_policy_expression).collect())
+        }
+        hcl::Expression::Object(object) => serde_json::Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (key, evaluate_policy_expression(value))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Traversal(_)
+            if expression.to_string() == "data.aws_caller_identity.current.account_id" =>
+        {
+            serde_json::Value::String(PARITY_ACCOUNT.to_string())
+        }
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// The argument of the `jsonencode(...)` call an IAM document attribute holds.
+fn jsonencoded(attribute: &hcl::Attribute) -> &hcl::Expression {
+    match attribute.expr() {
+        hcl::Expression::FuncCall(call) if call.name.name.as_str() == "jsonencode" => {
+            assert_eq!(call.args.len(), 1, "jsonencode takes one argument");
+            &call.args[0]
+        }
+        other => panic!("{} must be a jsonencode call: {other}", attribute.key()),
+    }
+}
+
+/// The `resource "<kind>" "<label>"` blocks of a rendered file.
+fn resource_blocks<'a>(
+    body: &'a hcl::Body,
+    kind: &'a str,
+) -> impl Iterator<Item = &'a hcl::Block> + 'a {
+    body.blocks().filter(move |block| {
+        block.identifier() == "resource"
+            && block.labels().first().map(|label| label.as_str()) == Some(kind)
+    })
+}
+
+fn block_attribute<'a>(block: &'a hcl::Block, key: &str) -> &'a hcl::Attribute {
+    block
+        .body()
+        .attributes()
+        .find(|attribute| attribute.key() == key)
+        .unwrap_or_else(|| panic!("{:?} has no {key}", block.labels()))
+}
+
+/// A direct deploy creates the build role through the IAM API from `SandboxBuildRole`, so a
+/// grant changed in the module alone would give the two install paths different roles.
+#[test]
+fn the_emitted_build_role_matches_the_shared_policy_builder() {
+    for (lifecycle, bundle_uri) in PARITY_CASES {
+        let stack = Stack::new("acme-sandbox-parity".to_string())
+            .add(
+                sandbox_fixture_with(SandboxEgress::Allow, bundle_uri),
+                lifecycle,
+            )
+            .build();
+        let case = format!("{lifecycle:?} sandbox built from {bundle_uri}");
+        let module = render(&stack, TerraformTarget::Aws, StackSettings::default());
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+                .unwrap_or_else(|error| panic!("{case}: agents.tf parses: {error}"));
+
+        let policies: Vec<_> = resource_blocks(&sandbox_file, "aws_iam_role_policy")
+            .filter(|block| {
+                block_attribute(block, "name").expr()
+                    == &hcl::Expression::String(SANDBOX_BUILD_POLICY_NAME.to_string())
+            })
+            .collect();
+        assert_eq!(policies.len(), 1, "{case}: one build policy");
+        let role_label = policies[0].labels()[1].as_str();
+        let role = resource_blocks(&sandbox_file, "aws_iam_role")
+            .find(|block| block.labels()[1].as_str() == role_label)
+            .unwrap_or_else(|| panic!("{case}: the build role {role_label} renders"));
+
+        let expected = SandboxBuildRole::builder()
+            .sandbox_id("agents")
+            .partition(PARITY_PARTITION)
+            .account_id(PARITY_ACCOUNT)
+            .region(PARITY_REGION)
+            .bundle_uri(bundle_uri)
+            .runtime_built(lifecycle == ResourceLifecycle::Live)
+            .build();
+
+        assert_eq!(
+            evaluate_policy_expression(jsonencoded(block_attribute(policies[0], "policy"))),
+            serde_json::to_value(expected.policy().expect("the builder accepts the fixture"))
+                .expect("serializes"),
+            "{case}: permission policy"
+        );
+        assert_eq!(
+            evaluate_policy_expression(jsonencoded(block_attribute(role, "assume_role_policy"))),
+            serde_json::to_value(expected.trust_policy()).expect("serializes"),
+            "{case}: trust policy"
+        );
+    }
 }
