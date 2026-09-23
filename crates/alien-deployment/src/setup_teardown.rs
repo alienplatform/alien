@@ -645,6 +645,87 @@ mod tests {
         }
     }
 
+    /// Both setup-teardown callers wait inline, so this budget is what ends a group AWS never
+    /// releases, with the record kept for a later destroy.
+    #[tokio::test(start_paused = true)]
+    async fn a_group_that_is_never_released_fails_teardown_within_the_step_budget() {
+        let mut cloudcontrol = alien_aws_clients::cloudcontrol::MockCloudControlApi::new();
+        cloudcontrol.expect_list_resources().returning(|_, _| {
+            Ok(alien_aws_clients::cloudcontrol::ListResourcesResponse {
+                resource_descriptions: vec![],
+                next_token: None,
+            })
+        });
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        ec2.expect_delete_security_group()
+            .times(3)
+            .returning(|group| {
+                Err(AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteResourceConflict {
+                        message: "DependencyViolation".to_string(),
+                        resource_type: "SecurityGroup".to_string(),
+                        resource_name: group.to_string(),
+                    },
+                ))
+            });
+        let (cloudcontrol, ec2) = (Arc::new(cloudcontrol), Arc::new(ec2));
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_cloudcontrol_client()
+            .returning(move |_| Ok(cloudcontrol.clone()));
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        let record = SetupScaffolding::AwsSandbox {
+            build_role_name: BUILD_ROLE.to_string(),
+            egress: Some(alien_core::AwsSandboxEgressScaffolding {
+                operator_role_name: "test-agents-egress".to_string(),
+                security_group_id: Some("sg-held".to_string()),
+                connector_arn: None,
+            }),
+        };
+        state.runtime_metadata.as_mut().unwrap().setup_scaffolding =
+            BTreeMap::from([("agents".to_string(), record.clone())]);
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+
+        let error = run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
+            "dep_test",
+            &RunnerPolicy {
+                max_steps: 3,
+                operation: LoopOperation::Delete,
+                delay_strategy: DelayStrategy::Inline,
+            },
+            &RecordingTransport::default(),
+            Some(Arc::new(provider)),
+        )
+        .await
+        .expect_err("a group that is never released fails teardown");
+
+        assert!(
+            error.message.contains("within 3 steps"),
+            "{}",
+            error.message
+        );
+        assert_eq!(state.status, DeploymentStatus::TeardownFailed);
+        assert_eq!(
+            state.runtime_metadata.unwrap().setup_scaffolding["agents"],
+            record
+        );
+    }
+
     fn running_frozen_network() -> alien_core::StackResourceState {
         alien_core::StackResourceState::builder()
             .resource_type(alien_core::Network::RESOURCE_TYPE.to_string())
