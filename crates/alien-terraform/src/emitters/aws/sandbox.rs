@@ -129,21 +129,6 @@ impl TfEmitter for AwsSandboxEmitter {
                     }),
                 ),
             ]),
-            Expression::from_iter([
-                ("Effect", Expression::String("Allow".to_string())),
-                (
-                    "Action",
-                    Expression::from(vec![
-                        // CreateLogGroup as well as the writes: the build creates no group of
-                        // its own, so without it the first build's logs go nowhere. The house
-                        // build role grants all three.
-                        Expression::String("logs:CreateLogGroup".to_string()),
-                        Expression::String("logs:CreateLogStream".to_string()),
-                        Expression::String("logs:PutLogEvents".to_string()),
-                    ]),
-                ),
-                ("Resource", Expression::String("*".to_string())),
-            ]),
         ];
         // A setup-baked image builds from a public base and pulls it anonymously, so the Frozen
         // role carries no ECR grant; a runtime-built image's base is a private registry image.

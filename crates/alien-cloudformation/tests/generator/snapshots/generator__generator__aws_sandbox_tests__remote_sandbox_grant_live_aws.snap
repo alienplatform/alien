@@ -103,12 +103,6 @@ Resources:
             - s3:GetObject
             Resource:
               Fn::Sub: arn:${AWS::Partition}:s3:::acme-artifacts/sandbox-bundle/*
-          - Effect: Allow
-            Action:
-            - logs:CreateLogGroup
-            - logs:CreateLogStream
-            - logs:PutLogEvents
-            Resource: '*'
           - Sid: PullSandboxBaseImage
             Effect: Allow
             Action:

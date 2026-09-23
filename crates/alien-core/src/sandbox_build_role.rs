@@ -111,7 +111,8 @@ pub struct SandboxBuildRole<'a> {
 }
 
 impl SandboxBuildRole<'_> {
-    /// Read the bundle, write build logs, and for a runtime-built image pull its base image.
+    /// Read the bundle, and for a runtime-built image pull its base image. No logs grant: every
+    /// path builds the image with logging disabled.
     ///
     /// A Frozen image is built once from the named object; a runtime rebuild reads a new key under
     /// the same stable prefix, so a Live role reads the prefix and is refused when there is none.
@@ -143,19 +144,7 @@ impl SandboxBuildRole<'_> {
             )
         };
 
-        let mut statement = vec![
-            bundle_grant,
-            SandboxBuildStatement {
-                sid: None,
-                effect: IamEffect::Allow,
-                action: actions(&[
-                    "logs:CreateLogGroup",
-                    "logs:CreateLogStream",
-                    "logs:PutLogEvents",
-                ]),
-                resource: "*".to_string(),
-            },
-        ];
+        let mut statement = vec![bundle_grant];
         if self.runtime_built {
             // GetAuthorizationToken accepts only `*`, and the base image's registry is not known
             // here; the Deny keeps the `*` pull from reaching this account's own repositories,
@@ -276,11 +265,6 @@ mod tests {
                         "Effect": "Allow",
                         "Action": ["s3:GetObject"],
                         "Resource": "arn:aws-us-gov:s3:::acme-artifacts/agents/bundle.zip"
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
-                        "Resource": "*"
                     }
                 ]
             })
@@ -302,11 +286,6 @@ mod tests {
                         "Effect": "Allow",
                         "Action": ["s3:GetObject"],
                         "Resource": "arn:aws-us-gov:s3:::acme-artifacts/sandbox-bundle/*"
-                    },
-                    {
-                        "Effect": "Allow",
-                        "Action": ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"],
-                        "Resource": "*"
                     },
                     {
                         "Sid": "PullSandboxBaseImage",

@@ -502,21 +502,6 @@ fn build_policies(
                 },
             ),
         ]),
-        CfExpression::object([
-            ("Effect", CfExpression::from("Allow")),
-            (
-                "Action",
-                CfExpression::list([
-                    // CreateLogGroup as well as the writes: the build creates no
-                    // group of its own, so without it the first build's logs go
-                    // nowhere. The house build role grants all three.
-                    CfExpression::from("logs:CreateLogGroup"),
-                    CfExpression::from("logs:CreateLogStream"),
-                    CfExpression::from("logs:PutLogEvents"),
-                ]),
-            ),
-            ("Resource", CfExpression::from("*")),
-        ]),
     ];
     if runtime_built {
         statements.push(CfExpression::object([
