@@ -3928,6 +3928,7 @@ impl GetConsoleOutputResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
 
     /// A rule that names a prefix list carries no CIDR, so a reader that dropped the list would
     /// see an egress rule reaching nothing where one reaches a whole AWS service.
@@ -3955,7 +3956,6 @@ mod tests {
             Some("pl-63a5400a")
         );
     }
-    use super::*;
 
     #[test]
     fn describe_volumes_deserializes_aws_status_as_volume_state() {
