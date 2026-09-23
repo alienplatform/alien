@@ -204,14 +204,14 @@ pub async fn handle_update_pending(
     if current.runtime_metadata.as_ref().is_some_and(|metadata| {
         metadata.initial_setup_authority == InitialSetupAuthority::DirectSetup
     }) {
-        if let Some(installed_stack) = old_stack_for_comparison {
-            refuse_changes_requiring_setup(
-                &client_config,
-                installed_stack,
-                &mutated_stack,
-                current.platform,
-            )?;
-        }
+        // With nothing installed to compare against, every scaffolded resource counts as new.
+        let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
+        refuse_changes_requiring_setup(
+            &client_config,
+            old_stack_for_comparison.unwrap_or(&nothing_installed),
+            &mutated_stack,
+            current.platform,
+        )?;
     }
 
     // Store the mutated stack in runtime_metadata for future compatibility checks
@@ -784,6 +784,42 @@ mod tests {
                 ),
             )
             .await;
+        }
+
+        /// With nothing installed to compare against, the sandbox is treated as new, not skipped.
+        #[tokio::test]
+        async fn an_update_with_no_installed_stack_waits_for_setup() {
+            let target = sandbox(SandboxEgress::Allow, BUNDLE, None);
+            let state = DeploymentState {
+                status: DeploymentStatus::UpdatePending,
+                platform: Platform::Aws,
+                current_release: None,
+                target_release: Some(release(target.clone(), "rel_target")),
+                stack_state: Some(stack_state()),
+                error: None,
+                environment_info: None,
+                runtime_metadata: Some(RuntimeMetadata {
+                    initial_setup_authority: InitialSetupAuthority::DirectSetup,
+                    prepared_stack: None,
+                    ..Default::default()
+                }),
+                retry_requested: false,
+                protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+            };
+
+            let error = handle_update_pending(
+                state,
+                target,
+                config(),
+                client_config(),
+                std::sync::Arc::new(alien_infra::DefaultPlatformServiceProvider::default()),
+            )
+            .await
+            .expect_err("the update needs setup to run first");
+
+            let cause = error.source.as_deref().expect("the refusal is the cause");
+            assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
+            assert!(cause.message.contains("is new"), "{}", cause.message);
         }
 
         #[tokio::test]
