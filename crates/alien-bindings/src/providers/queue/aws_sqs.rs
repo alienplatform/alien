@@ -3,9 +3,9 @@ use crate::traits::{
     Binding, MessagePayload, Queue, QueueMessage, MAX_BATCH_SIZE, MAX_MESSAGE_BYTES,
 };
 use alien_aws_clients::sqs::{
-    DeleteMessageRequest, ReceiveMessageRequest, SendMessageRequest, SqsApi, SqsClient,
+    DeleteMessageRequest, Message, ReceiveMessageRequest, SendMessageRequest, SqsApi, SqsClient,
 };
-use alien_error::{Context, ContextError, IntoAlienError};
+use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use async_trait::async_trait;
 use std::fmt::{Debug, Formatter};
 
@@ -88,6 +88,9 @@ impl Queue for AwsSqsQueue {
         }
 
         let req = ReceiveMessageRequest::builder()
+            // The SQS Query-protocol client uses AttributeName.N. AWS keeps
+            // this parameter supported for backward compatibility.
+            .attribute_names(vec!["ApproximateReceiveCount".to_string()])
             .maybe_max_number_of_messages(Some(max_messages as i32))
             .maybe_wait_time_seconds(Some(20))
             .build();
@@ -99,25 +102,22 @@ impl Queue for AwsSqsQueue {
                 binding_type: "queue.sqs".to_string(),
                 reason: "Failed to receive".to_string(),
             })?;
-        let msgs = resp
-            .receive_message_result
+        resp.receive_message_result
             .messages
             .into_iter()
             .map(|m| {
+                let attempt = receive_count(&m)?;
                 let raw = m.body;
                 let payload = serde_json::from_str::<serde_json::Value>(&raw)
                     .map(MessagePayload::Json)
                     .unwrap_or(MessagePayload::Text(raw));
-                QueueMessage {
+                Ok(QueueMessage {
                     payload,
                     receipt_handle: m.receipt_handle,
-                    // SQS redelivery counts (ApproximateReceiveCount) are not
-                    // requested on this receive path yet.
-                    attempt: 1,
-                }
+                    attempt,
+                })
             })
-            .collect();
-        Ok(msgs)
+            .collect()
     }
 
     async fn ack(&self, _queue: &str, receipt_handle: &str) -> Result<()> {
@@ -153,5 +153,73 @@ impl Queue for AwsSqsQueue {
                 binding_type: "queue.sqs".to_string(),
                 reason: "Failed to purge queue".to_string(),
             })
+    }
+}
+
+fn receive_count(message: &Message) -> Result<u32> {
+    let reason = || ErrorData::QueueProviderResponseInvalid {
+        reason: format!(
+            "SQS message '{}' has no positive ApproximateReceiveCount",
+            message.message_id
+        ),
+    };
+    let raw = message
+        .attributes
+        .iter()
+        .find(|attribute| attribute.name == "ApproximateReceiveCount")
+        .map(|attribute| &attribute.value)
+        .ok_or_else(|| AlienError::new(reason()))?;
+    let count = raw.parse::<u32>().into_alien_error().context(reason())?;
+    if count == 0 {
+        return Err(AlienError::new(reason()));
+    }
+    Ok(count)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alien_aws_clients::sqs::Attribute;
+
+    fn message(count: Option<&str>) -> Message {
+        Message {
+            attributes: count
+                .map(|count| {
+                    vec![Attribute {
+                        name: "ApproximateReceiveCount".to_string(),
+                        value: count.to_string(),
+                    }]
+                })
+                .unwrap_or_default(),
+            body: "payload".to_string(),
+            md5_of_body: "unused".to_string(),
+            md5_of_message_attributes: None,
+            message_attributes: None,
+            message_id: "message-1".to_string(),
+            receipt_handle: "receipt-1".to_string(),
+        }
+    }
+
+    #[test]
+    fn reads_positive_sqs_delivery_attempts() {
+        assert_eq!(receive_count(&message(Some("1"))).expect("first"), 1);
+        assert_eq!(receive_count(&message(Some("2"))).expect("redelivery"), 2);
+    }
+
+    #[test]
+    fn rejects_missing_or_invalid_sqs_delivery_attempts() {
+        for count in [
+            None,
+            Some(""),
+            Some("not-a-number"),
+            Some("0"),
+            Some("4294967296"),
+        ] {
+            let error = receive_count(&message(count)).expect_err("invalid attempt must fail");
+            assert!(matches!(
+                error.error,
+                Some(ErrorData::QueueProviderResponseInvalid { .. })
+            ));
+        }
     }
 }

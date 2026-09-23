@@ -814,7 +814,8 @@ pub struct MessageSystemAttributeValue {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 pub struct Message {
-    pub attributes: Option<HashMap<String, String>>,
+    #[serde(rename = "Attribute", default)]
+    pub attributes: Vec<Attribute>,
     pub body: String,
     #[serde(rename = "MD5OfBody")]
     pub md5_of_body: String,
@@ -823,4 +824,28 @@ pub struct Message {
     pub message_attributes: Option<HashMap<String, MessageAttributeValue>>,
     pub message_id: String,
     pub receipt_handle: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn receive_message_decodes_repeated_sqs_system_attributes() {
+        let xml = r#"<ReceiveMessageResponse>
+            <ReceiveMessageResult><Message>
+                <MessageId>message-1</MessageId>
+                <ReceiptHandle>receipt-1</ReceiptHandle>
+                <MD5OfBody>unused</MD5OfBody>
+                <Body>payload</Body>
+                <Attribute><Name>SenderId</Name><Value>sender</Value></Attribute>
+                <Attribute><Name>ApproximateReceiveCount</Name><Value>2</Value></Attribute>
+            </Message></ReceiveMessageResult>
+        </ReceiveMessageResponse>"#;
+        let response: ReceiveMessageResponse = quick_xml::de::from_str(xml).expect("SQS XML");
+        let message = &response.receive_message_result.messages[0];
+        assert_eq!(message.attributes.len(), 2);
+        assert_eq!(message.attributes[1].name, "ApproximateReceiveCount");
+        assert_eq!(message.attributes[1].value, "2");
+    }
 }

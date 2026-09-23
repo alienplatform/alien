@@ -795,6 +795,19 @@ pub enum ErrorData {
         reason: String,
     },
 
+    /// A queue provider returned invalid message metadata required by the binding contract.
+    #[error(
+        code = "QUEUE_PROVIDER_RESPONSE_INVALID",
+        message = "Queue provider response is invalid: {reason}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 502
+    )]
+    QueueProviderResponseInvalid {
+        /// Safe description of the missing or invalid provider field.
+        reason: String,
+    },
+
     /// Remote access to deployment resources failed.
     #[error(
         code = "REMOTE_ACCESS_FAILED",
