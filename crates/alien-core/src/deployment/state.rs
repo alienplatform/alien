@@ -5,6 +5,7 @@ use alien_error::AlienError;
 use bon::Builder;
 use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::{DeploymentStatus, EnvironmentInfo, ReleaseInfo};
 
@@ -109,6 +110,24 @@ pub struct RuntimeMetadata {
     /// granted. Absent on a grant recorded before this field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub registry_access: Option<RegistryAccess>,
+
+    /// What a direct setup created for resources it does not own, keyed by resource id. Setup
+    /// teardown removes exactly what is recorded here.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub setup_scaffolding: BTreeMap<String, SetupScaffolding>,
+}
+
+/// Cloud objects a direct setup created so a runtime-owned resource can run.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase", tag = "type")]
+pub enum SetupScaffolding {
+    /// An AWS sandbox's image-build role.
+    #[serde(rename_all = "camelCase")]
+    AwsSandbox {
+        /// IAM role the image build runs as.
+        build_role_name: String,
+    },
 }
 
 /// The cross-account read a manager opened on Alien's registry for one deployment.
@@ -318,5 +337,30 @@ mod tests {
         assert!(metadata.last_synced_secret_names.is_empty());
         assert!(metadata.pending_prepared_stack.is_none());
         assert!(metadata.setup_update_authorization.is_none());
+        assert!(metadata.setup_scaffolding.is_empty());
+    }
+
+    /// Teardown reads this record back from persisted state, so its wire form is a contract.
+    #[test]
+    fn setup_scaffolding_round_trips_in_its_persisted_form() {
+        let persisted = serde_json::json!({
+            "initialSetupAuthority": "directSetup",
+            "setupScaffolding": {
+                "agents": { "type": "awsSandbox", "buildRoleName": "acme-agents-build" }
+            }
+        });
+        let metadata: RuntimeMetadata =
+            serde_json::from_value(persisted.clone()).expect("persisted record reads");
+        assert_eq!(
+            metadata.setup_scaffolding["agents"],
+            SetupScaffolding::AwsSandbox {
+                build_role_name: "acme-agents-build".to_string()
+            }
+        );
+        assert_eq!(serde_json::to_value(&metadata).unwrap(), persisted);
+        assert!(
+            serde_json::to_value(RuntimeMetadata::default()).unwrap()["setupScaffolding"].is_null(),
+            "state with no scaffolding serializes as it did before the field existed"
+        );
     }
 }
