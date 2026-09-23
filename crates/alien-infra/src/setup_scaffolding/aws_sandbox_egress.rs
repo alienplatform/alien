@@ -2400,4 +2400,87 @@ mod tests {
             &json!(served.build_role_arn)
         );
     }
+
+    /// A serving deny sandbox that setup runs over again keeps its image and version and starts
+    /// its sessions on the connector setup recorded, not on the empty list it was serving with.
+    #[tokio::test(start_paused = true)]
+    async fn a_second_seed_keeps_a_serving_deny_sandbox_and_hands_it_the_connector() {
+        use crate::core::ResourceController as _;
+        use crate::sandbox::AwsSandboxController;
+        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
+        use alien_core::import::ImportContext;
+
+        const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let mut state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let registry = crate::ImporterRegistry::built_in();
+        let settings = alien_core::StackSettings::default();
+        let mut serving = registry
+            .run(
+                &Sandbox::RESOURCE_TYPE,
+                Platform::Aws,
+                json!({
+                    "imageIdentifier": IMAGE_ARN,
+                    "imageArn": IMAGE_ARN,
+                    "imageVersion": "1.0",
+                }),
+                &ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &settings,
+                    management_config: None,
+                    resource: &stack.resources["agents"],
+                },
+            )
+            .unwrap();
+        serving.controller_platform = Some(Platform::Aws);
+        state.resources.insert("agents".to_string(), serving);
+
+        let provider = provider(&cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let seeds = seeds(&ctx, &stack, &state, &records).unwrap();
+        apply_seeds(
+            &SeedContext {
+                registry: &registry,
+                stack_settings: &settings,
+                management_config: None,
+            },
+            &stack,
+            &mut state,
+            seeds,
+        )
+        .unwrap();
+
+        let sandbox = &state.resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let controller =
+            AwsSandboxController::from_persisted(sandbox.internal_state.clone().unwrap()).unwrap();
+        assert_eq!(controller.state, crate::sandbox::AwsSandboxState::Ready);
+        assert_eq!(controller.image_arn.as_deref(), Some(IMAGE_ARN));
+        assert_eq!(controller.active_version.as_deref(), Some("1.0"));
+        let SetupScaffolding::AwsSandbox {
+            egress: Some(egress),
+            ..
+        } = &records["agents"]
+        else {
+            panic!("a deny sandbox records its egress objects");
+        };
+        assert_eq!(
+            controller.egress_connector_arns,
+            vec![egress.connector_arn.clone().unwrap()]
+        );
+        let binding = controller.get_binding_params().unwrap().unwrap();
+        load(&binding)
+            .await
+            .unwrap_or_else(|error| panic!("the corrected binding must load: {error}\n{binding}"));
+    }
 }
