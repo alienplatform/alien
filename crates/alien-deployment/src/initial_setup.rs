@@ -666,7 +666,12 @@ mod tests {
             description: None,
             max_session_duration: None,
             permissions_boundary: None,
-            tags: None,
+            tags: Some(alien_aws_clients::iam::Tags {
+                member: alien_core::setup_resource_tags("test", "agents", "sandbox")
+                    .into_iter()
+                    .map(|(key, value)| alien_aws_clients::iam::Tag { key, value })
+                    .collect(),
+            }),
             role_last_used: None,
         }
     }

@@ -22,8 +22,10 @@ use super::{ScaffoldingProgress, ScaffoldingSeed, SetupScaffoldingContext};
 use crate::sandbox::aws_partition;
 use crate::{ErrorData, Result};
 
-/// An existing role is verified before it is adopted: `iam:PassRole` is scoped by name alone, so
-/// a same-named role someone else made would be handed to a build running customer code.
+/// An existing role is adopted only if it carries setup's tags and then passes verification:
+/// `iam:PassRole` is scoped by name alone, so a same-named role someone else made, including one
+/// another deployment's setup made under a name that collides with this one, would otherwise be
+/// handed to a build running customer code and later deleted by this deployment's teardown.
 ///
 /// A deny sandbox's egress objects come between verifying the role and applying its policy, so
 /// each call still makes at most one mutating call.
@@ -85,6 +87,9 @@ pub(super) async fn reconcile(
         }
     };
 
+    if !is_setups_role(&role, ctx.resource_prefix, &sandbox.id) {
+        return Err(not_setups(&sandbox.id, &format!("IAM role '{role_name}'")));
+    }
     let expected_arn =
         sandbox_build_role_arn(partition, &aws.account_id, ctx.resource_prefix, &sandbox.id);
     let mismatches = adoption_mismatches(
@@ -442,6 +447,30 @@ fn record(records: &mut BTreeMap<String, SetupScaffolding>, sandbox_id: &str, ro
     }
 }
 
+/// Whether `role` carries every tag setup creates this sandbox's roles with. IAM applies tags in
+/// the same call that creates the role, so setup's own roles always carry them.
+pub(super) fn is_setups_role(role: &Role, resource_prefix: &str, sandbox_id: &str) -> bool {
+    let tags: Vec<(&str, &str)> = role
+        .tags
+        .iter()
+        .flat_map(|tags| &tags.member)
+        .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+        .collect();
+    setup_tags(resource_prefix, sandbox_id)
+        .iter()
+        .all(|expected| tags.contains(&(expected.key.as_str(), expected.value.as_str())))
+}
+
+pub(super) fn not_setups(sandbox_id: &str, object: &str) -> AlienError<ErrorData> {
+    AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+        resource_id: sandbox_id.to_string(),
+        object: object.to_string(),
+        reason: "it does not carry the tags setup creates it with, so this deployment's setup \
+                 did not create it. Delete or rename it, then run setup again."
+            .to_string(),
+    })
+}
+
 pub(super) fn setup_tags(resource_prefix: &str, sandbox_id: &str) -> Vec<CreateRoleTag> {
     setup_resource_tags(resource_prefix, sandbox_id, Sandbox::RESOURCE_TYPE.as_ref())
         .into_iter()
@@ -560,7 +589,15 @@ mod tests {
             description: None,
             max_session_duration: None,
             permissions_boundary: None,
-            tags: None,
+            tags: Some(alien_aws_clients::iam::Tags {
+                member: setup_tags(PREFIX, "agents")
+                    .into_iter()
+                    .map(|tag| alien_aws_clients::iam::Tag {
+                        key: tag.key,
+                        value: tag.value,
+                    })
+                    .collect(),
+            }),
             role_last_used: None,
         }
     }
@@ -853,6 +890,25 @@ mod tests {
             error.message
         );
         assert!(records.is_empty(), "a refused role must never be recorded");
+    }
+
+    /// A role that would pass every other check is still not claimed: teardown would delete it,
+    /// and a same-named role can belong to another deployment whose names collide with these.
+    #[tokio::test]
+    async fn an_untagged_role_is_refused_before_it_is_verified() {
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|_| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: Role {
+                        tags: None,
+                        ..role(ROLE_ARN, &expected_trust())
+                    },
+                },
+            })
+        });
+        iam.expect_put_role_policy().never();
+        assert_refused(iam, "does not carry the tags").await;
     }
 
     #[tokio::test]

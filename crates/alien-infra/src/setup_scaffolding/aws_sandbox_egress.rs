@@ -28,7 +28,8 @@ use serde_json::Value;
 use tracing::info;
 
 use super::aws_sandbox::{
-    adoption_mismatches, applied_policy, is_conflict, is_not_found, setup_tags,
+    adoption_mismatches, applied_policy, is_conflict, is_not_found, is_setups_role, not_setups,
+    setup_tags,
 };
 use super::{ScaffoldingProgress, SetupScaffoldingContext};
 use crate::network::AwsNetworkController;
@@ -219,6 +220,9 @@ async fn operator_role(
         }
     };
 
+    if !is_setups_role(&role, ctx.resource_prefix, sandbox_id) {
+        return Err(not_setups(sandbox_id, &format!("IAM role '{name}'")));
+    }
     let mismatches = adoption_mismatches(
         iam,
         &role,
@@ -353,27 +357,31 @@ async fn deny_security_group(
         .and_then(|egress| egress.security_group_id.as_deref())
         == Some(group_id.as_str());
     // CreateSecurityGroup applies its tags atomically, so a group carrying setup's tags for this
-    // sandbox is one this step created before its id could be recorded. Recording it lets the
-    // repair below close EC2's default allow-all egress, which verification would refuse.
-    let tagged = !recorded && carries_setup_tags(&group, ctx.resource_prefix, sandbox_id);
-    if tagged {
+    // sandbox is one this step created before its id could be recorded.
+    if !recorded {
+        if !carries_setup_tags(&group, ctx.resource_prefix, sandbox_id) {
+            return Err(not_setups(
+                sandbox_id,
+                &format!("security group '{group_id}' ('{name}')"),
+            ));
+        }
         info!(sandbox_id, security_group = %group_id, "Recognised an unrecorded deny group by its setup tags");
         record_group(record, group_id.clone());
     }
-
-    if !recorded && !tagged {
-        if !is_loopback_only(&rules) {
-            return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
-                resource_id: sandbox_id.to_string(),
-                object: format!("security group '{group_id}' ('{name}')"),
-                reason: format!(
-                    "its egress is not exactly {LOOPBACK_ONLY_CIDR} for all protocols, so \
-                     sessions would reach past the deny. Delete it, then run setup again."
-                ),
-            }));
-        }
-        record_group(record, group_id.clone());
-        return Ok(Some(group_id));
+    // A security group is stateful: an inbound rule lets a peer open a connection into a session
+    // and read its replies, past the egress deny. Setup creates the group with none.
+    if group
+        .ip_permissions
+        .as_ref()
+        .is_some_and(|set| !set.items.is_empty())
+    {
+        return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+            resource_id: sandbox_id.to_string(),
+            object: format!("security group '{group_id}' ('{name}')"),
+            reason: "it has inbound rules, which reach a session past the deny. Remove them, \
+                     then run setup again."
+                .to_string(),
+        }));
     }
 
     let foreign: Vec<&IpPermissionResponse> = rules
@@ -520,10 +528,6 @@ fn is_loopback_rule(rule: &IpPermissionResponse) -> bool {
             .prefix_list_ids
             .as_ref()
             .is_none_or(|set| set.items.is_empty())
-}
-
-fn is_loopback_only(rules: &[IpPermissionResponse]) -> bool {
-    matches!(rules, [rule] if is_loopback_rule(rule))
 }
 
 /// The request form of a described rule, so revoking removes exactly it.
@@ -925,16 +929,7 @@ pub(super) async fn carries_setup_role_tags(
             })
         }
     };
-    let tags: Vec<(String, String)> = role
-        .tags
-        .map(|tags| tags.member)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|tag| (tag.key, tag.value))
-        .collect();
-    Ok(setup_tags(resource_prefix, sandbox_id)
-        .into_iter()
-        .all(|expected| tags.contains(&(expected.key, expected.value))))
+    Ok(is_setups_role(&role, resource_prefix, sandbox_id))
 }
 
 /// Connector, then group, then role: the connector's interfaces hold the group, and the group
@@ -1132,6 +1127,8 @@ mod tests {
         vpc: String,
         egress: Vec<Rule>,
         tags: Vec<(String, String)>,
+        /// Whether someone added an inbound rule; setup never does.
+        inbound: bool,
     }
 
     /// An in-memory account: what exists, and every mutating call made against it, in order.
@@ -1356,7 +1353,22 @@ mod tests {
             vpc_id: Some(group.vpc.clone()),
             owner_id: None,
             group_description: None,
-            ip_permissions: None,
+            ip_permissions: group.inbound.then(|| IpPermissionSet {
+                items: vec![IpPermissionResponse {
+                    ip_protocol: Some("tcp".to_string()),
+                    from_port: Some(22),
+                    to_port: Some(22),
+                    ip_ranges: Some(IpRangeSet {
+                        items: vec![IpRangeResponse {
+                            cidr_ip: Some("10.0.0.0/8".to_string()),
+                            description: None,
+                        }],
+                    }),
+                    ipv6_ranges: None,
+                    groups: None,
+                    prefix_list_ids: None,
+                }],
+            }),
             ip_permissions_egress: Some(IpPermissionSet {
                 items: group
                     .egress
@@ -1433,8 +1445,18 @@ mod tests {
                     .flatten()
                     .map(|range| range.cidr_ip.clone())
                     .collect(),
-                ipv6_cidrs: vec![],
-                groups: vec![],
+                ipv6_cidrs: permission
+                    .ipv6_ranges
+                    .iter()
+                    .flatten()
+                    .map(|range| range.cidr_ipv6.clone())
+                    .collect(),
+                groups: permission
+                    .user_id_group_pairs
+                    .iter()
+                    .flatten()
+                    .filter_map(|pair| pair.group_id.clone())
+                    .collect(),
                 prefix_lists: vec![],
             })
             .collect()
@@ -1517,6 +1539,7 @@ mod tests {
                         .flat_map(|spec| &spec.tags)
                         .map(|tag| (tag.key.clone(), tag.value.clone()))
                         .collect(),
+                    inbound: false,
                 });
                 cloud.respond()?;
                 Ok(CreateSecurityGroupResponse { group_id: Some(id) })
@@ -2106,41 +2129,68 @@ mod tests {
             vpc: VPC.to_string(),
             egress,
             tags: vec![],
+            inbound: false,
         });
         cloud
     }
 
+    /// Loopback-only is the strongest case: even a group that already denies is not claimed, since
+    /// teardown would delete it.
     #[tokio::test]
-    async fn an_unrecorded_group_with_open_egress_is_refused() {
-        let cloud = preexisting_group(vec![rule("0.0.0.0/0")]);
-        assert_not_adoptable(&cloud, "sg-foreign").await;
-        let cloud = cloud.lock().unwrap();
+    async fn an_untagged_group_is_refused_and_never_rewritten() {
+        let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
+        assert_not_adoptable(&cloud, "does not carry the tags").await;
         assert_eq!(
-            cloud.groups[0].egress,
-            vec![rule("0.0.0.0/0")],
-            "a group setup did not create is never rewritten"
+            cloud.lock().unwrap().groups[0].egress,
+            vec![rule("127.0.0.1/32")]
         );
     }
 
+    /// Each rule reaches past loopback through a target other than an IPv4 range.
     #[tokio::test]
-    async fn an_unrecorded_group_reaching_a_prefix_list_is_refused() {
+    async fn a_tagged_group_reaching_ipv6_or_another_group_is_repaired() {
+        let mut v6 = rule("127.0.0.1/32");
+        v6.ipv6_cidrs = vec!["::/0".to_string()];
+        let mut peer = rule("127.0.0.1/32");
+        peer.groups = vec!["sg-peer".to_string()];
+        for extra in [v6, peer] {
+            let cloud = preexisting_group(vec![extra.clone()]);
+            cloud.lock().unwrap().groups[0].tags = tags_for(PREFIX, "agents");
+            let stack = stack(SandboxEgress::Deny, created_network());
+            let state = stack_state(Some(ResourceStatus::Running));
+
+            let made = converge(&cloud, &stack, &state, &mut BTreeMap::new()).await;
+
+            assert!(
+                made.iter()
+                    .any(|call| call.starts_with("ec2:RevokeSecurityGroupEgress")),
+                "{extra:?} is not loopback: {made:?}"
+            );
+            assert_eq!(
+                cloud.lock().unwrap().groups[0].egress,
+                vec![rule("127.0.0.1/32")]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_tagged_group_reaching_a_prefix_list_is_refused() {
         let mut loopback_and_s3 = rule("127.0.0.1/32");
         loopback_and_s3.prefix_lists = vec!["pl-63a5400a".to_string()];
-        assert_not_adoptable(&preexisting_group(vec![loopback_and_s3]), "sg-foreign").await;
+        let cloud = preexisting_group(vec![loopback_and_s3]);
+        cloud.lock().unwrap().groups[0].tags = tags_for(PREFIX, "agents");
+        assert_not_adoptable(&cloud, "prefix list").await;
     }
 
     #[tokio::test]
-    async fn an_unrecorded_group_also_reaching_ipv6_is_refused() {
-        let mut loopback_and_v6 = rule("127.0.0.1/32");
-        loopback_and_v6.ipv6_cidrs = vec!["::/0".to_string()];
-        assert_not_adoptable(&preexisting_group(vec![loopback_and_v6]), "sg-foreign").await;
-    }
-
-    #[tokio::test]
-    async fn an_unrecorded_group_also_reaching_another_group_is_refused() {
-        let mut loopback_and_peer = rule("127.0.0.1/32");
-        loopback_and_peer.groups = vec!["sg-peer".to_string()];
-        assert_not_adoptable(&preexisting_group(vec![loopback_and_peer]), "sg-foreign").await;
+    async fn a_tagged_group_with_inbound_rules_is_refused() {
+        let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
+        {
+            let mut c = cloud.lock().unwrap();
+            c.groups[0].tags = tags_for(PREFIX, "agents");
+            c.groups[0].inbound = true;
+        }
+        assert_not_adoptable(&cloud, "inbound rules").await;
     }
 
     fn tags_for(prefix: &str, sandbox_id: &str) -> Vec<(String, String)> {
@@ -2223,6 +2273,7 @@ mod tests {
             vpc: "vpc-0previous".to_string(),
             egress: vec![rule("127.0.0.1/32")],
             tags: tags_for(PREFIX, "agents"),
+            inbound: false,
         });
         let stack = stack(SandboxEgress::Deny, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
@@ -2376,20 +2427,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unrecorded_loopback_only_group_is_adopted() {
-        let cloud = preexisting_group(vec![rule("127.0.0.1/32")]);
-        let stack = stack(SandboxEgress::Deny, created_network());
-        let state = stack_state(Some(ResourceStatus::Running));
-        let mut records = BTreeMap::new();
-
-        let made = converge(&cloud, &stack, &state, &mut records).await;
-
-        assert!(
-            !made.iter().any(|call| call.starts_with("ec2:")),
-            "an adopted group is used as is: {made:?}"
+    async fn an_untagged_operator_role_is_refused() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().roles.insert(
+            EGRESS_NAME.to_string(),
+            sandbox_egress_operator_trust_policy(),
         );
-        let arn = cloud.lock().unwrap().connectors[0].0.clone();
-        assert_eq!(records["agents"], full_record("sg-foreign", &arn));
+        assert_not_adoptable(&cloud, "does not carry the tags").await;
     }
 
     #[tokio::test]
@@ -2401,6 +2445,8 @@ mod tests {
                 EGRESS_NAME.to_string(),
                 sandbox_egress_operator_trust_policy(),
             );
+            c.role_tags
+                .insert(EGRESS_NAME.to_string(), tags_for(PREFIX, "agents"));
             c.inline.insert(
                 (EGRESS_NAME.to_string(), "admin".to_string()),
                 "{}".to_string(),
@@ -2418,11 +2464,12 @@ mod tests {
         let cloud = Shared::default();
         let mut trust = sandbox_egress_operator_trust_policy();
         trust["Statement"][0]["Principal"]["AWS"] = json!("arn:aws:iam::999999999999:root");
-        cloud
-            .lock()
-            .unwrap()
-            .roles
-            .insert(EGRESS_NAME.to_string(), trust);
+        {
+            let mut c = cloud.lock().unwrap();
+            c.roles.insert(EGRESS_NAME.to_string(), trust);
+            c.role_tags
+                .insert(EGRESS_NAME.to_string(), tags_for(PREFIX, "agents"));
+        }
         assert_not_adoptable(&cloud, "trust policy").await;
     }
 
@@ -2473,12 +2520,15 @@ mod tests {
                 EGRESS_NAME.to_string(),
                 sandbox_egress_operator_trust_policy(),
             );
+            c.role_tags
+                .insert(EGRESS_NAME.to_string(), tags_for(PREFIX, "agents"));
             c.groups.push(Group {
                 id: "sg-1".to_string(),
                 name: EGRESS_NAME.to_string(),
                 vpc: VPC.to_string(),
                 egress: vec![rule("127.0.0.1/32")],
-                tags: vec![],
+                tags: tags_for(PREFIX, "agents"),
+                inbound: false,
             });
             let mut properties = desired_connector("sg-open");
             properties["State"] = json!("ACTIVE");
