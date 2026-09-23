@@ -9,7 +9,7 @@ use alien_core::{
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
     sandbox_egress::{
         sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
-        SandboxEgressConnector, SANDBOX_EGRESS_POLICY_NAME,
+        SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
     },
     Network, NetworkSettings, RemoteBindings, ResourceLifecycle, Sandbox, SandboxCode,
     SandboxEgress, SandboxLifecyclePolicy, Stack, StackSettings, Worker, WorkerCode,
@@ -496,51 +496,13 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
         "sandbox deny",
     );
 
-    let security_group = template
-        .resources
-        .get("AgentsEgressSecurityGroup")
-        .expect("the sandbox egress security group must render");
-    let egress = serde_json::to_string(
-        security_group
-            .properties
-            .get("SecurityGroupEgress")
-            .expect("an egress rule, or EC2's allow-all default survives"),
-    )
-    .expect("serializes");
-    assert!(
-        egress.contains("127.0.0.1/32"),
-        "the only permitted destination must be the one that reaches nothing: {egress}"
-    );
-    assert!(
-        !egress.contains("0.0.0.0/0"),
-        "a wide egress rule turns deny back into outbound access: {egress}"
-    );
-
+    // The group's rules and the connector's configuration are compared whole by the parity
+    // tests below.
     let connector = template
         .resources
         .get("AgentsEgressConnector")
         .expect("the egress connector must render");
     assert_eq!(connector.resource_type, "AWS::Lambda::NetworkConnector");
-    let configuration = serde_json::to_string(
-        connector
-            .properties
-            .get("Configuration")
-            .expect("connector configuration"),
-    )
-    .expect("serializes");
-    assert!(
-        configuration.contains("AgentsEgressSecurityGroup"),
-        "the connector must carry the group that denies: {configuration}"
-    );
-    assert!(
-        configuration.contains("DefaultNetworkPrivateSubnet1"),
-        "the connector must place its interfaces in the network's private subnets: \
-         {configuration}"
-    );
-    assert!(
-        configuration.contains("MicroVm"),
-        "the connector must be usable by MicroVMs: {configuration}"
-    );
 
     let image = template
         .resources
@@ -1309,35 +1271,51 @@ const PARITY_PREFIX: &str = "acme-parity";
 const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
 const PARITY_SECURITY_GROUP: &str = "sg-0parity";
 
-/// The two network modes `egress: deny` accepts, each with the private subnets its connector must
-/// name once the template's parameters and conditions are resolved.
-fn egress_parity_cases() -> [(NetworkSettings, Vec<String>); 2] {
+/// The `PrivateSubnetIds` parameter as an installer fills it in.
+fn existing_subnets() -> Vec<String> {
+    vec![
+        "subnet-existing-a".to_string(),
+        "subnet-existing-b".to_string(),
+    ]
+}
+
+/// A network mode `egress: deny` accepts, the value of the template's `NetworkModeCreate`
+/// condition, and the private subnets its connector must name once both are resolved.
+struct EgressParityCase {
+    network: NetworkSettings,
+    network_mode_create: bool,
+    subnets: Vec<String>,
+}
+
+fn egress_parity_cases() -> [EgressParityCase; 3] {
+    let create = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
     [
-        (
-            NetworkSettings::Create {
-                cidr: None,
-                availability_zones: 2,
-            },
-            vec![
+        EgressParityCase {
+            network: create.clone(),
+            network_mode_create: true,
+            subnets: vec![
                 "subnet-created-1".to_string(),
                 "subnet-created-2".to_string(),
             ],
-        ),
-        (
-            NetworkSettings::ByoVpcAws {
+        },
+        EgressParityCase {
+            network: create,
+            network_mode_create: false,
+            subnets: existing_subnets(),
+        },
+        EgressParityCase {
+            network: NetworkSettings::ByoVpcAws {
                 vpc_id: "vpc-0parity".to_string(),
                 public_subnet_ids: vec!["subnet-public-a".to_string()],
-                private_subnet_ids: vec![
-                    "subnet-private-a".to_string(),
-                    "subnet-private-b".to_string(),
-                ],
+                private_subnet_ids: existing_subnets(),
                 security_group_ids: vec!["sg-0network".to_string()],
             },
-            vec![
-                "subnet-private-a".to_string(),
-                "subnet-private-b".to_string(),
-            ],
-        ),
+            network_mode_create: false,
+            subnets: existing_subnets(),
+        },
     ]
 }
 
@@ -1385,7 +1363,10 @@ fn emitted_properties(
 
 /// Resolves every intrinsic the connector uses to the value it takes in a deployed stack. An
 /// intrinsic outside these tables panics, so a new reference cannot compare equal unchecked.
-fn resolve_connector(value: &serde_json::Value, subnets: &[String]) -> Option<serde_json::Value> {
+fn resolve_connector(
+    value: &serde_json::Value,
+    network_mode_create: bool,
+) -> Option<serde_json::Value> {
     use serde_json::Value;
     let reference = |name: &str| -> Option<Value> {
         match name {
@@ -1393,12 +1374,13 @@ fn resolve_connector(value: &serde_json::Value, subnets: &[String]) -> Option<se
             "AWS::StackName" => Some(Value::from(PARITY_PREFIX)),
             "DefaultNetworkPrivateSubnet1" => Some(Value::from("subnet-created-1")),
             "DefaultNetworkPrivateSubnet2" => Some(Value::from("subnet-created-2")),
-            "PrivateSubnetIds" => Some(serde_json::json!(subnets)),
+            "PrivateSubnetIds" => Some(serde_json::json!(existing_subnets())),
             other => panic!("the parity test cannot resolve Ref {other}"),
         }
     };
     let condition = |name: &str| match name {
-        "NetworkModeCreate" | "NetworkCreateUseAz2" => true,
+        "NetworkModeCreate" => network_mode_create,
+        "NetworkCreateUseAz2" => true,
         "NetworkCreateUseAz3" => false,
         other => panic!("the parity test cannot evaluate condition {other}"),
     };
@@ -1422,7 +1404,10 @@ fn resolve_connector(value: &serde_json::Value, subnets: &[String]) -> Option<se
         Value::Object(map) if map.len() == 1 && map.contains_key("Fn::If") => {
             let branches = map["Fn::If"].as_array().expect("If takes three items");
             let name = branches[0].as_str().expect("If names a condition");
-            resolve_connector(&branches[if condition(name) { 1 } else { 2 }], subnets)
+            resolve_connector(
+                &branches[if condition(name) { 1 } else { 2 }],
+                network_mode_create,
+            )
         }
         Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
             let text = map["Fn::Sub"].as_str().expect("the string form of Sub");
@@ -1436,14 +1421,16 @@ fn resolve_connector(value: &serde_json::Value, subnets: &[String]) -> Option<se
             }
             Some(Value::Object(
                 map.iter()
-                    .filter_map(|(k, v)| resolve_connector(v, subnets).map(|v| (k.clone(), v)))
+                    .filter_map(|(k, v)| {
+                        resolve_connector(v, network_mode_create).map(|v| (k.clone(), v))
+                    })
                     .collect(),
             ))
         }
         Value::Array(items) => Some(Value::Array(
             items
                 .iter()
-                .filter_map(|item| resolve_connector(item, subnets))
+                .filter_map(|item| resolve_connector(item, network_mode_create))
                 .flat_map(|item| match item {
                     // A list parameter referenced inside a list stands for its members.
                     Value::Array(members) => members,
@@ -1467,7 +1454,7 @@ fn tags_sorted(mut properties: serde_json::Value) -> serde_json::Value {
 /// grant changed in the emitter alone would give the two install paths different roles.
 #[test]
 fn the_emitted_operator_role_matches_the_shared_builder() {
-    for (network, _) in egress_parity_cases() {
+    for EgressParityCase { network, .. } in egress_parity_cases() {
         let template = deny_template(&network);
         let properties = emitted_properties(&template, "AgentsEgressOperatorRole");
         let policies = properties["Policies"]
@@ -1496,11 +1483,17 @@ fn the_emitted_operator_role_matches_the_shared_builder() {
 /// it must be the resource CloudFormation creates for the same sandbox.
 #[test]
 fn the_emitted_connector_matches_the_direct_desired_state() {
-    for (network, subnets) in egress_parity_cases() {
+    for EgressParityCase {
+        network,
+        network_mode_create,
+        subnets,
+    } in egress_parity_cases()
+    {
+        let case = format!("connector on {network:?} with NetworkModeCreate={network_mode_create}");
         let template = deny_template(&network);
         let emitted = resolve_connector(
             &emitted_properties(&template, "AgentsEgressConnector"),
-            &subnets,
+            network_mode_create,
         )
         .expect("the connector's properties resolve to a value");
 
@@ -1513,11 +1506,56 @@ fn the_emitted_connector_matches_the_direct_desired_state() {
             .build()
             .desired_state();
 
+        assert_eq!(tags_sorted(emitted), tags_sorted(direct), "{case}");
+    }
+}
+
+/// The group is what enforces `egress: deny`, and a direct deploy creates it with exactly one
+/// all-protocol rule to [`LOOPBACK_ONLY_CIDR`] and no ingress. The name is not compared: the
+/// direct path finds its group again by `sandbox_egress_name`, CloudFormation by logical id, and
+/// adding `GroupName` here would replace the group under every installed stack.
+#[test]
+fn the_emitted_deny_group_matches_the_direct_rule_set() {
+    for EgressParityCase { network, .. } in egress_parity_cases() {
+        let case = format!("deny group on {network:?}");
+        let template = deny_template(&network);
+        let properties = emitted_properties(&template, "AgentsEgressSecurityGroup");
+
+        assert_eq!(properties.get("GroupName"), None, "{case}");
         assert_eq!(
-            tags_sorted(emitted),
-            tags_sorted(direct),
-            "connector on {network:?}"
+            properties["GroupDescription"],
+            serde_json::json!("Sandbox agents session egress"),
+            "{case}"
         );
+        assert_eq!(
+            properties["SecurityGroupEgress"],
+            serde_json::json!([{
+                "IpProtocol": "-1",
+                "CidrIp": LOOPBACK_ONLY_CIDR,
+                "Description": "Sandbox sessions reach nothing outbound"
+            }]),
+            "{case}: one rule, all protocols, to the destination that reaches nothing"
+        );
+        assert_eq!(
+            properties.get("SecurityGroupIngress"),
+            None,
+            "{case}: {properties:#}"
+        );
+
+        // A standalone rule resource widens the group as surely as an inline one.
+        for (logical_id, resource) in &template.resources {
+            if resource
+                .resource_type
+                .starts_with("AWS::EC2::SecurityGroup")
+                && logical_id != "AgentsEgressSecurityGroup"
+            {
+                let rendered = serde_json::to_string(resource).expect("serializes");
+                assert!(
+                    !rendered.contains("AgentsEgressSecurityGroup"),
+                    "{case}: {logical_id} adds a rule to the deny group: {rendered}"
+                );
+            }
+        }
     }
 }
 

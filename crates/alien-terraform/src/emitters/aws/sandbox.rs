@@ -16,6 +16,8 @@ use crate::{
     },
     expr,
 };
+use alien_core::sandbox_build_role::sandbox_build_role_name;
+use alien_core::sandbox_egress::{sandbox_egress_name, LOOPBACK_ONLY_CIDR};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, permissions::PermissionSetReference, BundleUri, ErrorData,
@@ -62,9 +64,6 @@ const ARCHITECTURE: &str = "ARM_64";
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
 
-/// The one destination the session's security group permits, which reaches nothing.
-pub const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
-
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsSandboxEmitter;
 
@@ -87,9 +86,14 @@ impl TfEmitter for AwsSandboxEmitter {
         let tier = sandbox.microvm_tier()?;
         let egress_label = format!("{label}_egress");
 
+        // Unclamped: `SandboxBuildRoleNameCheck` refuses any id that could reach IAM's ceiling,
+        // and a hashed tail would drop the `-build` the pass grant is scoped to.
         let build_role = iam_role_block(
             label,
-            iam_role_name_template(&format!("{}-build", sandbox.id())),
+            expr::template(sandbox_build_role_name(
+                "${local.resource_prefix}",
+                sandbox.id(),
+            )),
             build_role_trust_policy(),
             tags(ctx, "sandbox"),
         );
@@ -265,7 +269,10 @@ impl TfEmitter for AwsSandboxEmitter {
             [
                 attr(
                     "name_prefix",
-                    resource_prefix_template(&format!("{}-egress-", sandbox.id())),
+                    expr::template(format!(
+                        "{}-",
+                        sandbox_egress_name("${local.resource_prefix}", sandbox.id())
+                    )),
                 ),
                 attr(
                     "description",

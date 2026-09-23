@@ -14,6 +14,8 @@ use crate::{
     emitters::aws::service_account::permission_context,
     template::{CfExpression, CfResource},
 };
+use alien_core::sandbox_build_role::sandbox_build_role_name;
+use alien_core::sandbox_egress::LOOPBACK_ONLY_CIDR;
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     import::EmitContext, BundleUri, ErrorData, NetworkSettings, RemoteBindings, ResourceLifecycle,
@@ -28,9 +30,6 @@ const ARCHITECTURE: &str = "ARM_64";
 
 /// Port the in-sandbox agent serves, both its own protocol and the lifecycle hooks.
 const AGENT_PORT: i64 = AWS_MICROVM.port as i64;
-
-/// The one destination the session's security group permits, which reaches nothing.
-const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AwsSandboxEmitter;
@@ -57,13 +56,11 @@ impl CfEmitter for AwsSandboxEmitter {
         // Terraform module produces. One name means one pattern for both.
         //
         // Unclamped on purpose. `SandboxBuildRoleNameCheck` refuses at plan time any id that could
-        // reach IAM's 64-character ceiling under the widest permitted prefix, so this cannot
-        // overflow — and clamping is what would hurt: Terraform's generic clamp replaces the tail
-        // with a hash, which drops the `-build` the pass grant matches and denies the image build
-        // at runtime instead of failing here.
+        // reach IAM's 64-character ceiling under the widest permitted prefix, and a hashed tail
+        // would drop the `-build` the pass grant matches and deny the image build at runtime.
         role.properties.insert(
             "RoleName".to_string(),
-            CfExpression::sub(format!("${{AWS::StackName}}-{}-build", sandbox.id())),
+            CfExpression::sub(sandbox_build_role_name("${AWS::StackName}", sandbox.id())),
         );
         role.properties.insert(
             "AssumeRolePolicyDocument".to_string(),
@@ -1103,6 +1100,5 @@ mod tests {
         // is left here is what both formats still spell themselves, asserted against the same
         // literal rather than a shared constant, which would make this crate depend on the other.
         assert_eq!(ARCHITECTURE, "ARM_64");
-        assert_eq!(LOOPBACK_ONLY_CIDR, "127.0.0.1/32");
     }
 }

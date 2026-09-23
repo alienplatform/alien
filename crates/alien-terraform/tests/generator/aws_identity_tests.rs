@@ -8,14 +8,16 @@ use super::helpers::{
 use alien_core::{
     sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME},
     sandbox_egress::{
-        sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
-        SANDBOX_EGRESS_POLICY_NAME,
+        sandbox_egress_name, sandbox_egress_operator_policy, sandbox_egress_operator_trust_policy,
+        SandboxEgressConnector, LOOPBACK_ONLY_CIDR, SANDBOX_EGRESS_POLICY_NAME,
     },
     ManagementPermissions, Network, NetworkSettings, PermissionProfile, RemoteStackManagement,
     ResourceLifecycle, Sandbox, SandboxCode, SandboxEgress, SandboxLifecyclePolicy, ServiceAccount,
     Stack, StackSettings, Worker, WorkerCode,
 };
 use alien_terraform::TerraformTarget;
+use hcl::expr::{BinaryOperator, Operation};
+use serde_json::Value;
 
 #[test]
 fn aws_service_account_with_permission_set() {
@@ -681,46 +683,8 @@ fn aws_sandbox_deny_builds_a_connector_that_permits_nothing_outbound() {
     let module = render(&stack, TerraformTarget::Aws, settings);
     let rendered: String = module.iter().map(|(_, contents)| contents).collect();
 
-    let security_group = rendered
-        .split("resource \"aws_security_group\" \"agents_egress\"")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the sandbox egress security group must render:\n{rendered}"))
-        .split("\nresource \"")
-        .next()
-        .expect("the block runs to the next resource");
-    assert_eq!(
-        security_group.matches("egress {").count(),
-        1,
-        "exactly one egress rule, or the default allow-all survives:\n{security_group}"
-    );
-    assert!(
-        security_group.contains("\"127.0.0.1/32\""),
-        "the only permitted destination must be the one that reaches nothing:\n{security_group}"
-    );
-    assert!(
-        !security_group.contains("0.0.0.0/0"),
-        "a wide egress rule turns deny back into outbound access:\n{security_group}"
-    );
-
-    let connector = rendered
-        .split("resource \"awscc_lambda_network_connector\" \"agents\"")
-        .nth(1)
-        .unwrap_or_else(|| panic!("the egress connector must render:\n{rendered}"))
-        .split("\nresource \"")
-        .next()
-        .expect("the block runs to the next resource");
-    assert!(
-        connector.contains("aws_security_group.agents_egress.id"),
-        "the connector must carry the group that denies:\n{connector}"
-    );
-    assert!(
-        connector.contains("aws_subnet.default_network_private"),
-        "the connector must place its ENIs in the network's private subnets:\n{connector}"
-    );
-    assert!(
-        connector.contains("\"MicroVm\""),
-        "the connector must be usable by MicroVMs:\n{connector}"
-    );
+    // The group's rules and the connector's configuration are compared whole by the parity
+    // tests below.
 
     // Scoped to the image block rather than the whole module: the binding also names the
     // connector, so a module-wide search passes even when the image has lost its own entry.
@@ -1033,45 +997,22 @@ const PARITY_PREFIX: &str = "acme-parity";
 const PARITY_CONNECTOR_ARN: &str =
     "arn:aws-us-gov:lambda:us-gov-east-1:987654321098:network-connector:nc-0parity";
 
-/// Evaluates the few HCL forms a clamped IAM role name is written in, with `local.resource_prefix`
-/// bound to the parity prefix. Any other form panics rather than guessing.
+/// Evaluates a name template with `local.resource_prefix` bound to the parity prefix. Any other
+/// form panics rather than guessing.
 fn evaluate_name(expression: &hcl::Expression) -> serde_json::Value {
-    use hcl::expr::{BinaryOperator, Operation};
-    use serde_json::Value;
     match expression {
-        hcl::Expression::String(text) => Value::from(text.clone()),
-        hcl::Expression::Number(number) => {
-            Value::from(number.as_u64().expect("an unsigned length"))
-        }
-        hcl::Expression::Traversal(_) if expression.to_string() == "local.resource_prefix" => {
-            Value::from(PARITY_PREFIX)
-        }
-        hcl::Expression::Parenthesis(inner) => evaluate_name(inner),
-        hcl::Expression::Conditional(conditional) => match evaluate_name(&conditional.cond_expr) {
-            Value::Bool(true) => evaluate_name(&conditional.true_expr),
-            Value::Bool(false) => evaluate_name(&conditional.false_expr),
-            other => panic!("a condition evaluates to a bool, not {other}"),
-        },
-        hcl::Expression::Operation(operation) => match operation.as_ref() {
-            Operation::Binary(op) if op.operator == BinaryOperator::LessEq => Value::from(
-                evaluate_name(&op.lhs_expr).as_u64().expect("a number")
-                    <= evaluate_name(&op.rhs_expr).as_u64().expect("a number"),
-            ),
-            other => panic!("the parity test cannot evaluate {other:?}"),
-        },
-        hcl::Expression::FuncCall(call) => {
-            let args: Vec<Value> = call.args.iter().map(evaluate_name).collect();
-            match (call.name.name.as_str(), args.as_slice()) {
-                ("length", [Value::String(text)]) => Value::from(text.len()),
-                ("format", [Value::String(pattern), Value::String(a), Value::String(b)])
-                    if pattern == "%s-%s" =>
-                {
-                    Value::from(format!("{a}-{b}"))
-                }
-                (name, _) => panic!("the parity test cannot evaluate {name}({args:?})"),
+        hcl::Expression::TemplateExpr(template) => match template.as_ref() {
+            hcl::TemplateExpr::QuotedString(text) => {
+                let resolved = text.replace("${local.resource_prefix}", PARITY_PREFIX);
+                assert!(
+                    !resolved.contains("${"),
+                    "unresolved interpolation left in {resolved}"
+                );
+                serde_json::Value::from(resolved)
             }
-        }
-        other => panic!("the parity test cannot evaluate {other}"),
+            heredoc => panic!("the parity test cannot evaluate a heredoc: {heredoc:?}"),
+        },
+        other => panic!("the parity test cannot evaluate the name {other}"),
     }
 }
 
@@ -1214,5 +1155,271 @@ fn the_emitted_registration_matches_the_direct_seed() {
         .unwrap_or_else(|error| panic!("{case}: the direct seed resolves: {error}"));
 
         assert_eq!(emitted, direct, "{case}");
+    }
+}
+
+const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
+const PARITY_SECURITY_GROUP: &str = "sg-0parity";
+const CREATED_SUBNETS: [&str; 2] = ["subnet-created-1", "subnet-created-2"];
+const EXISTING_SUBNETS: [&str; 2] = ["subnet-existing-a", "subnet-existing-b"];
+
+/// A network `egress: deny` accepts, the `network_mode` an installer picks, and the private
+/// subnets the connector must name once both are bound.
+fn egress_parity_cases() -> [(NetworkSettings, &'static str, [&'static str; 2]); 3] {
+    let create = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    [
+        (create.clone(), "create-new", CREATED_SUBNETS),
+        (create, "use-existing", EXISTING_SUBNETS),
+        (
+            NetworkSettings::ByoVpcAws {
+                vpc_id: "vpc-0parity".to_string(),
+                public_subnet_ids: vec!["subnet-public-a".to_string()],
+                private_subnet_ids: EXISTING_SUBNETS.map(String::from).to_vec(),
+                security_group_ids: vec!["sg-0network".to_string()],
+            },
+            "use-existing",
+            EXISTING_SUBNETS,
+        ),
+    ]
+}
+
+fn deny_module(network: &NetworkSettings) -> alien_terraform::ModuleFiles {
+    let settings = StackSettings {
+        network: Some(network.clone()),
+        ..StackSettings::default()
+    };
+    let stack = Stack::new("acme-sandbox-egress-parity".to_string())
+        .add(
+            Network::new("default-network".to_string())
+                .settings(network.clone())
+                .build(),
+            ResourceLifecycle::Frozen,
+        )
+        .add(
+            sandbox_fixture_with(SandboxEgress::Deny, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .build();
+    render(&stack, TerraformTarget::Aws, settings)
+}
+
+fn sandbox_body(module: &alien_terraform::ModuleFiles) -> hcl::Body {
+    hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+        .unwrap_or_else(|error| panic!("agents.tf parses: {error}"))
+}
+
+fn only_resource<'a>(body: &'a hcl::Body, kind: &'a str, label: &str) -> &'a hcl::Block {
+    let blocks: Vec<_> = resource_blocks(body, kind)
+        .filter(|block| block.labels()[1].as_str() == label)
+        .collect();
+    assert_eq!(blocks.len(), 1, "one {kind}.{label}");
+    blocks[0]
+}
+
+/// `awscc` spells the schema's property names in snake_case; Cloud Control takes them as declared.
+fn schema_name(snake: &str) -> String {
+    snake
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            chars
+                .next()
+                .map(|first| first.to_ascii_uppercase().to_string() + chars.as_str())
+                .unwrap_or_default()
+        })
+        .collect()
+}
+
+/// Evaluates a connector attribute with the module's references bound to what a deployed module
+/// holds for `network_mode`. Any reference outside this table panics, so a new one cannot compare
+/// equal unchecked.
+fn evaluate_connector(expression: &hcl::Expression, network_mode: &str) -> Value {
+    match expression {
+        hcl::Expression::String(text) => Value::from(text.clone()),
+        hcl::Expression::TemplateExpr(_) => evaluate_name(expression),
+        hcl::Expression::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| evaluate_connector(item, network_mode))
+                .collect(),
+        ),
+        hcl::Expression::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (schema_name(&key), evaluate_connector(value, network_mode))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Conditional(conditional) => {
+            match evaluate_connector(&conditional.cond_expr, network_mode) {
+                Value::Bool(true) => evaluate_connector(&conditional.true_expr, network_mode),
+                Value::Bool(false) => evaluate_connector(&conditional.false_expr, network_mode),
+                other => panic!("a condition evaluates to a bool, not {other}"),
+            }
+        }
+        hcl::Expression::Operation(operation) => match operation.as_ref() {
+            Operation::Binary(op) if op.operator == BinaryOperator::Eq => Value::from(
+                evaluate_connector(&op.lhs_expr, network_mode)
+                    == evaluate_connector(&op.rhs_expr, network_mode),
+            ),
+            other => panic!("the parity test cannot evaluate {other:?}"),
+        },
+        hcl::Expression::Traversal(_) => match expression.to_string().as_str() {
+            "local.resource_prefix" => Value::from(PARITY_PREFIX),
+            "var.network_mode" => Value::from(network_mode),
+            "aws_iam_role.agents_egress.arn" => Value::from(PARITY_OPERATOR_ARN),
+            "aws_security_group.agents_egress.id" => Value::from(PARITY_SECURITY_GROUP),
+            "aws_subnet.default_network_private[*].id" => serde_json::json!(CREATED_SUBNETS),
+            "var.private_subnet_ids" | "var.default_network_private_subnet_ids" => {
+                serde_json::json!(EXISTING_SUBNETS)
+            }
+            other => panic!("the parity test cannot resolve {other}"),
+        },
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// A direct deploy sends this builder's output to Cloud Control as the connector's desired state;
+/// it must be the resource the module creates for the same sandbox.
+#[test]
+fn the_emitted_connector_matches_the_direct_desired_state() {
+    for (network, network_mode, subnets) in egress_parity_cases() {
+        let case = format!("connector on {network:?} with network_mode={network_mode}");
+        let sandbox_file = sandbox_body(&deny_module(&network));
+        let connector = only_resource(&sandbox_file, "awscc_lambda_network_connector", "agents");
+
+        let emitted = serde_json::Value::Object(
+            connector
+                .body()
+                .attributes()
+                .filter(|attribute| attribute.key() != "depends_on")
+                .map(|attribute| {
+                    (
+                        schema_name(attribute.key()),
+                        evaluate_connector(attribute.expr(), network_mode),
+                    )
+                })
+                .collect(),
+        );
+        let subnets = subnets.map(String::from).to_vec();
+        let direct = SandboxEgressConnector::builder()
+            .resource_prefix(PARITY_PREFIX)
+            .sandbox_id("agents")
+            .operator_role_arn(PARITY_OPERATOR_ARN)
+            .private_subnet_ids(&subnets)
+            .security_group_id(PARITY_SECURITY_GROUP)
+            .build()
+            .desired_state();
+
+        assert_eq!(tags_sorted(emitted), tags_sorted(direct), "{case}");
+    }
+}
+
+/// Tags carry `insertionOrder: false` in the connector's schema, so their order is not state.
+fn tags_sorted(mut properties: serde_json::Value) -> serde_json::Value {
+    if let Some(tags) = properties["Tags"].as_array_mut() {
+        tags.sort_by(|a, b| a["Key"].as_str().cmp(&b["Key"].as_str()));
+    }
+    properties
+}
+
+/// The group is what enforces `egress: deny`, and a direct deploy creates it named
+/// `sandbox_egress_name` with exactly one all-protocol rule to [`LOOPBACK_ONLY_CIDR`] and no
+/// ingress. The module keeps `name_prefix`, which a rename to `name` would replace the group over.
+#[test]
+fn the_emitted_deny_group_matches_the_direct_rule_set() {
+    for (network, _, _) in egress_parity_cases() {
+        let case = format!("deny group on {network:?}");
+        let module = deny_module(&network);
+        let sandbox_file = sandbox_body(&module);
+        let group = only_resource(&sandbox_file, "aws_security_group", "agents_egress");
+        let attributes: Vec<&str> = group.body().attributes().map(|a| a.key()).collect();
+
+        assert_eq!(
+            evaluate_name(block_attribute(group, "name_prefix").expr()),
+            serde_json::json!(format!("{}-", sandbox_egress_name(PARITY_PREFIX, "agents"))),
+            "{case}"
+        );
+        assert!(
+            !attributes.contains(&"name"),
+            "{case}: name_prefix alone names the group"
+        );
+        assert_eq!(
+            block_attribute(group, "description").expr(),
+            &hcl::Expression::String("Sandbox agents session egress".to_string()),
+            "{case}"
+        );
+        assert!(
+            !attributes.contains(&"egress") && !attributes.contains(&"ingress"),
+            "{case}: rules are written as blocks, where they can be counted: {attributes:?}"
+        );
+        assert_eq!(
+            group
+                .body()
+                .blocks()
+                .filter(|block| block.identifier() == "ingress")
+                .count(),
+            0,
+            "{case}: no ingress"
+        );
+
+        let egress: Vec<_> = group
+            .body()
+            .blocks()
+            .filter(|block| block.identifier() == "egress")
+            .collect();
+        assert_eq!(
+            egress.len(),
+            1,
+            "{case}: one rule, or the default allow-all survives"
+        );
+        let rule: Vec<(&str, &hcl::Expression)> = egress[0]
+            .body()
+            .attributes()
+            .map(|attribute| (attribute.key(), attribute.expr()))
+            .collect();
+        assert_eq!(
+            rule,
+            vec![
+                ("from_port", &hcl::Expression::Number(0.into())),
+                ("to_port", &hcl::Expression::Number(0.into())),
+                ("protocol", &hcl::Expression::String("-1".to_string())),
+                (
+                    "cidr_blocks",
+                    &hcl::Expression::Array(vec![hcl::Expression::String(
+                        LOOPBACK_ONLY_CIDR.to_string()
+                    )])
+                ),
+            ],
+            "{case}: all protocols to the destination that reaches nothing, and no other target"
+        );
+
+        // A standalone rule resource widens the group as surely as an inline one.
+        for (file, contents) in module.iter().filter(|(file, _)| file.ends_with(".tf")) {
+            let body: hcl::Body = hcl::parse(contents)
+                .unwrap_or_else(|error| panic!("{case}: {file} parses: {error}"));
+            for kind in [
+                "aws_security_group_rule",
+                "aws_vpc_security_group_egress_rule",
+                "aws_vpc_security_group_ingress_rule",
+            ] {
+                for block in resource_blocks(&body, kind) {
+                    let rendered = hcl::to_string(block).expect("the block renders");
+                    assert!(
+                        !rendered.contains("aws_security_group.agents_egress"),
+                        "{case}: {file} adds a rule to the deny group:\n{rendered}"
+                    );
+                }
+            }
+        }
     }
 }
