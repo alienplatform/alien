@@ -1028,3 +1028,191 @@ fn the_emitted_operator_role_matches_the_shared_builder() {
         "trust policy"
     );
 }
+
+const PARITY_PREFIX: &str = "acme-parity";
+const PARITY_CONNECTOR_ARN: &str =
+    "arn:aws-us-gov:lambda:us-gov-east-1:987654321098:network-connector:nc-0parity";
+
+/// Evaluates the few HCL forms a clamped IAM role name is written in, with `local.resource_prefix`
+/// bound to the parity prefix. Any other form panics rather than guessing.
+fn evaluate_name(expression: &hcl::Expression) -> serde_json::Value {
+    use hcl::expr::{BinaryOperator, Operation};
+    use serde_json::Value;
+    match expression {
+        hcl::Expression::String(text) => Value::from(text.clone()),
+        hcl::Expression::Number(number) => {
+            Value::from(number.as_u64().expect("an unsigned length"))
+        }
+        hcl::Expression::Traversal(_) if expression.to_string() == "local.resource_prefix" => {
+            Value::from(PARITY_PREFIX)
+        }
+        hcl::Expression::Parenthesis(inner) => evaluate_name(inner),
+        hcl::Expression::Conditional(conditional) => match evaluate_name(&conditional.cond_expr) {
+            Value::Bool(true) => evaluate_name(&conditional.true_expr),
+            Value::Bool(false) => evaluate_name(&conditional.false_expr),
+            other => panic!("a condition evaluates to a bool, not {other}"),
+        },
+        hcl::Expression::Operation(operation) => match operation.as_ref() {
+            Operation::Binary(op) if op.operator == BinaryOperator::LessEq => Value::from(
+                evaluate_name(&op.lhs_expr).as_u64().expect("a number")
+                    <= evaluate_name(&op.rhs_expr).as_u64().expect("a number"),
+            ),
+            other => panic!("the parity test cannot evaluate {other:?}"),
+        },
+        hcl::Expression::FuncCall(call) => {
+            let args: Vec<Value> = call.args.iter().map(evaluate_name).collect();
+            match (call.name.name.as_str(), args.as_slice()) {
+                ("length", [Value::String(text)]) => Value::from(text.len()),
+                ("format", [Value::String(pattern), Value::String(a), Value::String(b)])
+                    if pattern == "%s-%s" =>
+                {
+                    Value::from(format!("{a}-{b}"))
+                }
+                (name, _) => panic!("the parity test cannot evaluate {name}({args:?})"),
+            }
+        }
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// Evaluates a sandbox's registration `importData`. The build role resolves from its own `name`,
+/// so the direct side's derivation is compared against what the module would create.
+fn evaluate_registration(
+    sandbox_file: &hcl::Body,
+    expression: &hcl::Expression,
+) -> serde_json::Value {
+    use serde_json::Value;
+    match expression {
+        hcl::Expression::Bool(flag) => Value::from(*flag),
+        hcl::Expression::Number(number) => {
+            Value::from(number.as_u64().expect("a port is unsigned"))
+        }
+        hcl::Expression::String(_) | hcl::Expression::TemplateExpr(_) => {
+            evaluate_policy_expression(expression)
+        }
+        hcl::Expression::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| evaluate_registration(sandbox_file, item))
+                .collect(),
+        ),
+        hcl::Expression::Object(object) => Value::Object(
+            object
+                .iter()
+                .map(|(key, value)| {
+                    let key = match key {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        other => panic!("the parity test cannot evaluate the key {other:?}"),
+                    };
+                    (key, evaluate_registration(sandbox_file, value))
+                })
+                .collect(),
+        ),
+        hcl::Expression::Traversal(_) => {
+            let path = expression.to_string();
+            let parts: Vec<&str> = path.split('.').collect();
+            match parts.as_slice() {
+                ["aws_iam_role", label, "arn"] => {
+                    let role = resource_blocks(sandbox_file, "aws_iam_role")
+                        .find(|block| block.labels()[1].as_str() == *label)
+                        .unwrap_or_else(|| panic!("{path} names a role that must render"));
+                    assert!(
+                        role.body().attributes().all(|a| a.key() != "path"),
+                        "the pass grant is scoped to the root path"
+                    );
+                    let name = evaluate_name(block_attribute(role, "name").expr());
+                    Value::from(format!(
+                        "arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:role/{}",
+                        name.as_str().expect("a role name")
+                    ))
+                }
+                ["awscc_lambda_network_connector", label, "arn"] => {
+                    resource_blocks(sandbox_file, "awscc_lambda_network_connector")
+                        .find(|block| block.labels()[1].as_str() == *label)
+                        .unwrap_or_else(|| panic!("{path} names a connector that must render"));
+                    Value::from(PARITY_CONNECTOR_ARN)
+                }
+                _ => panic!("the parity test cannot resolve {path}"),
+            }
+        }
+        other => panic!("the parity test cannot evaluate {other}"),
+    }
+}
+
+/// A direct deploy registers a runtime-built sandbox from `AwsSandboxImportData::runtime_built`
+/// instead of this module, so a field changed in the module alone would hand the controller a
+/// different build role, bundle, egress, or preview set depending on how it was installed.
+#[test]
+fn the_emitted_registration_matches_the_direct_seed() {
+    for (egress, bundle_uri) in [
+        (
+            SandboxEgress::Allow,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (
+            SandboxEgress::Deny,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+    ] {
+        let (mut stack, settings) = live_sandbox_stack("acme-sandbox-parity", egress.clone());
+        let sandbox = Sandbox {
+            preview_ports: vec![8080, 3000],
+            ..sandbox_fixture_with(egress.clone(), bundle_uri)
+        };
+        stack
+            .resources
+            .get_mut("agents")
+            .expect("the sandbox is in the stack")
+            .config = alien_core::Resource::new(sandbox.clone());
+        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let module = render(&stack, TerraformTarget::Aws, settings);
+        let sandbox_file: hcl::Body =
+            hcl::parse(module.get("agents.tf").expect("agents.tf renders"))
+                .unwrap_or_else(|error| panic!("{case}: agents.tf parses: {error}"));
+        let locals: hcl::Body = hcl::parse(module.get("locals.tf").expect("locals.tf renders"))
+            .unwrap_or_else(|error| panic!("{case}: locals.tf parses: {error}"));
+        let registered = locals
+            .blocks()
+            .flat_map(|block| block.body().attributes())
+            .find(|attribute| attribute.key() == "deployment_resources")
+            .unwrap_or_else(|| panic!("{case}: the registration list renders"));
+        let hcl::Expression::Array(entries) = registered.expr() else {
+            panic!("{case}: the registration list is a list");
+        };
+        let import_data = entries
+            .iter()
+            .find_map(|entry| {
+                let hcl::Expression::Object(object) = entry else {
+                    return None;
+                };
+                let field = |name: &str| {
+                    object.iter().find_map(|(key, value)| {
+                        matches!(key, hcl::ObjectKey::Identifier(id) if id.as_str() == name)
+                            .then_some(value)
+                    })
+                };
+                (field("id") == Some(&hcl::Expression::String("agents".to_string())))
+                    .then(|| field("importData").expect("a registration carries importData"))
+            })
+            .unwrap_or_else(|| panic!("{case}: the sandbox registers"));
+
+        let emitted: alien_core::import::data::AwsSandboxImportData =
+            serde_json::from_value(evaluate_registration(&sandbox_file, import_data))
+                .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
+        let direct = alien_core::import::data::AwsSandboxImportData::runtime_built(
+            &sandbox,
+            alien_core::sandbox_build_role::sandbox_build_role_arn(
+                PARITY_PARTITION,
+                PARITY_ACCOUNT,
+                PARITY_PREFIX,
+                "agents",
+            ),
+            PARITY_REGION,
+            Some(PARITY_CONNECTOR_ARN),
+        )
+        .unwrap_or_else(|error| panic!("{case}: the direct seed resolves: {error}"));
+
+        assert_eq!(emitted, direct, "{case}");
+    }
+}

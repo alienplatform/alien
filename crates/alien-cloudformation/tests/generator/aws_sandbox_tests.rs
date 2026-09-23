@@ -149,12 +149,20 @@ fn registration_import_data(
         }
     }
 
+    resolve(&emitted_import_data(template, resource_id))
+}
+
+/// The `importData` a rendered registration carries for one resource id, intrinsics and all.
+fn emitted_import_data(
+    template: &alien_cloudformation::CfTemplate,
+    resource_id: &str,
+) -> serde_json::Value {
     fn find(value: &serde_json::Value, resource_id: &str) -> Option<serde_json::Value> {
         match value {
             serde_json::Value::Object(map) => {
                 if map.get("id").and_then(serde_json::Value::as_str) == Some(resource_id) {
                     if let Some(import_data) = map.get("importData") {
-                        return Some(resolve(import_data));
+                        return Some(import_data.clone());
                     }
                 }
                 map.values().find_map(|nested| find(nested, resource_id))
@@ -1510,5 +1518,157 @@ fn the_emitted_connector_matches_the_direct_desired_state() {
             tags_sorted(direct),
             "connector on {network:?}"
         );
+    }
+}
+
+const PARITY_CONNECTOR_ARN: &str =
+    "arn:aws-us-gov:lambda:us-gov-east-1:987654321098:network-connector:nc-0parity";
+
+/// Resolves the registration's intrinsics to a deployed stack's values. The build role resolves
+/// from its own emitted `RoleName`, so a renamed role cannot compare equal to the direct side's
+/// derivation by both sides reading one placeholder.
+fn resolve_registration(
+    template: &alien_cloudformation::CfTemplate,
+    value: &serde_json::Value,
+) -> serde_json::Value {
+    use serde_json::Value;
+    let sub = |text: &str| {
+        let resolved = text
+            .replace("${AWS::StackName}", PARITY_PREFIX)
+            .replace("${AWS::Partition}", PARITY_PARTITION)
+            .replace("${AWS::AccountId}", PARITY_ACCOUNT)
+            .replace("${AWS::Region}", PARITY_REGION);
+        assert!(!resolved.contains("${"), "unresolved Sub in {text}");
+        resolved
+    };
+    match value {
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::Sub") => {
+            Value::from(sub(map["Fn::Sub"]
+                .as_str()
+                .expect("the string form of Sub")))
+        }
+        Value::Object(map) if map.len() == 1 && map.contains_key("Fn::GetAtt") => {
+            let target: Vec<&str> = map["Fn::GetAtt"]
+                .as_array()
+                .expect("GetAtt takes a pair")
+                .iter()
+                .map(|part| part.as_str().expect("GetAtt parts are strings"))
+                .collect();
+            let resource = serde_json::to_value(
+                template
+                    .resources
+                    .get(target[0])
+                    .unwrap_or_else(|| panic!("GetAtt names {} which must render", target[0])),
+            )
+            .expect("serializes");
+            match target.as_slice() {
+                [_, "Arn"] if resource["Type"] == "AWS::IAM::Role" => {
+                    assert_eq!(
+                        resource["Properties"].get("Path"),
+                        None,
+                        "the pass grant is scoped to the root path"
+                    );
+                    let role_name = resource["Properties"]["RoleName"]["Fn::Sub"]
+                        .as_str()
+                        .expect("the build role is named through Sub");
+                    Value::from(format!(
+                        "arn:{PARITY_PARTITION}:iam::{PARITY_ACCOUNT}:role/{}",
+                        sub(role_name)
+                    ))
+                }
+                [_, "Arn"] if resource["Type"] == "AWS::Lambda::NetworkConnector" => {
+                    Value::from(PARITY_CONNECTOR_ARN)
+                }
+                other => panic!("the parity test cannot resolve GetAtt {other:?}"),
+            }
+        }
+        Value::Object(map) => {
+            if let Some(key) = map
+                .keys()
+                .find(|key| key.starts_with("Fn::") || *key == "Ref")
+            {
+                panic!("the parity test cannot resolve {key}: {value}");
+            }
+            Value::Object(
+                map.iter()
+                    .map(|(k, v)| (k.clone(), resolve_registration(template, v)))
+                    .collect(),
+            )
+        }
+        Value::Array(items) => Value::Array(
+            items
+                .iter()
+                .map(|item| resolve_registration(template, item))
+                .collect(),
+        ),
+        other => other.clone(),
+    }
+}
+
+/// A direct deploy registers a runtime-built sandbox from `AwsSandboxImportData::runtime_built`
+/// instead of this template, so a field changed in the emitter alone would hand the controller a
+/// different build role, bundle, egress, or preview set depending on how it was installed.
+#[test]
+fn the_emitted_registration_matches_the_direct_seed() {
+    let network = NetworkSettings::Create {
+        cidr: None,
+        availability_zones: 2,
+    };
+    for (egress, bundle_uri) in [
+        (
+            SandboxEgress::Allow,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+        (SandboxEgress::Deny, LIVE_BUNDLE),
+        (
+            SandboxEgress::Deny,
+            "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip",
+        ),
+    ] {
+        let sandbox = Sandbox {
+            preview_ports: vec![8080, 3000],
+            ..sandbox_fixture_with(egress.clone(), bundle_uri)
+        };
+        let stack = Stack::new("acme-sandbox-registration-parity".to_string())
+            .add(
+                Network::new("default-network".to_string())
+                    .settings(network.clone())
+                    .build(),
+                ResourceLifecycle::Frozen,
+            )
+            .add(sandbox.clone(), ResourceLifecycle::Live)
+            .build();
+        let case = format!("{egress:?} sandbox built from {bundle_uri}");
+        let (template, _yaml) = render_built_ins_template(
+            &stack,
+            StackSettings {
+                network: Some(network.clone()),
+                ..StackSettings::default()
+            },
+            custom_resource_registration(),
+            CloudFormationTarget::Aws,
+            "aws",
+            &case,
+        );
+
+        let emitted: AwsSandboxImportData = serde_json::from_value(resolve_registration(
+            &template,
+            &emitted_import_data(&template, "agents"),
+        ))
+        .unwrap_or_else(|error| panic!("{case}: the importer must accept it: {error}"));
+        let direct = AwsSandboxImportData::runtime_built(
+            &sandbox,
+            alien_core::sandbox_build_role::sandbox_build_role_arn(
+                PARITY_PARTITION,
+                PARITY_ACCOUNT,
+                PARITY_PREFIX,
+                "agents",
+            ),
+            PARITY_REGION,
+            Some(PARITY_CONNECTOR_ARN),
+        )
+        .unwrap_or_else(|error| panic!("{case}: the direct seed resolves: {error}"));
+
+        assert_eq!(emitted, direct, "{case}");
     }
 }
