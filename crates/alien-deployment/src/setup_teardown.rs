@@ -594,6 +594,12 @@ mod tests {
             .expect_get_aws_ec2_client()
             .returning(move |_| Ok(ec2.clone()));
         let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("default-network".to_string(), running_frozen_network());
         let record = SetupScaffolding::AwsSandbox {
             build_role_name: BUILD_ROLE.to_string(),
             egress: Some(alien_core::AwsSandboxEgressScaffolding {
@@ -618,7 +624,7 @@ mod tests {
         assert_eq!(result.loop_result.stop_reason, LoopStopReason::Delayed);
         assert_eq!(state.status, DeploymentStatus::TeardownRequired);
         assert_eq!(
-            state.runtime_metadata.unwrap().setup_scaffolding["agents"],
+            state.runtime_metadata.as_ref().unwrap().setup_scaffolding["agents"],
             record,
             "the group stays recorded for the next call"
         );
@@ -628,6 +634,250 @@ mod tests {
                 .iter()
                 .all(|checkpoint| checkpoint.status == DeploymentStatus::TeardownRequired),
             "nothing past the scaffolding may start"
+        );
+        for checkpoint in checkpoints.iter().chain([&state]) {
+            let network = &checkpoint.stack_state.as_ref().unwrap().resources["default-network"];
+            assert_eq!(
+                network.status,
+                alien_core::ResourceStatus::Running,
+                "the network is not prepared for teardown while the group is held"
+            );
+        }
+    }
+
+    fn running_frozen_network() -> alien_core::StackResourceState {
+        alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Network::RESOURCE_TYPE.to_string())
+            .status(alien_core::ResourceStatus::Running)
+            .config(alien_core::Resource::new(
+                alien_core::Network::new("default-network".to_string())
+                    .settings(alien_core::NetworkSettings::Create {
+                        cidr: None,
+                        availability_zones: 2,
+                    })
+                    .build(),
+            ))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .build()
+    }
+
+    const SANDBOX_IMAGE: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+    const CONNECTOR: &str = "arn:aws:lambda:us-east-1:123456789012:network-connector:nc-1";
+
+    fn serving_live_sandbox() -> alien_core::StackResourceState {
+        let sandbox = alien_core::Sandbox::new("agents".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Deny)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        alien_core::StackResourceState::builder()
+            .resource_type(alien_core::Sandbox::RESOURCE_TYPE.to_string())
+            .status(alien_core::ResourceStatus::Running)
+            .config(alien_core::Resource::new(sandbox))
+            .internal_state(serde_json::json!({
+                "_controllerStateVersion": 1,
+                "type": "AwsSandboxController",
+                "state": "ready",
+                "allowEgress": false,
+                "egressConnectorArns": [CONNECTOR],
+                "previewPorts": [],
+                "imageArn": SANDBOX_IMAGE,
+                "imageIdentifier": SANDBOX_IMAGE,
+                "activeVersion": "1.0",
+                "region": "us-east-1",
+                "buildRoleArn": format!("arn:aws:iam::123456789012:role/{BUILD_ROLE}"),
+                "internalStayCount": null
+            }))
+            .lifecycle(ResourceLifecycle::Live)
+            .controller_platform(Platform::Aws)
+            .build()
+    }
+
+    /// Every deleting call, from runtime cleanup and setup teardown alike, in the order made.
+    fn logging_provider(log: &Arc<Mutex<Vec<String>>>) -> MockPlatformServiceProvider {
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        let l = log.clone();
+        microvms
+            .expect_delete_microvm_image()
+            .returning(move |image| {
+                l.lock()
+                    .unwrap()
+                    .push(format!("lambda:DeleteMicrovmImage {image}"));
+                Ok(())
+            });
+        let mut cloudcontrol = alien_aws_clients::cloudcontrol::MockCloudControlApi::new();
+        cloudcontrol
+            .expect_get_resource()
+            .returning(|_, identifier| {
+                Ok(alien_aws_clients::cloudcontrol::ResourceDescription {
+                    identifier: identifier.to_string(),
+                    properties: Some(
+                        serde_json::json!({ "Arn": identifier, "Name": "test-agents" }).to_string(),
+                    ),
+                })
+            });
+        let l = log.clone();
+        cloudcontrol
+            .expect_delete_resource()
+            .returning(move |_, identifier| {
+                l.lock()
+                    .unwrap()
+                    .push(format!("cloudcontrol:DeleteResource {identifier}"));
+                Ok(alien_aws_clients::cloudcontrol::ProgressEvent {
+                    type_name: None,
+                    identifier: Some(identifier.to_string()),
+                    request_token: "delete".to_string(),
+                    operation: None,
+                    operation_status: alien_aws_clients::cloudcontrol::OperationStatus::Success,
+                    status_message: None,
+                    error_code: None,
+                })
+            });
+        let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        let l = log.clone();
+        ec2.expect_delete_security_group().returning(move |group| {
+            l.lock()
+                .unwrap()
+                .push(format!("ec2:DeleteSecurityGroup {group}"));
+            Ok(())
+        });
+        let mut iam = MockIamApi::new();
+        let l = log.clone();
+        iam.expect_delete_role_policy().returning(move |role, _| {
+            l.lock()
+                .unwrap()
+                .push(format!("iam:DeleteRolePolicy {role}"));
+            Ok(())
+        });
+        let l = log.clone();
+        iam.expect_delete_role().returning(move |role| {
+            l.lock().unwrap().push(format!("iam:DeleteRole {role}"));
+            Ok(())
+        });
+        let (microvms, cloudcontrol, ec2, iam) = (
+            Arc::new(microvms),
+            Arc::new(cloudcontrol),
+            Arc::new(ec2),
+            Arc::new(iam),
+        );
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(microvms.clone()));
+        provider
+            .expect_get_aws_cloudcontrol_client()
+            .returning(move |_| Ok(cloudcontrol.clone()));
+        provider
+            .expect_get_aws_ec2_client()
+            .returning(move |_| Ok(ec2.clone()));
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        provider
+    }
+
+    /// A deny sandbox's sessions place interfaces in the connector's group and its image builds
+    /// assume the build role, so the sandbox goes first and the scaffolding only after it.
+    #[tokio::test]
+    async fn the_sandbox_is_deleted_before_setup_deletes_its_scaffolding() {
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let provider: Arc<dyn alien_infra::PlatformServiceProvider> =
+            Arc::new(logging_provider(&log));
+        let mut state = teardown_required(InitialSetupAuthority::DirectSetup);
+        state.status = DeploymentStatus::DeletePending;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("agents".to_string(), serving_live_sandbox());
+        state.runtime_metadata.as_mut().unwrap().setup_scaffolding = BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: Some(alien_core::AwsSandboxEgressScaffolding {
+                    operator_role_name: "test-agents-egress".to_string(),
+                    security_group_id: Some("sg-deny".to_string()),
+                    connector_arn: Some(CONNECTOR.to_string()),
+                }),
+            },
+        )]);
+        let mut config = DeploymentConfig::builder()
+            .stack_settings(StackSettings::default())
+            .environment_variables(EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .external_bindings(alien_core::ExternalBindings::default())
+            .allow_frozen_changes(false)
+            .build();
+        let client_config = ClientConfig::Aws(Box::new(AwsClientConfig::mock()));
+
+        state = crate::deleting::handle_delete_pending(
+            state,
+            config.clone(),
+            client_config.clone(),
+            provider.clone(),
+        )
+        .await
+        .unwrap()
+        .state;
+        for _ in 0..10 {
+            if state.status != DeploymentStatus::Deleting {
+                break;
+            }
+            state = crate::deleting::handle_deleting(
+                state,
+                config.clone(),
+                client_config.clone(),
+                provider.clone(),
+            )
+            .await
+            .unwrap()
+            .state;
+        }
+        assert_eq!(state.status, DeploymentStatus::TeardownRequired);
+        assert_eq!(
+            state.stack_state.as_ref().unwrap().resources["agents"].status,
+            alien_core::ResourceStatus::Deleted
+        );
+
+        let transport = RecordingTransport::default();
+        run_setup_teardown_after_handoff(
+            &mut state,
+            &mut config,
+            &client_config,
+            "dep_test",
+            &RunnerPolicy {
+                operation: LoopOperation::Delete,
+                delay_strategy: DelayStrategy::Inline,
+                ..Default::default()
+            },
+            &transport,
+            Some(provider),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(state.status, DeploymentStatus::Deleted);
+        assert!(state.runtime_metadata.unwrap().setup_scaffolding.is_empty());
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec![
+                format!("lambda:DeleteMicrovmImage {SANDBOX_IMAGE}"),
+                format!("cloudcontrol:DeleteResource {CONNECTOR}"),
+                "ec2:DeleteSecurityGroup sg-deny".to_string(),
+                "iam:DeleteRolePolicy test-agents-egress".to_string(),
+                "iam:DeleteRole test-agents-egress".to_string(),
+                format!("iam:DeleteRolePolicy {BUILD_ROLE}"),
+                format!("iam:DeleteRole {BUILD_ROLE}"),
+            ]
         );
     }
 }
