@@ -879,8 +879,8 @@ mod tests {
     use alien_aws_clients::AwsClientConfigExt as _;
     use alien_client_core::ErrorData as CloudError;
     use alien_core::{
-        ClientConfig, Platform, Resource, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy,
-        SetupScaffolding, StackResourceState,
+        ClientConfig, Platform, Resource, ResourceLifecycle, ResourceRef, SandboxCode,
+        SandboxLifecyclePolicy, SetupScaffolding, StackResourceState,
     };
     use serde_json::json;
 
@@ -2407,65 +2407,16 @@ mod tests {
     async fn a_second_seed_keeps_a_serving_deny_sandbox_and_hands_it_the_connector() {
         use crate::core::ResourceController as _;
         use crate::sandbox::AwsSandboxController;
-        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
-        use alien_core::import::ImportContext;
 
-        const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
-        let cloud = Shared::default();
-        let stack = stack(SandboxEgress::Deny, created_network());
-        let mut state = stack_state(Some(ResourceStatus::Running));
-        let mut records = BTreeMap::new();
-        converge(&cloud, &stack, &state, &mut records).await;
-        let registry = crate::ImporterRegistry::built_in();
-        let settings = alien_core::StackSettings::default();
-        let mut serving = registry
-            .run(
-                &Sandbox::RESOURCE_TYPE,
-                Platform::Aws,
-                json!({
-                    "imageIdentifier": IMAGE_ARN,
-                    "imageArn": IMAGE_ARN,
-                    "imageVersion": "1.0",
-                }),
-                &ImportContext {
-                    resource_id: "agents",
-                    platform: Platform::Aws,
-                    region: "us-east-1",
-                    stack_settings: &settings,
-                    management_config: None,
-                    resource: &stack.resources["agents"],
-                },
-            )
-            .unwrap();
-        serving.controller_platform = Some(Platform::Aws);
-        state.resources.insert("agents".to_string(), serving);
-
-        let provider = provider(&cloud);
-        let client_config = client_config();
-        let ctx = SetupScaffoldingContext {
-            client_config: &client_config,
-            service_provider: &provider,
-            resource_prefix: PREFIX,
-        };
-        let seeds = seeds(&ctx, &stack, &state, &records).unwrap();
-        apply_seeds(
-            &SeedContext {
-                registry: &registry,
-                stack_settings: &settings,
-                management_config: None,
-            },
-            &stack,
-            &mut state,
-            seeds,
-        )
-        .unwrap();
+        let (cloud, stack, mut state, records) = serving_deny_sandbox().await;
+        seed_again(&cloud, &stack, &mut state, &records).unwrap();
 
         let sandbox = &state.resources["agents"];
         assert_eq!(sandbox.status, ResourceStatus::Running);
         let controller =
             AwsSandboxController::from_persisted(sandbox.internal_state.clone().unwrap()).unwrap();
         assert_eq!(controller.state, crate::sandbox::AwsSandboxState::Ready);
-        assert_eq!(controller.image_arn.as_deref(), Some(IMAGE_ARN));
+        assert_eq!(controller.image_arn.as_deref(), Some(SERVING_IMAGE_ARN));
         assert_eq!(controller.active_version.as_deref(), Some("1.0"));
         let SetupScaffolding::AwsSandbox {
             egress: Some(egress),
@@ -2482,5 +2433,106 @@ mod tests {
         load(&binding)
             .await
             .unwrap_or_else(|error| panic!("the corrected binding must load: {error}\n{binding}"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_second_seed_takes_its_dependencies_from_the_stack() {
+        let (cloud, stack, mut state, records) = serving_deny_sandbox().await;
+        state.resources.get_mut("agents").unwrap().dependencies =
+            vec![ResourceRef::new(Sandbox::RESOURCE_TYPE, "removed-since")];
+
+        seed_again(&cloud, &stack, &mut state, &records).unwrap();
+
+        assert_eq!(
+            state.resources["agents"].dependencies,
+            stack.resources["agents"].combined_dependencies(),
+            "teardown orders by these, so a stale list must not survive the seed"
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_seed_refuses_state_of_another_resource_type() {
+        let (cloud, stack, mut state, records) = serving_deny_sandbox().await;
+        state.resources.get_mut("agents").unwrap().resource_type = "worker".to_string();
+
+        let error = seed_again(&cloud, &stack, &mut state, &records).unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("another resource type or platform"),
+            "{error}"
+        );
+        assert_eq!(state.resources["agents"].resource_type, "worker");
+    }
+
+    const SERVING_IMAGE_ARN: &str =
+        "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+
+    /// A converged deny sandbox whose state was registered Frozen-style: Ready at version 1.0.
+    async fn serving_deny_sandbox() -> (
+        Shared,
+        Stack,
+        StackState,
+        BTreeMap<String, SetupScaffolding>,
+    ) {
+        use alien_core::import::ImportContext;
+
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let mut state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let settings = alien_core::StackSettings::default();
+        let mut serving = crate::ImporterRegistry::built_in()
+            .run(
+                &Sandbox::RESOURCE_TYPE,
+                Platform::Aws,
+                json!({
+                    "imageIdentifier": SERVING_IMAGE_ARN,
+                    "imageArn": SERVING_IMAGE_ARN,
+                    "imageVersion": "1.0",
+                }),
+                &ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &settings,
+                    management_config: None,
+                    resource: &stack.resources["agents"],
+                },
+            )
+            .unwrap();
+        serving.controller_platform = Some(Platform::Aws);
+        state.resources.insert("agents".to_string(), serving);
+        (cloud, stack, state, records)
+    }
+
+    fn seed_again(
+        cloud: &Shared,
+        stack: &Stack,
+        state: &mut StackState,
+        records: &BTreeMap<String, SetupScaffolding>,
+    ) -> Result<()> {
+        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
+
+        let provider = provider(cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let seeds = seeds(&ctx, stack, state, records)?;
+        apply_seeds(
+            &SeedContext {
+                registry: &crate::ImporterRegistry::built_in(),
+                stack_settings: &alien_core::StackSettings::default(),
+                management_config: None,
+            },
+            stack,
+            state,
+            seeds,
+        )
     }
 }
