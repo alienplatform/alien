@@ -648,6 +648,17 @@ mod tests {
         .await;
     }
 
+    /// The check is by name, not by count. Counting would accept a role whose one inline policy is
+    /// someone else's, then add the build policy beside it and pass the result to the build.
+    #[tokio::test]
+    async fn a_role_whose_only_inline_policy_is_foreign_is_refused() {
+        assert_refused(
+            existing(ROLE_ARN, expected_trust(), &["admin"], &[], 0),
+            "inline policies other than 'sandbox-image-build': admin",
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn a_role_with_an_attached_managed_policy_is_refused() {
         assert_refused(
