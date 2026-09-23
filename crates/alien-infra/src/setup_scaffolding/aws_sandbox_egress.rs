@@ -209,11 +209,7 @@ async fn operator_role(
             return match created {
                 Ok(_) => {
                     info!(sandbox_id, role = %name, "Created sandbox egress operator role");
-                    *record = Some(AwsSandboxEgressScaffolding {
-                        operator_role_name: name.to_string(),
-                        security_group_id: None,
-                        connector_arn: None,
-                    });
+                    record_operator_role(record, name);
                     Ok(ScaffoldingProgress::InProgress)
                 }
                 Err(error) if is_conflict(&error) => Ok(ScaffoldingProgress::InProgress),
@@ -254,13 +250,7 @@ async fn operator_role(
             ),
         }));
     }
-    if record.is_none() {
-        *record = Some(AwsSandboxEgressScaffolding {
-            operator_role_name: name.to_string(),
-            security_group_id: None,
-            connector_arn: None,
-        });
-    }
+    record_operator_role(record, name);
 
     let policy =
         sandbox_egress_operator_policy(aws_partition(&aws.region), &aws.account_id, &aws.region);
@@ -315,6 +305,16 @@ async fn deny_security_group(
         .security_group_info
         .and_then(|groups| groups.items.into_iter().next());
 
+    let recorded_id = record
+        .as_ref()
+        .and_then(|egress| egress.security_group_id.clone());
+    if let Some(recorded_id) = recorded_id {
+        if group.as_ref().and_then(|group| group.group_id.as_deref()) != Some(&recorded_id) {
+            forget_a_recorded_group_that_is_gone(ec2, sandbox_id, &recorded_id, vpc_id, record)
+                .await?;
+        }
+    }
+
     let Some(group) = group else {
         let created = ec2
             .create_security_group(
@@ -358,14 +358,23 @@ async fn deny_security_group(
     })?;
     let rules: Vec<IpPermissionResponse> = group
         .ip_permissions_egress
+        .clone()
         .map(|set| set.items)
         .unwrap_or_default();
     let recorded = record
         .as_ref()
         .and_then(|egress| egress.security_group_id.as_deref())
         == Some(group_id.as_str());
+    // CreateSecurityGroup applies its tags atomically, so a group carrying setup's tags for this
+    // sandbox is one this step created before its id could be recorded. Recording it lets the
+    // repair below close EC2's default allow-all egress, which verification would refuse.
+    let tagged = !recorded && carries_setup_tags(&group, ctx.resource_prefix, sandbox_id);
+    if tagged {
+        info!(sandbox_id, security_group = %group_id, "Recognised an unrecorded deny group by its setup tags");
+        record_group(record, group_id.clone());
+    }
 
-    if !recorded {
+    if !recorded && !tagged {
         if !is_loopback_only(&rules) {
             return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
                 resource_id: sandbox_id.to_string(),
@@ -424,6 +433,78 @@ async fn deny_security_group(
         return Ok(None);
     }
     Ok(Some(group_id))
+}
+
+/// Keeps the group and connector already recorded: a role recreated after it went missing must
+/// not drop objects teardown still has to delete.
+fn record_operator_role(record: &mut Option<AwsSandboxEgressScaffolding>, name: &str) {
+    match record {
+        Some(egress) => egress.operator_role_name = name.to_string(),
+        None => {
+            *record = Some(AwsSandboxEgressScaffolding {
+                operator_role_name: name.to_string(),
+                security_group_id: None,
+                connector_arn: None,
+            })
+        }
+    }
+}
+
+fn carries_setup_tags(group: &SecurityGroup, resource_prefix: &str, sandbox_id: &str) -> bool {
+    let tags: Vec<(&str, &str)> = group
+        .tag_set
+        .iter()
+        .flat_map(|set| &set.items)
+        .map(|tag| (tag.key.as_str(), tag.value.as_str()))
+        .collect();
+    setup_tags(resource_prefix, sandbox_id)
+        .iter()
+        .all(|expected| tags.contains(&(expected.key.as_str(), expected.value.as_str())))
+}
+
+/// A recorded group that no longer exists leaves the record, so setup makes a new one. One that
+/// still exists outside this network's VPC cannot follow the sandbox there, and is refused.
+async fn forget_a_recorded_group_that_is_gone(
+    ec2: &dyn Ec2Api,
+    sandbox_id: &str,
+    recorded_id: &str,
+    vpc_id: &str,
+    record: &mut Option<AwsSandboxEgressScaffolding>,
+) -> Result<()> {
+    let described = ec2
+        .describe_security_groups(
+            DescribeSecurityGroupsRequest::builder()
+                .filters(vec![Filter {
+                    name: "group-id".to_string(),
+                    values: vec![recorded_id.to_string()],
+                }])
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to look up recorded security group '{recorded_id}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?;
+    let still_there = described
+        .security_group_info
+        .and_then(|groups| groups.items.into_iter().next());
+    if let Some(group) = still_there {
+        return Err(AlienError::new(ErrorData::SetupScaffoldingNotAdoptable {
+            resource_id: sandbox_id.to_string(),
+            object: format!("security group '{recorded_id}'"),
+            reason: format!(
+                "setup recorded it for this sandbox in VPC '{}', and the sandbox's network is \
+                 now VPC '{vpc_id}'. Its egress objects cannot move to another network: destroy \
+                 the deployment and deploy it again.",
+                group.vpc_id.as_deref().unwrap_or("unknown")
+            ),
+        }));
+    }
+    info!(sandbox_id, security_group = %recorded_id, "Recorded deny group no longer exists");
+    if let Some(egress) = record {
+        egress.security_group_id = None;
+    }
+    Ok(())
 }
 
 fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: String) {
@@ -901,12 +982,13 @@ mod tests {
         }
     }
 
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     struct Group {
         id: String,
         name: String,
         vpc: String,
         egress: Vec<Rule>,
+        tags: Vec<(String, String)>,
     }
 
     /// An in-memory account: what exists, and every mutating call made against it, in order.
@@ -925,6 +1007,21 @@ mod tests {
         /// The state a created connector reports.
         created_state: Option<&'static str>,
         next_id: usize,
+        /// The 1-based mutating call whose effect lands but whose response is lost.
+        lose_response_to: Option<usize>,
+    }
+
+    impl Cloud {
+        /// Called after a mutating call has taken effect.
+        fn respond(&mut self) -> std::result::Result<(), AlienError<CloudError>> {
+            if self.lose_response_to == Some(self.mutations.len()) {
+                self.lose_response_to = None;
+                return Err(AlienError::new(CloudError::Timeout {
+                    message: format!("no response to {}", self.mutations.last().unwrap()),
+                }));
+            }
+            Ok(())
+        }
     }
 
     type Shared = Arc<Mutex<Cloud>>;
@@ -984,6 +1081,7 @@ mod tests {
                 .mutations
                 .push(format!("iam:CreateRole {}", request.role_name));
             cloud.roles.insert(request.role_name.clone(), trust.clone());
+            cloud.respond()?;
             Ok(CreateRoleResponse {
                 create_role_result: CreateRoleResult {
                     role: role(&request.role_name, &trust),
@@ -1056,7 +1154,7 @@ mod tests {
                 cloud
                     .inline
                     .insert((role.to_string(), policy.to_string()), document.to_string());
-                Ok(())
+                cloud.respond()
             });
         let c = cloud.clone();
         iam.expect_delete_role_policy()
@@ -1068,18 +1166,15 @@ mod tests {
                 cloud
                     .inline
                     .remove(&(role.to_string(), policy.to_string()))
-                    .map(|_| ())
-                    .ok_or_else(|| not_found(policy))
+                    .ok_or_else(|| not_found(policy))?;
+                cloud.respond()
             });
         let c = cloud.clone();
         iam.expect_delete_role().returning(move |role| {
             let mut cloud = c.lock().unwrap();
             cloud.mutations.push(format!("iam:DeleteRole {role}"));
-            cloud
-                .roles
-                .remove(role)
-                .map(|_| ())
-                .ok_or_else(|| not_found(role))
+            cloud.roles.remove(role).ok_or_else(|| not_found(role))?;
+            cloud.respond()
         });
         iam
     }
@@ -1144,7 +1239,16 @@ mod tests {
                     })
                     .collect(),
             }),
-            tag_set: None,
+            tag_set: Some(alien_aws_clients::ec2::TagSet {
+                items: group
+                    .tags
+                    .iter()
+                    .map(|(key, value)| Tag {
+                        key: key.clone(),
+                        value: value.clone(),
+                    })
+                    .collect(),
+            }),
         }
     }
 
@@ -1178,19 +1282,32 @@ mod tests {
                         .flatten()
                         .find(|f| f.name == key)
                         .map(|f| f.values.clone())
-                        .unwrap_or_else(|| panic!("the lookup must filter by {key}"))
                 };
-                let (names, vpcs) = (filter("group-name"), filter("vpc-id"));
+                assert!(
+                    request.group_ids.is_none(),
+                    "GroupIds fails on a missing group; look it up by the group-id filter"
+                );
                 let cloud = c.lock().unwrap();
-                Ok(DescribeSecurityGroupsResponse {
-                    security_group_info: Some(SecurityGroupSet {
-                        items: cloud
+                let matching: Vec<SecurityGroup> = match filter("group-id") {
+                    Some(ids) => cloud
+                        .groups
+                        .iter()
+                        .filter(|g| ids.contains(&g.id))
+                        .map(described)
+                        .collect(),
+                    None => {
+                        let names = filter("group-name").expect("the lookup filters by name");
+                        let vpcs = filter("vpc-id").expect("the lookup filters by VPC");
+                        cloud
                             .groups
                             .iter()
                             .filter(|g| names.contains(&g.name) && vpcs.contains(&g.vpc))
                             .map(described)
-                            .collect(),
-                    }),
+                            .collect()
+                    }
+                };
+                Ok(DescribeSecurityGroupsResponse {
+                    security_group_info: Some(SecurityGroupSet { items: matching }),
                     next_token: None,
                 })
             });
@@ -1209,7 +1326,15 @@ mod tests {
                     name: request.group_name,
                     vpc: request.vpc_id,
                     egress: vec![rule("0.0.0.0/0")],
+                    tags: request
+                        .tag_specifications
+                        .iter()
+                        .flatten()
+                        .flat_map(|spec| &spec.tags)
+                        .map(|tag| (tag.key.clone(), tag.value.clone()))
+                        .collect(),
                 });
+                cloud.respond()?;
                 Ok(CreateSecurityGroupResponse { group_id: Some(id) })
             });
         let c = cloud.clone();
@@ -1230,7 +1355,7 @@ mod tests {
                     .find(|g| g.id == request.group_id)
                     .ok_or_else(|| not_found(&request.group_id))?;
                 group.egress.retain(|rule| !revoked.contains(rule));
-                Ok(())
+                cloud.respond()
             });
         let c = cloud.clone();
         ec2.expect_authorize_security_group_egress()
@@ -1250,7 +1375,7 @@ mod tests {
                     .find(|g| g.id == request.group_id)
                     .ok_or_else(|| not_found(&request.group_id))?;
                 group.egress.extend(added);
-                Ok(())
+                cloud.respond()
             });
         let c = cloud.clone();
         ec2.expect_delete_security_group()
@@ -1272,7 +1397,7 @@ mod tests {
                 if cloud.groups.len() == before {
                     return Err(not_found(group_id));
                 }
-                Ok(())
+                cloud.respond()
             });
         ec2
     }
@@ -1308,6 +1433,7 @@ mod tests {
                 token.clone(),
                 event(&token, OperationStatus::Success, Some(&arn)),
             );
+            cloud.respond()?;
             Ok(event(&token, OperationStatus::InProgress, None))
         });
         let c = cloud.clone();
@@ -1367,6 +1493,7 @@ mod tests {
                 token.clone(),
                 event(&token, OperationStatus::Success, Some(identifier)),
             );
+            cloud.respond()?;
             Ok(event(&token, OperationStatus::InProgress, None))
         });
         cc
@@ -1765,6 +1892,7 @@ mod tests {
             name: EGRESS_NAME.to_string(),
             vpc: VPC.to_string(),
             egress,
+            tags: vec![],
         });
         cloud
     }
@@ -1800,6 +1928,237 @@ mod tests {
         let mut loopback_and_peer = rule("127.0.0.1/32");
         loopback_and_peer.groups = vec!["sg-peer".to_string()];
         assert_not_adoptable(&preexisting_group(vec![loopback_and_peer]), "sg-foreign").await;
+    }
+
+    fn tags_for(prefix: &str, sandbox_id: &str) -> Vec<(String, String)> {
+        setup_tags(prefix, sandbox_id)
+            .into_iter()
+            .map(|tag| (tag.key, tag.value))
+            .collect()
+    }
+
+    /// Setup created this group and lost the response, so its id never reached the record.
+    fn open_group_tagged_for(prefix: &str, sandbox_id: &str) -> Shared {
+        let cloud = preexisting_group(vec![rule("0.0.0.0/0")]);
+        cloud.lock().unwrap().groups[0].tags = tags_for(prefix, sandbox_id);
+        cloud
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_unrecorded_group_carrying_setup_tags_is_recorded_and_repaired() {
+        let cloud = open_group_tagged_for(PREFIX, "agents");
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        assert_eq!(
+            made.iter()
+                .filter(|call| call.starts_with("ec2:CreateSecurityGroup"))
+                .count(),
+            0,
+            "the tagged group is the sandbox's, not a reason to make another"
+        );
+        let cloud = cloud.lock().unwrap();
+        assert_eq!(cloud.groups.len(), 1);
+        assert_eq!(cloud.groups[0].egress, vec![rule("127.0.0.1/32")]);
+        let connector_arn = cloud.connectors[0].0.clone();
+        assert_eq!(
+            records,
+            BTreeMap::from([(
+                "agents".to_string(),
+                full_record("sg-foreign", &connector_arn)
+            )])
+        );
+    }
+
+    #[tokio::test]
+    async fn an_open_group_tagged_for_another_sandbox_or_stack_is_refused() {
+        for (prefix, sandbox_id) in [(PREFIX, "other"), ("other", "agents")] {
+            let cloud = open_group_tagged_for(prefix, sandbox_id);
+            assert_not_adoptable(&cloud, "sg-foreign").await;
+            assert_eq!(
+                cloud.lock().unwrap().groups[0].egress,
+                vec![rule("0.0.0.0/0")],
+                "a group tagged for anything else is never rewritten"
+            );
+        }
+    }
+
+    fn record_with_group(security_group_id: &str) -> BTreeMap<String, SetupScaffolding> {
+        BTreeMap::from([(
+            "agents".to_string(),
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: Some(AwsSandboxEgressScaffolding {
+                    operator_role_name: EGRESS_NAME.to_string(),
+                    security_group_id: Some(security_group_id.to_string()),
+                    connector_arn: None,
+                }),
+            },
+        )])
+    }
+
+    #[tokio::test]
+    async fn a_recorded_group_left_in_another_vpc_is_refused() {
+        let cloud = Shared::default();
+        cloud.lock().unwrap().groups.push(Group {
+            id: "sg-old".to_string(),
+            name: EGRESS_NAME.to_string(),
+            vpc: "vpc-0previous".to_string(),
+            egress: vec![rule("127.0.0.1/32")],
+            tags: tags_for(PREFIX, "agents"),
+        });
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = record_with_group("sg-old");
+        let mut calls = 0;
+        let error = loop {
+            bounded(&mut calls);
+            match step(&cloud, &stack, &state, &mut records).await {
+                Ok((ScaffoldingProgress::InProgress, _)) => continue,
+                Ok((ScaffoldingProgress::Done, made)) => panic!("converged: {made:?}"),
+                Err(error) => break error,
+            }
+        };
+        assert_eq!(error.code, "SETUP_SCAFFOLDING_NOT_ADOPTABLE");
+        assert!(
+            error.message.contains("vpc-0previous")
+                && error.message.contains(VPC)
+                && error
+                    .message
+                    .contains("destroy the deployment and deploy it again"),
+            "{}",
+            error.message
+        );
+        let cloud = cloud.lock().unwrap();
+        assert!(
+            !cloud
+                .mutations
+                .iter()
+                .any(|call| call.starts_with("ec2:") || call.starts_with("cloudcontrol:")),
+            "no second group or connector is made while the first is still recorded: {:?}",
+            cloud.mutations
+        );
+        assert_eq!(records, record_with_group("sg-old"));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_recorded_group_that_no_longer_exists_is_replaced() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = record_with_group("sg-deleted-by-hand");
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        assert_eq!(
+            made.iter()
+                .filter(|call| call.starts_with("ec2:CreateSecurityGroup"))
+                .count(),
+            1
+        );
+        let connector_arn = cloud.lock().unwrap().connectors[0].0.clone();
+        assert_eq!(
+            records,
+            BTreeMap::from([("agents".to_string(), full_record("sg-1", &connector_arn))])
+        );
+    }
+
+    /// Each mutating call in turn takes effect and then loses its response, as a crash between
+    /// the call and the checkpoint would. Setup and teardown must each still finish with one of
+    /// every object while set up, and none after, without refusing their own objects.
+    #[tokio::test(start_paused = true)]
+    async fn a_lost_response_at_any_mutating_call_still_converges() {
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let total = {
+            let cloud = Shared::default();
+            let mut records = BTreeMap::new();
+            converge(&cloud, &stack, &state, &mut records).await;
+            while tear_down(&cloud, &mut records).await.unwrap().0 != ScaffoldingProgress::Done {}
+            let total = cloud.lock().unwrap().mutations.len();
+            total
+        };
+        assert_eq!(total, 14, "8 setup calls and 6 teardown calls");
+
+        for lost in 1..=total {
+            let cloud = Shared::default();
+            cloud.lock().unwrap().lose_response_to = Some(lost);
+            let mut records = BTreeMap::new();
+            let mut failures = 0;
+            let mut calls = 0;
+            loop {
+                bounded(&mut calls);
+                match step(&cloud, &stack, &state, &mut records).await {
+                    Ok((ScaffoldingProgress::Done, _)) => break,
+                    Ok((ScaffoldingProgress::InProgress, _)) => {}
+                    Err(error) => {
+                        failures += 1;
+                        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR", "call {lost}: {error}");
+                    }
+                }
+            }
+            {
+                let cloud = cloud.lock().unwrap();
+                let created = |prefix: &str| {
+                    cloud
+                        .mutations
+                        .iter()
+                        .filter(|call| call.starts_with(prefix))
+                        .count()
+                };
+                assert_eq!(
+                    created(&format!("iam:CreateRole {BUILD_ROLE}")),
+                    1,
+                    "call {lost}"
+                );
+                assert_eq!(
+                    created(&format!("iam:CreateRole {EGRESS_NAME}")),
+                    1,
+                    "call {lost}"
+                );
+                assert_eq!(created("ec2:CreateSecurityGroup"), 1, "call {lost}");
+                assert_eq!(created("cloudcontrol:CreateResource"), 1, "call {lost}");
+                assert_eq!(cloud.groups.len(), 1, "call {lost}");
+                assert_eq!(
+                    cloud.groups[0].egress,
+                    vec![rule("127.0.0.1/32")],
+                    "call {lost}"
+                );
+                assert_eq!(cloud.inline.len(), 2, "call {lost}");
+                let connector_arn = cloud.connectors[0].0.clone();
+                assert_eq!(
+                    records,
+                    BTreeMap::from([(
+                        "agents".to_string(),
+                        full_record(&cloud.groups[0].id, &connector_arn)
+                    )]),
+                    "call {lost}"
+                );
+            }
+
+            let mut calls = 0;
+            loop {
+                bounded(&mut calls);
+                match tear_down(&cloud, &mut records).await {
+                    Ok((ScaffoldingProgress::Done, _)) => break,
+                    Ok((ScaffoldingProgress::InProgress, _)) => {}
+                    Err(error) => {
+                        failures += 1;
+                        assert_eq!(error.code, "CLOUD_PLATFORM_ERROR", "call {lost}: {error}");
+                    }
+                }
+            }
+            assert_eq!(failures, 1, "call {lost}: the lost response surfaces once");
+            let cloud = cloud.lock().unwrap();
+            assert!(records.is_empty(), "call {lost}");
+            assert!(cloud.roles.is_empty(), "call {lost}: {:?}", cloud.roles);
+            assert!(cloud.inline.is_empty(), "call {lost}");
+            assert!(cloud.groups.is_empty(), "call {lost}");
+            assert!(cloud.connectors.is_empty(), "call {lost}");
+        }
     }
 
     #[tokio::test(start_paused = true)]
@@ -1905,6 +2264,7 @@ mod tests {
                 name: EGRESS_NAME.to_string(),
                 vpc: VPC.to_string(),
                 egress: vec![rule("127.0.0.1/32")],
+                tags: vec![],
             });
             let mut properties = desired_connector("sg-open");
             properties["State"] = json!("ACTIVE");
