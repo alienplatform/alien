@@ -609,12 +609,9 @@ fn environment_variables() -> CfExpression {
 /// Resolves the S3 bundle the MicroVM image is built from.
 ///
 /// A MicroVM image is built from a zip containing a Dockerfile, not from a container image
-/// What Lambda may do while managing the connector's network interfaces.
-///
-/// Reproduces the role AWS documents as the prerequisite for creating a network connector, and
-/// the contents of its `AWSLambdaNetworkConnectorOperatorPolicy`. Written out rather than
-/// attached so the grant is visible in the template the customer reads and does not change under
-/// them when AWS revises the managed policy.
+/// What Lambda may do while managing the connector's network interfaces: the resolved form is
+/// `sandbox_egress_operator_policy`. Written out rather than attaching AWS's managed policy so the
+/// grant is visible in the template the customer reads and does not change under them.
 fn operator_policies() -> CfExpression {
     CfExpression::list([CfExpression::object([
         ("PolicyName", CfExpression::from("sandbox-egress-connector")),
@@ -653,12 +650,18 @@ fn operator_policies() -> CfExpression {
                                 "Condition",
                                 CfExpression::object([(
                                     "StringEquals",
-                                    CfExpression::object([(
-                                        "ec2:ManagedResourceOperator",
-                                        CfExpression::from(
-                                            "network-connectors.lambda.amazonaws.com",
+                                    CfExpression::object([
+                                        (
+                                            "ec2:CreateAction",
+                                            CfExpression::from("CreateNetworkInterface"),
                                         ),
-                                    )]),
+                                        (
+                                            "ec2:ManagedResourceOperator",
+                                            CfExpression::from(
+                                                "network-connectors.lambda.amazonaws.com",
+                                            ),
+                                        ),
+                                    ]),
                                 )]),
                             ),
                         ]),

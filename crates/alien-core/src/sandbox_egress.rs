@@ -45,8 +45,9 @@ pub fn sandbox_egress_operator_trust_policy() -> Value {
     })
 }
 
-/// The contents of AWS's `AWSLambdaNetworkConnectorOperatorPolicy`, written out so it does not
-/// change under the customer when AWS revises the managed policy.
+/// Lets Lambda create the connector's network interfaces and tag each one only as it creates it.
+/// Unlike AWS's `AWSLambdaNetworkConnectorOperatorPolicy` it is pinned to this account and Region,
+/// and puts no `aws:TagKeys` condition on the interface it creates.
 pub fn sandbox_egress_operator_policy(partition: &str, account_id: &str, region: &str) -> Value {
     let arn = |kind: &str| format!("arn:{partition}:ec2:{region}:{account_id}:{kind}/*");
     json!({
@@ -65,6 +66,7 @@ pub fn sandbox_egress_operator_policy(partition: &str, account_id: &str, region:
                 "Resource": arn("network-interface"),
                 "Condition": {
                     "StringEquals": {
+                        "ec2:CreateAction": "CreateNetworkInterface",
                         "ec2:ManagedResourceOperator": "network-connectors.lambda.amazonaws.com"
                     }
                 }
@@ -227,6 +229,26 @@ mod tests {
             assert_eq!(found.id, "net");
         }
         Ok(found.map(|found| found.vpc))
+    }
+
+    #[test]
+    fn the_operator_role_tags_only_the_interface_it_is_creating() {
+        let policy = sandbox_egress_operator_policy("aws", "123456789012", "us-east-1");
+        let tagging = policy["Statement"]
+            .as_array()
+            .expect("statements")
+            .iter()
+            .find(|statement| statement["Action"] == "ec2:CreateTags")
+            .expect("the role tags the interfaces it creates");
+        assert_eq!(
+            tagging["Condition"],
+            json!({
+                "StringEquals": {
+                    "ec2:CreateAction": "CreateNetworkInterface",
+                    "ec2:ManagedResourceOperator": "network-connectors.lambda.amazonaws.com"
+                }
+            })
+        );
     }
 
     #[test]

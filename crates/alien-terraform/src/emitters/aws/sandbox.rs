@@ -743,12 +743,9 @@ fn code_artifact_uri(uri: BundleUri<'_>) -> Expression {
     }
 }
 
-/// What Lambda may do while managing the connector's network interfaces.
-///
-/// Reproduces the role AWS documents as the prerequisite for creating a network connector, and
-/// the contents of its `AWSLambdaNetworkConnectorOperatorPolicy`. Written out rather than
-/// attached so the grant is visible in the module the customer reads and does not change under
-/// them when AWS revises the managed policy.
+/// What Lambda may do while managing the connector's network interfaces: the resolved form is
+/// `sandbox_egress_operator_policy`. Written out rather than attaching AWS's managed policy so the
+/// grant is visible in the module the customer reads and does not change under them.
 fn operator_statements() -> Vec<Expression> {
     vec![
         Expression::from_iter([
@@ -788,10 +785,18 @@ fn operator_statements() -> Vec<Expression> {
                 "Condition",
                 Expression::from_iter([(
                     "StringEquals",
-                    Expression::from_iter([(
-                        "ec2:ManagedResourceOperator",
-                        Expression::String("network-connectors.lambda.amazonaws.com".to_string()),
-                    )]),
+                    Expression::from_iter([
+                        (
+                            "ec2:CreateAction",
+                            Expression::String("CreateNetworkInterface".to_string()),
+                        ),
+                        (
+                            "ec2:ManagedResourceOperator",
+                            Expression::String(
+                                "network-connectors.lambda.amazonaws.com".to_string(),
+                            ),
+                        ),
+                    ]),
                 )]),
             ),
         ]),
