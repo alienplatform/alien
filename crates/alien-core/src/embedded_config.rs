@@ -331,8 +331,11 @@ mod tests {
             env_prefix: Some("ACME".into()),
             label_domain: Some("acme.dev".into()),
         };
-        let directory = tempfile::tempdir().expect("create config directory");
-        let path = directory.path().join("operator-config.json");
+        let path = std::env::temp_dir().join(format!(
+            "alien-operator-config-{}-{}.json",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
         std::fs::write(
             &path,
             serde_json::to_vec(&config).expect("serialize operator config"),
@@ -347,6 +350,7 @@ mod tests {
         assert_eq!(loaded.display_name.as_deref(), Some("Acme Operator"));
         assert_eq!(loaded.env_prefix.as_deref(), Some("ACME"));
         assert_eq!(loaded.label_domain.as_deref(), Some("acme.dev"));
+        std::fs::remove_file(path).expect("remove operator config");
     }
 
     /// Helper that works on in-memory bytes (for tests that don't need files).
