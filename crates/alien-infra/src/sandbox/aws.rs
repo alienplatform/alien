@@ -25,6 +25,7 @@ use alien_aws_clients::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::sandbox_build_role::sandbox_build_role_arn;
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
@@ -130,7 +131,7 @@ impl AwsSandboxController {
         // config and the deployment's own names, so a create that restarts after a failure still
         // has them — and the adopt below, which is what makes that restart safe, is reachable.
         let build_role_arn = sandbox_build_role_arn(
-            &aws_config.region,
+            aws_partition(&aws_config.region),
             &aws_config.account_id,
             ctx.resource_prefix,
             &config.id,
@@ -520,7 +521,7 @@ impl AwsSandboxController {
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
         let build_role_arn = sandbox_build_role_arn(
-            &aws_config.region,
+            aws_partition(&aws_config.region),
             &aws_config.account_id,
             ctx.resource_prefix,
             &config.id,
@@ -1016,23 +1017,6 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .collect()
 }
 
-/// The build role setup installs for this sandbox, named the way both generators name it.
-///
-/// Derived rather than read back from the registration: `SandboxBuildRoleNameCheck` refuses at
-/// plan time any id that could reach IAM's 64-character ceiling, so neither generator clamps the
-/// name, and `sandbox/provision` already scopes its `iam:PassRole` to this same shape.
-fn sandbox_build_role_arn(
-    region: &str,
-    account_id: &str,
-    resource_prefix: &str,
-    resource_id: &str,
-) -> String {
-    format!(
-        "arn:{}:iam::{account_id}:role/{resource_prefix}-{resource_id}-build",
-        aws_partition(region)
-    )
-}
-
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
 /// that no absent-resource check can read as absence. The name is account-unique, so the ARN
 /// it will carry is derivable before the image exists.
@@ -1062,7 +1046,7 @@ fn internet_egress_connector_arn(region: &str) -> String {
 
 /// Partition for ARNs the controller mints itself, where no CloudFormation pseudo-parameter
 /// can resolve it.
-fn aws_partition(region: &str) -> &'static str {
+pub(crate) fn aws_partition(region: &str) -> &'static str {
     if region.starts_with("us-gov-") {
         "aws-us-gov"
     } else if region.starts_with("cn-") {

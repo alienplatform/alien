@@ -15,6 +15,26 @@ pub const SANDBOX_BUILD_POLICY_NAME: &str = "sandbox-image-build";
 
 const IAM_POLICY_VERSION: &str = "2012-10-17";
 
+/// The one derivation of the build role's name: the step that creates the role and the controller
+/// that passes it must agree. Never clamped, because `SandboxBuildRoleNameCheck` refuses any id
+/// that could reach IAM's 64-character ceiling and `iam:PassRole` is scoped to this exact name.
+pub fn sandbox_build_role_name(resource_prefix: &str, sandbox_id: &str) -> String {
+    format!("{resource_prefix}-{sandbox_id}-build")
+}
+
+/// The ARN of [`sandbox_build_role_name`] at the root path, where the role is created.
+pub fn sandbox_build_role_arn(
+    partition: &str,
+    account_id: &str,
+    resource_prefix: &str,
+    sandbox_id: &str,
+) -> String {
+    format!(
+        "arn:{partition}:iam::{account_id}:role/{}",
+        sandbox_build_role_name(resource_prefix, sandbox_id)
+    )
+}
+
 /// Whether a statement grants or refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum IamEffect {
