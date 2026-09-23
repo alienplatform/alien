@@ -132,15 +132,17 @@ fn map_result<T>(result: Result<T>, resource: &str) -> Result<T> {
         },
         "ThrottlingException" => ErrorData::RateLimitExceeded { message },
         "ServiceLimitExceededException" => ErrorData::QuotaExceeded { message },
-        "ServiceInternalErrorException" | "NetworkFailureException" => {
-            ErrorData::RemoteServiceUnavailable { message }
-        }
-        "InvalidRequestException" | "TypeNotFoundException" | "UnsupportedActionException" => {
-            ErrorData::InvalidInput {
-                message,
-                field_name: None,
-            }
-        }
+        "ServiceInternalErrorException"
+        | "NetworkFailureException"
+        | "NotStabilizedException"
+        | "HandlerInternalFailureException" => ErrorData::RemoteServiceUnavailable { message },
+        "InvalidRequestException"
+        | "NotUpdatableException"
+        | "TypeNotFoundException"
+        | "UnsupportedActionException" => ErrorData::InvalidInput {
+            message,
+            field_name: None,
+        },
         _ if status == StatusCode::TOO_MANY_REQUESTS => ErrorData::RateLimitExceeded { message },
         _ => ErrorData::GenericError {
             message: format!("Cloud Control {code} for '{resource}': {message}"),
@@ -324,8 +326,9 @@ impl ProgressEvent {
 
     /// The error a FAILED or cancelled request stands for, carrying AWS's code and message.
     ///
-    /// `NotFound` and `AlreadyExists` map to the same variants a synchronous refusal does, so a
-    /// caller handles "already gone" and "already there" the same way whichever path reports it.
+    /// Each handler error code maps to the variant its synchronous exception gets, so a caller
+    /// reads retryable/internal the same way whichever path reports the failure.
+    /// `GeneralServiceException` is AWS's own "unclassified" code and stays a `GenericError`.
     pub fn failure(&self) -> Option<AlienError<ErrorData>> {
         if !matches!(
             self.operation_status,
@@ -362,6 +365,16 @@ impl ProgressEvent {
                 resource_name: resource,
             },
             "Throttling" => ErrorData::RateLimitExceeded { message },
+            "ServiceLimitExceeded" => ErrorData::QuotaExceeded { message },
+            "ServiceInternalError"
+            | "NetworkFailure"
+            | "NotStabilized"
+            | "InternalFailure"
+            | "ServiceTimeout" => ErrorData::RemoteServiceUnavailable { message },
+            "InvalidRequest" | "NotUpdatable" => ErrorData::InvalidInput {
+                message,
+                field_name: None,
+            },
             "AccessDenied" | "InvalidCredentials" | "UnauthorizedTaggingOperation" => {
                 ErrorData::RemoteAccessDenied {
                     resource_type: "Cloud Control resource".into(),

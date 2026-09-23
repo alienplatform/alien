@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use alien_aws_clients::cloudcontrol::{CreateResourceRequest, OperationStatus};
+use alien_aws_clients::cloudcontrol::{CreateResourceRequest, OperationStatus, ProgressEvent};
 use alien_aws_clients::{
     AwsClientConfig, AwsCredentialProvider, AwsCredentials, CloudControlApi, CloudControlClient,
     ErrorData, ServiceOverrides,
@@ -112,7 +112,15 @@ async fn a_failed_request_carries_the_handler_code_and_status_message() {
 
     assert!(event.is_terminal());
     let failure = event.failure().expect("a FAILED request is an error");
-    assert_eq!(failure.code, "GENERIC_ERROR");
+    assert_eq!(failure.code, "INVALID_INPUT");
+    assert!(
+        !failure.retryable,
+        "a rejected input fails the same way again"
+    );
+    assert!(
+        !failure.internal,
+        "the handler's reason is the user's to act on"
+    );
     assert!(
         failure.message.contains("InvalidRequest")
             && failure
@@ -121,6 +129,44 @@ async fn a_failed_request_carries_the_handler_code_and_status_message() {
         "{}",
         failure.message
     );
+}
+
+#[test]
+fn handler_error_codes_carry_their_retry_and_visibility() {
+    for (handler_code, code, retryable, internal) in [
+        ("InvalidRequest", "INVALID_INPUT", false, false),
+        ("NotUpdatable", "INVALID_INPUT", false, false),
+        ("ServiceLimitExceeded", "QUOTA_EXCEEDED", true, false),
+        (
+            "ServiceInternalError",
+            "REMOTE_SERVICE_UNAVAILABLE",
+            true,
+            false,
+        ),
+        ("ServiceTimeout", "REMOTE_SERVICE_UNAVAILABLE", true, false),
+        ("GeneralServiceException", "GENERIC_ERROR", true, true),
+        ("SomethingAwsAddsLater", "GENERIC_ERROR", true, true),
+    ] {
+        let event: ProgressEvent = serde_json::from_value(json!({
+            "TypeName": TYPE_NAME,
+            "RequestToken": "token-1",
+            "Operation": "CREATE",
+            "OperationStatus": "FAILED",
+            "ErrorCode": handler_code,
+            "StatusMessage": "the handler's own words"
+        }))
+        .expect("a FAILED progress event parses");
+
+        let failure = event.failure().expect("a FAILED request is an error");
+        assert_eq!(failure.code, code, "{handler_code}");
+        assert_eq!(failure.retryable, retryable, "{handler_code} retryable");
+        assert_eq!(failure.internal, internal, "{handler_code} internal");
+        assert!(
+            failure.message.contains("the handler's own words"),
+            "{handler_code}: {}",
+            failure.message
+        );
+    }
 }
 
 #[tokio::test]
