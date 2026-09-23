@@ -2024,13 +2024,13 @@ mod tests {
             made,
             vec![
                 format!("iam:CreateRole {BUILD_ROLE}"),
+                format!("iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"),
                 format!("iam:CreateRole {EGRESS_NAME}"),
                 format!("iam:PutRolePolicy {EGRESS_NAME} {SANDBOX_EGRESS_POLICY_NAME}"),
                 format!("ec2:CreateSecurityGroup {EGRESS_NAME}"),
                 "ec2:RevokeSecurityGroupEgress [\"0.0.0.0/0\"]".to_string(),
                 "ec2:AuthorizeSecurityGroupEgress [\"127.0.0.1/32\"]".to_string(),
                 format!("cloudcontrol:CreateResource {desired}"),
-                format!("iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"),
             ]
         );
         let cloud = cloud.lock().unwrap();
@@ -2133,7 +2133,10 @@ mod tests {
         let cloud = cloud.lock().unwrap();
         assert_eq!(
             cloud.mutations,
-            vec![format!("iam:CreateRole {BUILD_ROLE}")],
+            vec![
+                format!("iam:CreateRole {BUILD_ROLE}"),
+                format!("iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"),
+            ],
             "nothing past the build role before the network is running"
         );
     }
@@ -2633,12 +2636,7 @@ mod tests {
 
         let made = converge(&cloud, &stack, &state, &mut records).await;
 
-        assert_eq!(
-            made,
-            vec![format!(
-                "iam:PutRolePolicy {BUILD_ROLE} sandbox-image-build"
-            )]
-        );
+        assert_eq!(made, Vec::<String>::new());
         let cloud = cloud.lock().unwrap();
         assert_eq!(cloud.connectors.len(), 1, "one connector, not two");
         assert_eq!(

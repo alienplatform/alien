@@ -720,6 +720,62 @@ mod tests {
         present
     }
 
+    /// The build role as a finished setup left it: its policy already reads back as setup's.
+    fn ready_role() -> MockIamApi {
+        let policy = serde_json::to_value(
+            alien_core::sandbox_build_role::SandboxBuildRole::builder()
+                .sandbox_id("agents")
+                .partition("aws")
+                .account_id("123456789012")
+                .region("us-east-1")
+                .bundle_uri(BUNDLE_URI)
+                .runtime_built(true)
+                .build()
+                .policy()
+                .unwrap(),
+        )
+        .unwrap();
+        let mut ready = MockIamApi::new();
+        ready.expect_get_role().returning(|_| {
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        ready.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: Some(PolicyNames {
+                        member: vec!["sandbox-image-build".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        ready.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        ready.expect_get_role_policy().returning(move |role, name| {
+            Ok(alien_aws_clients::iam::GetRolePolicyResponse {
+                get_role_policy_result: alien_aws_clients::iam::GetRolePolicyResult {
+                    role_name: role.to_string(),
+                    policy_name: name.to_string(),
+                    policy_document: policy.to_string(),
+                },
+            })
+        });
+        ready.expect_put_role_policy().never();
+        ready
+    }
+
     /// A Live sandbox is the only resource, so Frozen setup is finished at once; the build
     /// role is what holds the handoff until it exists and carries its policy.
     #[tokio::test]
@@ -790,8 +846,22 @@ mod tests {
         )
         .await
         .unwrap();
-        assert_eq!(second.state.status, DeploymentStatus::Provisioning);
-        let seeded = &second.state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(
+            second.state.status,
+            DeploymentStatus::InitialSetup,
+            "the pass that applies the build policy does not also hand off"
+        );
+
+        let third = handle_initial_setup(
+            second.state,
+            config(),
+            aws_client_config(),
+            with_iam(ready_role()),
+        )
+        .await
+        .unwrap();
+        assert_eq!(third.state.status, DeploymentStatus::Provisioning);
+        let seeded = &third.state.stack_state.as_ref().unwrap().resources["agents"];
         assert_eq!(seeded.status, ResourceStatus::Provisioning);
         let controller = seeded.internal_state.as_ref().unwrap();
         assert_eq!(controller["state"], "creatingImage");
@@ -803,7 +873,7 @@ mod tests {
         assert_eq!(controller["allowEgress"], true);
         assert_eq!(controller["previewPorts"], serde_json::json!([8080]));
         assert_eq!(
-            second.state.runtime_metadata.unwrap().setup_scaffolding,
+            third.state.runtime_metadata.unwrap().setup_scaffolding,
             recorded
         );
     }
@@ -1154,7 +1224,7 @@ mod tests {
             deployment,
             config(),
             aws_client_config(),
-            with_iam(present_role()),
+            with_iam(ready_role()),
         )
         .await
         .unwrap()
@@ -1250,7 +1320,7 @@ mod tests {
             with_serving_sandbox(live_sandbox_setup(InitialSetupAuthority::DirectSetup)).await,
             config(),
             aws_client_config(),
-            with_iam(present_role()),
+            with_iam(ready_role()),
         )
         .await
         .unwrap();
@@ -1290,7 +1360,7 @@ mod tests {
             deployment,
             config(),
             aws_client_config(),
-            with_iam(present_role()),
+            with_iam(ready_role()),
         )
         .await
         .expect("a seed failure is a failed setup, not a lost step");

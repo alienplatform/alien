@@ -27,8 +27,8 @@ use crate::{ErrorData, Result};
 /// another deployment's setup made under a name that collides with this one, would otherwise be
 /// handed to a build running customer code and later deleted by this deployment's teardown.
 ///
-/// A deny sandbox's egress objects come between verifying the role and applying its policy, so
-/// each call still makes at most one mutating call.
+/// The role's policy lands before any egress object, so a verified role never keeps content no
+/// one checked while the rest is still being built.
 pub(super) async fn reconcile(
     ctx: &SetupScaffoldingContext<'_>,
     stack: &Stack,
@@ -113,18 +113,6 @@ pub(super) async fn reconcile(
 
     record(records, &sandbox.id, role_name.clone());
 
-    if let Some(network_id) = egress_network {
-        let SetupScaffolding::AwsSandbox { egress, .. } = records
-            .get_mut(&sandbox.id)
-            .unwrap_or_else(|| unreachable!("recorded above"));
-        let progress =
-            aws_sandbox_egress::reconcile(ctx, aws, &sandbox.id, network_id, stack_state, egress)
-                .await?;
-        if progress == ScaffoldingProgress::InProgress {
-            return Ok(progress);
-        }
-    }
-
     if applied_policy(
         iam.as_ref(),
         &role_name,
@@ -133,19 +121,34 @@ pub(super) async fn reconcile(
     )
     .await?
     .as_ref()
-        == Some(&policy)
+        != Some(&policy)
     {
-        return Ok(ScaffoldingProgress::Done);
+        iam.put_role_policy(&role_name, SANDBOX_BUILD_POLICY_NAME, &policy.to_string())
+            .await
+            .context(ErrorData::CloudPlatformError {
+                message: format!(
+                    "Failed to apply policy '{SANDBOX_BUILD_POLICY_NAME}' to sandbox build role \
+                     '{role_name}'"
+                ),
+                resource_id: Some(sandbox.id.clone()),
+            })?;
+        return Ok(ScaffoldingProgress::InProgress);
     }
-    iam.put_role_policy(&role_name, SANDBOX_BUILD_POLICY_NAME, &policy.to_string())
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!(
-                "Failed to apply policy '{SANDBOX_BUILD_POLICY_NAME}' to sandbox build role \
-                 '{role_name}'"
-            ),
-            resource_id: Some(sandbox.id.clone()),
-        })?;
+
+    if let Some(network_id) = egress_network {
+        let SetupScaffolding::AwsSandbox { egress, .. } = records
+            .get_mut(&sandbox.id)
+            .unwrap_or_else(|| unreachable!("recorded above"));
+        return aws_sandbox_egress::reconcile(
+            ctx,
+            aws,
+            &sandbox.id,
+            network_id,
+            stack_state,
+            egress,
+        )
+        .await;
+    }
     Ok(ScaffoldingProgress::Done)
 }
 
@@ -812,10 +815,11 @@ mod tests {
             "a created role is recorded before its policy lands"
         );
 
-        // The next call finds the role it made, with no inline policy yet, and finishes it.
+        // The next call finds the role it made, with no inline policy yet, and applies it; the
+        // call after that reads it back.
         let created = existing(ROLE_ARN, expected_trust(), &[], &[], 1);
         let progress = step(&provider(created), &mut records).await.unwrap();
-        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
         assert_eq!(records, recorded());
     }
 
@@ -851,7 +855,7 @@ mod tests {
         );
         let mut records = BTreeMap::new();
         let progress = step(&provider(iam), &mut records).await.unwrap();
-        assert_eq!(progress, ScaffoldingProgress::Done);
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
         assert_eq!(records, recorded());
     }
 
