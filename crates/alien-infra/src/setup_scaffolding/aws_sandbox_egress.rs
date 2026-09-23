@@ -2164,4 +2164,242 @@ mod tests {
         )
         .await;
     }
+
+    const REGIONAL_BUNDLE: &str = "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip";
+
+    /// What a sandbox seeded by direct setup serves once its controller has built the image.
+    struct Served {
+        seed: crate::setup_scaffolding::ScaffoldingSeed,
+        build_role_arn: String,
+        bundle_uri: String,
+        binding: Value,
+    }
+
+    /// Converges direct setup, seeds the sandbox through the registered importer, then runs its
+    /// controller from that seed alone until the image is ACTIVE.
+    async fn serve_from_seed(sandbox: Sandbox, network: Option<NetworkSettings>) -> Served {
+        use crate::controller_test::SingleControllerExecutor;
+        use crate::core::ResourceController as _;
+        use crate::sandbox::AwsSandboxController;
+        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
+        use alien_aws_clients::lambda_microvms::{
+            CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
+        };
+
+        const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+        let cloud = Shared::default();
+        let mut stack = Stack::new("acme".to_string());
+        let network_status = network.as_ref().map(|_| ResourceStatus::Running);
+        if let Some(settings) = network {
+            stack = stack.add(
+                Network::new("default-network".to_string())
+                    .settings(settings)
+                    .build(),
+                ResourceLifecycle::Frozen,
+            );
+        }
+        let stack = stack.add(sandbox.clone(), ResourceLifecycle::Live).build();
+        let mut state = stack_state(network_status);
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+
+        let provider = provider(&cloud);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        let mut seeds = seeds(&ctx, &stack, &state, &records).unwrap();
+        assert_eq!(seeds.len(), 1, "one seed per scaffolded sandbox");
+        let seed = seeds[0].clone();
+        apply_seeds(
+            &SeedContext {
+                registry: &crate::ImporterRegistry::built_in(),
+                stack_settings: &alien_core::StackSettings::default(),
+                management_config: None,
+            },
+            &stack,
+            &mut state,
+            std::mem::take(&mut seeds),
+        )
+        .unwrap();
+        let seeded = &state.resources["agents"];
+        assert_eq!(seeded.status, ResourceStatus::Provisioning);
+        assert_eq!(seeded.controller_platform, Some(Platform::Aws));
+        let controller =
+            AwsSandboxController::from_persisted(seeded.internal_state.clone().unwrap()).unwrap();
+
+        let requested = Arc::new(Mutex::new(None::<(String, String)>));
+        let capture = requested.clone();
+        let mut microvms = MockLambdaMicrovmsApi::new();
+        let built = Arc::new(Mutex::new(false));
+        let probe = built.clone();
+        microvms.expect_get_microvm_image().returning(move |_| {
+            if !*probe.lock().unwrap() {
+                return Err(not_found("test-agents"));
+            }
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        microvms
+            .expect_create_microvm_image()
+            .times(1)
+            .returning(move |request| {
+                *capture.lock().unwrap() = Some((
+                    request.build_role_arn.clone(),
+                    request.code_artifact.uri.clone(),
+                ));
+                *built.lock().unwrap() = true;
+                Ok(CreateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("CREATING".to_string()),
+                    image_version: Some("1.0".to_string()),
+                })
+            });
+        microvms
+            .expect_get_microvm_image_version()
+            .returning(|_, _| {
+                Ok(MicrovmImageVersion {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("SUCCESSFUL".to_string()),
+                    status: Some("ACTIVE".to_string()),
+                    state_reason: None,
+                })
+            });
+        let microvms = Arc::new(microvms);
+        let mut controller_provider = MockPlatformServiceProvider::new();
+        controller_provider
+            .expect_get_aws_microvms_client()
+            .returning(move |_| Ok(microvms.clone()));
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox)
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(ResourceLifecycle::Live)
+            .service_provider(Arc::new(controller_provider))
+            .build()
+            .await
+            .unwrap();
+        executor.run_until_terminal().await.unwrap();
+        assert_eq!(executor.status(), ResourceStatus::Running);
+
+        let binding = executor
+            .internal_state::<AwsSandboxController>()
+            .unwrap()
+            .get_binding_params()
+            .unwrap()
+            .expect("an ACTIVE image publishes a binding");
+        let (build_role_arn, bundle_uri) = requested.lock().unwrap().clone().unwrap();
+        Served {
+            seed,
+            build_role_arn,
+            bundle_uri,
+            binding,
+        }
+    }
+
+    /// Loads a binding the way the application's runtime does.
+    async fn load(binding: &Value) -> std::result::Result<(), String> {
+        use alien_bindings::{BindingsProvider, BindingsProviderApi};
+        let env = std::collections::HashMap::from([
+            (
+                alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
+                Platform::Aws.as_str().to_string(),
+            ),
+            ("AWS_REGION".to_string(), "us-east-1".to_string()),
+            ("AWS_ACCOUNT_ID".to_string(), ACCOUNT.to_string()),
+            ("AWS_ACCESS_KEY_ID".to_string(), "test".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "test".to_string()),
+            ("ALIEN_AGENTS_BINDING".to_string(), binding.to_string()),
+        ]);
+        BindingsProvider::from_env(env)
+            .await
+            .map_err(|error| error.to_string())?
+            .load_sandbox("agents")
+            .await
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
+
+    fn seed_field<'a>(served: &'a Served, field: &str) -> &'a Value {
+        &served.seed.import_data[field]
+    }
+
+    /// The binding as the runtime deserializes it: (allowEgress, connectors, preview ports).
+    fn egress_facts(binding: &Value) -> (bool, Vec<String>, Vec<u16>) {
+        use alien_core::bindings::SandboxBinding;
+        let SandboxBinding::Aws(aws) = serde_json::from_value(binding.clone()).unwrap() else {
+            panic!("an AWS sandbox publishes an AWS binding: {binding}");
+        };
+        let connectors = aws
+            .egress_connector_arns
+            .into_iter()
+            .map(|arn| arn.into_value("agents", "egressConnectorArns").unwrap())
+            .collect();
+        (aws.allow_egress, connectors, aws.preview_ports)
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_deny_sandbox_seeded_by_direct_setup_serves_a_binding_the_runtime_loads() {
+        let sandbox = Sandbox {
+            preview_ports: vec![8080],
+            ..sandbox(SandboxEgress::Deny)
+        };
+        let served = serve_from_seed(sandbox, created_network()).await;
+
+        load(&served.binding).await.unwrap_or_else(|error| {
+            panic!("the deny binding must load: {error}\n{}", served.binding)
+        });
+        let (allow_egress, connectors, preview_ports) = egress_facts(&served.binding);
+        assert!(!allow_egress);
+        assert_eq!(
+            connectors,
+            vec!["arn:aws:lambda:us-east-1:123456789012:network-connector:nc-2".to_string()],
+            "the session starts on the connector setup created"
+        );
+        assert_eq!(preview_ports, vec![8080]);
+        assert_eq!(
+            seed_field(&served, "buildRoleArn"),
+            &json!(served.build_role_arn)
+        );
+        assert_eq!(seed_field(&served, "bundleUri"), &json!(served.bundle_uri));
+    }
+
+    #[tokio::test]
+    async fn an_allow_sandbox_seeded_by_direct_setup_serves_a_binding_the_runtime_loads() {
+        let sandbox = Sandbox {
+            preview_ports: vec![3000, 8080],
+            code: SandboxCode::Image {
+                image: REGIONAL_BUNDLE.to_string(),
+            },
+            ..sandbox(SandboxEgress::Allow)
+        };
+        let served = serve_from_seed(sandbox, None).await;
+
+        load(&served.binding).await.unwrap_or_else(|error| {
+            panic!("the allow binding must load: {error}\n{}", served.binding)
+        });
+        assert_eq!(
+            egress_facts(&served.binding),
+            (true, vec![], vec![3000, 8080])
+        );
+        // The seed resolves the region token as the controller does, so the bundle it records
+        // is the one the image is built from and no roll is mistaken for a change.
+        assert_eq!(
+            served.bundle_uri,
+            "s3://acme-artifacts-us-east-1/sandbox-bundle/f00dcafe/bundle.zip"
+        );
+        assert_eq!(seed_field(&served, "bundleUri"), &json!(served.bundle_uri));
+        assert_eq!(
+            seed_field(&served, "buildRoleArn"),
+            &json!(served.build_role_arn)
+        );
+    }
 }

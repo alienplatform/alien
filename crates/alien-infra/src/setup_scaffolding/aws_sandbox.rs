@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, Role};
 use alien_client_core::ErrorData as CloudClientErrorData;
+use alien_core::import::data::AwsSandboxImportData;
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
@@ -17,7 +18,7 @@ use alien_error::{AlienError, Context, IntoAlienError};
 use tracing::info;
 
 use super::aws_sandbox_egress;
-use super::{ScaffoldingProgress, SetupScaffoldingContext};
+use super::{ScaffoldingProgress, ScaffoldingSeed, SetupScaffoldingContext};
 use crate::sandbox::aws_partition;
 use crate::{ErrorData, Result};
 
@@ -147,6 +148,46 @@ pub(super) async fn reconcile(
             resource_id: Some(sandbox.id.clone()),
         })?;
     Ok(ScaffoldingProgress::Done)
+}
+
+/// What the template setups register for this sandbox, from the build role this step verified
+/// and the connector it recorded.
+pub(super) fn seed(
+    ctx: &SetupScaffoldingContext<'_>,
+    sandbox: &Sandbox,
+    records: &BTreeMap<String, SetupScaffolding>,
+) -> Result<ScaffoldingSeed> {
+    let aws = aws_config(ctx.client_config)?;
+    let connector_arn = match records.get(&sandbox.id) {
+        Some(SetupScaffolding::AwsSandbox {
+            egress: Some(egress),
+            ..
+        }) => egress.connector_arn.as_deref(),
+        _ => None,
+    };
+    let import_data = AwsSandboxImportData::runtime_built(
+        sandbox,
+        sandbox_build_role_arn(
+            aws_partition(&aws.region),
+            &aws.account_id,
+            ctx.resource_prefix,
+            &sandbox.id,
+        ),
+        &aws.region,
+        connector_arn,
+    )
+    .context(ErrorData::ResourceConfigInvalid {
+        message: "the sandbox's registration cannot be resolved".to_string(),
+        resource_id: Some(sandbox.id.clone()),
+    })?;
+    Ok(ScaffoldingSeed {
+        resource_id: sandbox.id.clone(),
+        platform: Platform::Aws,
+        region: aws.region.clone(),
+        import_data: serde_json::to_value(import_data)
+            .into_alien_error()
+            .context(serialize_failed(&sandbox.id))?,
+    })
 }
 
 /// Egress first: its connector, group and operator role, then the build role.

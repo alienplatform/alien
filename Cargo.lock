@@ -811,6 +811,7 @@ version = "3.3.23"
 dependencies = [
  "alien-aws-clients",
  "alien-azure-clients",
+ "alien-bindings",
  "alien-client-config",
  "alien-client-core",
  "alien-core",
