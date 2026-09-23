@@ -2167,7 +2167,6 @@ mod tests {
 
     const REGIONAL_BUNDLE: &str = "s3://acme-artifacts-{region}/sandbox-bundle/f00dcafe/bundle.zip";
 
-    /// What a sandbox seeded by direct setup serves once its controller has built the image.
     struct Served {
         seed: crate::setup_scaffolding::ScaffoldingSeed,
         build_role_arn: String,
@@ -2305,7 +2304,6 @@ mod tests {
         }
     }
 
-    /// Loads a binding the way the application's runtime does.
     async fn load(binding: &Value) -> std::result::Result<(), String> {
         use alien_bindings::{BindingsProvider, BindingsProviderApi};
         let env = std::collections::HashMap::from([

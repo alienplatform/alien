@@ -828,7 +828,6 @@ mod tests {
             .expect("a sandbox with an ACTIVE image publishes a binding")
     }
 
-    /// Loads a binding the way the application's runtime does.
     async fn load_binding(binding: &serde_json::Value) -> std::result::Result<(), String> {
         use alien_bindings::{BindingsProvider, BindingsProviderApi};
         let env = std::collections::HashMap::from([
@@ -851,7 +850,6 @@ mod tests {
             .map_err(|error| error.to_string())
     }
 
-    /// A MicroVM API that builds one image and reports it ACTIVE.
     fn building_microvms() -> Arc<MockPlatformServiceProvider> {
         use alien_aws_clients::lambda_microvms::{
             CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
