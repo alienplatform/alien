@@ -117,14 +117,34 @@ pub async fn handle_initial_setup(
 
     let scaffolding = match runtime_metadata.initial_setup_authority {
         InitialSetupAuthority::DirectSetup => {
-            reconcile_setup_scaffolding(
+            match reconcile_setup_scaffolding(
                 &target_stack,
                 &stack_state,
                 &client_config_for_scaffolding,
                 service_provider.as_ref(),
                 &mut runtime_metadata,
             )
-            .await?
+            .await
+            {
+                Ok(progress) => progress,
+                // The record holds what this step created or settled before the error; the
+                // runner's failure path keeps the state from before the step and would drop it.
+                Err(error) => {
+                    let mut next = current_cloned;
+                    next.status = DeploymentStatus::InitialSetupFailed;
+                    next.stack_state = Some(stack_state);
+                    next.error = Some(error.into_generic());
+                    next.retry_requested = false;
+                    next.runtime_metadata = Some(runtime_metadata);
+                    return Ok(DeploymentStepResult {
+                        state: next,
+                        suggested_delay_ms: None,
+                        update_heartbeat: false,
+                        heartbeats: vec![],
+                        observed_inventory_batches: vec![],
+                    });
+                }
+            }
         }
         // An imported setup created the scaffolding itself, from the template.
         InitialSetupAuthority::ImportedHandoff => ScaffoldingProgress::Done,
@@ -447,7 +467,16 @@ pub async fn handle_initial_setup_failed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_aws_clients::iam::MockIamApi;
+    use alien_aws_clients::iam::{
+        CreateRoleResponse, CreateRoleResult, GetRoleResponse, GetRoleResult,
+        ListAttachedRolePoliciesResponse, ListAttachedRolePoliciesResult, ListRolePoliciesResponse,
+        ListRolePoliciesResult, MockIamApi, PolicyNames,
+    };
+    use alien_aws_clients::lambda_microvms::{
+        CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
+    };
+    use alien_aws_clients::AwsClientConfigExt as _;
+    use alien_bindings::{BindingsProvider, BindingsProviderApi};
     use alien_core::{
         ClientConfig, EnvironmentVariablesSnapshot, Platform, RuntimeMetadata, SetupScaffolding,
         StackSettings, Storage,
@@ -572,7 +601,6 @@ mod tests {
     }
 
     fn aws_client_config() -> ClientConfig {
-        use alien_aws_clients::AwsClientConfigExt as _;
         ClientConfig::Aws(Box::new(alien_aws_clients::AwsClientConfig::mock()))
     }
 
@@ -612,10 +640,6 @@ mod tests {
 
     /// The build role as this step created it, before or after its policy landed.
     fn present_role() -> MockIamApi {
-        use alien_aws_clients::iam::{
-            GetRoleResponse, GetRoleResult, ListAttachedRolePoliciesResponse,
-            ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
-        };
         let mut present = MockIamApi::new();
         present.expect_get_role().returning(|_| {
             Ok(GetRoleResponse {
@@ -662,8 +686,6 @@ mod tests {
     /// role is what holds the handoff until it exists and carries its policy.
     #[tokio::test]
     async fn direct_setup_hands_off_only_once_the_build_role_is_ready() {
-        use alien_aws_clients::iam::{CreateRoleResponse, CreateRoleResult};
-
         let mut absent = MockIamApi::new();
         absent.expect_get_role().times(1).returning(|name| {
             Err(alien_error::AlienError::new(
@@ -752,12 +774,6 @@ mod tests {
     /// let the controller pass that role to a build running a customer's Dockerfile.
     #[tokio::test]
     async fn a_refused_build_role_stops_setup_instead_of_handing_off() {
-        use alien_aws_clients::iam::{
-            GetRoleResponse, GetRoleResult, ListAttachedRolePoliciesResponse,
-            ListAttachedRolePoliciesResult, ListRolePoliciesResponse, ListRolePoliciesResult,
-            PolicyNames,
-        };
-
         let mut foreign = MockIamApi::new();
         foreign.expect_get_role().returning(|_| {
             Ok(GetRoleResponse {
@@ -788,17 +804,123 @@ mod tests {
         });
         foreign.expect_put_role_policy().never();
 
-        let error = handle_initial_setup(
+        let result = handle_initial_setup(
             live_sandbox_setup(InitialSetupAuthority::DirectSetup),
             config(),
             aws_client_config(),
             with_iam(foreign),
         )
         .await
-        .expect_err("a refused role must not let setup reach Provisioning");
+        .expect("a refusal is a failed setup, not a lost step");
+        assert_eq!(
+            result.state.status,
+            DeploymentStatus::InitialSetupFailed,
+            "a refused role must not let setup reach Provisioning"
+        );
+        let error = result.state.error.expect("the refusal is recorded");
         assert!(
             format!("{error:?}").contains("SETUP_SCAFFOLDING_NOT_ADOPTABLE"),
             "the refusal surfaces as itself: {error:?}"
+        );
+    }
+
+    /// One step creates the first sandbox's build role and is then refused the second's. The
+    /// created role must stay in the persisted record, or nothing owns it until a teardown
+    /// happens to recover it.
+    #[tokio::test]
+    async fn a_refused_step_keeps_what_it_created_in_the_record() {
+        let second = alien_core::Sandbox::new("zeta".to_string())
+            .code(alien_core::SandboxCode::Image {
+                image: BUNDLE_URI.to_string(),
+            })
+            .egress(alien_core::SandboxEgress::Allow)
+            .lifecycle(alien_core::SandboxLifecyclePolicy {
+                max_lifetime_seconds: None,
+                idle_pause_seconds: None,
+            })
+            .build();
+        let mut state = live_sandbox_setup(InitialSetupAuthority::DirectSetup);
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        let stack = metadata.prepared_stack.take().unwrap();
+        metadata.prepared_stack = Some(
+            Stack::new("test".to_string())
+                .add(
+                    stack.resources["agents"]
+                        .config
+                        .downcast_ref::<alien_core::Sandbox>()
+                        .unwrap()
+                        .clone(),
+                    ResourceLifecycle::Live,
+                )
+                .add(second, ResourceLifecycle::Live)
+                .build(),
+        );
+
+        let mut iam = MockIamApi::new();
+        iam.expect_get_role().returning(|name| {
+            if name == BUILD_ROLE {
+                return Err(alien_error::AlienError::new(
+                    alien_aws_clients::ErrorData::RemoteResourceNotFound {
+                        resource_type: "IAM Resource".to_string(),
+                        resource_name: name.to_string(),
+                    },
+                ));
+            }
+            // Someone else's role under the second sandbox's name: its ARN is not that name's.
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        iam.expect_create_role()
+            .withf(|request| request.role_name == BUILD_ROLE)
+            .times(1)
+            .returning(|_| {
+                Ok(CreateRoleResponse {
+                    create_role_result: CreateRoleResult {
+                        role: created_role(),
+                    },
+                })
+            });
+        iam.expect_list_role_policies().returning(|_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        iam.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+
+        let result = handle_initial_setup(state, config(), aws_client_config(), with_iam(iam))
+            .await
+            .expect("a refusal is a failed setup, not a lost step");
+
+        assert_eq!(result.state.status, DeploymentStatus::InitialSetupFailed);
+        assert!(
+            format!("{:?}", result.state.error).contains("SETUP_SCAFFOLDING_NOT_ADOPTABLE"),
+            "{:?}",
+            result.state.error
+        );
+        assert_eq!(
+            result.state.runtime_metadata.unwrap().setup_scaffolding,
+            BTreeMap::from([(
+                "agents".to_string(),
+                SetupScaffolding::AwsSandbox {
+                    build_role_name: BUILD_ROLE.to_string(),
+                    egress: None,
+                },
+            )]),
         );
     }
 
@@ -837,7 +959,6 @@ mod tests {
     }
 
     async fn load_binding(binding: &serde_json::Value) -> std::result::Result<(), String> {
-        use alien_bindings::{BindingsProvider, BindingsProviderApi};
         let env = std::collections::HashMap::from([
             (
                 alien_core::ENV_ALIEN_DEPLOYMENT_TYPE.to_string(),
@@ -859,9 +980,6 @@ mod tests {
     }
 
     fn building_microvms() -> Arc<MockPlatformServiceProvider> {
-        use alien_aws_clients::lambda_microvms::{
-            CreateMicrovmImageResponse, MicrovmImage, MicrovmImageVersion, MockLambdaMicrovmsApi,
-        };
         let built = Arc::new(std::sync::Mutex::new(false));
         let probe = built.clone();
         let mut microvms = MockLambdaMicrovmsApi::new();
