@@ -108,6 +108,12 @@ pub fn map_object_store_error(
             binding_name,
             operation,
         }),
+        object_store::Error::AlreadyExists { .. } => {
+            AlienError::new(ErrorData::StorageObjectAlreadyExists {
+                binding_name,
+                operation,
+            })
+        }
         _ => AlienError::new(ErrorData::StorageOperationFailed {
             binding_name,
             operation,
@@ -310,6 +316,25 @@ mod tests {
         assert_eq!(env["context"]["operation"], "get");
         let serialized = env.to_string();
         assert!(!serialized.contains("greeting.txt"));
+        assert!(!serialized.contains("secret URL"));
+    }
+
+    #[test]
+    fn map_object_store_error_classifies_create_conflict_safely() {
+        let err = object_store::Error::AlreadyExists {
+            path: "immutable/object.txt".to_string(),
+            source: "provider detail with a secret URL".into(),
+        };
+        let napi_err = map_object_store_error(err, "files", "put");
+
+        let env = envelope_of(&napi_err);
+        assert_eq!(env["code"], "STORAGE_OBJECT_ALREADY_EXISTS");
+        assert_eq!(env["retryable"], false);
+        assert_eq!(env["httpStatusCode"], 409);
+        assert_eq!(env["context"]["binding_name"], "files");
+        assert_eq!(env["context"]["operation"], "put");
+        let serialized = env.to_string();
+        assert!(!serialized.contains("object.txt"));
         assert!(!serialized.contains("secret URL"));
     }
 

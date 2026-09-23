@@ -129,6 +129,21 @@ pub enum ErrorData {
         operation: String,
     },
 
+    /// A create-only storage write found an existing object.
+    #[error(
+        code = "STORAGE_OBJECT_ALREADY_EXISTS",
+        message = "Storage object already exists for binding '{binding_name}' while attempting to {operation}",
+        retryable = "false",
+        internal = "false",
+        http_status_code = 409
+    )]
+    StorageObjectAlreadyExists {
+        /// Name of the storage binding.
+        binding_name: String,
+        /// Provider-independent operation name.
+        operation: String,
+    },
+
     /// Build operation failed due to provider issues.
     #[error(
         code = "BUILD_OPERATION_FAILED",

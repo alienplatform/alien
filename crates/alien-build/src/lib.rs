@@ -85,6 +85,7 @@ struct DedupeKey {
 enum ToolchainType {
     Rust,
     TypeScript,
+    Python,
     Docker,
 }
 
@@ -101,6 +102,20 @@ impl DedupeKey {
                 src: src.to_string(),
                 toolchain_type: ToolchainType::TypeScript,
                 binary_name: binary_name.clone().unwrap_or_else(|| "default".to_string()),
+            },
+            ToolchainConfig::Python {
+                python_version,
+                package,
+                command,
+            } => Self {
+                src: src.to_string(),
+                toolchain_type: ToolchainType::Python,
+                binary_name: format!(
+                    "{}\0{}\0{}",
+                    python_version.as_deref().unwrap_or_default(),
+                    package.as_deref().unwrap_or_default(),
+                    command.join("\0")
+                ),
             },
             ToolchainConfig::Docker { dockerfile, .. } => Self {
                 src: src.to_string(),
@@ -2056,6 +2071,22 @@ async fn hash_build_input_source(
             hash_source_directory(Path::new(src), hasher).await?;
             hash_typescript_dependency_inputs(Path::new(src), targets, hasher).await
         }
+        ToolchainConfig::Python { .. } => {
+            hash_source_directory(Path::new(src), hasher).await?;
+            hasher.update(toolchain::python::build_recipe_cache_key());
+            if let Some(wheel) = toolchain::python::sdk_wheel_path()? {
+                let bytes = fs::read(&wheel).await.into_alien_error().context(
+                    ErrorData::FileOperationFailed {
+                        operation: "read file".to_string(),
+                        file_path: wheel.display().to_string(),
+                        reason: "Failed to read Python SDK wheel for build cache key".to_string(),
+                    },
+                )?;
+                hasher.update(b"python-sdk-wheel");
+                hasher.update(bytes);
+            }
+            Ok(())
+        }
         _ => hash_source_directory(Path::new(src), hasher).await,
     }
 }
@@ -2971,7 +3002,12 @@ fn effective_source_base_images(
     workload: toolchain::WorkloadKind,
     host_process: bool,
 ) -> Vec<String> {
-    if host_process || matches!(toolchain_config, alien_core::ToolchainConfig::Docker { .. }) {
+    if host_process
+        || matches!(
+            toolchain_config,
+            alien_core::ToolchainConfig::Docker { .. } | alien_core::ToolchainConfig::Python { .. }
+        )
+    {
         return vec![];
     }
 

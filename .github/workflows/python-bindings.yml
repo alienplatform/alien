@@ -1,0 +1,86 @@
+name: Python bindings
+
+on:
+  pull_request:
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/alien-bindings/**"
+      - "crates/alien-ai-gateway/**"
+      - "crates/alien-core/src/bindings/**"
+      - "crates/alien-bindings-python/**"
+      - "examples/python-bindings/**"
+      - ".github/workflows/python-bindings.yml"
+  push:
+    branches: [main]
+    paths:
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "crates/alien-bindings/**"
+      - "crates/alien-ai-gateway/**"
+      - "crates/alien-core/src/bindings/**"
+      - "crates/alien-bindings-python/**"
+      - "examples/python-bindings/**"
+      - ".github/workflows/python-bindings.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14]
+        python: ["3.10", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install test tools
+        run: python -m pip install 'maturin>=1.9,<2' 'mypy>=1.18,<2' 'pytest>=8,<10' 'pytest-asyncio>=1,<2' 'ruff>=0.13,<1'
+      - name: Build and install local-provider wheel
+        run: |
+          maturin build --manifest-path crates/alien-bindings-python/Cargo.toml --no-default-features --features local --out dist
+          python -m pip install --force-reinstall dist/*.whl
+      - name: Check Python sources
+        run: |
+          ruff check crates/alien-bindings-python/python crates/alien-bindings-python/tests examples/python-bindings
+          mypy crates/alien-bindings-python/python examples/python-bindings
+          cargo fmt -p alien-bindings-python --check
+          cargo clippy -p alien-bindings-python --no-default-features --features local --no-deps -- -D warnings
+      - name: Test Python bindings
+        run: pytest -q crates/alien-bindings-python/tests
+
+  wheels:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64
+            manylinux: "2014"
+          - os: ubuntu-24.04-arm
+            target: aarch64
+            manylinux: "2_28"
+          - os: macos-14
+            target: aarch64
+            manylinux: "off"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --manifest-path crates/alien-bindings-python/Cargo.toml --release --out dist --no-default-features --features all-platforms
+      - uses: actions/upload-artifact@v4
+        with:
+          name: alienplatform-${{ matrix.os }}-${{ matrix.target }}
+          path: dist/*.whl
+          if-no-files-found: error

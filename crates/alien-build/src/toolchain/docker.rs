@@ -64,7 +64,7 @@ impl DockerToolchain {
         format!("alien-build-{}-{suffix}", std::process::id())
     }
 
-    fn absolute_path(path: &Path) -> Result<PathBuf> {
+    pub(crate) fn absolute_path(path: &Path) -> Result<PathBuf> {
         if path.is_absolute() {
             return Ok(path.to_path_buf());
         }
@@ -325,9 +325,12 @@ impl DockerToolchain {
     }
 }
 
-#[async_trait]
-impl Toolchain for DockerToolchain {
-    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+impl DockerToolchain {
+    pub(crate) async fn build_with_contexts(
+        &self,
+        context: &ToolchainContext,
+        additional_contexts: &[(&str, &Path)],
+    ) -> Result<ToolchainOutput> {
         let dockerfile_name = self.dockerfile.as_deref().unwrap_or("Dockerfile");
 
         info!(
@@ -404,6 +407,11 @@ impl Toolchain for DockerToolchain {
         if let Some(target) = &self.target {
             args.push("--target".to_string());
             args.push(target.clone());
+        }
+
+        for (name, path) in additional_contexts {
+            args.push("--build-context".to_string());
+            args.push(format!("{name}={}", path.display()));
         }
 
         // Add build context
@@ -502,6 +510,13 @@ impl Toolchain for DockerToolchain {
             entrypoint: None,
             runtime_command,
         })
+    }
+}
+
+#[async_trait]
+impl Toolchain for DockerToolchain {
+    async fn build(&self, context: &ToolchainContext) -> Result<ToolchainOutput> {
+        self.build_with_contexts(context, &[]).await
     }
 
     fn dev_command(&self, _src_dir: &Path) -> Vec<String> {

@@ -443,6 +443,7 @@ describe("createFactories method mapping", () => {
     }
     const { storage } = createFactories(() => addonForStorage(storageHandle))
     const options = {
+      condition: "absent" as const,
       attributes: {
         contentType: "text/plain",
         contentDisposition: 'attachment; filename="note.txt"',
