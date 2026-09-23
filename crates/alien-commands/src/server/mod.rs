@@ -8,13 +8,14 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use alien_bindings::presigned::PresignedRequest;
+use alien_bindings::providers::kv::validate_key;
 use alien_bindings::traits::{Kv, PutCondition, PutOptions, Storage};
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use chrono::{DateTime, Utc};
 use hex;
 use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 use uuid::Uuid;
 
@@ -1201,8 +1202,23 @@ impl CommandServer {
         )
     }
 
+    /// Preserve existing KV keys when portable, while supporting versioned
+    /// commands (whose names contain '/') and arbitrary client keys. The v2
+    /// prefix cannot overlap a key written by the legacy `idem:` scheme.
+    fn storage_idempotency_key(composed_key: &str) -> String {
+        let legacy_key = format!("idem:{composed_key}");
+        if validate_key(&legacy_key).is_ok() {
+            legacy_key
+        } else {
+            format!(
+                "idem2:{}",
+                hex::encode(Sha256::digest(composed_key.as_bytes()))
+            )
+        }
+    }
+
     async fn check_idempotency(&self, idem_key: &str) -> Result<Option<String>> {
-        let key = format!("idem:{}", idem_key);
+        let key = Self::storage_idempotency_key(idem_key);
         if let Some(data) = self
             .kv
             .get(&key)
@@ -1232,7 +1248,7 @@ impl CommandServer {
     /// `check_idempotency` before either stored, so the loser must be
     /// detected here, after its command was already created.
     async fn store_idempotency(&self, idem_key: &str, command_id: &str) -> Result<Option<String>> {
-        let key = format!("idem:{}", idem_key);
+        let key = Self::storage_idempotency_key(idem_key);
         let ttl = Duration::from_secs(24 * 60 * 60); // 24 hours
         let won = self
             .kv
@@ -2076,6 +2092,31 @@ mod relative_url_tests {
 mod idempotency_key_tests {
     use super::*;
     use crate::server::{validate_command_name, validate_command_target_id};
+
+    #[test]
+    fn storage_key_preserves_portable_legacy_keys_and_encodes_versioned_commands() {
+        let legacy = CommandServer::compose_idempotency_key("dep", "operator", "refresh", "retry");
+        assert_eq!(
+            CommandServer::storage_idempotency_key(&legacy),
+            "idem:dep:operator:refresh:retry"
+        );
+
+        let versioned =
+            CommandServer::compose_idempotency_key("dep", "operator", "operation/v1/abc", "retry");
+        let encoded = CommandServer::storage_idempotency_key(&versioned);
+        assert!(encoded.starts_with("idem2:"));
+        assert!(validate_key(&encoded).is_ok());
+        assert_eq!(encoded, CommandServer::storage_idempotency_key(&versioned));
+        assert_ne!(
+            encoded,
+            CommandServer::storage_idempotency_key(&CommandServer::compose_idempotency_key(
+                "dep",
+                "operator",
+                "operation/v1/def",
+                "retry",
+            )),
+        );
+    }
 
     #[test]
     fn definite_dispatch_rejection_is_classified_by_typed_error_data() {
