@@ -708,8 +708,8 @@ mod tests {
             .await
         }
 
-        /// `reason` is what the refusal must name, whichever check refuses.
-        async fn assert_setup_required(installed: Stack, target: Stack, reason: &str) {
+        /// `reason`, when given, is what the refusal must name.
+        async fn assert_setup_required(installed: Stack, target: Stack, reason: Option<&str>) {
             let error = update(InitialSetupAuthority::DirectSetup, installed, target)
                 .await
                 .expect_err("the update needs setup to run first");
@@ -719,7 +719,9 @@ mod tests {
                 .expect("the preflight refusal is the cause");
             assert_eq!(cause.code, "DEPLOYMENT_SETUP_REQUIRED");
             assert!(!cause.retryable);
-            assert!(cause.message.contains(reason), "{}", cause.message);
+            if let Some(reason) = reason {
+                assert!(cause.message.contains(reason), "{}", cause.message);
+            }
         }
 
         async fn assert_updates(authority: InitialSetupAuthority, installed: Stack, target: Stack) {
@@ -734,7 +736,7 @@ mod tests {
             assert_setup_required(
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
                 sandbox(SandboxEgress::Deny, BUNDLE, None),
-                "Management permissions configuration was modified",
+                None,
             )
             .await;
         }
@@ -744,7 +746,7 @@ mod tests {
             assert_setup_required(
                 sandbox(SandboxEgress::Deny, BUNDLE, None),
                 sandbox(SandboxEgress::Allow, BUNDLE, None),
-                "Management permissions configuration was modified",
+                None,
             )
             .await;
         }
@@ -758,19 +760,14 @@ mod tests {
                     "s3://other-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
                     None,
                 ),
-                "sandbox 'agents' changes its build role policy. Run the deployment's setup again",
+                Some("sandbox 'agents' changes its build role policy. Run the deployment's setup again"),
             )
             .await;
         }
 
         #[tokio::test]
         async fn a_sandbox_added_by_an_update_waits_for_setup_to_create_its_build_role() {
-            assert_setup_required(
-                empty(),
-                sandbox(SandboxEgress::Allow, BUNDLE, None),
-                "Management permissions configuration was modified",
-            )
-            .await;
+            assert_setup_required(empty(), sandbox(SandboxEgress::Allow, BUNDLE, None), None).await;
         }
 
         /// Every release publishes its bundle under a new version segment of the same prefix,

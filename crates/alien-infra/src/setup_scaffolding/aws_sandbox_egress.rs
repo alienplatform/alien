@@ -462,7 +462,7 @@ fn carries_setup_tags(group: &SecurityGroup, resource_prefix: &str, sandbox_id: 
         .all(|expected| tags.contains(&(expected.key.as_str(), expected.value.as_str())))
 }
 
-/// A recorded group that no longer exists leaves the record, so setup makes a new one. One that
+/// A recorded group that is gone leaves the record, so setup makes a new one. One that
 /// still exists outside this network's VPC cannot follow the sandbox there, and is refused.
 async fn forget_a_recorded_group_that_is_gone(
     ec2: &dyn Ec2Api,
@@ -500,7 +500,7 @@ async fn forget_a_recorded_group_that_is_gone(
             ),
         }));
     }
-    info!(sandbox_id, security_group = %recorded_id, "Recorded deny group no longer exists");
+    info!(sandbox_id, security_group = %recorded_id, "Recorded deny group is gone");
     if let Some(egress) = record {
         egress.security_group_id = None;
     }
@@ -2239,7 +2239,7 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_recorded_group_that_no_longer_exists_is_replaced() {
+    async fn a_recorded_group_that_is_gone_is_replaced() {
         let cloud = Shared::default();
         let stack = stack(SandboxEgress::Deny, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
@@ -3092,7 +3092,7 @@ mod tests {
 
     /// A serving sandbox's egress mode changes only through setup running again. Each run leaves
     /// a binding the runtime loads with the declared mode, and the egress objects a switch to
-    /// allow no longer uses stay recorded, so teardown still removes them.
+    /// allow leaves unused stay recorded, so teardown still removes them.
     #[tokio::test(start_paused = true)]
     async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
         use crate::core::ResourceController as _;
