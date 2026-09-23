@@ -243,7 +243,7 @@ resource "azurerm_storage_management_policy" "audit" {
         "blockBlob"
       ]
       prefix_match = [
-        "logs/"
+        format("%s/%s", azurerm_storage_container.audit.name, "logs/")
       ]
     }
 
