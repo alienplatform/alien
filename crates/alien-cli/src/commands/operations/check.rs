@@ -1,5 +1,6 @@
-//! `alien operations check` — validate a plugin's manifest offline, with no
-//! platform account or network access.
+//! `alien operations check` — validate a plugin's manifest with no platform
+//! account. For a typed plugin it also runs the plugin's `generate-metadata`
+//! binary through `cargo`, unless `--manifest-only` is set.
 
 use std::path::Path;
 use std::process::Command;
@@ -10,11 +11,13 @@ use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
 
-/// Check that generated metadata is current, then read and validate
-/// `metadata.json` in `directory` (or the current directory). Prints a
-/// summary of the declared operations on success.
-pub fn check_task(directory: Option<&str>, json: bool) -> Result<()> {
-    ensure_generated_metadata_current(Path::new(directory.unwrap_or(".")))?;
+/// Unless `manifest_only` is set, check that generated metadata is current.
+/// Then read and validate `metadata.json` in `directory` (or the current
+/// directory). Prints a summary of the declared operations on success.
+pub fn check_task(directory: Option<&str>, manifest_only: bool, json: bool) -> Result<()> {
+    if !manifest_only {
+        ensure_generated_metadata_current(Path::new(directory.unwrap_or(".")))?;
+    }
     let manifest = validate_manifest(directory)?;
 
     if json {
@@ -210,7 +213,7 @@ mod tests {
             }"#,
         );
 
-        check_task(Some(temp.path().to_str().expect("utf8 path")), false)
+        check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
             .expect("valid manifest should pass check");
     }
 
@@ -262,7 +265,7 @@ mod tests {
             }"#,
         );
 
-        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false)
+        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
             .expect_err("duplicate operations must fail check");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
     }
@@ -318,9 +321,37 @@ mod tests {
     }
 
     #[test]
+    fn manifest_only_does_not_build_or_run_plugin_code() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        write_manifest(
+            temp.path(),
+            r#"{
+                "name": "postgres",
+                "version": "1.0.0",
+                "tier": "read-only",
+                "binaries": { "amd64": "postgres-linux-amd64" },
+                "operations": [{ "name": "health" }]
+            }"#,
+        );
+        // A generator with no Cargo.toml: running it would fail.
+        std::fs::create_dir_all(temp.path().join("src/bin")).expect("create generator directory");
+        std::fs::write(
+            temp.path().join("src/bin/generate-metadata.rs"),
+            "fn main() {}\n",
+        )
+        .expect("write generator");
+        let directory = temp.path().to_str().expect("utf8 path");
+
+        check_task(Some(directory), true, false)
+            .expect("--manifest-only must validate without running the generator");
+        check_task(Some(directory), false, false)
+            .expect_err("a full check must run the generator");
+    }
+
+    #[test]
     fn rejects_a_missing_manifest() {
         let temp = tempfile::tempdir().expect("create temp dir");
-        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false)
+        let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false, false)
             .expect_err("missing manifest must fail check");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
     }

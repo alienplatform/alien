@@ -53,8 +53,9 @@ pub use test::test_task;
 Operations plugins package named operations (`plugin/operation`) that Remote
 Operator runs in a deployment. Each operation declares its risk, and invoking
 one goes through the project's approval policy and access requests. `init`,
-`check`, `test`, and `package` work fully offline against the public SDK;
-`permissions`, `publish`, `list`, and `invoke` need a linked platform workspace.
+`check`, `test`, and `package` need no platform account (`cargo` may download
+the plugin's dependencies); `permissions`, `publish`, `list`, and `invoke` need a
+linked platform workspace.
 
 See also: `alien commands --help` for application RPC handled by your Worker,
 Container, or Daemon. Commands have no approval policy or access requests.
@@ -63,7 +64,7 @@ EXAMPLES:
     # Scaffold a new plugin
     alien operations init my-plugin
 
-    # Validate its manifest and generated metadata offline
+    # Validate its manifest and check its generated metadata
     alien operations check
 
     # Run its own test suite
@@ -112,12 +113,19 @@ pub enum OperationsAction {
         directory: Option<String>,
     },
     /// Validate a plugin's manifest. When the plugin has a
-    /// `generate-metadata` binary, also fail if `metadata.json` differs from
-    /// the metadata its typed operations generate. Fully offline.
+    /// `generate-metadata` binary, also build and run it (like `test` and
+    /// `package` do) and fail if `metadata.json` differs from the metadata its
+    /// typed operations generate. Needs no platform account; `cargo` may
+    /// download the plugin's dependencies.
     Check {
         /// Plugin directory containing `metadata.json`. Defaults to the
         /// current directory.
         directory: Option<String>,
+
+        /// Only validate `metadata.json`. Does not build or run any plugin
+        /// code, so it is safe for a plugin you do not trust.
+        #[arg(long)]
+        manifest_only: bool,
     },
     /// Run a plugin's own test suite (`cargo test` in its directory).
     /// Fully offline.
@@ -205,9 +213,10 @@ pub async fn local_operations_task(args: &OperationsArgs) -> Option<Result<()>> 
         OperationsAction::Init { name, directory } => {
             Some(init_task(name, directory.as_deref(), args.json))
         }
-        OperationsAction::Check { directory } => {
-            Some(check_task(directory.as_deref(), args.json))
-        }
+        OperationsAction::Check {
+            directory,
+            manifest_only,
+        } => Some(check_task(directory.as_deref(), *manifest_only, args.json)),
         OperationsAction::Test { directory } => Some(test_task(directory.as_deref(), args.json)),
         OperationsAction::Permissions { directory, cloud } => {
             Some(permissions_task(directory.as_deref(), *cloud, args.json))
