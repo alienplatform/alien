@@ -415,8 +415,8 @@ impl AwsSandboxController {
             }
             self.region = Some(aws_config.region.clone());
 
-            // A Frozen image keeps its retired versions: this runs as the runtime identity, which
-            // cannot delete them, and setup teardown's image delete removes them with the image.
+            // A Frozen image keeps its retired versions until setup teardown's image delete removes
+            // them with the image; the runtime identity cannot delete them.
             if self.owns_image_deletion(ctx, &config.id) {
                 self.reap_retired_versions(&client, &config.id).await?;
             }
@@ -797,18 +797,11 @@ impl AwsSandboxController {
         serde_json::from_value(value)
     }
 
-    /// Whether this controller built the image and therefore owns its deletion.
-    ///
-    /// The lifecycle in stack state is the honest source. A state that carries none falls
-    /// back to the registration's build inputs, which only a runtime-provisioned sandbox has
-    /// — and errs toward not deleting, because destroying a setup-owned image is the failure
-    /// that cannot be retried.
+    /// Whether this controller owns the image's deletion: only a Live sandbox's. A Frozen image is
+    /// deleted by whatever set it up, and a state without a lifecycle is never proof of ownership,
+    /// because destroying a setup-owned image is the failure that cannot be retried.
     fn owns_image_deletion(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        match resource_lifecycle(ctx, resource_id) {
-            Some(alien_core::ResourceLifecycle::Live) => true,
-            Some(alien_core::ResourceLifecycle::Frozen) => false,
-            None => self.build_role_arn.is_some(),
-        }
+        resource_lifecycle(ctx, resource_id) == Some(alien_core::ResourceLifecycle::Live)
     }
 
     fn require_image(&self, resource_id: &str) -> Result<(String, String)> {
