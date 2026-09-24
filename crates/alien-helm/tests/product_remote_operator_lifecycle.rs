@@ -1675,21 +1675,6 @@ spec:
     );
     run_ok("helm", rotation.iter().map(String::as_str), None);
 
-    run_fails(
-        "helm",
-        [
-            "rollback",
-            &helm_release,
-            "1",
-            "--namespace",
-            &helm_namespace,
-            "--wait",
-            "--timeout=30s",
-        ],
-        None,
-        "rollback must not disable a completed Remote Operator identity",
-    );
-
     // Remove only the Remote Operator from the running product release, then
     // restore it from the kept identity.
     let mut removal = rotation.clone();
@@ -1812,6 +1797,20 @@ spec:
         None,
     );
 
+    run_fails(
+        "helm",
+        [
+            "rollback",
+            &helm_release,
+            "1",
+            "--namespace",
+            &helm_namespace,
+            "--wait",
+            "--timeout=30s",
+        ],
+        None,
+        "rollback must not disable a completed Remote Operator identity",
+    );
     run_ok(
         "helm",
         [
