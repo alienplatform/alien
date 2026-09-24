@@ -439,6 +439,16 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::Mutex;
 
+    /// Teardown also looks for groups setup made that the record lost; these tests have none.
+    fn no_other_tagged_group(ec2: &mut alien_aws_clients::ec2::MockEc2Api) {
+        ec2.expect_describe_security_groups().returning(|_| {
+            Ok(alien_aws_clients::ec2::DescribeSecurityGroupsResponse {
+                security_group_info: None,
+                next_token: None,
+            })
+        });
+    }
+
     const BUILD_ROLE: &str = "test-agents-build";
 
     #[derive(Default)]
@@ -680,6 +690,7 @@ mod tests {
             })
         });
         let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        no_other_tagged_group(&mut ec2);
         ec2.expect_delete_security_group()
             .withf(|group| group == "sg-held")
             .times(1)
@@ -765,6 +776,7 @@ mod tests {
             })
         });
         let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        no_other_tagged_group(&mut ec2);
         ec2.expect_delete_security_group()
             .times(3)
             .returning(|group| {
@@ -960,6 +972,7 @@ mod tests {
                 })
             });
         let mut ec2 = alien_aws_clients::ec2::MockEc2Api::new();
+        no_other_tagged_group(&mut ec2);
         let l = log.clone();
         ec2.expect_delete_security_group().returning(move |group| {
             l.lock()

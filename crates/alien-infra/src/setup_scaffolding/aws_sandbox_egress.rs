@@ -241,8 +241,8 @@ async fn operator_role(
 
 /// The group's id once its egress is exactly loopback, or `None` after a mutating call.
 ///
-/// EC2 gives every new group an allow-all egress rule. Only a group this step recorded is
-/// repaired toward loopback-only; any other same-named group must already be exactly that.
+/// EC2 gives every new group an allow-all egress rule. A group that is recorded, or carries
+/// setup's tags for this sandbox, is repaired toward loopback-only; any other is refused.
 async fn deny_security_group(
     ctx: &SetupScaffoldingContext<'_>,
     ec2: &dyn Ec2Api,
@@ -381,38 +381,60 @@ async fn deny_security_group(
             .into_iter()
             .map(|rule| revocable(rule, &group_id, sandbox_id))
             .collect::<Result<Vec<_>>>()?;
-        ec2.revoke_security_group_egress(RevokeSecurityGroupEgressRequest {
-            group_id: group_id.clone(),
-            ip_permissions: revoke,
-        })
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to revoke the open egress of security group '{group_id}'"),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
-        info!(sandbox_id, security_group = %group_id, "Revoked open egress from deny group");
+        match ec2
+            .revoke_security_group_egress(RevokeSecurityGroupEgressRequest {
+                group_id: group_id.clone(),
+                ip_permissions: revoke,
+            })
+            .await
+        {
+            Ok(_) => {
+                info!(sandbox_id, security_group = %group_id, "Revoked open egress from deny group")
+            }
+            // A revoke that landed before a lost checkpoint, read back before EC2 caught up; the
+            // next call reads the rules again.
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to revoke the open egress of security group '{group_id}'"
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        }
         return Ok(None);
     }
     if rules.is_empty() {
-        ec2.authorize_security_group_egress(AuthorizeSecurityGroupEgressRequest {
-            group_id: group_id.clone(),
-            ip_permissions: vec![IpPermission {
-                ip_protocol: "-1".to_string(),
-                from_port: None,
-                to_port: None,
-                ip_ranges: Some(vec![IpRange {
-                    cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
-                    description: Some("Sandbox sessions reach nothing outbound".to_string()),
-                }]),
-                ipv6_ranges: None,
-                user_id_group_pairs: None,
-            }],
-        })
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to allow loopback egress on security group '{group_id}'"),
-            resource_id: Some(sandbox_id.to_string()),
-        })?;
+        let authorized = ec2
+            .authorize_security_group_egress(AuthorizeSecurityGroupEgressRequest {
+                group_id: group_id.clone(),
+                ip_permissions: vec![IpPermission {
+                    ip_protocol: "-1".to_string(),
+                    from_port: None,
+                    to_port: None,
+                    ip_ranges: Some(vec![IpRange {
+                        cidr_ip: LOOPBACK_ONLY_CIDR.to_string(),
+                        description: Some("Sandbox sessions reach nothing outbound".to_string()),
+                    }]),
+                    ipv6_ranges: None,
+                    user_id_group_pairs: None,
+                }],
+            })
+            .await;
+        match authorized {
+            Ok(_) => {}
+            // The same lag as a revoke: the rule is already there, and the next read shows it.
+            Err(error) if is_conflict(&error) => {}
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to allow loopback egress on security group '{group_id}'"
+                    ),
+                    resource_id: Some(sandbox_id.to_string()),
+                })
+            }
+        }
         return Ok(None);
     }
     Ok(Some(group_id))
@@ -856,34 +878,6 @@ pub(super) async fn recover(
         return Ok(None);
     }
 
-    let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
-    let mut filters = vec![Filter {
-        name: "group-name".to_string(),
-        values: vec![name.clone()],
-    }];
-    filters.extend(
-        setup_tags(ctx.resource_prefix, sandbox_id)
-            .into_iter()
-            .map(|tag| Filter {
-                name: format!("tag:{}", tag.key),
-                values: vec![tag.value],
-            }),
-    );
-    let security_group_id = ec2
-        .describe_security_groups(
-            DescribeSecurityGroupsRequest::builder()
-                .filters(filters)
-                .build(),
-        )
-        .await
-        .context(ErrorData::CloudPlatformError {
-            message: format!("Failed to look up security group '{name}'"),
-            resource_id: Some(sandbox_id.to_string()),
-        })?
-        .security_group_info
-        .and_then(|groups| groups.items.into_iter().next())
-        .and_then(|group| group.group_id);
-
     let cloudcontrol = ctx
         .service_provider
         .get_aws_cloudcontrol_client(aws)
@@ -902,12 +896,51 @@ pub(super) async fn recover(
         })
         .map(|(arn, _)| arn);
 
+    // The group is left to teardown, which finds it by the same name and tags.
     Ok(Some(AwsSandboxEgressScaffolding {
         operator_role_name: name,
-        security_group_id,
+        security_group_id: None,
         connector_arn,
         connector_request: None,
     }))
+}
+
+/// The ids of every group named for this sandbox that carries setup's tags for it, in any VPC.
+async fn setup_tagged_groups(
+    ec2: &dyn Ec2Api,
+    resource_prefix: &str,
+    sandbox_id: &str,
+) -> Result<Vec<String>> {
+    let name = sandbox_egress_name(resource_prefix, sandbox_id);
+    let mut filters = vec![Filter {
+        name: "group-name".to_string(),
+        values: vec![name.clone()],
+    }];
+    filters.extend(
+        setup_tags(resource_prefix, sandbox_id)
+            .into_iter()
+            .map(|tag| Filter {
+                name: format!("tag:{}", tag.key),
+                values: vec![tag.value],
+            }),
+    );
+    Ok(ec2
+        .describe_security_groups(
+            DescribeSecurityGroupsRequest::builder()
+                .filters(filters)
+                .build(),
+        )
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!("Failed to look up security group '{name}'"),
+            resource_id: Some(sandbox_id.to_string()),
+        })?
+        .security_group_info
+        .map(|groups| groups.items)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|group| group.group_id)
+        .collect())
 }
 
 fn operator_role_arn(aws: &AwsClientConfig, name: &str) -> String {
@@ -1007,8 +1040,18 @@ pub(super) async fn teardown(
                 return Ok(ScaffoldingProgress::InProgress);
             }
             Err(error) if is_not_found(&error) => {}
-            // Another delete of the same connector is still running.
-            Err(error) if is_conflict(&error) => return Ok(ScaffoldingProgress::InProgress),
+            // Cloud Control's ConcurrentOperation or ResourceConflict: another operation on the
+            // connector is still running. One that cannot delete it fails its own request, which
+            // settling reports with AWS's message.
+            Err(error) if is_conflict(&error) => {
+                info!(
+                    sandbox_id,
+                    connector = %arn,
+                    reason = %error.message,
+                    "Connector is busy with another operation; retrying on the next call"
+                );
+                return Ok(ScaffoldingProgress::InProgress);
+            }
             Err(error) => {
                 return Err(error).context(ErrorData::CloudPlatformError {
                     message: format!("Failed to delete network connector '{arn}'"),
@@ -1019,8 +1062,17 @@ pub(super) async fn teardown(
     }
     egress.connector_arn = None;
 
-    if let Some(group_id) = egress.security_group_id.clone() {
-        let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+    // Also every group setup made under this sandbox's name: one created after the recorded group
+    // went missing is recorded only when its checkpoint lands, and a lost checkpoint leaves the
+    // old id in the record.
+    let ec2 = ctx.service_provider.get_aws_ec2_client(aws).await?;
+    let mut groups: Vec<String> = egress.security_group_id.iter().cloned().collect();
+    for group_id in setup_tagged_groups(ec2.as_ref(), ctx.resource_prefix, sandbox_id).await? {
+        if !groups.contains(&group_id) {
+            groups.push(group_id);
+        }
+    }
+    for group_id in groups {
         match ec2.delete_security_group(&group_id).await {
             Ok(()) => info!(sandbox_id, security_group = %group_id, "Deleted deny group"),
             Err(error) if is_not_found(&error) => {}
@@ -1040,8 +1092,8 @@ pub(super) async fn teardown(
                 })
             }
         }
-        egress.security_group_id = None;
     }
+    egress.security_group_id = None;
 
     let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
     let role = egress.operator_role_name.as_str();
@@ -1156,6 +1208,8 @@ mod tests {
         tags: Vec<(String, String)>,
         /// Whether someone added an inbound rule; setup never does.
         inbound: bool,
+        /// Egress rules the next read still reports, from before a write it has not caught up to.
+        stale_egress: Option<Vec<Rule>>,
     }
 
     /// An in-memory account: what exists, and every mutating call made against it, in order.
@@ -1184,6 +1238,19 @@ mod tests {
         requests_in_flight: bool,
         /// How many lookups by name still miss a group, as EC2's reads can lag its writes.
         name_lookup_lags: usize,
+        /// How many egress rule writes the next read of their group still misses.
+        rule_read_lags: usize,
+    }
+
+    impl Group {
+        /// Applies an egress rule write, leaving the next read on the old rules if a lag is due.
+        fn write_egress(&mut self, lags: &mut usize, write: impl FnOnce(&mut Vec<Rule>)) {
+            if *lags > 0 {
+                *lags -= 1;
+                self.stale_egress = Some(self.egress.clone());
+            }
+            write(&mut self.egress);
+        }
     }
 
     impl Cloud {
@@ -1406,7 +1473,9 @@ mod tests {
             }),
             ip_permissions_egress: Some(IpPermissionSet {
                 items: group
-                    .egress
+                    .stale_egress
+                    .as_ref()
+                    .unwrap_or(&group.egress)
                     .iter()
                     .map(|rule| IpPermissionResponse {
                         ip_protocol: Some(rule.protocol.clone()),
@@ -1552,7 +1621,7 @@ mod tests {
                             .collect();
                         cloud
                             .groups
-                            .iter()
+                            .iter_mut()
                             .filter(|g| {
                                 names.contains(&g.name)
                                     && vpcs.as_ref().is_none_or(|vpcs| vpcs.contains(&g.vpc))
@@ -1560,7 +1629,11 @@ mod tests {
                                         g.tags.iter().any(|(k, v)| k == key && values.contains(v))
                                     })
                             })
-                            .map(described)
+                            .map(|g| {
+                                let read = described(g);
+                                g.stale_egress = None;
+                                read
+                            })
                             .collect()
                     }
                 };
@@ -1603,6 +1676,7 @@ mod tests {
                         .map(|tag| (tag.key.clone(), tag.value.clone()))
                         .collect(),
                     inbound: false,
+                    stale_egress: None,
                 });
                 cloud.respond()?;
                 Ok(CreateSecurityGroupResponse { group_id: Some(id) })
@@ -1619,12 +1693,19 @@ mod tests {
                         .flat_map(|r| r.cidrs.clone())
                         .collect::<Vec<_>>()
                 ));
+                let cloud = &mut *cloud;
                 let group = cloud
                     .groups
                     .iter_mut()
                     .find(|g| g.id == request.group_id)
                     .ok_or_else(|| not_found(&request.group_id))?;
-                group.egress.retain(|rule| !revoked.contains(rule));
+                // EC2 refuses the whole call when any rule named is not on the group.
+                if revoked.iter().any(|rule| !group.egress.contains(rule)) {
+                    return Err(not_found("InvalidPermission.NotFound"));
+                }
+                group.write_egress(&mut cloud.rule_read_lags, |egress| {
+                    egress.retain(|rule| !revoked.contains(rule))
+                });
                 cloud.respond()
             });
         let c = cloud.clone();
@@ -1639,12 +1720,20 @@ mod tests {
                         .flat_map(|r| r.cidrs.clone())
                         .collect::<Vec<_>>()
                 ));
+                let cloud = &mut *cloud;
                 let group = cloud
                     .groups
                     .iter_mut()
                     .find(|g| g.id == request.group_id)
                     .ok_or_else(|| not_found(&request.group_id))?;
-                group.egress.extend(added);
+                if added.iter().any(|rule| group.egress.contains(rule)) {
+                    return Err(AlienError::new(CloudError::RemoteResourceConflict {
+                        resource_type: "security group rule".to_string(),
+                        resource_name: request.group_id.clone(),
+                        message: "InvalidPermission.Duplicate".to_string(),
+                    }));
+                }
+                group.write_egress(&mut cloud.rule_read_lags, |egress| egress.extend(added));
                 cloud.respond()
             });
         let c = cloud.clone();
@@ -2204,6 +2293,7 @@ mod tests {
             egress,
             tags: vec![],
             inbound: false,
+            stale_egress: None,
         });
         cloud
     }
@@ -2246,6 +2336,7 @@ mod tests {
                 egress: vec![rule("0.0.0.0/0")],
                 tags: tags_for(PREFIX, "agents"),
                 inbound: false,
+                stale_egress: None,
             });
             c.name_lookup_lags = 1;
         }
@@ -2257,6 +2348,37 @@ mod tests {
         assert_eq!(cloud.groups[0].egress, vec![rule("127.0.0.1/32")]);
         let connector_arn = cloud.connectors[0].0.clone();
         assert_eq!(records["agents"], full_record("sg-lost", &connector_arn));
+    }
+
+    /// Each rule write landed but the next read still shows the rules from before it, so setup
+    /// revokes a rule already gone and authorizes one already there. EC2 refuses both.
+    #[tokio::test]
+    async fn rule_writes_the_next_read_misses_are_not_failures() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        cloud.lock().unwrap().rule_read_lags = 2;
+
+        let made = converge(&cloud, &stack, &state, &mut records).await;
+
+        let revokes = made.iter().filter(|call| call.contains("Revoke")).count();
+        let authorizes = made
+            .iter()
+            .filter(|call| call.contains("Authorize"))
+            .count();
+        assert_eq!(
+            (revokes, authorizes),
+            (2, 2),
+            "each write is repeated once: {made:?}"
+        );
+        assert_eq!(
+            cloud.lock().unwrap().groups[0].egress,
+            vec![rule("127.0.0.1/32")]
+        );
+        let connector_arn = cloud.lock().unwrap().connectors[0].0.clone();
+        let group_id = cloud.lock().unwrap().groups[0].id.clone();
+        assert_eq!(records["agents"], full_record(&group_id, &connector_arn));
     }
 
     /// Loopback-only is the strongest case: even a group that already denies is not claimed, since
@@ -2399,6 +2521,7 @@ mod tests {
             egress: vec![rule("127.0.0.1/32")],
             tags: tags_for(PREFIX, "agents"),
             inbound: false,
+            stale_egress: None,
         });
         let stack = stack(SandboxEgress::Deny, created_network());
         let state = stack_state(Some(ResourceStatus::Running));
@@ -2577,6 +2700,7 @@ mod tests {
                 egress: vec![rule("127.0.0.1/32")],
                 tags: tags_for(PREFIX, "agents"),
                 inbound: false,
+                stale_egress: None,
             });
             let mut properties = desired_connector("sg-1");
             properties["State"] = json!("ACTIVE");
@@ -2734,6 +2858,7 @@ mod tests {
                 egress: vec![rule("127.0.0.1/32")],
                 tags: tags_for(PREFIX, "agents"),
                 inbound: false,
+                stale_egress: None,
             });
             let mut properties = desired_connector("sg-open");
             properties["State"] = json!("ACTIVE");
@@ -3186,8 +3311,6 @@ mod tests {
     /// Converges direct setup, seeds the sandbox through the registered importer, then runs its
     /// controller from that seed alone until the image is ACTIVE.
     async fn serve_from_seed(sandbox: Sandbox, network: Option<NetworkSettings>) -> Served {
-        use crate::core::ResourceController as _;
-        use crate::setup_scaffolding::{apply_seeds, seeds, SeedContext};
         const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
         let cloud = Shared::default();
         let mut stack = Stack::new("acme".to_string());
@@ -3406,8 +3529,6 @@ mod tests {
     /// its sessions on the connector setup recorded, not on the empty list it was serving with.
     #[tokio::test]
     async fn a_second_seed_keeps_a_serving_deny_sandbox_and_hands_it_the_connector() {
-        use crate::sandbox::AwsSandboxController;
-
         let (cloud, stack, mut state, records) = serving_deny_sandbox().await;
         seed_again(&cloud, &stack, &mut state, &records).unwrap();
 
@@ -3531,6 +3652,37 @@ mod tests {
         }
     }
 
+    /// The recorded group went missing, setup made another, and that step's checkpoint never
+    /// landed: the record still names the first. Teardown finds the second by name and tags.
+    #[tokio::test]
+    async fn a_destroy_deletes_a_group_made_after_the_recorded_one_went_missing() {
+        let cloud = Shared::default();
+        let stack = stack(SandboxEgress::Deny, created_network());
+        let state = stack_state(Some(ResourceStatus::Running));
+        let mut records = BTreeMap::new();
+        converge(&cloud, &stack, &state, &mut records).await;
+        let persisted = records.clone();
+        let recorded = cloud.lock().unwrap().groups[0].id.clone();
+        cloud.lock().unwrap().groups.clear();
+        while cloud
+            .lock()
+            .unwrap()
+            .groups
+            .iter()
+            .all(|group| group.id == recorded)
+        {
+            step(&cloud, &stack, &state, &mut records).await.unwrap();
+        }
+
+        destroy(&cloud, &stack, &mut persisted.clone()).await;
+
+        assert!(
+            cloud.lock().unwrap().groups.is_empty(),
+            "{:?}",
+            cloud.lock().unwrap().groups
+        );
+    }
+
     /// Should Cloud Control not read a connector's tags back, its operator role still marks it.
     #[tokio::test]
     async fn a_destroy_deletes_an_unrecorded_connector_by_its_operator_role() {
@@ -3598,7 +3750,6 @@ mod tests {
     /// allow leaves unused stay recorded, so teardown still removes them.
     #[tokio::test]
     async fn setup_run_again_switches_a_serving_sandbox_between_allow_and_deny() {
-        use crate::sandbox::AwsSandboxController;
         let cloud = Shared::default();
         let allow = stack(SandboxEgress::Allow, created_network());
         let deny = stack(SandboxEgress::Deny, created_network());
