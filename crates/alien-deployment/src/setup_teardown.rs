@@ -636,15 +636,38 @@ mod tests {
             .await;
     }
 
-    /// A Frozen sandbox's image goes with the record: recovery names it from the sandbox, and an
-    /// image a teardown whose checkpoint was lost already deleted is not an error.
+    /// A Frozen sandbox's image goes with the record: recovery finds it by the name the controller
+    /// gives it, and teardown deletes it once.
     #[tokio::test]
     async fn direct_teardown_deletes_the_image_of_a_frozen_sandbox_the_record_never_held() {
         let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
         microvms
+            .expect_get_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
+            .returning(|image| {
+                Ok(alien_aws_clients::lambda_microvms::MicrovmImage {
+                    image_identifier: Some(image.to_string()),
+                    image_arn: Some(image.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        microvms
             .expect_delete_microvm_image()
             .withf(|image| image == SANDBOX_IMAGE)
             .times(1)
+            .returning(|_| Ok(()));
+        teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms)).await;
+    }
+
+    /// Recovery runs on every teardown pass, so an image already deleted must not come back into
+    /// the record and be deleted again. The mock panics on any delete.
+    #[tokio::test]
+    async fn a_frozen_image_already_gone_is_not_recovered() {
+        let mut microvms = alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi::new();
+        microvms
+            .expect_get_microvm_image()
+            .withf(|image| image == SANDBOX_IMAGE)
             .returning(|image| {
                 Err(AlienError::new(
                     alien_aws_clients::ErrorData::RemoteResourceNotFound {
@@ -653,12 +676,18 @@ mod tests {
                     },
                 ))
             });
+        teardown_after_a_lost_record(ResourceLifecycle::Frozen, microvms_provider(microvms)).await;
+    }
+
+    fn microvms_provider(
+        microvms: alien_aws_clients::lambda_microvms::MockLambdaMicrovmsApi,
+    ) -> MockPlatformServiceProvider {
         let microvms = Arc::new(microvms);
         let mut provider = MockPlatformServiceProvider::new();
         provider
             .expect_get_aws_microvms_client()
             .returning(move |_| Ok(microvms.clone()));
-        teardown_after_a_lost_record(ResourceLifecycle::Frozen, provider).await;
+        provider
     }
 
     async fn teardown_after_a_lost_record(
@@ -1106,9 +1135,9 @@ mod tests {
         provider
     }
 
-    /// A Frozen sandbox's runtime cleanup runs as the management identity, which holds no
-    /// DeleteMicrovmImage and whose refusal a delete accepts as best effort. The image setup built
-    /// is deleted by setup, with the credentials that built it, before the role it was built with.
+    /// A Frozen sandbox's runtime cleanup leaves its image alone: the lifecycle check refuses it,
+    /// whatever IAM a Live sibling grants. Setup deletes the image it built, before the role it was
+    /// built with.
     #[tokio::test]
     async fn setup_teardown_deletes_the_image_a_frozen_sandbox_was_built_with() {
         let mut serving = serving_live_sandbox();

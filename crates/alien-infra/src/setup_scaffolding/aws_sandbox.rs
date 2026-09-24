@@ -305,7 +305,7 @@ pub(super) async fn recover(
     Ok(Some(SetupScaffolding::AwsSandbox {
         build_role_name,
         egress,
-        image_arn: setup_built_image(ctx, aws, sandbox, lifecycle),
+        image_arn: existing_setup_built_image(ctx, aws, sandbox, lifecycle).await?,
     }))
 }
 
@@ -487,6 +487,7 @@ fn record(
 
 /// The image a Frozen sandbox's controller builds while setup runs, recorded before it exists so
 /// teardown deletes it whatever point the build reached. A Live image is the runtime's to delete.
+/// The image a direct setup builds for a Frozen sandbox, named as the controller names it.
 fn setup_built_image(
     ctx: &SetupScaffoldingContext<'_>,
     aws: &alien_aws_clients::AwsClientConfig,
@@ -500,6 +501,28 @@ fn setup_built_image(
             &format!("{}-{}", ctx.resource_prefix, sandbox.id),
         )
     })
+}
+
+/// [`setup_built_image`], only if it still exists: recovery runs on every teardown pass, and an
+/// image teardown already deleted must not come back into the record.
+async fn existing_setup_built_image(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &alien_aws_clients::AwsClientConfig,
+    sandbox: &Sandbox,
+    lifecycle: ResourceLifecycle,
+) -> Result<Option<String>> {
+    let Some(arn) = setup_built_image(ctx, aws, sandbox, lifecycle) else {
+        return Ok(None);
+    };
+    let microvms = ctx.service_provider.get_aws_microvms_client(aws).await?;
+    match microvms.get_microvm_image(&arn).await {
+        Ok(_) => Ok(Some(arn)),
+        Err(error) if is_not_found(&error) => Ok(None),
+        Err(error) => Err(error).context(ErrorData::CloudPlatformError {
+            message: format!("Failed to look up MicroVM image '{arn}'"),
+            resource_id: Some(sandbox.id.clone()),
+        }),
+    }
 }
 
 /// Whether `role` carries every tag setup creates this sandbox's roles with. IAM applies tags in
