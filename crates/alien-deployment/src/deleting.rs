@@ -177,20 +177,23 @@ pub async fn handle_deleting(
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
 ///
-/// Direct setup creates the remote stack management identity before any Live resource, so while
-/// it has no outputs no controller has held credentials in the target and nothing runtime-owned
-/// exists. Runtime cleanup needs that identity to reach the target; skipping it lets setup
-/// teardown remove what setup created, under setup's own credentials.
+/// Runtime cleanup acts on Live resources, on the Frozen types with a runtime share of their
+/// delete, and on the secrets it synced; it reaches the target through the management identity.
+/// While that identity has no outputs and none of those came up, it has nothing to do, and setup
+/// teardown removes what setup created under setup's own credentials. Fails closed on a resource
+/// with no recorded lifecycle.
 pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
     let destroying = match current.status {
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
         DeploymentStatus::DeleteFailed => current.retry_requested,
         _ => false,
     };
-    if !destroying || !matches!(
-        current.platform,
-        alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
-    ) {
+    if !destroying
+        || !matches!(
+            current.platform,
+            alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
+        )
+    {
         return None;
     }
     let metadata = current.runtime_metadata.as_ref()?;
@@ -198,17 +201,34 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
         return None;
     }
     let stack_state = current.stack_state.as_ref()?;
-    let runtime_reached = stack_state.resources.values().any(|resource| {
-        (resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
-            && resource.outputs.is_some())
-            || (resource.lifecycle == Some(ResourceLifecycle::Live)
-                && !matches!(
-                    resource.status,
-                    ResourceStatus::Pending | ResourceStatus::Deleted
-                ))
-    });
-    if runtime_reached {
-        return None;
+    for (resource_id, resource) in &stack_state.resources {
+        let lifecycle = resource.lifecycle?;
+        let resource_type = resource.config.resource_type();
+        if resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE {
+            if resource.outputs.is_some() {
+                return None;
+            }
+            continue;
+        }
+        if matches!(
+            resource.status,
+            ResourceStatus::Pending | ResourceStatus::Deleted
+        ) {
+            continue;
+        }
+        // A Frozen sandbox's delete makes no cloud call; its image goes with setup's scaffolding.
+        let runtime_cleans_up = match lifecycle {
+            ResourceLifecycle::Live => true,
+            ResourceLifecycle::Frozen => {
+                resource_id == "secrets"
+                    || (resource_type != alien_core::Sandbox::RESOURCE_TYPE
+                        && ownership_policy_for_resource_type(resource_type.as_ref())
+                            .has_runtime_cleanup_before_teardown())
+            }
+        };
+        if runtime_cleans_up {
+            return None;
+        }
     }
     Some(
         if has_remaining_setup_resources(stack_state)
@@ -734,6 +754,109 @@ mod tests {
                 Some(DeploymentStatus::TeardownRequired),
                 "{status:?}"
             );
+        }
+    }
+
+    fn with_resource(
+        mut state: DeploymentState,
+        id: &str,
+        resource: Resource,
+        lifecycle: Option<ResourceLifecycle>,
+        status: ResourceStatus,
+    ) -> DeploymentState {
+        let mut entry = resource_state(resource, ResourceLifecycle::Frozen, status);
+        entry.lifecycle = lifecycle;
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert(id.to_string(), entry);
+        state
+    }
+
+    fn sandbox(id: &str) -> Resource {
+        Resource::new(
+            alien_core::Sandbox::new(id.to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://acme/sandbox-bundle/f00d/bundle.zip".to_string(),
+                })
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build(),
+        )
+    }
+
+    /// A stack prepared with no management configuration has no management identity to wait for;
+    /// setup failing on another Frozen resource still leaves nothing for runtime cleanup.
+    #[test]
+    fn a_destroy_with_no_management_identity_planned_goes_to_setup_teardown() {
+        let mut state = after_setup_failed(
+            alien_core::InitialSetupAuthority::DirectSetup,
+            false,
+            ResourceStatus::Pending,
+        );
+        state
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .remove("management");
+        let state = with_resource(
+            state,
+            "frozen-sandbox",
+            sandbox("frozen-sandbox"),
+            Some(ResourceLifecycle::Frozen),
+            ResourceStatus::Running,
+        );
+        assert_eq!(
+            super::destroy_without_runtime(&state),
+            Some(DeploymentStatus::TeardownRequired)
+        );
+    }
+
+    /// What runtime cleanup acts on beyond Live resources: synced secrets, and a Frozen type
+    /// with a runtime share of its delete. Once either came up, the destroy keeps its cleanup.
+    #[test]
+    fn setup_created_objects_runtime_cleanup_owns_keep_it() {
+        let direct = alien_core::InitialSetupAuthority::DirectSetup;
+        let base = || after_setup_failed(direct, false, ResourceStatus::Pending);
+        for (case, state) in [
+            (
+                "a secrets vault setup brought up",
+                with_resource(
+                    base(),
+                    "secrets",
+                    Resource::new(alien_core::Vault::new("secrets".to_string()).build()),
+                    Some(ResourceLifecycle::Frozen),
+                    ResourceStatus::Running,
+                ),
+            ),
+            (
+                "a compute cluster setup brought up",
+                with_resource(
+                    base(),
+                    "compute",
+                    Resource::new(ComputeCluster::new("compute".to_string()).build()),
+                    Some(ResourceLifecycle::Frozen),
+                    ResourceStatus::Running,
+                ),
+            ),
+            (
+                "a resource with no recorded lifecycle",
+                with_resource(
+                    base(),
+                    "unknown",
+                    Resource::new(Storage::new("unknown".to_string()).build()),
+                    None,
+                    ResourceStatus::Pending,
+                ),
+            ),
+        ] {
+            assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
         }
     }
 

@@ -612,9 +612,11 @@ mod tests {
             ..teardown_required(InitialSetupAuthority::DirectSetup)
         };
 
-        assert!(run(&mut state, MockPlatformServiceProvider::new(), &transport)
-            .await
-            .is_err());
+        assert!(
+            run(&mut state, MockPlatformServiceProvider::new(), &transport)
+                .await
+                .is_err()
+        );
         assert!(transport.checkpoints.lock().unwrap().is_empty());
         assert_eq!(state.status, DeploymentStatus::TeardownFailed);
         assert!(state.error.is_some(), "the earlier failure stays recorded");

@@ -480,18 +480,29 @@ impl DeploymentLoop {
                 next_status = ?next_status,
                 "Runtime never started; skipping runtime cleanup"
             );
+            let state_after = DeploymentState {
+                status: next_status,
+                error: None,
+                retry_requested: false,
+                ..recorded_state
+            };
             self.checkpoint_without_step(
                 &deployment_id,
                 session,
-                DeploymentState {
-                    status: next_status,
-                    error: None,
-                    retry_requested: false,
-                    ..recorded_state
-                },
+                state_after.clone(),
                 execution_claim,
             )
             .await?;
+            crate::registry_access::cleanup_deleted_registry_access(
+                self.deployment_store.as_ref(),
+                &self.server_bindings.bindings_provider,
+                &self.server_bindings.target_bindings_providers,
+                &deployment_id,
+                &deployment.project_id,
+                &state_after,
+            )
+            .await
+            .map_err(|error| error.into_generic())?;
             return Ok(());
         }
 
@@ -872,15 +883,6 @@ impl DeploymentLoop {
         runner_result.map(|_| ()).map_err(|e| e.into_generic())
     }
 
-    /// Derive the native image host for Lambda/Cloud Run deployments.
-    ///
-    /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
-    /// Build the environment variables snapshot injected into containers/workers.
-    ///
-    /// Includes:
-    /// - `ALIEN_DEPLOYMENT_ID`
-    /// - `ALIEN_DEPLOYMENT_NAME`
-    /// - Command delivery configuration
     async fn checkpoint_without_step(
         &self,
         deployment_id: &str,
@@ -909,6 +911,15 @@ impl DeploymentLoop {
         Ok(())
     }
 
+    /// Derive the native image host for Lambda/Cloud Run deployments.
+    ///
+    /// Lambda requires ECR URIs and Cloud Run requires GAR URIs — they can't pull
+    /// Build the environment variables snapshot injected into containers/workers.
+    ///
+    /// Includes:
+    /// - `ALIEN_DEPLOYMENT_ID`
+    /// - `ALIEN_DEPLOYMENT_NAME`
+    /// - Command delivery configuration
     async fn build_environment_variables(
         &self,
         deployment_id: &str,
