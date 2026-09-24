@@ -15,15 +15,14 @@
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Build, Platform, Sandbox, Stack};
+use alien_core::{Build, Platform, Sandbox, SandboxEgress, Stack};
 
 /// Suffix `sandbox/provision` scopes its `iam:PassRole` to.
 const BUILD_ROLE_SUFFIX: &str = "-build";
 
-/// Suffix of a sandbox's egress operator role, the longer of the two roles setup creates for it.
-///
-/// Budgeted for every sandbox, not only a deny one: egress can change on an update, and an id
-/// that fit before must not have to be renamed (and its sandbox replaced) to make the switch.
+/// Suffix of the egress operator role setup creates for a deny sandbox, longer than the build
+/// role's. Only a deny sandbox is held to it: an open one creates no such role, and a switch to
+/// deny runs this check again.
 const EGRESS_ROLE_SUFFIX: &str = "-egress";
 
 /// IAM's ceiling on a role name, past which the generators hash the tail away.
@@ -76,10 +75,13 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
 
     async fn check(&self, stack: &Stack, _platform: Platform) -> Result<CheckResult> {
         let mut errors = Vec::new();
-        let sandbox_ids: Vec<&str> = stack
+        let deny_sandbox_ids: Vec<&str> = stack
             .resources()
             .filter(|(_, entry)| {
-                entry.config.resource_type().as_ref() == Sandbox::RESOURCE_TYPE.as_ref()
+                entry
+                    .config
+                    .downcast_ref::<Sandbox>()
+                    .is_some_and(|sandbox| sandbox.egress == SandboxEgress::Deny)
             })
             .map(|(resource_id, _)| resource_id.as_str())
             .collect();
@@ -106,19 +108,23 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
                 // name, and no install path can create both.
                 if let Some(sandbox_id) = resource_id
                     .strip_suffix(EGRESS_ROLE_SUFFIX)
-                    .filter(|stem| sandbox_ids.contains(stem))
+                    .filter(|stem| deny_sandbox_ids.contains(stem))
                 {
                     errors.push(format!(
-                        "Resource '{resource_id}' takes the name of sandbox '{sandbox_id}''s \
-                         egress operator role, '<prefix>-{sandbox_id}{EGRESS_ROLE_SUFFIX}'. \
+                        "Resource '{resource_id}' takes the name of the egress operator role of \
+                         sandbox '{sandbox_id}', '<prefix>-{sandbox_id}{EGRESS_ROLE_SUFFIX}'. \
                          Rename it."
                     ));
                 }
                 continue;
             }
 
-            let longest =
-                MAX_RESOURCE_PREFIX_LEN + 1 + resource_id.len() + EGRESS_ROLE_SUFFIX.len();
+            let suffix = if deny_sandbox_ids.contains(&resource_id.as_str()) {
+                EGRESS_ROLE_SUFFIX
+            } else {
+                BUILD_ROLE_SUFFIX
+            };
+            let longest = MAX_RESOURCE_PREFIX_LEN + 1 + resource_id.len() + suffix.len();
             if longest > IAM_ROLE_NAME_MAX_LEN {
                 errors.push(format!(
                     "Sandbox '{resource_id}' makes a role name of up to {longest} characters, \
@@ -142,7 +148,7 @@ impl CompileTimeCheck for SandboxBuildRoleNameCheck {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alien_core::{Kv, ResourceLifecycle, SandboxCode, SandboxEgress, SandboxLifecyclePolicy};
+    use alien_core::{Kv, ResourceLifecycle, SandboxCode, SandboxLifecyclePolicy};
 
     fn sandbox(id: &str) -> Sandbox {
         Sandbox::new(id.to_string())
@@ -239,55 +245,61 @@ mod tests {
         assert!(!result.success, "the colliding id must still be refused");
     }
 
-    /// Pinned at the boundary, not near it: with a widest-prefix budget of 40 and the 7-character
-    /// `-egress`, the longest id that still fits is 16, and every constant in the arithmetic could
-    /// drift several characters before a test using 6 and one using 40 noticed.
+    fn deny_sandbox(id: &str) -> Sandbox {
+        Sandbox {
+            egress: SandboxEgress::Deny,
+            ..sandbox(id)
+        }
+    }
+
+    async fn fits(sandbox: Sandbox) -> bool {
+        run(Stack::new("app".to_string())
+            .add(sandbox, ResourceLifecycle::Frozen)
+            .build())
+        .await
+        .success
+    }
+
+    /// Pinned at the boundary, not near it: with a widest-prefix budget of 40, a deny sandbox's
+    /// 7-character `-egress` leaves 16 for the id and an open one's `-build` leaves 17, and every
+    /// constant in the arithmetic could drift several characters before a test using 6 and one
+    /// using 40 noticed.
     #[tokio::test]
     async fn the_length_boundary_is_where_the_arithmetic_says_it_is() {
-        let longest_that_fits = Stack::new("app".to_string())
-            .add(sandbox(&"r".repeat(16)), ResourceLifecycle::Frozen)
-            .build();
+        assert!(fits(deny_sandbox(&"r".repeat(16))).await);
         assert!(
-            run(longest_that_fits).await.success,
-            "16 characters still fits the egress role name"
-        );
-
-        let one_too_many = Stack::new("app".to_string())
-            .add(sandbox(&"r".repeat(17)), ResourceLifecycle::Frozen)
-            .build();
-        assert!(
-            !run(one_too_many).await.success,
+            !fits(deny_sandbox(&"r".repeat(17))).await,
             "17 characters takes the egress role name past IAM's ceiling at the widest prefix"
         );
+        assert!(
+            fits(sandbox(&"r".repeat(17))).await,
+            "an open sandbox creates no egress role, so only its build role counts"
+        );
+        assert!(!fits(sandbox(&"r".repeat(18))).await);
     }
 
     #[tokio::test]
-    async fn another_resource_may_not_take_a_sandboxs_egress_role_name() {
-        let stack = Stack::new("app".to_string())
-            .add(sandbox("runner"), ResourceLifecycle::Frozen)
-            .add(
-                Kv::new("runner-egress".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
+    async fn another_resource_may_not_take_a_deny_sandboxs_egress_role_name() {
+        let with = |sandbox: Sandbox| {
+            Stack::new("app".to_string())
+                .add(sandbox, ResourceLifecycle::Frozen)
+                .add(
+                    Kv::new("runner-egress".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
 
-        let result = run(stack).await;
+        let result = run(with(deny_sandbox("runner"))).await;
         assert!(!result.success, "the operator role's name must be refused");
         assert!(result
             .errors
             .iter()
             .any(|error| error.contains("egress operator role")));
 
-        let unrelated = Stack::new("app".to_string())
-            .add(sandbox("runner"), ResourceLifecycle::Frozen)
-            .add(
-                Kv::new("other-egress".to_string()).build(),
-                ResourceLifecycle::Frozen,
-            )
-            .build();
         assert!(
-            run(unrelated).await.success,
-            "an id no sandbox's operator role wears stays free"
+            run(with(sandbox("runner"))).await.success,
+            "an open sandbox has no operator role to collide with"
         );
     }
 
