@@ -1,0 +1,54 @@
+---
+source: crates/alien-cloudformation/tests/generator/aws_sandbox_tests.rs
+expression: "serde_json::to_string_pretty(&[own_role_denies[0],\ndenies[0]]).expect(\"serializes\")"
+---
+[
+  {
+    "Action": [
+      "iam:AttachRolePolicy",
+      "iam:DeleteRole",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:UpdateRole"
+    ],
+    "Effect": "Deny",
+    "Resource": [
+      {
+        "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management"
+      }
+    ],
+    "Sid": "DenyManagementRoleChanges"
+  },
+  {
+    "Action": [
+      "iam:AttachRolePolicy",
+      "iam:DeleteRole",
+      "iam:DeleteRolePermissionsBoundary",
+      "iam:DeleteRolePolicy",
+      "iam:DetachRolePolicy",
+      "iam:PutRolePermissionsBoundary",
+      "iam:PutRolePolicy",
+      "iam:TagRole",
+      "iam:UntagRole",
+      "iam:UpdateAssumeRolePolicy",
+      "iam:UpdateRole"
+    ],
+    "Condition": {
+      "StringEquals": {
+        "aws:ResourceTag/managed-by": "setup",
+        "aws:ResourceTag/resource-type": "sandbox"
+      }
+    },
+    "Effect": "Deny",
+    "Resource": [
+      "*"
+    ],
+    "Sid": "DenySandboxSetupRoleChanges"
+  }
+]

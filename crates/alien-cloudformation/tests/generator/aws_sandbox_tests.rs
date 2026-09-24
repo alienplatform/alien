@@ -1180,6 +1180,10 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         "the management role may not rewrite itself: {statements:#?}"
     );
     assert_eq!(denies.len(), 1, "{statements:#?}");
+    insta::assert_snapshot!(
+        "aws_management_role_guards",
+        serde_json::to_string_pretty(&[own_role_denies[0], denies[0]]).expect("serializes")
+    );
     assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
     assert_eq!(
         denies[0]["Condition"],

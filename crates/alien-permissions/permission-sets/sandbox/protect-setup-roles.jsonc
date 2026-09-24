@@ -8,6 +8,7 @@
         // sandbox's build role, so management could rewrite a role it runs code under. Matched by
         // setup's tags, not names: a template may name these roles itself, and a sibling
         // deployment's prefix can collide with this one's. PassRole stays.
+        "label": "deny-sandbox-setup-role-changes",
         "effect": "Deny",
         "grant": {
           "actions": [

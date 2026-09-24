@@ -4,10 +4,12 @@
   "platforms": {
     "aws": [
       {
-        // Several sets grant role writes on `role/${stackPrefix}-*`, which names this role too, so
-        // without this management could rewrite its own policies and grant itself anything. Only
-        // setup changes this role; no update does. Its managed policies need no Deny: no set the
-        // preparing mutation derives grants management a policy-version write.
+        // Several sets grant role writes on `role/${stackPrefix}-*`, which names this role too.
+        // This keeps management from rewriting its own role, and only that: the same grants still
+        // reach its other `${stackPrefix}-*` roles. Only setup changes this role; no update does.
+        // Its managed policies need no Deny: no set the preparing mutation derives grants
+        // management a policy-version write.
+        "label": "deny-management-role-changes",
         "effect": "Deny",
         "grant": {
           "actions": [
