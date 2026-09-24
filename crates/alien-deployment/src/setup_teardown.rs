@@ -71,6 +71,13 @@ async fn run_setup_teardown_after_handoff_inner(
         }));
     }
 
+    // Checked before anything is checkpointed, so a retry of a broken record keeps its error.
+    if state.stack_state.is_none() {
+        return Err(AlienError::new(ErrorData::MissingConfiguration {
+            message: "Stack state required for setup teardown".to_string(),
+        }));
+    }
+
     info!(deployment_id = %deployment_id, "Starting setup-owned teardown");
     state.status = DeploymentStatus::TeardownRequired;
     state.error = None;
@@ -591,6 +598,26 @@ mod tests {
             Some(Arc::new(provider)),
         )
         .await
+    }
+
+    #[tokio::test]
+    async fn a_record_without_stack_state_fails_before_anything_is_checkpointed() {
+        let transport = RecordingTransport::default();
+        let mut state = DeploymentState {
+            status: DeploymentStatus::TeardownFailed,
+            stack_state: None,
+            error: Some(AlienError::new(alien_error::GenericError {
+                message: "the earlier failure".to_string(),
+            })),
+            ..teardown_required(InitialSetupAuthority::DirectSetup)
+        };
+
+        assert!(run(&mut state, MockPlatformServiceProvider::new(), &transport)
+            .await
+            .is_err());
+        assert!(transport.checkpoints.lock().unwrap().is_empty());
+        assert_eq!(state.status, DeploymentStatus::TeardownFailed);
+        assert!(state.error.is_some(), "the earlier failure stays recorded");
     }
 
     #[tokio::test]
