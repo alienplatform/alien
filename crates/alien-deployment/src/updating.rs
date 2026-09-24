@@ -685,6 +685,7 @@ mod tests {
                     let record = SetupScaffolding::AwsSandbox {
                         build_role_name: format!("test-{id}-build"),
                         egress: None,
+                        image_arn: None,
                     };
                     (id.clone(), record)
                 })

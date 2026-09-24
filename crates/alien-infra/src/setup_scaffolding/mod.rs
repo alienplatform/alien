@@ -270,10 +270,12 @@ pub async fn recover_unrecorded(
     platform: Platform,
     records: &mut BTreeMap<String, SetupScaffolding>,
 ) -> Result<()> {
-    for (resource_id, _, scaffolded) in scaffolded(stack, platform) {
+    for (resource_id, entry, scaffolded) in scaffolded(stack, platform) {
         let recovered = match scaffolded {
             #[cfg(feature = "aws")]
-            Scaffolded::AwsSandbox(sandbox) => aws_sandbox::recover(ctx, sandbox).await?,
+            Scaffolded::AwsSandbox(sandbox) => {
+                aws_sandbox::recover(ctx, sandbox, entry.lifecycle).await?
+            }
             #[cfg(not(feature = "aws"))]
             Scaffolded::AwsSandbox(_) => return Err(aws_not_built()),
         };
@@ -304,7 +306,10 @@ pub async fn teardown(
             Some(SetupScaffolding::AwsSandbox {
                 build_role_name,
                 egress,
-            }) => aws_sandbox::teardown(ctx, &resource_id, build_role_name, egress).await?,
+                image_arn,
+            }) => {
+                aws_sandbox::teardown(ctx, &resource_id, build_role_name, egress, image_arn).await?
+            }
             #[cfg(not(feature = "aws"))]
             Some(SetupScaffolding::AwsSandbox { .. }) => return Err(aws_not_built()),
             None => continue,

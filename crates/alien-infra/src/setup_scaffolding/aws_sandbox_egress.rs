@@ -2088,6 +2088,7 @@ mod tests {
                 connector_arn: Some(connector_arn.to_string()),
                 connector_request: None,
             }),
+            image_arn: None,
         }
     }
 
@@ -2193,6 +2194,7 @@ mod tests {
                 SetupScaffolding::AwsSandbox {
                     build_role_name: BUILD_ROLE.to_string(),
                     egress: None,
+                    image_arn: None,
                 }
             )])
         );
@@ -2513,6 +2515,7 @@ mod tests {
                     connector_arn: None,
                     connector_request: None,
                 }),
+                image_arn: None,
             },
         )])
     }
@@ -2902,6 +2905,7 @@ mod tests {
                     connector_arn: Some(connector_arn.clone()),
                     connector_request: Some(format!("delete-{connector_arn}")),
                 }),
+                image_arn: None,
             },
             "the delete request is recorded until its outcome is read"
         );
@@ -2919,6 +2923,7 @@ mod tests {
                     connector_arn: None,
                     connector_request: None,
                 }),
+                image_arn: None,
             },
             "a group still held by interfaces stays recorded"
         );

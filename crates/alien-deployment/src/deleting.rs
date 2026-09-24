@@ -429,6 +429,7 @@ mod tests {
                 alien_core::SetupScaffolding::AwsSandbox {
                     build_role_name: "test-agents-build".to_string(),
                     egress: None,
+                    image_arn: None,
                 },
             )]),
             ..Default::default()

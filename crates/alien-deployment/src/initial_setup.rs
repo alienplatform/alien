@@ -822,6 +822,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: BUILD_ROLE.to_string(),
                 egress: None,
+                image_arn: None,
             },
         )]);
         assert_eq!(
@@ -1034,6 +1035,7 @@ mod tests {
                 SetupScaffolding::AwsSandbox {
                     build_role_name: BUILD_ROLE.to_string(),
                     egress: None,
+                    image_arn: None,
                 },
             )]),
         );
@@ -1096,6 +1098,7 @@ mod tests {
                 SetupScaffolding::AwsSandbox {
                     build_role_name: BUILD_ROLE.to_string(),
                     egress: None,
+                    image_arn: None,
                 },
             )]),
         );
@@ -1293,6 +1296,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: BUILD_ROLE.to_string(),
                 egress: None,
+                image_arn: None,
             },
         )]);
         let mut state = handle_initial_setup(
@@ -1382,6 +1386,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: BUILD_ROLE.to_string(),
                 egress: None,
+                image_arn: None,
             },
         )]);
         deployment
@@ -1454,6 +1459,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: BUILD_ROLE.to_string(),
                 egress: None,
+                image_arn: None,
             },
             "the build role this step verified stays recorded"
         );
@@ -1703,6 +1709,15 @@ mod tests {
             .unwrap_or_else(|error| panic!("the binding must load: {error}\n{binding}"));
         assert_eq!(binding["allowEgress"], true);
         assert_eq!(binding["previewPorts"], serde_json::json!([8080]));
+        assert_eq!(
+            state.runtime_metadata.unwrap().setup_scaffolding["agents"],
+            SetupScaffolding::AwsSandbox {
+                build_role_name: BUILD_ROLE.to_string(),
+                egress: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+            },
+            "setup records the image it built, so its teardown deletes it"
+        );
     }
 
     #[tokio::test]

@@ -1037,7 +1037,7 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
 /// that no absent-resource check can read as absence. The name is account-unique, so the ARN
 /// it will carry is derivable before the image exists.
-fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
+pub(crate) fn sandbox_image_arn(region: &str, account_id: &str, image_name: &str) -> String {
     format!(
         "arn:{}:lambda:{region}:{account_id}:microvm-image:{image_name}",
         aws_partition(region)

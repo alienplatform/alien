@@ -130,6 +130,10 @@ pub enum SetupScaffolding {
         /// What `egress: deny` needs; absent for an open sandbox.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         egress: Option<AwsSandboxEgressScaffolding>,
+        /// A Frozen sandbox's MicroVM image, built during setup. A Live one's image belongs to its
+        /// runtime controller.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        image_arn: Option<String>,
     },
 }
 
@@ -159,23 +163,31 @@ impl SetupScaffolding {
     pub fn fill_missing(&mut self, found: SetupScaffolding) {
         match (self, found) {
             (
-                SetupScaffolding::AwsSandbox { egress, .. },
+                SetupScaffolding::AwsSandbox {
+                    egress, image_arn, ..
+                },
                 SetupScaffolding::AwsSandbox {
                     egress: found_egress,
+                    image_arn: found_image_arn,
                     ..
                 },
-            ) => match (egress.as_mut(), found_egress) {
-                (None, found_egress) => *egress = found_egress,
-                (Some(recorded), Some(found)) => {
-                    if recorded.security_group_id.is_none() {
-                        recorded.security_group_id = found.security_group_id;
-                    }
-                    if recorded.connector_arn.is_none() {
-                        recorded.connector_arn = found.connector_arn;
-                    }
+            ) => {
+                if image_arn.is_none() {
+                    *image_arn = found_image_arn;
                 }
-                (Some(_), None) => {}
-            },
+                match (egress.as_mut(), found_egress) {
+                    (None, found_egress) => *egress = found_egress,
+                    (Some(recorded), Some(found)) => {
+                        if recorded.security_group_id.is_none() {
+                            recorded.security_group_id = found.security_group_id;
+                        }
+                        if recorded.connector_arn.is_none() {
+                            recorded.connector_arn = found.connector_arn;
+                        }
+                    }
+                    (Some(_), None) => {}
+                }
+            }
         }
     }
 }
@@ -406,6 +418,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: "acme-agents-build".to_string(),
                 egress: None,
+                image_arn: None,
             }
         );
         assert_eq!(serde_json::to_value(&metadata).unwrap(), persisted);
@@ -426,6 +439,7 @@ mod tests {
         let record = |egress| SetupScaffolding::AwsSandbox {
             build_role_name: "acme-agents-build".to_string(),
             egress,
+            image_arn: None,
         };
 
         let mut partial = record(Some(egress(Some("sg-recorded"), None)));
@@ -439,6 +453,18 @@ mod tests {
         let mut role_only = record(None);
         role_only.fill_missing(record(Some(egress(Some("sg-found"), None))));
         assert_eq!(role_only, record(Some(egress(Some("sg-found"), None))));
+
+        let image = |arn: Option<&str>| SetupScaffolding::AwsSandbox {
+            build_role_name: "acme-agents-build".to_string(),
+            egress: None,
+            image_arn: arn.map(str::to_string),
+        };
+        let mut without_image = image(None);
+        without_image.fill_missing(image(Some("arn:found")));
+        assert_eq!(without_image, image(Some("arn:found")));
+        let mut with_image = image(Some("arn:recorded"));
+        with_image.fill_missing(image(Some("arn:found")));
+        assert_eq!(with_image, image(Some("arn:recorded")));
     }
 
     /// A deny sandbox's record is written piece by piece, so a partial one must read back as is.
@@ -464,6 +490,7 @@ mod tests {
                     connector_arn: None,
                     connector_request: None,
                 }),
+                image_arn: None,
             }
         );
         assert_eq!(serde_json::to_value(&record).unwrap(), persisted);

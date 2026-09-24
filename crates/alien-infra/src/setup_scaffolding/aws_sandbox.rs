@@ -19,7 +19,7 @@ use tracing::info;
 
 use super::aws_sandbox_egress;
 use super::{ScaffoldingProgress, ScaffoldingSeed, SetupScaffoldingContext};
-use crate::sandbox::aws_partition;
+use crate::sandbox::{aws_partition, sandbox_image_arn};
 use crate::{ErrorData, Result};
 
 /// An existing role is adopted only if it carries setup's tags and then passes verification:
@@ -46,6 +46,7 @@ pub(super) async fn reconcile(
     };
     let build_role = build_role(aws, sandbox, image, lifecycle);
     let policy = build_policy(&build_role, sandbox)?;
+    let image_arn = setup_built_image(ctx, aws, sandbox, lifecycle);
     let trust = serde_json::to_value(build_role.trust_policy())
         .into_alien_error()
         .context(serialize_failed(&sandbox.id))?;
@@ -67,7 +68,7 @@ pub(super) async fn reconcile(
             return match created {
                 Ok(_) => {
                     info!(sandbox_id = %sandbox.id, role = %role_name, "Created sandbox build role");
-                    record(records, &sandbox.id, role_name);
+                    record(records, &sandbox.id, role_name, image_arn);
                     Ok(ScaffoldingProgress::InProgress)
                 }
                 // IAM reads lag its writes, so this may be our own earlier create; the next call
@@ -111,7 +112,7 @@ pub(super) async fn reconcile(
         }));
     }
 
-    record(records, &sandbox.id, role_name.clone());
+    record(records, &sandbox.id, role_name.clone(), image_arn);
 
     if applied_policy(
         iam.as_ref(),
@@ -284,6 +285,7 @@ pub(super) fn seed(
 pub(super) async fn recover(
     ctx: &SetupScaffoldingContext<'_>,
     sandbox: &Sandbox,
+    lifecycle: ResourceLifecycle,
 ) -> Result<Option<SetupScaffolding>> {
     let aws = aws_config(ctx.client_config)?;
     let iam = ctx.service_provider.get_aws_iam_client(aws).await?;
@@ -303,17 +305,34 @@ pub(super) async fn recover(
     Ok(Some(SetupScaffolding::AwsSandbox {
         build_role_name,
         egress,
+        image_arn: setup_built_image(ctx, aws, sandbox, lifecycle),
     }))
 }
 
-/// Egress first: its connector, group and operator role, then the build role.
+/// The image first, then egress: its connector, group and operator role, then the build role.
 pub(super) async fn teardown(
     ctx: &SetupScaffoldingContext<'_>,
     resource_id: &str,
     role_name: &str,
     egress: &mut Option<AwsSandboxEgressScaffolding>,
+    image_arn: &mut Option<String>,
 ) -> Result<ScaffoldingProgress> {
     let aws = aws_config(ctx.client_config)?;
+    if let Some(image) = image_arn.as_deref() {
+        let microvms = ctx.service_provider.get_aws_microvms_client(aws).await?;
+        match microvms.delete_microvm_image(image).await {
+            Ok(()) => {}
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!("Failed to delete sandbox MicroVM image '{image}'"),
+                    resource_id: Some(resource_id.to_string()),
+                });
+            }
+        }
+        info!(sandbox_id = %resource_id, image = %image, "Deleted sandbox MicroVM image");
+        *image_arn = None;
+    }
     if let Some(objects) = egress {
         if aws_sandbox_egress::teardown(ctx, aws, resource_id, objects).await?
             == ScaffoldingProgress::InProgress
@@ -438,21 +457,49 @@ pub(super) async fn adoption_mismatches(
 }
 
 /// Keeps whatever egress objects the record already holds.
-fn record(records: &mut BTreeMap<String, SetupScaffolding>, sandbox_id: &str, role_name: String) {
+fn record(
+    records: &mut BTreeMap<String, SetupScaffolding>,
+    sandbox_id: &str,
+    role_name: String,
+    image: Option<String>,
+) {
     match records.get_mut(sandbox_id) {
         Some(SetupScaffolding::AwsSandbox {
-            build_role_name, ..
-        }) => *build_role_name = role_name,
+            build_role_name,
+            image_arn,
+            ..
+        }) => {
+            *build_role_name = role_name;
+            *image_arn = image;
+        }
         None => {
             records.insert(
                 sandbox_id.to_string(),
                 SetupScaffolding::AwsSandbox {
                     build_role_name: role_name,
                     egress: None,
+                    image_arn: image,
                 },
             );
         }
     }
+}
+
+/// The image a Frozen sandbox's controller builds while setup runs, recorded before it exists so
+/// teardown deletes it whatever point the build reached. A Live image is the runtime's to delete.
+fn setup_built_image(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &alien_aws_clients::AwsClientConfig,
+    sandbox: &Sandbox,
+    lifecycle: ResourceLifecycle,
+) -> Option<String> {
+    (lifecycle == ResourceLifecycle::Frozen).then(|| {
+        sandbox_image_arn(
+            &aws.region,
+            &aws.account_id,
+            &format!("{}-{}", ctx.resource_prefix, sandbox.id),
+        )
+    })
 }
 
 /// Whether `role` carries every tag setup creates this sandbox's roles with. IAM applies tags in
@@ -773,6 +820,7 @@ mod tests {
             SetupScaffolding::AwsSandbox {
                 build_role_name: ROLE_NAME.to_string(),
                 egress: None,
+                image_arn: None,
             },
         )])
     }
@@ -1094,6 +1142,7 @@ mod tests {
                 let record = SetupScaffolding::AwsSandbox {
                     build_role_name: sandbox_build_role_name(PREFIX, id),
                     egress: None,
+                    image_arn: None,
                 };
                 (id.clone(), record)
             })
