@@ -50,16 +50,20 @@ pub use test::test_task;
     about = "Build, test, and manage operations plugins",
     long_about = "Build, test, and manage operations plugins.
 
-Operations plugins package named operations you can run inside a deployment via
-the commands interface (`plugin/operation`). `init`, `check`, `test`, and
-`package` work fully offline against the public SDK; `permissions`, `publish`,
-`list`, and `invoke` need a linked platform workspace.
+Operations plugins package named operations (`plugin/operation`) that Remote
+Operator runs in a deployment. Each operation declares its risk, and invoking
+one goes through the project's approval policy and access requests. `init`,
+`check`, `test`, and `package` work fully offline against the public SDK;
+`permissions`, `publish`, `list`, and `invoke` need a linked platform workspace.
+
+See also: `alien commands --help` for application RPC handled by your Worker,
+Container, or Daemon. Commands have no approval policy or access requests.
 
 EXAMPLES:
     # Scaffold a new plugin
     alien operations init my-plugin
 
-    # Validate its manifest offline
+    # Validate its manifest and generated metadata offline
     alien operations check
 
     # Run its own test suite
@@ -107,7 +111,9 @@ pub enum OperationsAction {
         /// Destination directory. Defaults to `./<name>`.
         directory: Option<String>,
     },
-    /// Validate a plugin's manifest offline. Fully offline.
+    /// Validate a plugin's manifest. When the plugin has a
+    /// `generate-metadata` binary, also fail if `metadata.json` differs from
+    /// the metadata its typed operations generate. Fully offline.
     Check {
         /// Plugin directory containing `metadata.json`. Defaults to the
         /// current directory.
