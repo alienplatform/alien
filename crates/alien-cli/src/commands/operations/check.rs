@@ -2,16 +2,19 @@
 //! platform account or network access.
 
 use std::path::Path;
+use std::process::Command;
 
-use alien_error::{Context, IntoAlienError};
+use alien_error::{AlienError, Context, IntoAlienError};
 use alien_operations_sdk::CanonicalPluginManifest;
 use serde_json::Value;
 
 use crate::error::{ErrorData, Result};
 
-/// Read and validate `metadata.json` in `directory` (or the current
-/// directory). Prints a summary of the declared operations on success.
+/// Check that generated metadata is current, then read and validate
+/// `metadata.json` in `directory` (or the current directory). Prints a
+/// summary of the declared operations on success.
 pub fn check_task(directory: Option<&str>, json: bool) -> Result<()> {
+    ensure_generated_metadata_current(Path::new(directory.unwrap_or(".")))?;
     let manifest = validate_manifest(directory)?;
 
     if json {
@@ -41,6 +44,48 @@ pub fn validate_manifest(directory: Option<&str>) -> Result<CanonicalPluginManif
             manifest_path.display()
         ),
     })
+}
+
+/// A plugin built with `TypedOperations` generates `metadata.json` from its
+/// typed operation registry with a `generate-metadata` binary. When the
+/// plugin has one, run it with `--check` so a hand-edited or stale
+/// `metadata.json` fails instead of drifting from the code that serves it.
+pub fn ensure_generated_metadata_current(directory: &Path) -> Result<()> {
+    ensure_generated_metadata_current_via(directory, Path::new("cargo"))
+}
+
+fn ensure_generated_metadata_current_via(directory: &Path, cargo: &Path) -> Result<()> {
+    if !directory.join("src/bin/generate-metadata.rs").is_file() {
+        return Ok(());
+    }
+    let output = Command::new(cargo)
+        .args([
+            "run",
+            "--quiet",
+            "--bin",
+            "generate-metadata",
+            "--",
+            "--check",
+        ])
+        .current_dir(directory)
+        .output()
+        .into_alien_error()
+        .context(ErrorData::ConfigurationError {
+            message: format!(
+                "could not check generated metadata in '{}'",
+                directory.display()
+            ),
+        })?;
+    if output.status.success() {
+        return Ok(());
+    }
+    Err(AlienError::new(ErrorData::ConfigurationError {
+        message: format!(
+            "generated metadata in '{}' is stale or invalid; run `cargo run --bin generate-metadata` to regenerate it: {}",
+            directory.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        ),
+    }))
 }
 
 /// Preserve released manifest behavior at CLI ingestion while making the
@@ -220,6 +265,56 @@ mod tests {
         let err = check_task(Some(temp.path().to_str().expect("utf8 path")), false)
             .expect_err("duplicate operations must fail check");
         assert_eq!(err.code, "CONFIGURATION_ERROR");
+    }
+
+    #[cfg(unix)]
+    fn write_generator_with_fake_cargo(directory: &Path, script: &str) -> std::path::PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+
+        std::fs::create_dir_all(directory.join("src/bin")).expect("create generator directory");
+        std::fs::write(
+            directory.join("src/bin/generate-metadata.rs"),
+            "fn main() {}\n",
+        )
+        .expect("write generator");
+        let fake_cargo = directory.join("cargo");
+        std::fs::write(&fake_cargo, script).expect("write fake cargo");
+        let mut permissions = std::fs::metadata(&fake_cargo)
+            .expect("read fake cargo metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(&fake_cargo, permissions).expect("make fake cargo executable");
+        fake_cargo
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn fails_when_generated_metadata_has_drifted() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let fake_cargo = write_generator_with_fake_cargo(
+            temp.path(),
+            "#!/bin/sh\necho \"$*\" > args\necho \"metadata.json is stale\" >&2\nexit 1\n",
+        );
+
+        let error = ensure_generated_metadata_current_via(temp.path(), &fake_cargo)
+            .expect_err("drifted generated metadata must fail check");
+
+        assert_eq!(error.code, "CONFIGURATION_ERROR");
+        assert!(error.message.contains("metadata.json is stale"));
+        assert_eq!(
+            std::fs::read_to_string(temp.path().join("args")).expect("read cargo arguments"),
+            "run --quiet --bin generate-metadata -- --check\n"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn passes_when_generated_metadata_is_current() {
+        let temp = tempfile::tempdir().expect("create temp dir");
+        let fake_cargo = write_generator_with_fake_cargo(temp.path(), "#!/bin/sh\nexit 0\n");
+
+        ensure_generated_metadata_current_via(temp.path(), &fake_cargo)
+            .expect("current generated metadata must pass check");
     }
 
     #[test]
