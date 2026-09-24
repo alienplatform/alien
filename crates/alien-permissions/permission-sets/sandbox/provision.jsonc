@@ -42,17 +42,7 @@
           // AWS authorizes creation against no resource type, so an ARN here would deny rather
           // than narrow. The boundary tags are what bound it instead: this statement is the
           // runtime controller's build.
-          //
-          // The tagged create performs an implicit TagResource, and the service evaluates that
-          // one against "*" too. The reference says otherwise — TagResource lists microvmImage
-          // as a resource type — so this reads like it belongs on the image ARN. It does not:
-          // a grant on `microvm-image:<prefix>-*` was in place, matched the image being
-          // created, and AWS still refused with "TagResource on resource: *".
-          //
-          // On "*" it is bounded only by the request tags, which is safe while a forged tag
-          // reaches nothing: every Lambda statement keyed on aws:ResourceTag also pins the
-          // name, as `lambda_resource_tag_statements_are_name_pinned` holds.
-          "actions": ["lambda:CreateMicrovmImage", "lambda:TagResource"]
+          "actions": ["lambda:CreateMicrovmImage"]
         },
         "binding": {
           "stack": {
@@ -78,9 +68,40 @@
       },
       {
         "grant": {
-          // The same build, and the same implicit tag, under the tag CloudFormation and
-          // Terraform put on a Frozen image.
-          "actions": ["lambda:CreateMicrovmImage", "lambda:TagResource"]
+          // The tagged create performs an implicit TagResource, which AWS authorizes against "*"
+          // rather than the image ARN: a grant on `microvm-image:<prefix>-*` was refused with
+          // "TagResource on resource: *". Excluding every Lambda ARN leaves only that implicit
+          // check, so this cannot tag an existing function or image; verified live.
+          "actions": ["lambda:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [],
+            "notResources": ["arn:aws:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          },
+          "resource": {
+            "resources": [],
+            "notResources": ["arn:aws:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "runtime"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          // The same build under the tag CloudFormation and Terraform put on a Frozen image.
+          "actions": ["lambda:CreateMicrovmImage"]
         },
         "binding": {
           "stack": {
@@ -94,6 +115,35 @@
           },
           "resource": {
             "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${resourceTag}": "${resourceName}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              }
+            }
+          }
+        }
+      },
+      {
+        "grant": {
+          // The implicit tag of that build, held to it the same way.
+          "actions": ["lambda:TagResource"]
+        },
+        "binding": {
+          "stack": {
+            "resources": [],
+            "notResources": ["arn:aws:lambda:*:*:*"],
+            "condition": {
+              "StringEquals": {
+                "aws:RequestTag/${stackTag}": "${stackPrefix}",
+                "aws:RequestTag/${managedByTag}": "setup"
+              }
+            }
+          },
+          "resource": {
+            "resources": [],
+            "notResources": ["arn:aws:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",

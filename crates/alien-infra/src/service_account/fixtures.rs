@@ -84,6 +84,7 @@ pub fn storage_read_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${stackPrefix}-*/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
@@ -91,6 +92,7 @@ pub fn storage_read_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${resourceName}/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
@@ -174,12 +176,14 @@ pub fn storage_write_permission_set() -> PermissionSet {
                             "arn:aws:s3:::${stackPrefix}-*/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
                             "arn:aws:s3:::${resourceName}/*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
@@ -262,12 +266,14 @@ pub fn function_execute_permission_set() -> PermissionSet {
                             "arn:aws:lambda:*:*:function:${stackPrefix}-*".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                     resource: Some(AwsBindingSpec {
                         resources: vec![
                             "arn:aws:lambda:*:*:function:${resourceName}".to_string(),
                         ],
                         condition: None,
+                        not_resources: Vec::new(),
                     }),
                 },
             }]),
