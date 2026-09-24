@@ -222,6 +222,12 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 `caller: &Subject` is threaded into `DeploymentStore::release`.
 * [renew](docs/sdks/sync/README.md#renew) - Renew an acquired deployment lease without writing deployment state.
 
+### [Vault](docs/sdks/vault/README.md)
+
+* [getSecret](docs/sdks/vault/README.md#getsecret)
+* [setSecret](docs/sdks/vault/README.md#setsecret)
+* [deleteSecret](docs/sdks/vault/README.md#deletesecret)
+
 ### [Whoami](docs/sdks/whoami/README.md)
 
 * [whoami](docs/sdks/whoami/README.md#whoami)
@@ -295,6 +301,9 @@ bearer. `caller: &Subject` is threaded into `DeploymentStore::reconcile`.
 - [`syncRelease`](docs/sdks/sync/README.md#release) - `POST /v1/sync/release` — Inbound: workspace / dg / deployment bearer.
 `caller: &Subject` is threaded into `DeploymentStore::release`.
 - [`syncRenew`](docs/sdks/sync/README.md#renew) - Renew an acquired deployment lease without writing deployment state.
+- [`vaultDeleteSecret`](docs/sdks/vault/README.md#deletesecret)
+- [`vaultGetSecret`](docs/sdks/vault/README.md#getsecret)
+- [`vaultSetSecret`](docs/sdks/vault/README.md#setsecret)
 - [`whoamiWhoami`](docs/sdks/whoami/README.md#whoami)
 
 </details>
@@ -437,8 +446,8 @@ run();
 
 
 **Inherit from [`AlienManagerError`](./src/models/errors/alienmanagererror.ts)**:
-* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 34 methods.*
-* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 34 methods.*
+* [`ErrorResponse`](./src/models/errors/errorresponse.ts): Error response wrapper for API endpoints. Applicable to 8 of 37 methods.*
+* [`AlienError`](./src/models/errors/alienerror.ts): Canonical error container that provides a structured way to represent errors with rich metadata including error codes, human-readable messages, context, and chaining capabilities for error propagation.  This struct is designed to be both machine-readable and user-friendly, supporting serialization for API responses and detailed error reporting in distributed systems. Applicable to 2 of 37 methods.*
 * [`ResponseValidationError`](./src/models/errors/responsevalidationerror.ts): Type mismatch between the data returned from the server and the structure expected by the SDK. See `error.rawValue` for the raw value and `error.pretty()` for a nicely formatted multi-line string.
 
 </details>

@@ -1448,7 +1448,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/AgentSyncWireRequest"
+                "$ref": "#/components/schemas/AgentSyncRequest"
               }
             }
           },
@@ -1724,70 +1724,102 @@
         }
       },
       "AgentSyncRequest": {
-        "type": "object",
-        "required": [
-          "deploymentId"
-        ],
-        "properties": {
-          "capabilities": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/OperatorCapabilityReport"
+        "allOf": [
+          {
+            "type": "object",
+            "required": [
+              "deploymentId"
+            ],
+            "properties": {
+              "capabilities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/OperatorCapabilityReport"
+                }
+              },
+              "currentState": {
+                "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
+              },
+              "deploymentId": {
+                "type": "string"
+              },
+              "executionClaim": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ExecutionClaim"
+                  }
+                ]
+              },
+              "observedInventoryBatches": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ObservedInventoryBatch"
+                }
+              },
+              "operationsReport": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperationsReport",
+                    "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`."
+                  }
+                ]
+              },
+              "operatorVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "resourceHeartbeats": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ResourceHeartbeat"
+                },
+                "description": "Managed resource status samples emitted by pull-mode deployment steps."
+              },
+              "session": {
+                "type": "string"
+              },
+              "supportsExecutionClaims": {
+                "type": "boolean"
+              }
             }
           },
-          "currentState": {
-            "description": "Current deployment state as reported by the agent.\nWhen present, the manager updates the deployment record to reflect\nthe agent's progress (status, stack_state, etc.)."
-          },
-          "deploymentId": {
-            "type": "string"
-          },
-          "executionClaim": {
-            "oneOf": [
-              {
-                "type": "null"
+          {
+            "type": "object",
+            "properties": {
+              "application": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ObservedApplicationReport",
+                    "description": "Application release the Operator observed in its environment.\nOpaque to OSS beyond forwarding it to `reconcile_request()`."
+                  }
+                ]
               },
-              {
-                "$ref": "#/components/schemas/ExecutionClaim"
+              "operatorImage": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OperatorImageReport",
+                    "description": "Exact immutable Operator image identity reported by the running process."
+                  }
+                ]
               }
-            ]
-          },
-          "observedInventoryBatches": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ObservedInventoryBatch"
             }
-          },
-          "operationsReport": {
-            "oneOf": [
-              {
-                "type": "null"
-              },
-              {
-                "$ref": "#/components/schemas/OperationsReport",
-                "description": "The Operator's self-reported operations-plugin catalog and loaded\nbundle hash. Opaque to OSS beyond forwarding it to `reconcile()`."
-              }
-            ]
-          },
-          "operatorVersion": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "resourceHeartbeats": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ResourceHeartbeat"
-            },
-            "description": "Managed resource status samples emitted by pull-mode deployment steps."
-          },
-          "session": {
-            "type": "string"
-          },
-          "supportsExecutionClaims": {
-            "type": "boolean"
           }
-        }
+        ],
+        "description": "Body of `POST /v1/sync`."
       },
       "AgentSyncResponse": {
         "type": "object",
@@ -1825,41 +1857,6 @@
             ]
           }
         }
-      },
-      "AgentSyncWireRequest": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/AgentSyncRequest"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "application": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/ObservedApplicationReport",
-                    "description": "Application release the Operator observed in its environment.\nOpaque to OSS beyond forwarding it to `reconcile_request()`."
-                  }
-                ]
-              },
-              "operatorImage": {
-                "oneOf": [
-                  {
-                    "type": "null"
-                  },
-                  {
-                    "$ref": "#/components/schemas/OperatorImageReport",
-                    "description": "Exact immutable Operator image identity reported by the running process."
-                  }
-                ]
-              }
-            }
-          }
-        ],
-        "description": "Inbound sync payload that adds optional receipts without expanding the\npublic [`AgentSyncRequest`] struct literal."
       },
       "AiAccessTest": {
         "type": "string",

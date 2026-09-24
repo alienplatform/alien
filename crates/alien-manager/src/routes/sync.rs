@@ -161,13 +161,17 @@ pub struct AgentSyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
-/// Inbound sync payload that adds optional receipts without expanding the
-/// public [`AgentSyncRequest`] struct literal.
+// Adds optional receipts without expanding the public [`AgentSyncRequest`]
+// struct literal. The API documents it as `AgentSyncRequest`, the body
+// clients send.
+/// Body of `POST /v1/sync`.
 #[derive(Debug, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[cfg_attr(feature = "openapi", schema(as = AgentSyncRequest))]
 #[serde(rename_all = "camelCase")]
 struct AgentSyncWireRequest {
     #[serde(flatten)]
+    #[cfg_attr(feature = "openapi", schema(inline))]
     request: AgentSyncRequest,
     /// Exact immutable Operator image identity reported by the running process.
     #[serde(default)]
