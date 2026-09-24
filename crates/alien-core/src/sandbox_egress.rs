@@ -24,7 +24,7 @@ pub const LOOPBACK_ONLY_CIDR: &str = "127.0.0.1/32";
 
 /// The name of both the operator role and the deny security group. Each lives in its own
 /// namespace, and a retry finds either again by this name. Never clamped, because
-/// `SandboxBuildRoleNameCheck` budgets every sandbox id for it.
+/// `SandboxBuildRoleNameCheck` budgets every deny sandbox's id for it.
 pub fn sandbox_egress_name(resource_prefix: &str, sandbox_id: &str) -> String {
     format!("{resource_prefix}-{sandbox_id}-egress")
 }
