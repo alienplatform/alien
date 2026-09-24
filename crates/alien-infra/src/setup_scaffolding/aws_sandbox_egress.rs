@@ -3463,6 +3463,10 @@ mod tests {
                 .contains("another resource type or platform"),
             "{error}"
         );
+        assert!(
+            !error.retryable,
+            "the same state refuses the seed on every retry"
+        );
         assert_eq!(state.resources["agents"].resource_type, "worker");
     }
 

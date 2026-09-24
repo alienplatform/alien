@@ -497,10 +497,9 @@ fn aws_config(client_config: &ClientConfig) -> Result<&alien_aws_clients::AwsCli
 }
 
 fn serialize_failed(sandbox_id: &str) -> ErrorData {
-    ErrorData::InfrastructureError {
-        message: "the sandbox's build role documents cannot be serialized".to_string(),
-        operation: Some("serialize setup scaffolding".to_string()),
-        resource_id: Some(sandbox_id.to_string()),
+    ErrorData::ResourceStateSerializationFailed {
+        resource_id: sandbox_id.to_string(),
+        message: "the sandbox's setup scaffolding cannot be serialized".to_string(),
     }
 }
 

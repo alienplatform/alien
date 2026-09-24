@@ -205,9 +205,9 @@ pub fn apply_seeds(
             management_config: ctx.management_config,
             resource: entry,
         };
-        let failed = |message: &str| ErrorData::InfrastructureError {
+        // An importer's answer is fixed by its inputs, so none of these clears on a retry.
+        let failed = |message: &str| ErrorData::ImportedSetupStateInvalid {
             message: message.to_string(),
-            operation: Some("seed setup scaffolding".to_string()),
             resource_id: Some(resource_id.to_string()),
         };
         let mut imported = ctx
