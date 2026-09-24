@@ -84,6 +84,27 @@ jobs:
               echo "::error::Prior qualification jobs did not all pass"
               exit 1
             fi
+            available_artifacts=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/artifacts?per_page=100" |
+              jq '[.[] | .artifacts[] | select(.expired == false) | .name]')
+            for required in \
+              addon-darwin-arm64 addon-darwin-x64 \
+              addon-linux-arm64-gnu addon-linux-x64-gnu \
+              ai-gateway-bin-darwin-arm64 ai-gateway-bin-darwin-x64 \
+              ai-gateway-bin-linux-arm64 ai-gateway-bin-linux-x64 \
+              binaries-aarch64-apple-darwin binaries-aarch64-unknown-linux-musl \
+              binaries-x86_64-pc-windows-msvc binaries-x86_64-unknown-linux-musl \
+              changelog qualified-ai-gateway qualified-bindings \
+              qualified-client-sdks qualified-crates qualified-github-release \
+              qualified-image-digests qualified-npm qualified-npm-cli \
+              qualified-python-linux-aarch64 qualified-python-linux-x86_64 \
+              qualified-python-macos-aarch64 qualified-python-macos-x86_64; do
+              if ! jq -e --arg name "$required" 'index($name) != null' \
+                <<< "$available_artifacts" >/dev/null; then
+                echo "::error::Required qualification artifact ${required} is missing or expired"
+                exit 1
+              fi
+            done
             echo "Resuming v${VERSION} from qualified run ${RESUME_RUN_ID} at ${RELEASE_COMMIT}"
             echo "qualification_run_id=$RESUME_RUN_ID" >> "$GITHUB_OUTPUT"
           else
