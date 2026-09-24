@@ -485,9 +485,9 @@ fn record(
     }
 }
 
-/// The image a Frozen sandbox's controller builds while setup runs, recorded before it exists so
-/// teardown deletes it whatever point the build reached. A Live image is the runtime's to delete.
-/// The image a direct setup builds for a Frozen sandbox, named as the controller names it.
+/// The image a direct setup builds for a Frozen sandbox, named as the controller names it and
+/// recorded before it exists so teardown deletes it wherever the build stopped. A Live image is
+/// the runtime's to delete.
 fn setup_built_image(
     ctx: &SetupScaffoldingContext<'_>,
     aws: &alien_aws_clients::AwsClientConfig,

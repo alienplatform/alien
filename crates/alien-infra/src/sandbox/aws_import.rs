@@ -14,11 +14,9 @@ use crate::sandbox::{AwsSandboxController, AwsSandboxState};
 
 /// AWS Sandbox importer.
 ///
-/// Two registration shapes arrive here, and which fields are present says which. A template's
-/// Frozen sandbox names the image stack creation built, and imports Ready. A Live one, and a
-/// Frozen one a direct setup registers, names the build role and bundle instead and imports at
-/// the start of the create flow, so the deployment loop builds the image once. A later release's
-/// changed bundle is rolled by the update flow, not by re-importing.
+/// A template's Frozen sandbox names its built image and imports Ready. A Live one, or a Frozen
+/// one a direct setup registers, names the build role and bundle and imports at the start of the
+/// create flow, so the deployment loop builds the image once; later bundles roll via update.
 #[derive(Debug, Default)]
 pub struct AwsSandboxImporter;
 
@@ -109,9 +107,8 @@ impl ResourceImporter for AwsSandboxImporter {
     }
 
     /// A registration naming build inputs leaves the image to the controller, so a re-import must
-    /// not replace the state that tracks it: the default would drop the built version, withdrawing
-    /// the binding of a sandbox that is serving, and re-run the create flow against an image that
-    /// exists. A direct setup registers a Frozen sandbox this way on every pass while it builds.
+    /// keep the state tracking it: replacing would drop the built version, unbinding a serving
+    /// sandbox. A direct setup re-registers a Frozen sandbox this way on every pass.
     ///
     /// Only the setup-owned facts cross over. The bundle deliberately does not: a new release's
     /// bundle is a desired-config change and reaches the image through the update flow. A Frozen
