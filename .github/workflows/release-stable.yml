@@ -36,6 +36,10 @@ jobs:
           GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
           RESUME_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            echo "::error::Stable publishing must run from main"
+            exit 1
+          fi
           VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           if git rev-parse --verify --quiet "refs/tags/v${VERSION}" >/dev/null; then
             echo "::error::v${VERSION} is already published"
@@ -116,7 +120,7 @@ jobs:
       id-token: write
     steps:
       - name: Download qualified Python wheels
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           run-id: ${{ needs.resolve.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
