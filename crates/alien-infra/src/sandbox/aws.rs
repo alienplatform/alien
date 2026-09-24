@@ -1625,6 +1625,52 @@ mod tests {
         );
     }
 
+    /// The restart that finds its image already built: a create whose response was lost and
+    /// whose state went with it. The adopt-and-roll must still carry the derived role and bundle.
+    #[tokio::test]
+    async fn a_restarted_create_adopts_its_existing_image_without_anything_registered() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| {
+                Ok(MicrovmImage {
+                    image_identifier: Some("test-agents".to_string()),
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == IMAGE_ARN
+                    && request.build_role_arn == BUILD_ROLE_ARN
+                    && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+
+        let mut executor = executor(AwsSandboxController::default(), client).await;
+        executor
+            .step()
+            .await
+            .expect("the restarted create adopts the image with derived build inputs");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.pending_version.as_deref(), Some("2.0"));
+        assert_eq!(controller.pending_bundle_uri.as_deref(), Some(BUNDLE_URI));
+    }
+
     /// The full runtime build: the create call must satisfy the already-deployed
     /// `sandbox/provision` grant — the `deployment` and `managed-by: runtime` request tags
     /// are what the policy conditions on, the build role is what it authorizes as a pass —
