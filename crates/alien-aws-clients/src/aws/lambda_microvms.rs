@@ -1411,10 +1411,7 @@ mod live_image_create {
         )
     }
 
-    /// Deletes images versions first.
-    ///
-    /// Probes CloudControl, which accepts a delete on a `CREATED` image and never removes it.
-    /// The MicroVM API's own `DeleteMicrovmImage` removes every version, and teardown uses that.
+    /// Deletes each `PROBE_IMAGES` image version by version, then the image, through the MicroVM API.
     #[tokio::test]
     #[ignore]
     async fn delete_images_versions_first() {
