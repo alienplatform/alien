@@ -524,9 +524,10 @@ async fn recorded_group_is_gone(
 }
 
 fn record_group(record: &mut Option<AwsSandboxEgressScaffolding>, group_id: String) {
-    if let Some(egress) = record {
-        egress.security_group_id = Some(group_id);
-    }
+    let Some(egress) = record else {
+        unreachable!("the operator role step records the egress objects first")
+    };
+    egress.security_group_id = Some(group_id);
 }
 
 /// One all-protocol rule to `127.0.0.1/32` and nothing else on it.
