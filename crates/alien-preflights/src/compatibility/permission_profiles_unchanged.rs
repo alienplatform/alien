@@ -163,9 +163,10 @@ fn management_differs_outside_gates(
 
 /// The new profile without the sandbox setup-roles guard if this update is what adds it.
 ///
-/// The guard is a Deny, so adding it only narrows the management identity, and every deployment
-/// prepared before it existed gains it on its first update. Only the canonical reference, only
-/// at stack scope: removing it, or anything added beside it, still reads as drift.
+/// The guard is a Deny, so adding it only narrows the management identity, and a deployment
+/// prepared before it existed gains it in its prepared profile on the first update; the installed
+/// role takes it the next time setup runs. Only the canonical reference, only at stack scope:
+/// removing it, or anything added beside it, still reads as drift.
 fn without_added_sandbox_setup_roles_guard(
     old_profile: &PermissionProfile,
     new_profile: &PermissionProfile,
@@ -324,8 +325,11 @@ fn check_permission_profiles(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::management_permission_profile::ManagementPermissionProfileMutation;
+    use crate::StackMutation;
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
+    use alien_core::{Platform, StackState};
     use indexmap::IndexMap;
 
     fn guarded_sandbox_stack(management: ManagementPermissions) -> Stack {
@@ -355,27 +359,63 @@ mod tests {
         result.success
     }
 
+    /// A stack as the preparing mutation leaves it.
+    async fn prepared(stack: Stack) -> Stack {
+        let config = alien_core::DeploymentConfig::builder()
+            .stack_settings(alien_core::StackSettings::default())
+            .environment_variables(alien_core::EnvironmentVariablesSnapshot {
+                variables: vec![],
+                hash: String::new(),
+                created_at: String::new(),
+            })
+            .allow_frozen_changes(false)
+            .external_bindings(alien_core::ExternalBindings::default())
+            .build();
+        ManagementPermissionProfileMutation
+            .mutate(stack, &StackState::new(Platform::Aws), &config)
+            .await
+            .expect("the mutation runs")
+    }
+
     /// A deployment prepared before the guard existed gains it on its first update, and a Deny
-    /// cannot escalate, so that one addition is not drift, whether the profile extends the
-    /// generated one or overrides it.
+    /// cannot escalate, so that one addition is not drift, whatever the profile's mode and the
+    /// sandbox's lifecycle.
     #[tokio::test]
     async fn an_update_may_add_the_sandbox_setup_roles_guard() {
-        let before = || PermissionProfile::new().global(["sandbox/management"]);
-        let after = || before().global(["sandbox/management", SANDBOX_SETUP_ROLES_GUARD]);
-        assert!(
-            update_passes(
-                ManagementPermissions::Extend(before()),
-                ManagementPermissions::Extend(after())
-            )
-            .await
-        );
-        assert!(
-            update_passes(
-                ManagementPermissions::Override(before()),
-                ManagementPermissions::Override(after())
-            )
-            .await
-        );
+        let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
+        for management in [
+            ManagementPermissions::Auto,
+            ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
+            ManagementPermissions::Override(
+                PermissionProfile::new().global(["sandbox/management"]),
+            ),
+        ] {
+            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
+                let mut stack = guarded_sandbox_stack(management.clone());
+                stack.resources.get_mut("agents").unwrap().lifecycle = lifecycle;
+                let now = prepared(stack).await;
+                let mut before_the_guard = now.clone();
+                match &mut before_the_guard.permissions.management {
+                    ManagementPermissions::Extend(profile)
+                    | ManagementPermissions::Override(profile) => profile
+                        .0
+                        .get_mut("*")
+                        .expect("the mutation writes a stack scope")
+                        .retain(|grant| grant != &guard),
+                    ManagementPermissions::Auto => panic!("a sandbox always extends management"),
+                }
+
+                let result = PermissionProfilesUnchangedCheck
+                    .check(&before_the_guard, &now)
+                    .await
+                    .expect("check should run");
+                assert!(
+                    result.success,
+                    "{management:?} {lifecycle:?}: {:?}",
+                    result.errors
+                );
+            }
+        }
     }
 
     #[tokio::test]

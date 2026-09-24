@@ -1048,8 +1048,9 @@ fn aws_remote_sandbox_with_restricted_egress_carries_no_grant() {
 /// reach into its sessions — the caller drives those.
 #[test]
 fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
-    // The profile the preflight mutation derives for this stack: heartbeat so the identity can
-    // report on the sandbox, management because a frozen sandbox is setup-owned.
+    // The grants this test is about, out of what the preflight mutation derives for this stack:
+    // heartbeat so the identity can report on the sandbox, management because a frozen sandbox is
+    // setup-owned.
     let stack = Stack::new("byo-sandbox".to_string())
         .management(alien_core::permissions::ManagementPermissions::extend(
             alien_core::PermissionProfile::new()
