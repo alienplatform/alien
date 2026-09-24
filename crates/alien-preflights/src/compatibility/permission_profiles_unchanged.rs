@@ -174,9 +174,7 @@ fn without_role_guards(management: &ManagementPermissions) -> (ManagementPermiss
         if let Some(grants) = profile.0.get_mut("*") {
             let before = grants.len();
             grants.retain(|grant| {
-                !ROLE_GUARDS
-                    .iter()
-                    .any(|guard| *grant == PermissionSetReference::from_name(*guard))
+                !matches!(grant, PermissionSetReference::Name(name) if ROLE_GUARDS.contains(&name.as_str()))
             });
             if grants.len() != before && grants.is_empty() {
                 profile.0.shift_remove("*");
@@ -203,24 +201,15 @@ fn comparable_without_role_guards(
     old: &ManagementPermissions,
     new: &ManagementPermissions,
 ) -> (ManagementPermissions, ManagementPermissions) {
-    let (old_stripped, old_guard_only) = without_role_guards(old);
-    let (new_stripped, new_guard_only) = without_role_guards(new);
-    let fold =
-        |stripped: ManagementPermissions, guard_only: bool, other: &ManagementPermissions| {
-            if guard_only && matches!(other, ManagementPermissions::Auto) {
-                ManagementPermissions::Auto
-            } else {
-                stripped
-            }
-        };
-    (
-        fold(old_stripped, old_guard_only, &new_stripped),
-        fold(
-            new_stripped.clone(),
-            new_guard_only,
-            &without_role_guards(old).0,
-        ),
-    )
+    let fold = |side: &ManagementPermissions, other: &ManagementPermissions| {
+        let (stripped, guard_only) = without_role_guards(side);
+        if guard_only && matches!(other, ManagementPermissions::Auto) {
+            ManagementPermissions::Auto
+        } else {
+            stripped
+        }
+    };
+    (fold(old, new), fold(new, old))
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
