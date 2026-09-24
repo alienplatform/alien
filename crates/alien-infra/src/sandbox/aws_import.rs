@@ -92,6 +92,7 @@ impl ResourceImporter for AwsSandboxImporter {
                 let controller = AwsSandboxController {
                     state: AwsSandboxState::CreatingImage,
                     build_role_arn: Some(build_role_arn),
+                    granted_bundle_uri: Some(bundle_uri.clone()),
                     bundle_uri: Some(bundle_uri),
                     ..base
                 };
@@ -156,6 +157,9 @@ impl ResourceImporter for AwsSandboxImporter {
             build_role_arn: imported_controller
                 .build_role_arn
                 .or(existing_controller.build_role_arn.clone()),
+            granted_bundle_uri: imported_controller
+                .granted_bundle_uri
+                .or(existing_controller.granted_bundle_uri.clone()),
             egress_connector_arns: imported_controller.egress_connector_arns,
             allow_egress: imported_controller.allow_egress,
             preview_ports: imported_controller.preview_ports,

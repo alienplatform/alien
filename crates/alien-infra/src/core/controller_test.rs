@@ -336,6 +336,7 @@ pub struct SingleControllerExecutor {
     resource_prefix: String,
     // Heartbeats emitted by the most recent step.
     last_heartbeats: Vec<ResourceHeartbeat>,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
 }
 
 impl SingleControllerExecutor {
@@ -390,7 +391,7 @@ impl SingleControllerExecutor {
                 .manager_url("https://test-manager.alien.dev".to_string())
                 .deployment_token("test-deployment-token".to_string())
                 .build(),
-            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
+            initial_setup_authority: self.initial_setup_authority,
             heartbeat_collector: HeartbeatCollector::default(),
         };
 
@@ -636,6 +637,7 @@ pub struct SingleControllerExecutorBuilder {
     service_provider: Option<Arc<dyn PlatformServiceProvider>>,
     client_config: Option<ClientConfig>,
     resource_lifecycle: ResourceLifecycle,
+    initial_setup_authority: alien_core::InitialSetupAuthority,
 }
 
 impl SingleControllerExecutorBuilder {
@@ -661,7 +663,15 @@ impl SingleControllerExecutorBuilder {
             service_provider: None,
             client_config: None,
             resource_lifecycle: ResourceLifecycle::Live,
+            initial_setup_authority: alien_core::InitialSetupAuthority::DirectSetup,
         }
+    }
+
+    /// Sets the authority the controller runs under. Direct setup's by default; an update or
+    /// the runtime loop runs as `ImportedHandoff`.
+    pub fn initial_setup_authority(mut self, authority: alien_core::InitialSetupAuthority) -> Self {
+        self.initial_setup_authority = authority;
+        self
     }
 
     /// Sets the main resource's lifecycle in stack and state. Live by default; a controller
@@ -1214,6 +1224,7 @@ impl SingleControllerExecutorBuilder {
                 .unwrap_or_else(|| Arc::new(DefaultPlatformServiceProvider::default())),
             resource_prefix: "test".to_string(),
             last_heartbeats: Vec::new(),
+            initial_setup_authority: self.initial_setup_authority,
         })
     }
 }
