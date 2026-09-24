@@ -393,7 +393,9 @@ async fn deny_security_group(
             }
             // A revoke that landed before a lost checkpoint, read back before EC2 caught up; the
             // next call reads the rules again.
-            Err(error) if is_not_found(&error) => {}
+            Err(error) if is_not_found(&error) => {
+                info!(sandbox_id, security_group = %group_id, reason = %error.message, "Open egress already revoked; reading the rules again")
+            }
             Err(error) => {
                 return Err(error).context(ErrorData::CloudPlatformError {
                     message: format!(
@@ -425,7 +427,9 @@ async fn deny_security_group(
         match authorized {
             Ok(_) => {}
             // The same lag as a revoke: the rule is already there, and the next read shows it.
-            Err(error) if is_conflict(&error) => {}
+            Err(error) if is_conflict(&error) => {
+                info!(sandbox_id, security_group = %group_id, reason = %error.message, "Loopback egress already allowed; reading the rules again")
+            }
             Err(error) => {
                 return Err(error).context(ErrorData::CloudPlatformError {
                     message: format!(
