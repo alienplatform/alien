@@ -49,6 +49,7 @@ pub(super) fn observed_application(
         .filter(|batch| batch.controller_platform == Platform::Kubernetes)
         .collect::<Vec<_>>();
     let observed_at = batches.iter().map(|batch| batch.observed_at).max()?;
+    let complete = batches.iter().all(|batch| batch.complete);
 
     let mut charts = BTreeSet::new();
     let mut images = BTreeSet::new();
@@ -85,14 +86,15 @@ pub(super) fn observed_application(
         chart_name,
         chart_version,
         images: images.into_iter().collect(),
+        complete,
         observed_at,
     })
 }
 
 /// Split a `helm.sh/chart` label into chart name and version. Chart names may
 /// contain hyphens, so the version starts at the first hyphen followed by a
-/// dotted numeric version. Helm writes `+` as `_` in the label; the version is
-/// returned with `+` restored.
+/// `MAJOR.MINOR.PATCH` version, which Helm requires of every chart. Helm
+/// writes `+` as `_` in the label; the version is returned with `+` restored.
 fn parse_helm_chart_label(label: &str) -> Option<(String, String)> {
     let label = label.trim();
     label
@@ -105,9 +107,10 @@ fn parse_helm_chart_label(label: &str) -> Option<(String, String)> {
 fn is_chart_version(value: &str) -> bool {
     let value = value.strip_prefix('v').unwrap_or(value);
     let core = value.split(['-', '_']).next().unwrap_or_default();
-    core.contains('.')
-        && core
-            .split('.')
+    let parts = core.split('.').collect::<Vec<_>>();
+    parts.len() == 3
+        && parts
+            .iter()
             .all(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()))
 }
 
@@ -200,6 +203,10 @@ mod tests {
             parse_helm_chart_label("shop-v3.1.2"),
             Some(("shop".to_string(), "v3.1.2".to_string()))
         );
+        assert_eq!(
+            parse_helm_chart_label("shop-1.2-extra-3.0.0"),
+            Some(("shop-1.2-extra".to_string(), "3.0.0".to_string()))
+        );
         assert_eq!(parse_helm_chart_label("shop"), None);
         assert_eq!(parse_helm_chart_label("shop-latest"), None);
         assert_eq!(parse_helm_chart_label("-1.0.0"), None);
@@ -279,9 +286,34 @@ mod tests {
                         "digest": digest('c'),
                     },
                 ],
+                "complete": true,
                 "observedAt": "2026-09-24T10:00:05Z",
             })
         );
+    }
+
+    #[test]
+    fn marks_the_report_incomplete_when_a_workload_kind_could_not_be_listed() {
+        let mut unlisted_statefulsets = batch(Platform::Kubernetes, "2026-09-24T10:00:00Z", vec![]);
+        unlisted_statefulsets.complete = false;
+        let batches = vec![
+            batch(
+                Platform::Kubernetes,
+                "2026-09-24T10:00:00Z",
+                vec![workload(
+                    "apps/v1:Deployment:shop:api",
+                    Some("shop-1.4.0"),
+                    vec![image("api", "shop/api:1.4.0", None)],
+                )],
+            ),
+            unlisted_statefulsets,
+        ];
+
+        let report = observed_application(&batches).expect("listed workloads still report");
+
+        assert!(!report.complete);
+        assert_eq!(report.chart_name.as_deref(), Some("shop"));
+        assert_eq!(report.images.len(), 1);
     }
 
     #[test]

@@ -801,6 +801,7 @@ mod tests {
                 image: "registry.example.com/shop/api:1.4.0".to_string(),
                 digest: Some(format!("sha256:{}", "a".repeat(64))),
             }],
+            complete: true,
             observed_at: "2026-09-24T10:00:00Z".parse().unwrap(),
         };
         let operator_request: SyncRequest =

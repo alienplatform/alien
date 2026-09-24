@@ -13805,6 +13805,7 @@
         "description": "Application release the Operator observes running in its environment.\n\nThis identifies the customer's application, not the Operator: the\nOperator's own image is reported separately as [`OperatorImageReport`].",
         "required": [
           "source",
+          "complete",
           "observedAt"
         ],
         "properties": {
@@ -13821,6 +13822,10 @@
               "null"
             ],
             "description": "Helm chart version from the same label."
+          },
+          "complete": {
+            "type": "boolean",
+            "description": "Whether every workload kind could be listed. When `false`, the chart\nand images describe only the workloads the Operator could read."
           },
           "images": {
             "type": "array",

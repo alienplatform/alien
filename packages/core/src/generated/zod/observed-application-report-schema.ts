@@ -13,6 +13,7 @@ import { ObservedApplicationSourceSchema } from "./observed-application-source-s
 export const ObservedApplicationReportSchema = z.object({
     "chartName": z.string().describe("Helm chart name from the workloads' `helm.sh/chart` label. Present only\nwhen every labelled workload names the same chart.").nullish(),
 "chartVersion": z.string().describe("Helm chart version from the same label.").nullish(),
+"complete": z.boolean().describe("Whether every workload kind could be listed. When `false`, the chart\nand images describe only the workloads the Operator could read."),
 get "images"(){
                 return z.array(ObservedApplicationImageSchema.describe("A container image running in one observed application workload.")).describe("Distinct container images running in the observed workloads.").optional()
               },

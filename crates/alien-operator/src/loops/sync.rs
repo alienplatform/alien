@@ -178,9 +178,17 @@ async fn sync_with_manager(
     let execution_claim = durable_execution.claim.clone();
     let heartbeats = state.db.get_pending_heartbeats().await?;
     let mut observed_inventory_batches = state.db.get_pending_observed_inventory_batches().await?;
-    if deployment_state.status == DeploymentStatus::Running && state.config.observes_environment() {
-        observed_inventory_batches.extend(observe_running_deployment(state, &deployment_id).await?);
-    }
+    let fresh_inventory_batches = if deployment_state.status == DeploymentStatus::Running
+        && state.config.observes_environment()
+    {
+        observe_running_deployment(state, &deployment_id).await?
+    } else {
+        Vec::new()
+    };
+    // Built from this tick's observe pass only, so the report never repeats
+    // workloads read on an earlier tick.
+    let application = observed_application(&fresh_inventory_batches);
+    observed_inventory_batches.extend(fresh_inventory_batches);
 
     // Remote Operator deployments have no Alien-shipped release, so they report the
     // app version as a version-only `current_release`; the platform resolves it to a
@@ -188,8 +196,7 @@ async fn sync_with_manager(
     // uses (where the deploy loop sets `current_release.release_id`). The version is
     // the vendor-configured override if set, else the single version observed on the
     // workloads (e.g. `app.kubernetes.io/version`), so it tracks upgrades.
-    let reports_application_release = state.config.reports_application_release();
-    if reports_application_release && deployment_state.current_release.is_none() {
+    if state.config.reports_application_release() && deployment_state.current_release.is_none() {
         let app_version = state
             .config
             .app_version
@@ -217,12 +224,6 @@ async fn sync_with_manager(
                 .await,
         ),
         None => None,
-    };
-
-    let application = if reports_application_release {
-        observed_application(&observed_inventory_batches)
-    } else {
-        None
     };
 
     let sync_request = SyncRequest {
@@ -604,7 +605,7 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 #[cfg(test)]
 mod tests {
     use std::{
-        collections::BTreeMap,
+        collections::{BTreeMap, HashMap},
         sync::{Arc, Mutex},
     };
 
@@ -613,7 +614,15 @@ mod tests {
         HeartbeatBackend, ObservedHealth, ObservedInventoryBatch, ObservedResourceSample, Platform,
         ProviderLifecycleState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
-    use axum::{extract::State, routing::post, Json, Router};
+    use alien_infra::MockPlatformServiceProvider;
+    use alien_k8s_clients::{
+        DeploymentApi, EventApi, KubernetesClient, KubernetesClientConfig, MetricsApi, PodApi,
+    };
+    use axum::{
+        extract::State,
+        routing::{get, post},
+        Json, Router,
+    };
     use serde_json::{json, Value};
     use tokio_util::sync::CancellationToken;
 
@@ -626,11 +635,17 @@ mod tests {
     const TEST_ENCRYPTION_KEY: &str =
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    struct SyncFixture {
+        config: OperatorConfig,
+        status: DeploymentStatus,
+        pending_inventory: Vec<ObservedInventoryBatch>,
+        service_provider: Option<Arc<dyn alien_infra::PlatformServiceProvider>>,
+    }
+
     /// Runs one sync against a stub manager and returns the request body it
     /// received.
     async fn captured_sync_request(
-        config: impl FnOnce(String, SyncConfig) -> OperatorConfig,
-        pending_inventory: &[ObservedInventoryBatch],
+        config: impl FnOnce(String, SyncConfig) -> SyncFixture,
     ) -> Value {
         type Captured = Arc<Mutex<Option<Value>>>;
         async fn capture_sync(
@@ -652,22 +667,39 @@ mod tests {
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
 
         let data_dir = tempfile::tempdir().expect("create data dir");
-        let data_dir = data_dir.path().to_string_lossy().to_string();
-        let db = OperatorDb::new(&data_dir, TEST_ENCRYPTION_KEY)
-            .await
-            .expect("open operator db");
-        db.set_deployment_id("dep_remote").await.unwrap();
-        db.set_pending_observed_inventory_batches(pending_inventory)
-            .await
-            .unwrap();
         let sync_config = SyncConfig {
             url: format!("http://{address}").parse().unwrap(),
             token: "ax_dep_test".to_string(),
         };
+        let fixture = config(
+            data_dir.path().to_string_lossy().to_string(),
+            sync_config.clone(),
+        );
+        let db = OperatorDb::new(&fixture.config.data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open operator db");
+        db.set_deployment_id("dep_remote").await.unwrap();
+        db.set_deployment_state(&DeploymentState {
+            platform: fixture.config.platform,
+            status: fixture.status,
+            current_release: None,
+            target_release: None,
+            stack_state: None,
+            error: None,
+            environment_info: None,
+            runtime_metadata: None,
+            retry_requested: false,
+            protocol_version: CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        })
+        .await
+        .unwrap();
+        db.set_pending_observed_inventory_batches(&fixture.pending_inventory)
+            .await
+            .unwrap();
         let state = OperatorState {
-            config: config(data_dir, sync_config.clone()),
+            config: fixture.config,
             db: Arc::new(db),
-            service_provider: None,
+            service_provider: fixture.service_provider,
             operations_sync_handler: None,
             cancel: CancellationToken::new(),
         };
@@ -682,50 +714,177 @@ mod tests {
         body.expect("stub manager received a sync request")
     }
 
-    fn helm_workload(
-        raw_identity: &str,
-        images: Vec<ContainerImageIdentity>,
-    ) -> ObservedResourceSample {
-        ObservedResourceSample {
-            deployment_id: Some("dep_remote".to_string()),
-            raw_identity: raw_identity.to_string(),
-            provider_kind: "apps/v1/Deployment".to_string(),
-            display_name: raw_identity.rsplit(':').next().unwrap().to_string(),
-            namespace: Some("shop".to_string()),
-            region: None,
-            scope: None,
-            resource_type_hint: None,
-            version: Some("1.4.0".to_string()),
-            alien_resource_id: None,
-            health: ObservedHealth::Healthy,
-            lifecycle: ProviderLifecycleState::Running,
-            message: None,
-            partial: false,
-            provider_stale: false,
-            counts: None,
-            collection_issues: vec![],
-            labels: BTreeMap::from([("helm.sh/chart".to_string(), "shop-1.4.0".to_string())]),
-            attributes: BTreeMap::new(),
-            raw: vec![],
-            images,
+    /// Serves the Kubernetes list calls the observe pass makes for one
+    /// Helm-installed Deployment in namespace `shop`, and returns a service
+    /// provider whose Kubernetes clients talk to it.
+    async fn stub_kubernetes_api(image_id: &str) -> Arc<dyn alien_infra::PlatformServiceProvider> {
+        fn list(api_version: &str, kind: &str, items: Value) -> Value {
+            json!({ "apiVersion": api_version, "kind": kind, "metadata": {}, "items": items })
         }
+        let deployments = list(
+            "apps/v1",
+            "DeploymentList",
+            json!([{
+                "metadata": {
+                    "name": "api",
+                    "namespace": "shop",
+                    "labels": {
+                        "helm.sh/chart": "shop-1.4.0",
+                        "app.kubernetes.io/version": "1.4.0"
+                    }
+                },
+                "spec": {
+                    "selector": { "matchLabels": { "app": "api" } },
+                    "template": {
+                        "metadata": { "labels": { "app": "api" } },
+                        "spec": { "containers": [{ "name": "api" }] }
+                    }
+                },
+                "status": { "replicas": 1, "readyReplicas": 1 }
+            }]),
+        );
+        let pods = list(
+            "v1",
+            "PodList",
+            json!([{
+                "metadata": { "name": "api-7d9f", "namespace": "shop" },
+                "spec": { "containers": [{ "name": "api" }] },
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [{
+                        "name": "api",
+                        "ready": true,
+                        "restartCount": 0,
+                        "image": "registry.example.com/shop/api:1.4.0",
+                        "imageID": image_id
+                    }]
+                }
+            }]),
+        );
+        let statefulsets = list("apps/v1", "StatefulSetList", json!([]));
+        let daemonsets = list("apps/v1", "DaemonSetList", json!([]));
+        let events = list("v1", "EventList", json!([]));
+        let metrics = list("metrics.k8s.io/v1beta1", "PodMetricsList", json!([]));
+        let app = Router::new()
+            .route(
+                "/apis/apps/v1/namespaces/shop/deployments",
+                get(move || async move { Json(deployments) }),
+            )
+            .route(
+                "/apis/apps/v1/namespaces/shop/statefulsets",
+                get(move || async move { Json(statefulsets) }),
+            )
+            .route(
+                "/apis/apps/v1/namespaces/shop/daemonsets",
+                get(move || async move { Json(daemonsets) }),
+            )
+            .route(
+                "/api/v1/namespaces/shop/pods",
+                get(move || async move { Json(pods) }),
+            )
+            .route(
+                "/api/v1/namespaces/shop/events",
+                get(move || async move { Json(events) }),
+            )
+            .route(
+                "/apis/metrics.k8s.io/v1beta1/namespaces/shop/pods",
+                get(move || async move { Json(metrics) }),
+            );
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind stub Kubernetes API");
+        let address = listener.local_addr().expect("stub Kubernetes address");
+        tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let client = Arc::new(
+            KubernetesClient::new(KubernetesClientConfig::Manual {
+                server_url: format!("http://{address}"),
+                certificate_authority_data: None,
+                insecure_skip_tls_verify: None,
+                client_certificate_data: None,
+                client_key_data: None,
+                token: Some("test-token".to_string()),
+                username: None,
+                password: None,
+                namespace: Some("shop".to_string()),
+                additional_headers: HashMap::new(),
+            })
+            .await
+            .expect("create stub Kubernetes client"),
+        );
+        let mut provider = MockPlatformServiceProvider::new();
+        let deployment_client: Arc<dyn DeploymentApi> = client.clone();
+        let pod_client: Arc<dyn PodApi> = client.clone();
+        let event_client: Arc<dyn EventApi> = client.clone();
+        let metrics_client: Arc<dyn MetricsApi> = client;
+        provider
+            .expect_get_kubernetes_deployment_client()
+            .returning(move |_| Ok(deployment_client.clone()));
+        provider
+            .expect_get_kubernetes_pod_client()
+            .returning(move |_| Ok(pod_client.clone()));
+        provider
+            .expect_get_kubernetes_event_client()
+            .returning(move |_| Ok(event_client.clone()));
+        provider
+            .expect_get_kubernetes_metrics_client()
+            .returning(move |_| Ok(metrics_client.clone()));
+        Arc::new(provider)
+    }
+
+    fn earlier_tick_inventory() -> Vec<ObservedInventoryBatch> {
+        vec![ObservedInventoryBatch {
+            source_kind: "operator".to_string(),
+            inventory_scope: "kubernetes:apps/v1:Deployment:shop".to_string(),
+            controller_platform: Platform::Kubernetes,
+            backend: HeartbeatBackend::Kubernetes,
+            observed_at: "2026-09-23T10:00:00Z".parse().unwrap(),
+            complete: true,
+            resources: vec![ObservedResourceSample {
+                deployment_id: Some("dep_remote".to_string()),
+                raw_identity: "apps/v1:Deployment:shop:api".to_string(),
+                provider_kind: "apps/v1/Deployment".to_string(),
+                display_name: "api".to_string(),
+                namespace: Some("shop".to_string()),
+                region: None,
+                scope: None,
+                resource_type_hint: None,
+                version: None,
+                alien_resource_id: None,
+                health: ObservedHealth::Healthy,
+                lifecycle: ProviderLifecycleState::Running,
+                message: None,
+                partial: false,
+                provider_stale: false,
+                counts: None,
+                collection_issues: vec![],
+                labels: BTreeMap::from([("helm.sh/chart".to_string(), "shop-1.3.0".to_string())]),
+                attributes: BTreeMap::new(),
+                raw: vec![],
+                images: vec![ContainerImageIdentity {
+                    name: "api".to_string(),
+                    image: "registry.example.com/shop/api:1.3.0".to_string(),
+                    digest: None,
+                }],
+            }],
+        }]
     }
 
     #[tokio::test]
     async fn ecs_diagnostics_operator_reports_the_configured_application_release() {
-        let body = captured_sync_request(
-            |data_dir, sync| {
-                OperatorConfig::builder()
-                    .platform(Platform::Aws)
-                    .operator_permission("diagnostics")
-                    .app_version("2026.09.1")
-                    .sync(sync)
-                    .data_dir(data_dir)
-                    .encryption_key(TEST_ENCRYPTION_KEY)
-                    .build()
-            },
-            &[],
-        )
+        let body = captured_sync_request(|data_dir, sync| SyncFixture {
+            config: OperatorConfig::builder()
+                .platform(Platform::Aws)
+                .operator_permission("diagnostics")
+                .app_version("2026.09.1")
+                .sync(sync)
+                .data_dir(data_dir)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build(),
+            status: DeploymentStatus::Running,
+            pending_inventory: vec![],
+            service_provider: None,
+        })
         .await;
 
         assert_eq!(body["deploymentId"], "dep_remote");
@@ -742,48 +901,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn kubernetes_remote_operator_reports_chart_and_image_digests() {
+    async fn kubernetes_remote_operator_reports_chart_and_image_digests_it_observes() {
         let digest = format!("sha256:{}", "a".repeat(64));
-        let inventory = vec![ObservedInventoryBatch {
-            source_kind: "operator".to_string(),
-            inventory_scope: "kubernetes:apps/v1:Deployment:shop".to_string(),
-            controller_platform: Platform::Kubernetes,
-            backend: HeartbeatBackend::Kubernetes,
-            observed_at: "2026-09-24T10:00:00Z".parse().unwrap(),
-            complete: true,
-            resources: vec![helm_workload(
-                "apps/v1:Deployment:shop:api",
-                vec![ContainerImageIdentity {
-                    name: "api".to_string(),
-                    image: "registry.example.com/shop/api:1.4.0".to_string(),
-                    digest: Some(digest.clone()),
-                }],
-            )],
-        }];
-        let remote_operator = |data_dir, sync| {
-            OperatorConfig::builder()
+        let provider =
+            stub_kubernetes_api(&format!("registry.example.com/shop/api@{digest}")).await;
+
+        let body = captured_sync_request(|data_dir, sync| SyncFixture {
+            config: OperatorConfig::builder()
                 .platform(Platform::Kubernetes)
                 .operator_permission("observe")
+                .namespace("shop")
                 .sync(sync)
                 .data_dir(data_dir)
                 .encryption_key(TEST_ENCRYPTION_KEY)
-                .build()
-        };
-        let alien_operator = |data_dir, sync| {
-            OperatorConfig::builder()
-                .platform(Platform::Kubernetes)
-                .sync(sync)
-                .data_dir(data_dir)
-                .encryption_key(TEST_ENCRYPTION_KEY)
-                .build()
-        };
+                .build(),
+            status: DeploymentStatus::Running,
+            pending_inventory: earlier_tick_inventory(),
+            service_provider: Some(provider),
+        })
+        .await;
 
-        let remote = captured_sync_request(remote_operator, &inventory).await;
-        let alien = captured_sync_request(alien_operator, &inventory).await;
-
-        assert_eq!(remote["currentState"]["currentRelease"]["version"], "1.4.0");
+        let mut application = body["application"].clone();
+        let observed_at = application
+            .as_object_mut()
+            .and_then(|report| report.remove("observedAt"))
+            .expect("application report carries observedAt");
+        assert!(observed_at.as_str().is_some_and(|at| at.starts_with("20")));
         assert_eq!(
-            remote["application"],
+            application,
             json!({
                 "source": "kubernetes",
                 "chartName": "shop",
@@ -794,13 +939,9 @@ mod tests {
                     "image": "registry.example.com/shop/api:1.4.0",
                     "digest": digest,
                 }],
-                "observedAt": "2026-09-24T10:00:00Z",
+                "complete": true,
             })
         );
-        assert!(alien.get("application").is_none());
-        assert!(alien["currentState"]
-            .get("currentRelease")
-            .is_none_or(Value::is_null));
     }
 
     #[test]

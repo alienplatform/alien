@@ -271,6 +271,9 @@ pub struct ObservedApplicationReport {
     /// Distinct container images running in the observed workloads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<ObservedApplicationImage>,
+    /// Whether every workload kind could be listed. When `false`, the chart
+    /// and images describe only the workloads the Operator could read.
+    pub complete: bool,
     /// When the workloads were read.
     pub observed_at: DateTime<Utc>,
 }
