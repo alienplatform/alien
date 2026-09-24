@@ -594,10 +594,8 @@ impl AwsSandboxController {
 
     // ─────────────── DELETE FLOW ──────────────────────────────────────────
 
-    // Versions first, then the image: the versions hold the image, and the API accepts a
-    // delete on an image with versions present while removing nothing. Sessions cannot be
-    // enumerated (see the module doc) and self-reap; a version delete refused while they run
-    // fails loudly here and the executor retries — nothing is fired and forgotten.
+    // Sessions cannot be enumerated (see the module doc) and self-reap; a delete refused while
+    // they run fails loudly here and the executor retries — nothing is fired and forgotten.
 
     #[flow_entry(Delete)]
     #[handler(
