@@ -437,3 +437,29 @@ fn test_aws_cloudformation_managing_account_id_substitution() {
         json!({"Fn::Sub": "arn:${AWS::Partition}:ecr:*:${ManagingAccountId}:repository/*"});
     assert_eq!(ecr_statement.resource[0], expected_resource);
 }
+
+/// The CloudFormation form of the tag-on-create grant: `NotResource` alone, its partition
+/// resolved by the stack like every other ARN.
+#[test]
+fn the_sandbox_tag_on_create_renders_as_not_resource_only() {
+    let permission_set = get_permission_set("sandbox/provision").expect("sandbox/provision");
+    let policy = AwsCloudFormationPermissionsGenerator::new()
+        .generate_policy(permission_set, BindingTarget::Stack, &create_test_context())
+        .expect("policy generates");
+    let document = serde_json::to_value(&policy).expect("serializes");
+    let tag_on_create: Vec<&serde_json::Value> = document["Statement"]
+        .as_array()
+        .expect("statements")
+        .iter()
+        .filter(|statement| statement.get("NotResource").is_some())
+        .collect();
+
+    assert_eq!(tag_on_create.len(), 2);
+    for statement in tag_on_create {
+        assert!(statement.get("Resource").is_none(), "{statement}");
+        assert_eq!(
+            statement["NotResource"],
+            json!([{"Fn::Sub": "arn:${AWS::Partition}:lambda:*:*:*"}])
+        );
+    }
+}

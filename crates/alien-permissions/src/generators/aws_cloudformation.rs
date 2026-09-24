@@ -19,7 +19,11 @@ pub struct AwsCloudFormationIamStatement {
     /// List of IAM actions (can be CloudFormation intrinsic functions)
     pub action: Vec<JsonValue>,
     /// List of resource ARNs (can be CloudFormation intrinsic functions)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resource: Vec<JsonValue>,
+    /// ARN patterns the statement excludes, rendered as `NotResource` in place of `Resource`
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_resource: Vec<JsonValue>,
     /// Optional conditions (can contain CloudFormation intrinsic functions)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub condition: Option<IndexMap<String, IndexMap<String, JsonValue>>>,
@@ -97,6 +101,8 @@ impl AwsCloudFormationPermissionsGenerator {
 
             let resources =
                 self.interpolate_cloudformation_resources(&binding_spec.resources, context)?;
+            let not_resources =
+                self.interpolate_cloudformation_resources(&binding_spec.not_resources, context)?;
             let conditions = self.extract_cloudformation_conditions(binding_spec, context)?;
 
             let statement_id = self.statement_id(
@@ -117,6 +123,7 @@ impl AwsCloudFormationPermissionsGenerator {
                 effect: platform_permission.effect.as_str().to_string(),
                 action: action_values,
                 resource: resources,
+                not_resource: not_resources,
                 condition: if conditions.is_empty() {
                     None
                 } else {

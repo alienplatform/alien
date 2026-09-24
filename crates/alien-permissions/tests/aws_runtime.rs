@@ -958,3 +958,39 @@ fn the_management_role_guard_covers_every_role_write_that_reaches_the_management
         "the sets this guard exists for still grant role writes on role/<prefix>-*"
     );
 }
+
+/// IAM takes exactly one of `Resource` and `NotResource`, and a tag-on-create grant must render
+/// as the second alone: an empty `Resource` beside it would make the document invalid.
+#[rstest]
+#[case::stack_binding(BindingTarget::Stack)]
+#[case::resource_binding(BindingTarget::Resource)]
+fn the_sandbox_tag_on_create_renders_as_not_resource_only(#[case] binding_target: BindingTarget) {
+    let permission_set = get_permission_set("sandbox/provision").expect("sandbox/provision");
+    let policy = AwsRuntimePermissionsGenerator::new()
+        .generate_policy(permission_set, binding_target, &create_test_context())
+        .expect("policy generates");
+    let document = serde_json::to_value(&policy).expect("serializes");
+    let tag_on_create: Vec<&serde_json::Value> = document["Statement"]
+        .as_array()
+        .expect("statements")
+        .iter()
+        .filter(|statement| statement.get("NotResource").is_some())
+        .collect();
+
+    assert_eq!(
+        tag_on_create.len(),
+        2,
+        "runtime and setup builds each tag on create"
+    );
+    for statement in tag_on_create {
+        assert_eq!(
+            statement["Action"],
+            serde_json::json!(["lambda:TagResource"])
+        );
+        assert_eq!(
+            statement["NotResource"],
+            serde_json::json!(["arn:aws:lambda:*:*:*"])
+        );
+        assert!(statement.get("Resource").is_none(), "{statement}");
+    }
+}

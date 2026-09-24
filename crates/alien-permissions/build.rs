@@ -195,6 +195,8 @@ fn validate_permission_set(content: &str, path: &Path) -> Result<String, String>
         return Err("Permission set description cannot be empty".to_string());
     }
 
+    permission_set.validate_not_resources()?;
+
     println!(
         "✓ Validated permission set: {} ({})",
         permission_set.id,

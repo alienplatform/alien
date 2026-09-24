@@ -15,6 +15,7 @@ export const BindingConfigurationAwsBindingSpecSchema = z.object({
     }).catchall(z.object({
     
     }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
+"notResources": z.optional(z.array(z.string()).describe("ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.")),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
     }).describe("AWS-specific binding specification")),
 "stack": z.optional(z.object({
@@ -23,6 +24,7 @@ export const BindingConfigurationAwsBindingSpecSchema = z.object({
     }).catchall(z.object({
     
     }).catchall(z.string())).describe("Optional condition for additional filtering (rare)").nullish(),
+"notResources": z.optional(z.array(z.string()).describe("ARN patterns rendered as IAM `NotResource`, in place of `resources`. Its one use is a\ntag-on-create grant whose implied check AWS authorizes against no resource; the build\nrefuses it anywhere else.")),
 "resources": z.array(z.string()).describe("Resource ARNs to bind to")
     }).describe("AWS-specific binding specification"))
     }).describe("Generic binding configuration for permissions")

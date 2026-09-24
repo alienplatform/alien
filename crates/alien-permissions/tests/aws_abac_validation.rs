@@ -796,6 +796,60 @@ const SANDBOX_ACTIONS_WITHOUT_A_RESOURCE_TYPE: &[&str] = &[
     // connector ARN, so it is scoped rather than wildcarded — see `sandbox/remote-execute`.
 ];
 
+/// A tag grant on `*` also tags every existing Lambda resource in the account, and its request
+/// tags bound only the keys they name. The implicit tag of a create is the one tag AWS checks
+/// against no resource, so it is granted on `NotResource` of every Lambda ARN instead.
+#[test]
+fn lambda_tag_resource_is_never_granted_on_every_resource() {
+    let mut failures = Vec::new();
+    let mut tag_on_create = 0;
+
+    for permission_set_id in list_permission_set_ids() {
+        let permission_set = get_permission_set(permission_set_id)
+            .unwrap_or_else(|| panic!("missing permission set {permission_set_id}"));
+        for (index, permission) in permission_set.platforms.aws.iter().flatten().enumerate() {
+            if permission.effect == AwsPermissionEffect::Deny {
+                continue;
+            }
+            let tags = permission
+                .grant
+                .actions
+                .iter()
+                .flatten()
+                .any(|action| action == "lambda:TagResource");
+            if !tags {
+                continue;
+            }
+            for binding in [
+                permission.binding.stack.as_ref(),
+                permission.binding.resource.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if binding.resources.iter().any(|resource| resource == "*") {
+                    failures.push(format!(
+                        "{permission_set_id}[{index}] grants lambda:TagResource on \"*\""
+                    ));
+                }
+                if binding
+                    .not_resources
+                    .iter()
+                    .any(|pattern| pattern == "arn:aws:lambda:*:*:*")
+                {
+                    tag_on_create += 1;
+                }
+            }
+        }
+    }
+
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+    assert!(
+        tag_on_create > 0,
+        "no sandbox image build can tag on create: the NotResource grant is gone"
+    );
+}
+
 /// The inverse of the wildcard check above: that one asks whether a `*` is too wide, this one asks
 /// whether an ARN is too narrow to work.
 ///

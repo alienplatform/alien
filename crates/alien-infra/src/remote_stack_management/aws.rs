@@ -649,6 +649,7 @@ impl AwsRemoteStackManagementController {
                     "arn:aws:iam::{}:role/{}",
                     aws_config.account_id, role_name
                 )],
+                not_resource: Vec::new(),
                 condition: None,
             });
         }
