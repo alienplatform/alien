@@ -3,7 +3,7 @@ use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXE
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::Stack;
-use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
+use alien_permissions::MANAGEMENT_ROLE_GUARD;
 use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
@@ -134,7 +134,7 @@ fn management_differs_outside_gates(
 ) -> bool {
     match (
         old_management,
-        &without_added_role_guards(old_management, new_management),
+        &without_added_management_role_guard(old_management, new_management),
     ) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
@@ -159,28 +159,27 @@ fn management_differs_outside_gates(
     }
 }
 
-/// The new management permissions without the role guards this update adds. They are Denies, so
-/// they only narrow the identity. Only the canonical references at stack scope are exempt: removing
-/// one, or anything added beside them, still reads as drift.
-fn without_added_role_guards(
+/// The new management permissions without the management-role guard, if this update is what adds
+/// it: a Deny only narrows the identity, and every AWS deployment prepared before it gains it on its
+/// next update. Only the canonical reference at stack scope; anything else still reads as drift.
+fn without_added_management_role_guard(
     old: &ManagementPermissions,
     new: &ManagementPermissions,
 ) -> ManagementPermissions {
+    let guard = PermissionSetReference::from_name(MANAGEMENT_ROLE_GUARD);
     let old_global = match old {
         ManagementPermissions::Auto => None,
         ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
             profile.0.get("*")
         }
     };
-    let added: Vec<PermissionSetReference> = [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD]
-        .into_iter()
-        .map(PermissionSetReference::from_name)
-        .filter(|guard| !old_global.is_some_and(|grants| grants.contains(guard)))
-        .collect();
+    if old_global.is_some_and(|grants| grants.contains(&guard)) {
+        return new.clone();
+    }
     let without = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
         if let Some(grants) = profile.0.get_mut("*") {
-            grants.retain(|grant| !added.contains(grant));
+            grants.retain(|grant| grant != &guard);
             if grants.is_empty() && old_global.is_none() {
                 profile.0.shift_remove("*");
             }
@@ -189,6 +188,7 @@ fn without_added_role_guards(
     };
     match new {
         ManagementPermissions::Auto => ManagementPermissions::Auto,
+        // A profile the mutation left `Auto` becomes `Extend` only to hold the guard.
         ManagementPermissions::Extend(profile) => {
             let profile = without(profile);
             if profile.0.is_empty() && matches!(old, ManagementPermissions::Auto) {
@@ -422,24 +422,20 @@ mod tests {
         stack
     }
 
-    /// A deployment prepared before a guard existed gains it on its first update, and a Deny
-    /// cannot escalate, so that addition is not drift, whatever the profile's mode, the stack's
-    /// resources, and whether the other guard was already there.
+    /// An AWS deployment prepared before the guard existed gains it on its next update, whatever
+    /// the profile's mode and the stack's resources.
     #[tokio::test]
-    async fn an_update_may_add_the_role_guards() {
+    async fn an_update_may_add_the_management_role_guard() {
         let mut stacks = Vec::new();
         for management in [
             ManagementPermissions::Auto,
             ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
-            ManagementPermissions::Override(
-                PermissionProfile::new().global(["sandbox/management"]),
-            ),
+            ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
         ] {
-            for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
-                let mut stack = guarded_sandbox_stack(management.clone());
-                stack.resources.get_mut("agents").unwrap().lifecycle = lifecycle;
-                stacks.push((management.clone(), stack));
-            }
+            stacks.push((
+                management.clone(),
+                guarded_sandbox_stack(management.clone()),
+            ));
             let kv_only = Stack::new("s".to_string())
                 .management(management.clone())
                 .add(
@@ -456,30 +452,28 @@ mod tests {
 
         for (management, stack) in stacks {
             let now = prepared(stack).await;
-            for added in [
-                &[MANAGEMENT_ROLE_GUARD][..],
-                &[MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD][..],
-            ] {
-                let result = PermissionProfilesUnchangedCheck
-                    .check(&without_guards(&now, &management, added), &now)
-                    .await
-                    .expect("check should run");
-                assert!(
-                    result.success,
-                    "{management:?} adding {added:?} to {:?}: {:?}",
-                    now.management(),
-                    result.errors
-                );
-            }
+            let result = PermissionProfilesUnchangedCheck
+                .check(
+                    &without_guards(&now, &management, &[MANAGEMENT_ROLE_GUARD]),
+                    &now,
+                )
+                .await
+                .expect("check should run");
+            assert!(
+                result.success,
+                "{management:?} gaining the guard in {:?}: {:?}",
+                now.management(),
+                result.errors
+            );
         }
     }
 
     #[tokio::test]
-    async fn an_update_may_not_remove_the_sandbox_setup_roles_guard() {
+    async fn an_update_may_not_remove_the_management_role_guard() {
         assert!(
             !update_passes(
                 ManagementPermissions::Extend(
-                    PermissionProfile::new().global([SANDBOX_SETUP_ROLES_GUARD])
+                    PermissionProfile::new().global([MANAGEMENT_ROLE_GUARD])
                 ),
                 ManagementPermissions::Extend(PermissionProfile::new()),
             )
@@ -493,7 +487,7 @@ mod tests {
             !update_passes(
                 ManagementPermissions::Extend(PermissionProfile::new()),
                 ManagementPermissions::Extend(
-                    PermissionProfile::new().global([SANDBOX_SETUP_ROLES_GUARD, "sandbox/execute"])
+                    PermissionProfile::new().global([MANAGEMENT_ROLE_GUARD, "sandbox/execute"])
                 ),
             )
             .await
@@ -506,7 +500,7 @@ mod tests {
             !update_passes(
                 ManagementPermissions::Extend(PermissionProfile::new()),
                 ManagementPermissions::Extend(
-                    PermissionProfile::new().resource("agents", [SANDBOX_SETUP_ROLES_GUARD])
+                    PermissionProfile::new().resource("agents", [MANAGEMENT_ROLE_GUARD])
                 ),
             )
             .await
