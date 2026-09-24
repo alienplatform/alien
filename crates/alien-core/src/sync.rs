@@ -3,6 +3,7 @@
 //! The agent periodically calls `POST /v1/sync` with a `SyncRequest` and
 //! receives a `SyncResponse` containing the target deployment state.
 
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -223,6 +224,57 @@ pub struct SyncRequest {
     pub operations_report: Option<OperationsReport>,
 }
 
+/// Where the Operator read the application identity from.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub enum ObservedApplicationSource {
+    /// Labels and pod statuses of the observed Kubernetes workloads.
+    Kubernetes,
+}
+
+/// A container image running in one observed application workload.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedApplicationImage {
+    /// Inventory identity of the workload, matching the `rawIdentity` of its
+    /// observed resource sample (for example `apps/v1:Deployment:shop:api`).
+    pub workload: String,
+    /// Container name within the workload.
+    pub container: String,
+    /// Image reference reported by the container runtime.
+    pub image: String,
+    /// Registry manifest digest in `sha256:<hex>` form, when the runtime
+    /// reports one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub digest: Option<String>,
+}
+
+/// Application release the Operator observes running in its environment.
+///
+/// This identifies the customer's application, not the Operator: the
+/// Operator's own image is reported separately as [`OperatorImageReport`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedApplicationReport {
+    /// Where this identity was read from.
+    pub source: ObservedApplicationSource,
+    /// Helm chart name from the workloads' `helm.sh/chart` label. Present only
+    /// when every labelled workload names the same chart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_name: Option<String>,
+    /// Helm chart version from the same label.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chart_version: Option<String>,
+    /// Distinct container images running in the observed workloads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ObservedApplicationImage>,
+    /// When the workloads were read.
+    pub observed_at: DateTime<Utc>,
+}
+
 /// Extensible wire input for sync metadata that is not part of the
 /// long-standing [`SyncRequest`] struct-literal contract.
 #[derive(Debug, Clone, Serialize)]
@@ -234,6 +286,10 @@ pub struct SyncInput {
     /// older installations that do not carry an image receipt.
     #[serde(skip_serializing_if = "Option::is_none")]
     operator_image: Option<OperatorImageReport>,
+    /// Application release observed in the environment. Absent when the
+    /// Operator observed none or predates this report.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    application: Option<ObservedApplicationReport>,
 }
 
 impl SyncInput {
@@ -243,6 +299,7 @@ impl SyncInput {
         SyncInputBuilder {
             request,
             operator_image: None,
+            application: None,
         }
     }
 }
@@ -252,6 +309,7 @@ impl SyncInput {
 pub struct SyncInputBuilder {
     request: SyncRequest,
     operator_image: Option<OperatorImageReport>,
+    application: Option<ObservedApplicationReport>,
 }
 
 impl SyncInputBuilder {
@@ -261,11 +319,18 @@ impl SyncInputBuilder {
         self
     }
 
+    /// Attach the application release observed in the environment.
+    pub fn application(mut self, application: ObservedApplicationReport) -> Self {
+        self.application = Some(application);
+        self
+    }
+
     /// Finish the serializable sync payload.
     pub fn build(self) -> SyncInput {
         SyncInput {
             request: self.request,
             operator_image: self.operator_image,
+            application: self.application,
         }
     }
 }

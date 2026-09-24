@@ -115,6 +115,9 @@ impl Modify for BearerSecurity {
         alien_core::sync::OperationsReport,
         alien_core::sync::OperatorImageReport,
         alien_core::sync::OperatorImageSource,
+        alien_core::sync::ObservedApplicationReport,
+        alien_core::sync::ObservedApplicationImage,
+        alien_core::sync::ObservedApplicationSource,
         alien_core::sync::OperationsBundleDownload,
         alien_core::sync::TargetOperationsBundleSet,
         // Credentials types

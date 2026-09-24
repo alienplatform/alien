@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
-use alien_core::{Platform, SECRETS_VAULT_ID, Stack};
+use alien_core::{Platform, Stack, SECRETS_VAULT_ID};
 use std::collections::HashSet;
 
 /// Ensures the stack contains only allowed user-defined resource types and IDs.

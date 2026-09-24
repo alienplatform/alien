@@ -7,6 +7,7 @@
 //! When approval_mode is Manual, new targets create approval records
 //! that must be approved before deployment proceeds.
 
+use super::observed_release::{observed_application, single_observed_version};
 use crate::db::{Approval, ApprovalStatus};
 use crate::OperatorState;
 use alien_core::{
@@ -181,13 +182,14 @@ async fn sync_with_manager(
         observed_inventory_batches.extend(observe_running_deployment(state, &deployment_id).await?);
     }
 
-    // Observe deployments have no Alien-shipped release, so they report the app
-    // version as a version-only `current_release`; the platform resolves it to a
+    // Remote Operator deployments have no Alien-shipped release, so they report the
+    // app version as a version-only `current_release`; the platform resolves it to a
     // stackless release and sets `currentReleaseId` — the same channel greenfield
     // uses (where the deploy loop sets `current_release.release_id`). The version is
     // the vendor-configured override if set, else the single version observed on the
     // workloads (e.g. `app.kubernetes.io/version`), so it tracks upgrades.
-    if state.config.observes_environment() && deployment_state.current_release.is_none() {
+    let reports_application_release = state.config.reports_application_release();
+    if reports_application_release && deployment_state.current_release.is_none() {
         let app_version = state
             .config
             .app_version
@@ -217,6 +219,12 @@ async fn sync_with_manager(
         None => None,
     };
 
+    let application = if reports_application_release {
+        observed_application(&observed_inventory_batches)
+    } else {
+        None
+    };
+
     let sync_request = SyncRequest {
         deployment_id: deployment_id.clone(),
         session: sync_session.clone(),
@@ -229,12 +237,14 @@ async fn sync_with_manager(
         operator_version: Some(env!("CARGO_PKG_VERSION").to_string()),
         operations_report,
     };
-    let sync_input = match operator_image.cloned() {
-        Some(operator_image) => SyncInput::builder(sync_request)
-            .operator_image(operator_image)
-            .build(),
-        None => SyncInput::builder(sync_request).build(),
-    };
+    let mut sync_input = SyncInput::builder(sync_request);
+    if let Some(operator_image) = operator_image.cloned() {
+        sync_input = sync_input.operator_image(operator_image);
+    }
+    if let Some(application) = application {
+        sync_input = sync_input.application(application);
+    }
+    let sync_input = sync_input.build();
 
     // Call manager with deployment_id in request body.
     //
@@ -455,30 +465,6 @@ async fn observe_running_deployment(
     Ok(observe_report.inventory_batches)
 }
 
-/// Resolve a single app version from the observed inventory — the distinct,
-/// non-empty `version` read off the workloads (e.g. `app.kubernetes.io/version`).
-/// Returns it only when exactly one version is present; a multi-version environment
-/// reports none rather than guessing, so the deployment shows "no release" until a
-/// vendor pins one via `OPERATOR_RELEASE_VERSION` or `alien release`.
-fn single_observed_version(batches: &[ObservedInventoryBatch]) -> Option<String> {
-    let mut versions = std::collections::BTreeSet::new();
-    for batch in batches {
-        for sample in &batch.resources {
-            if let Some(version) = sample.version.as_deref() {
-                let version = version.trim();
-                if !version.is_empty() {
-                    versions.insert(version.to_string());
-                }
-            }
-        }
-    }
-    if versions.len() == 1 {
-        versions.into_iter().next()
-    } else {
-        None
-    }
-}
-
 fn report_operator_capabilities(
     state: &OperatorState,
     operations_command_address_v1: bool,
@@ -617,15 +603,205 @@ fn local_state_is_delete_or_deleted(state: &alien_core::DeploymentState) -> bool
 
 #[cfg(test)]
 mod tests {
-    use alien_core::{
-        sync::OperatorCapabilityState, DeploymentState, DeploymentStatus, Platform,
-        CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+    use std::{
+        collections::BTreeMap,
+        sync::{Arc, Mutex},
     };
 
-    use super::{
-        apply_manager_control_state, is_uninitialized_deployment_state,
-        operation_command_address_capability,
+    use alien_core::{
+        sync::OperatorCapabilityState, ContainerImageIdentity, DeploymentState, DeploymentStatus,
+        HeartbeatBackend, ObservedHealth, ObservedInventoryBatch, ObservedResourceSample, Platform,
+        ProviderLifecycleState, CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
     };
+    use axum::{extract::State, routing::post, Json, Router};
+    use serde_json::{json, Value};
+    use tokio_util::sync::CancellationToken;
+
+    use super::{
+        apply_manager_control_state, create_authenticated_client,
+        is_uninitialized_deployment_state, operation_command_address_capability, sync_with_manager,
+    };
+    use crate::{db::OperatorDb, OperatorConfig, OperatorState, SyncConfig};
+
+    const TEST_ENCRYPTION_KEY: &str =
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    /// Runs one sync against a stub manager and returns the request body it
+    /// received.
+    async fn captured_sync_request(
+        config: impl FnOnce(String, SyncConfig) -> OperatorConfig,
+        pending_inventory: &[ObservedInventoryBatch],
+    ) -> Value {
+        type Captured = Arc<Mutex<Option<Value>>>;
+        async fn capture_sync(
+            State(captured): State<Captured>,
+            Json(body): Json<Value>,
+        ) -> Json<Value> {
+            *captured.lock().unwrap() = Some(body);
+            Json(json!({}))
+        }
+
+        let captured: Captured = Arc::new(Mutex::new(None));
+        let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .await
+            .expect("bind stub manager");
+        let address = listener.local_addr().expect("stub manager address");
+        let app = Router::new()
+            .route("/v1/sync", post(capture_sync))
+            .with_state(captured.clone());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await });
+
+        let data_dir = tempfile::tempdir().expect("create data dir");
+        let data_dir = data_dir.path().to_string_lossy().to_string();
+        let db = OperatorDb::new(&data_dir, TEST_ENCRYPTION_KEY)
+            .await
+            .expect("open operator db");
+        db.set_deployment_id("dep_remote").await.unwrap();
+        db.set_pending_observed_inventory_batches(pending_inventory)
+            .await
+            .unwrap();
+        let sync_config = SyncConfig {
+            url: format!("http://{address}").parse().unwrap(),
+            token: "ax_dep_test".to_string(),
+        };
+        let state = OperatorState {
+            config: config(data_dir, sync_config.clone()),
+            db: Arc::new(db),
+            service_provider: None,
+            operations_sync_handler: None,
+            cancel: CancellationToken::new(),
+        };
+
+        let client = create_authenticated_client(&sync_config.token).unwrap();
+        sync_with_manager(&state, &client, sync_config.url.as_str(), false, None)
+            .await
+            .expect("sync with stub manager");
+        server.abort();
+
+        let body = captured.lock().unwrap().take();
+        body.expect("stub manager received a sync request")
+    }
+
+    fn helm_workload(
+        raw_identity: &str,
+        images: Vec<ContainerImageIdentity>,
+    ) -> ObservedResourceSample {
+        ObservedResourceSample {
+            deployment_id: Some("dep_remote".to_string()),
+            raw_identity: raw_identity.to_string(),
+            provider_kind: "apps/v1/Deployment".to_string(),
+            display_name: raw_identity.rsplit(':').next().unwrap().to_string(),
+            namespace: Some("shop".to_string()),
+            region: None,
+            scope: None,
+            resource_type_hint: None,
+            version: Some("1.4.0".to_string()),
+            alien_resource_id: None,
+            health: ObservedHealth::Healthy,
+            lifecycle: ProviderLifecycleState::Running,
+            message: None,
+            partial: false,
+            provider_stale: false,
+            counts: None,
+            collection_issues: vec![],
+            labels: BTreeMap::from([("helm.sh/chart".to_string(), "shop-1.4.0".to_string())]),
+            attributes: BTreeMap::new(),
+            raw: vec![],
+            images,
+        }
+    }
+
+    #[tokio::test]
+    async fn ecs_diagnostics_operator_reports_the_configured_application_release() {
+        let body = captured_sync_request(
+            |data_dir, sync| {
+                OperatorConfig::builder()
+                    .platform(Platform::Aws)
+                    .operator_permission("diagnostics")
+                    .app_version("2026.09.1")
+                    .sync(sync)
+                    .data_dir(data_dir)
+                    .encryption_key(TEST_ENCRYPTION_KEY)
+                    .build()
+            },
+            &[],
+        )
+        .await;
+
+        assert_eq!(body["deploymentId"], "dep_remote");
+        assert_eq!(
+            body["currentState"]["currentRelease"]["version"],
+            "2026.09.1"
+        );
+        assert_eq!(
+            body["currentState"]["currentRelease"]["releaseId"],
+            Value::Null
+        );
+        assert!(body.get("observedInventoryBatches").is_none());
+        assert!(body.get("application").is_none());
+    }
+
+    #[tokio::test]
+    async fn kubernetes_remote_operator_reports_chart_and_image_digests() {
+        let digest = format!("sha256:{}", "a".repeat(64));
+        let inventory = vec![ObservedInventoryBatch {
+            source_kind: "operator".to_string(),
+            inventory_scope: "kubernetes:apps/v1:Deployment:shop".to_string(),
+            controller_platform: Platform::Kubernetes,
+            backend: HeartbeatBackend::Kubernetes,
+            observed_at: "2026-09-24T10:00:00Z".parse().unwrap(),
+            complete: true,
+            resources: vec![helm_workload(
+                "apps/v1:Deployment:shop:api",
+                vec![ContainerImageIdentity {
+                    name: "api".to_string(),
+                    image: "registry.example.com/shop/api:1.4.0".to_string(),
+                    digest: Some(digest.clone()),
+                }],
+            )],
+        }];
+        let remote_operator = |data_dir, sync| {
+            OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .operator_permission("observe")
+                .sync(sync)
+                .data_dir(data_dir)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build()
+        };
+        let alien_operator = |data_dir, sync| {
+            OperatorConfig::builder()
+                .platform(Platform::Kubernetes)
+                .sync(sync)
+                .data_dir(data_dir)
+                .encryption_key(TEST_ENCRYPTION_KEY)
+                .build()
+        };
+
+        let remote = captured_sync_request(remote_operator, &inventory).await;
+        let alien = captured_sync_request(alien_operator, &inventory).await;
+
+        assert_eq!(remote["currentState"]["currentRelease"]["version"], "1.4.0");
+        assert_eq!(
+            remote["application"],
+            json!({
+                "source": "kubernetes",
+                "chartName": "shop",
+                "chartVersion": "1.4.0",
+                "images": [{
+                    "workload": "apps/v1:Deployment:shop:api",
+                    "container": "api",
+                    "image": "registry.example.com/shop/api:1.4.0",
+                    "digest": digest,
+                }],
+                "observedAt": "2026-09-24T10:00:00Z",
+            })
+        );
+        assert!(alien.get("application").is_none());
+        assert!(alien["currentState"]
+            .get("currentRelease")
+            .is_none_or(Value::is_null));
+    }
 
     #[test]
     fn reports_versioned_operation_command_support_declared_by_the_receiver() {
