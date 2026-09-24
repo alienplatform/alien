@@ -1735,6 +1735,24 @@ spec:
         &removed,
         &format!("remoteOperator.confirmRemoval={helm_release} on later upgrades"),
     );
+    // Removing a completed identity is the one disabled revision without a
+    // rollback guard, so it stays a valid rollback target.
+    let removal_hooks = run_ok(
+        "helm",
+        [
+            "get",
+            "hooks",
+            helm_release.as_str(),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    assert!(
+        !removal_hooks.stdout.contains("pre-rollback"),
+        "{}",
+        removal_hooks.stdout
+    );
     for kind in ["deployment", "serviceaccount"] {
         let remaining = run_ok(
             "kubectl",

@@ -1258,7 +1258,9 @@ spec:
 }
 
 fn remote_operator_rollback_guard_tpl() -> String {
-    r#"{{- if not (or .Values.remoteOperator.enabled (include "deployment.remoteOperatorRemovalConfirmed" .)) }}
+    r#"{{- /* Only a confirmed removal of a completed identity is a guard-free rollback target. */ -}}
+{{- $identityCompletion := lookup "v1" "ConfigMap" .Release.Namespace (include "deployment.remoteOperatorIdentityCompletionName" .) }}
+{{- if not (or .Values.remoteOperator.enabled (and (include "deployment.remoteOperatorRemovalConfirmed" .) $identityCompletion)) }}
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -8423,12 +8425,14 @@ remoteOperator:
         disabled.assert_ok("disabled product chart");
         assert!(has_rollback_guard(&disabled.stdout));
 
-        // A confirmed removal is itself a safe rollback target, renders no
-        // Remote Operator workload or permissions, and keeps uninstall cleanup.
+        // A confirmation with no completed identity to remove (here, no
+        // cluster at all) keeps the rollback guard, so an install or bridge
+        // upgrade confirmed early never becomes a guard-free rollback target.
+        // The Kind lifecycle test covers removal of a completed identity.
         let removed = render("remoteOperator:\n  enabled: false\n  confirmRemoval: shop\n");
         removed.assert_ok("product chart with the Remote Operator removed");
         let documents = parse_manifest_docs(&removed.stdout);
-        assert!(!has_rollback_guard(&removed.stdout));
+        assert!(has_rollback_guard(&removed.stdout));
         assert!(docs_by_kind(&documents, "Deployment")
             .iter()
             .all(|document| {
@@ -8440,16 +8444,9 @@ remoteOperator:
             yaml_path(job, &["metadata", "annotations", "helm.sh/hook"]).and_then(YamlValue::as_str)
                 == Some("pre-delete")
         }));
-        let without_operator: Vec<_> = parse_manifest_docs(&disabled.stdout)
-            .into_iter()
-            .filter(|document| {
-                yaml_path(document, &["metadata", "annotations", "helm.sh/hook"])
-                    .and_then(YamlValue::as_str)
-                    != Some("pre-rollback")
-            })
-            .collect();
         assert_eq!(
-            documents, without_operator,
+            documents,
+            parse_manifest_docs(&disabled.stdout),
             "removal must leave the product resources exactly as a disabled render"
         );
     }
