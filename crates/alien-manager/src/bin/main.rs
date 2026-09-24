@@ -114,7 +114,9 @@ async fn build_standalone_server(
     toml_config: &ManagerTomlConfig,
 ) -> AlienManager {
     let addr_display = format!("{}:{}", config.host, config.port);
-    let (token_store, admin_token) = bootstrap_standalone_admin_token(&config).await;
+    let (token_store, admin_token) =
+        bootstrap_standalone_admin_token(&config, toml_config.database.encryption_key.as_deref())
+            .await;
 
     // Derive command response signing key from the admin token.
     use sha2::{Digest, Sha256};
@@ -158,7 +160,10 @@ async fn build_standalone_server(
 /// hashes it with SHA-256, and stores it in SQLite via TokenStore.
 /// On subsequent runs: reads the existing token from the file and verifies it exists in the DB.
 /// Returns the pre-created TokenStore so the builder reuses the same DB connection.
-async fn bootstrap_standalone_admin_token(config: &ManagerConfig) -> (Arc<dyn TokenStore>, String) {
+async fn bootstrap_standalone_admin_token(
+    config: &ManagerConfig,
+    encryption_key: Option<&str>,
+) -> (Arc<dyn TokenStore>, String) {
     let state_dir = config
         .state_dir
         .as_ref()
@@ -221,7 +226,7 @@ async fn bootstrap_standalone_admin_token(config: &ManagerConfig) -> (Arc<dyn To
 
     // Create SQLite database and token store
     let db = Arc::new(
-        SqliteDatabase::new(&db_path.to_string_lossy())
+        SqliteDatabase::new_with_key(&db_path.to_string_lossy(), encryption_key)
             .await
             .unwrap_or_else(|e| panic!("Failed to initialize database: {}", e)),
     );

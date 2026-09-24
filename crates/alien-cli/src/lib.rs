@@ -912,11 +912,14 @@ async fn serve_task(args: ServeArgs) -> Result<()> {
 
     // Create SQLite database and token store first (needed for token bootstrap)
     let db = std::sync::Arc::new(
-        alien_manager::stores::sqlite::SqliteDatabase::new(&db_path.to_string_lossy())
-            .await
-            .context(ErrorData::ServerStartFailed {
-                reason: "Failed to initialize database".to_string(),
-            })?,
+        alien_manager::stores::sqlite::SqliteDatabase::new_with_key(
+            &db_path.to_string_lossy(),
+            toml_config.database.encryption_key.as_deref(),
+        )
+        .await
+        .context(ErrorData::ServerStartFailed {
+            reason: "Failed to initialize database".to_string(),
+        })?,
     );
     let token_store: std::sync::Arc<dyn alien_manager::traits::TokenStore> =
         std::sync::Arc::new(alien_manager::stores::sqlite::SqliteTokenStore::new(db));

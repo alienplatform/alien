@@ -109,6 +109,7 @@ toml = { workspace = true }
 
 # Misc
 futures = { workspace = true }
+fs2 = { workspace = true }
 
 [dev-dependencies]
 alien-commands = { workspace = true, features = ["test-utils"] }

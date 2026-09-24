@@ -88,7 +88,7 @@ impl Default for ServerConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub struct DatabaseConfig {
     /// Path to the SQLite database file.
@@ -99,6 +99,19 @@ pub struct DatabaseConfig {
     pub state_dir: PathBuf,
     /// Optional AEGIS-256 encryption key for database-at-rest encryption.
     pub encryption_key: Option<String>,
+}
+
+impl std::fmt::Debug for DatabaseConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DatabaseConfig")
+            .field("path", &self.path)
+            .field("state_dir", &self.state_dir)
+            .field(
+                "encryption_key",
+                &self.encryption_key.as_ref().map(|_| "[REDACTED]"),
+            )
+            .finish()
+    }
 }
 
 impl Default for DatabaseConfig {
@@ -424,6 +437,19 @@ port = 3000
         assert_eq!(mc.host, "127.0.0.1");
         assert_eq!(mc.db_path, Some(PathBuf::from("/tmp/test.db")));
         assert_eq!(mc.otlp_endpoint, Some("http://otel:4318".to_string()));
+    }
+
+    #[test]
+    fn database_debug_redacts_configured_encryption_key() {
+        let sentinel = "manager-config-secret-sentinel";
+        let config = DatabaseConfig {
+            encryption_key: Some(sentinel.to_string()),
+            ..DatabaseConfig::default()
+        };
+
+        let rendered = format!("{config:?}");
+        assert!(rendered.contains("[REDACTED]"));
+        assert!(!rendered.contains(sentinel));
     }
 
     #[test]

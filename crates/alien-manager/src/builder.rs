@@ -218,11 +218,14 @@ impl AlienManagerBuilder {
                     .into_owned()
             });
         let db = Arc::new(
-            crate::stores::sqlite::SqliteDatabase::new(&db_path)
-                .await
-                .context(ErrorData::ServerInitFailed {
-                    reason: format!("Failed to initialize database at '{}'", db_path),
-                })?,
+            crate::stores::sqlite::SqliteDatabase::new_with_key(
+                &db_path,
+                toml_config.database.encryption_key.as_deref(),
+            )
+            .await
+            .context(ErrorData::ServerInitFailed {
+                reason: format!("Failed to initialize database at '{}'", db_path),
+            })?,
         );
 
         // --- Stores (only set if not already provided) ---
