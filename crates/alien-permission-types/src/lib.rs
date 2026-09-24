@@ -238,14 +238,16 @@ impl PermissionSet {
                 }
                 let services: Vec<&str> =
                     actions.iter().filter_map(|a| a.split(':').next()).collect();
+                // An exclusion fails open: a pattern pinned to one partition excludes nothing in
+                // the others, so the partition must be a wildcard.
                 for pattern in &spec.not_resources {
                     let service = pattern
-                        .strip_prefix("arn:aws:")
+                        .strip_prefix("arn:*:")
                         .and_then(|rest| rest.split(':').next());
                     if !service.is_some_and(|service| services.contains(&service)) {
                         return Err(format!(
-                            "{id}: notResources pattern '{pattern}' must name the action's own \
-                             service"
+                            "{id}: notResources pattern '{pattern}' must be `arn:*:<the action's \
+                             service>:...`"
                         ));
                     }
                 }
@@ -508,7 +510,7 @@ mod tests {
 
     #[test]
     fn a_request_tag_bound_tag_on_create_may_exclude_its_services_arns() {
-        let set = tag_on_create(&["lambda:TagResource"], &["arn:aws:lambda:*:*:*"], &[]);
+        let set = tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &[]);
         assert_eq!(set.validate_not_resources(), Ok(()));
     }
 
@@ -516,11 +518,11 @@ mod tests {
     fn not_resources_is_refused_beyond_tag_on_create() {
         for (set, why) in [
             (
-                tag_on_create(&["lambda:InvokeFunction"], &["arn:aws:lambda:*:*:*"], &[]),
+                tag_on_create(&["lambda:InvokeFunction"], &["arn:*:lambda:*:*:*"], &[]),
                 "an action other than TagResource",
             ),
             (
-                tag_on_create(&["lambda:TagResource"], &["arn:aws:s3:::*"], &[]),
+                tag_on_create(&["lambda:TagResource"], &["arn:*:s3:::*"], &[]),
                 "another service's ARNs, which leaves every Lambda ARN in",
             ),
             (
@@ -528,14 +530,18 @@ mod tests {
                 "a pattern IAM refuses",
             ),
             (
-                tag_on_create(&["lambda:TagResource"], &["arn:aws:lambda:*:*:*"], &["*"]),
+                tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &["*"]),
                 "both Resource and NotResource",
+            ),
+            (
+                tag_on_create(&["lambda:TagResource"], &["arn:aws:lambda:*:*:*"], &[]),
+                "a partition-pinned exclusion, which excludes nothing in GovCloud or China",
             ),
         ] {
             assert!(set.validate_not_resources().is_err(), "must refuse {why}");
         }
 
-        let mut unbounded = tag_on_create(&["lambda:TagResource"], &["arn:aws:lambda:*:*:*"], &[]);
+        let mut unbounded = tag_on_create(&["lambda:TagResource"], &["arn:*:lambda:*:*:*"], &[]);
         unbounded.platforms.aws.as_mut().unwrap()[0]
             .binding
             .stack

@@ -71,13 +71,15 @@
           // The tagged create performs an implicit TagResource, which AWS authorizes against "*"
           // rather than the image ARN: a grant on `microvm-image:<prefix>-*` was refused with
           // "TagResource on resource: *". Excluding every Lambda ARN leaves only that implicit
-          // check, so this cannot tag an existing function or image; verified live.
+          // check, so this cannot tag an existing function or image; verified live. The partition
+          // is a wildcard because an exclusion fails open: a pattern naming only `aws` would
+          // exclude nothing in GovCloud or China.
           "actions": ["lambda:TagResource"]
         },
         "binding": {
           "stack": {
             "resources": [],
-            "notResources": ["arn:aws:lambda:*:*:*"],
+            "notResources": ["arn:*:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -87,7 +89,7 @@
           },
           "resource": {
             "resources": [],
-            "notResources": ["arn:aws:lambda:*:*:*"],
+            "notResources": ["arn:*:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -133,7 +135,7 @@
         "binding": {
           "stack": {
             "resources": [],
-            "notResources": ["arn:aws:lambda:*:*:*"],
+            "notResources": ["arn:*:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
@@ -143,7 +145,7 @@
           },
           "resource": {
             "resources": [],
-            "notResources": ["arn:aws:lambda:*:*:*"],
+            "notResources": ["arn:*:lambda:*:*:*"],
             "condition": {
               "StringEquals": {
                 "aws:RequestTag/${stackTag}": "${stackPrefix}",
