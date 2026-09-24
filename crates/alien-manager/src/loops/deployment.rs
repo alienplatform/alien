@@ -468,6 +468,33 @@ impl DeploymentLoop {
             })?;
         let deployment_stack = release.stacks.get(&deployment.platform).cloned();
 
+        let recorded_state = state_from_record(
+            &deployment,
+            status,
+            deployment_stack.as_ref(),
+            target_release_id,
+        );
+        if let Some(next_status) = alien_deployment::destroy_without_runtime(&recorded_state) {
+            info!(
+                deployment_id = %deployment_id,
+                next_status = ?next_status,
+                "Runtime never started; skipping runtime cleanup"
+            );
+            self.checkpoint_without_step(
+                &deployment_id,
+                session,
+                DeploymentState {
+                    status: next_status,
+                    error: None,
+                    retry_requested: false,
+                    ..recorded_state
+                },
+                execution_claim,
+            )
+            .await?;
+            return Ok(());
+        }
+
         // 2. Resolve credentials for the target platform and lifecycle phase.
         let resolved_credentials = match self
             .credential_resolver
@@ -509,25 +536,13 @@ impl DeploymentLoop {
                         platform = ?deployment.platform,
                         "Credential resolution failed for manager-owned phase; checkpointing failed deployment state"
                     );
-                    let caller = Subject::system();
-                    self.deployment_store
-                        .reconcile(
-                            &caller,
-                            ReconcileData {
-                                deployment_id: deployment_id.clone(),
-                                session: session.to_string(),
-                                state: failed_state,
-                                update_heartbeat: false,
-                                suggested_delay_ms: None,
-                                heartbeats: Vec::new(),
-                                observed_inventory_batches: Vec::new(),
-                                capabilities: Vec::new(),
-                                operator_version: None,
-                                execution_claim: execution_claim.clone(),
-                                operations_report: None,
-                            },
-                        )
-                        .await?;
+                    self.checkpoint_without_step(
+                        &deployment_id,
+                        session,
+                        failed_state,
+                        execution_claim.clone(),
+                    )
+                    .await?;
                 }
                 return Ok(());
             }
@@ -866,6 +881,34 @@ impl DeploymentLoop {
     /// - `ALIEN_DEPLOYMENT_ID`
     /// - `ALIEN_DEPLOYMENT_NAME`
     /// - Command delivery configuration
+    async fn checkpoint_without_step(
+        &self,
+        deployment_id: &str,
+        session: &str,
+        state: DeploymentState,
+        execution_claim: Option<crate::traits::deployment_store::ExecutionClaim>,
+    ) -> Result<(), AlienError> {
+        self.deployment_store
+            .reconcile(
+                &Subject::system(),
+                ReconcileData {
+                    deployment_id: deployment_id.to_string(),
+                    session: session.to_string(),
+                    state,
+                    update_heartbeat: false,
+                    suggested_delay_ms: None,
+                    heartbeats: Vec::new(),
+                    observed_inventory_batches: Vec::new(),
+                    capabilities: Vec::new(),
+                    operator_version: None,
+                    execution_claim,
+                    operations_report: None,
+                },
+            )
+            .await?;
+        Ok(())
+    }
+
     async fn build_environment_variables(
         &self,
         deployment_id: &str,
@@ -1063,6 +1106,20 @@ fn failed_state_for_credential_error(
 ) -> DeploymentState {
     DeploymentState {
         status: failed_status_for_deployment_error(status),
+        error: Some(error),
+        retry_requested: false,
+        ..state_from_record(deployment, status, deployment_stack, target_release_id)
+    }
+}
+
+fn state_from_record(
+    deployment: &DeploymentRecord,
+    status: DeploymentStatus,
+    deployment_stack: Option<&alien_core::Stack>,
+    target_release_id: &str,
+) -> DeploymentState {
+    DeploymentState {
+        status,
         platform: deployment.platform,
         current_release: deployment_stack.and_then(|stack| {
             deployment
@@ -1082,10 +1139,10 @@ fn failed_state_for_credential_error(
             stack: stack.clone(),
         }),
         stack_state: deployment.stack_state.clone(),
-        error: Some(error),
+        error: None,
         environment_info: deployment.environment_info.clone(),
         runtime_metadata: deployment.runtime_metadata.clone(),
-        retry_requested: false,
+        retry_requested: deployment.retry_requested,
         protocol_version: deployment.deployment_protocol_version,
     }
 }

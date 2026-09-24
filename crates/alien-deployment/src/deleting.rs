@@ -175,6 +175,52 @@ pub async fn handle_deleting(
     Ok(result)
 }
 
+/// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
+///
+/// Direct setup creates the remote stack management identity before any Live resource, so while
+/// it has no outputs no controller has held credentials in the target and nothing runtime-owned
+/// exists. Runtime cleanup needs that identity to reach the target; skipping it lets setup
+/// teardown remove what setup created, under setup's own credentials.
+pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
+    let destroying = match current.status {
+        DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
+        DeploymentStatus::DeleteFailed => current.retry_requested,
+        _ => false,
+    };
+    if !destroying || !matches!(
+        current.platform,
+        alien_core::Platform::Aws | alien_core::Platform::Gcp | alien_core::Platform::Azure
+    ) {
+        return None;
+    }
+    let metadata = current.runtime_metadata.as_ref()?;
+    if metadata.initial_setup_authority != alien_core::InitialSetupAuthority::DirectSetup {
+        return None;
+    }
+    let stack_state = current.stack_state.as_ref()?;
+    let runtime_reached = stack_state.resources.values().any(|resource| {
+        (resource.resource_type == alien_core::RemoteStackManagement::RESOURCE_TYPE.as_ref()
+            && resource.outputs.is_some())
+            || (resource.lifecycle == Some(ResourceLifecycle::Live)
+                && !matches!(
+                    resource.status,
+                    ResourceStatus::Pending | ResourceStatus::Deleted
+                ))
+    });
+    if runtime_reached {
+        return None;
+    }
+    Some(
+        if has_remaining_setup_resources(stack_state)
+            || crate::setup_teardown::has_setup_scaffolding(Some(metadata), current.platform)
+        {
+            DeploymentStatus::TeardownRequired
+        } else {
+            DeploymentStatus::Deleted
+        },
+    )
+}
+
 /// Handle TeardownRequired status. This is a synced tombstone state: Live
 /// resources are gone, but setup-owned resources still need a privileged
 /// teardown request.
@@ -609,5 +655,135 @@ mod tests {
             error.message.contains("LocalWorkerManager"),
             "expected LocalWorkerManager error, got {error:?}"
         );
+    }
+
+    fn after_setup_failed(
+        authority: alien_core::InitialSetupAuthority,
+        management_outputs: bool,
+        live_status: ResourceStatus,
+    ) -> DeploymentState {
+        let mut stack_state = StackState::with_resource_prefix(Platform::Aws, "test".to_string());
+        let mut management = resource_state(
+            Resource::new(alien_core::RemoteStackManagement {
+                id: "management".to_string(),
+            }),
+            ResourceLifecycle::Frozen,
+            ResourceStatus::ProvisionFailed,
+        );
+        if management_outputs {
+            management.status = ResourceStatus::Running;
+            management.outputs = Some(alien_core::ResourceOutputs::new(
+                alien_core::RemoteStackManagementOutputs {
+                    management_resource_id: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                    access_configuration: "arn:aws:iam::123456789012:role/test-management"
+                        .to_string(),
+                    legacy_remote_bindings_access: None,
+                },
+            ));
+        }
+        stack_state
+            .resources
+            .insert("management".to_string(), management);
+        stack_state.resources.insert(
+            "live-storage".to_string(),
+            resource_state(
+                Resource::new(Storage::new("live-storage".to_string()).build()),
+                ResourceLifecycle::Live,
+                live_status,
+            ),
+        );
+        DeploymentState {
+            status: DeploymentStatus::DeletePending,
+            platform: Platform::Aws,
+            current_release: None,
+            target_release: None,
+            stack_state: Some(stack_state),
+            error: None,
+            environment_info: None,
+            runtime_metadata: Some(scaffolding_record(authority)),
+            retry_requested: false,
+            protocol_version: alien_core::CURRENT_DEPLOYMENT_PROTOCOL_VERSION,
+        }
+    }
+
+    /// Setup failed on the management identity after building the sandbox's role: runtime
+    /// cleanup could never obtain credentials, so destroy must reach setup teardown without it.
+    #[test]
+    fn a_destroy_before_the_management_identity_existed_goes_to_setup_teardown() {
+        let state = after_setup_failed(
+            alien_core::InitialSetupAuthority::DirectSetup,
+            false,
+            ResourceStatus::Pending,
+        );
+        assert_eq!(
+            super::destroy_without_runtime(&state),
+            Some(DeploymentStatus::TeardownRequired)
+        );
+        for (status, retry_requested) in [
+            (DeploymentStatus::Deleting, false),
+            (DeploymentStatus::DeleteFailed, true),
+        ] {
+            let later = DeploymentState {
+                status,
+                retry_requested,
+                ..state.clone()
+            };
+            assert_eq!(
+                super::destroy_without_runtime(&later),
+                Some(DeploymentStatus::TeardownRequired),
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_runtime_that_started_keeps_its_runtime_cleanup() {
+        let direct = alien_core::InitialSetupAuthority::DirectSetup;
+        for (case, state) in [
+            (
+                "management identity has outputs",
+                after_setup_failed(direct, true, ResourceStatus::Pending),
+            ),
+            (
+                "a Live resource was provisioned",
+                after_setup_failed(direct, false, ResourceStatus::Running),
+            ),
+            (
+                "a Live resource failed mid-provision",
+                after_setup_failed(direct, false, ResourceStatus::ProvisionFailed),
+            ),
+            (
+                "setup was imported from a template",
+                after_setup_failed(
+                    alien_core::InitialSetupAuthority::ImportedHandoff,
+                    false,
+                    ResourceStatus::Pending,
+                ),
+            ),
+            (
+                "the platform has no management identity",
+                DeploymentState {
+                    platform: Platform::Kubernetes,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+            (
+                "a failed destroy nobody asked to retry",
+                DeploymentState {
+                    status: DeploymentStatus::DeleteFailed,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+            (
+                "the deployment is not being destroyed",
+                DeploymentState {
+                    status: DeploymentStatus::InitialSetupFailed,
+                    ..after_setup_failed(direct, false, ResourceStatus::Pending)
+                },
+            ),
+        ] {
+            assert_eq!(super::destroy_without_runtime(&state), None, "{case}");
+        }
     }
 }
