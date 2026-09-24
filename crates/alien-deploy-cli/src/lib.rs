@@ -144,7 +144,7 @@ pub async fn run_cli(cli: Cli) -> Result<()> {
         Commands::Status(args) => status_command(args, embedded_config.as_ref()).await,
         Commands::List(args) => list_command(args, embedded_config.as_ref()).await,
         Commands::Operator(args) => operator_command(args).await,
-        Commands::Register(args) => register_command(args).await,
+        Commands::Register(args) => register_command(args, embedded_config.as_ref()).await,
         Commands::Join(args) => join_command(args, embedded_config.as_ref()).await,
         Commands::Leave(args) => leave_command(args).await,
     }
@@ -339,10 +339,18 @@ mod tests {
             "acme-prod",
             "--region",
             "us-east-1",
+            "--base-url",
+            "https://api.example.com",
             "--manager-url",
             "https://manager.example.com",
             "--token",
             "dg_abc",
+            "--input",
+            "region=us-east-1",
+            "--input-json",
+            "replicas=3",
+            "--secret-input-file",
+            "apiKey=/run/secrets/api-key",
         ])
         .unwrap();
         let Commands::Register(args) = cli.command else {
@@ -354,8 +362,15 @@ mod tests {
         );
         assert_eq!(args.stack_name.as_deref(), Some("acme-prod"));
         assert_eq!(args.region, "us-east-1");
-        assert_eq!(args.manager_url, "https://manager.example.com");
+        assert_eq!(args.base_url.as_deref(), Some("https://api.example.com"));
+        assert_eq!(
+            args.manager_url.as_deref(),
+            Some("https://manager.example.com")
+        );
         assert_eq!(args.token, "dg_abc");
+        assert_eq!(args.input_values, vec!["region=us-east-1"]);
+        assert_eq!(args.json_input_values, vec!["replicas=3"]);
+        assert_eq!(args.secret_input_files, vec!["apiKey=/run/secrets/api-key"]);
     }
 
     #[test]
