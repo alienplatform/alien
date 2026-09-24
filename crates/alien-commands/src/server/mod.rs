@@ -230,6 +230,7 @@ impl CommandServer {
             .command_registry
             .resolve_target(
                 &request.deployment_id,
+                &request.command,
                 request.target_resource_id.as_deref(),
             )
             .await?;
