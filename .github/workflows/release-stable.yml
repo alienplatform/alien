@@ -50,8 +50,114 @@ jobs:
       source_ref: ${{ needs.resolve.outputs.commit }}
     secrets: inherit
 
-  publish:
+  # PyPI trusted publishing requires the protected job in this top-level workflow.
+  publish-python:
     needs: [resolve, qualify]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/alienplatform
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download qualified Python wheels
+        uses: actions/download-artifact@v8
+        with:
+          run-id: ${{ github.run_id }}
+          github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
+          pattern: qualified-python-*
+          path: dist
+          merge-multiple: true
+
+      - name: Check qualified wheels against PyPI
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          python - <<'PY'
+          import glob
+          import hashlib
+          import json
+          import os
+          import urllib.error
+          import urllib.request
+
+          wheels = sorted(glob.glob("dist/*.whl"))
+          if len(wheels) != 4:
+              raise SystemExit(f"expected four qualified wheels, found {wheels}")
+          expected = {
+              os.path.basename(path): hashlib.sha256(open(path, "rb").read()).hexdigest()
+              for path in wheels
+          }
+          url = f"https://pypi.org/pypi/alienplatform/{os.environ['VERSION']}/json"
+          try:
+              with urllib.request.urlopen(url) as response:
+                  published = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise
+              published = {"urls": []}
+          existing = {
+              item["filename"]: item["digests"]["sha256"]
+              for item in published["urls"]
+              if item["filename"] in expected
+          }
+          mismatched = {
+              name: (expected[name], digest)
+              for name, digest in existing.items()
+              if expected[name] != digest
+          }
+          if mismatched:
+              raise SystemExit(f"PyPI already contains different wheel contents: {mismatched}")
+          print(f"qualified wheels: {sorted(expected)}")
+          print(f"already published with matching hashes: {sorted(existing)}")
+          PY
+
+      # Resuming a partially completed upload is safe because the preceding
+      # checksum check rejects an existing filename with different contents.
+      - name: Publish qualified Python wheels
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          packages-dir: dist
+          skip-existing: true
+
+      - name: Verify published wheel hashes
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if python - <<'PY'
+          import glob
+          import hashlib
+          import json
+          import os
+          import urllib.request
+
+          expected = {
+              os.path.basename(path): hashlib.sha256(open(path, "rb").read()).hexdigest()
+              for path in glob.glob("dist/*.whl")
+          }
+          with urllib.request.urlopen(
+              f"https://pypi.org/pypi/alienplatform/{os.environ['VERSION']}/json"
+          ) as response:
+              published = json.load(response)
+          actual = {item["filename"]: item["digests"]["sha256"] for item in published["urls"]}
+          if any(actual.get(name) != digest for name, digest in expected.items()):
+              raise SystemExit(1)
+          print(f"verified {len(expected)} wheels on PyPI")
+          PY
+            then
+              exit 0
+            fi
+            echo "Waiting for PyPI metadata propagation (${attempt}/30)..."
+            sleep 10
+          done
+          echo "::error::Published Python wheels did not appear with their qualified hashes"
+          exit 1
+
+  publish:
+    needs: [resolve, qualify, publish-python]
     uses: ./.github/workflows/release.yml
     with:
       mode: stable
