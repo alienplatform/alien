@@ -2581,7 +2581,7 @@ fn providers_body(
         structures.push(Structure::Block(Block {
             identifier: Identifier::sanitized("provider"),
             labels: vec![BlockLabel::String("kubernetes".to_string())],
-            body: Body::from(kubernetes_provider_body(target)),
+            body: Body::from(kubernetes_provider_body(target, false)),
         }));
     }
     if include_helm_provider {
@@ -2590,7 +2590,7 @@ fn providers_body(
             labels: vec![BlockLabel::String("helm".to_string())],
             body: Body::from(vec![attr(
                 "kubernetes",
-                provider_config_object(kubernetes_provider_body(target)),
+                provider_config_object(kubernetes_provider_body(target, true)),
             )]),
         }));
     }
@@ -2606,7 +2606,7 @@ fn provider_config_object(items: Vec<Structure>) -> Expression {
     }))
 }
 
-fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
+fn kubernetes_provider_body(target: TerraformTarget, for_helm: bool) -> Vec<Structure> {
     match target {
         // EKS: use the `exec` auth plugin instead of
         // `data.aws_eks_cluster_auth.target.token` because that data source
@@ -2618,38 +2618,38 @@ fn kubernetes_provider_body(target: TerraformTarget) -> Vec<Structure> {
         // generated `kubernetes_kubeconfig` local already uses this pattern
         // for the `kubectl` CLI output; mirroring it here keeps both paths
         // honoring the same auth flow.
-        TerraformTarget::Eks => vec![
-            attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
-            attr(
-                "cluster_ca_certificate",
-                expr::raw("base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)"),
-            ),
-            // `exec` is expressed as an *attribute* (object literal), not a
-            // nested HCL block, because this same body is reused inside the
-            // `helm` provider as `kubernetes = { … }` (object form, which
-            // only takes attributes — `provider_config_object` drops
-            // anything that isn't an Attribute). The kubernetes provider
-            // accepts both block and attribute forms, so attribute form
-            // works in both places.
-            attr(
-                "exec",
-                expr::object([
-                    (
-                        "api_version",
-                        Expression::String(
-                            "client.authentication.k8s.io/v1beta1".to_string(),
-                        ),
+        TerraformTarget::Eks => {
+            let exec = vec![
+                attr(
+                    "api_version",
+                    Expression::String("client.authentication.k8s.io/v1beta1".to_string()),
+                ),
+                attr("command", Expression::String("aws".to_string())),
+                attr(
+                    "args",
+                    expr::raw(
+                        "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
                     ),
-                    ("command", Expression::String("aws".to_string())),
-                    (
-                        "args",
-                        expr::raw(
-                            "[\"eks\", \"get-token\", \"--cluster-name\", data.aws_eks_cluster.target.name, \"--region\", var.aws_region]",
-                        ),
+                ),
+            ];
+            let exec = if for_helm {
+                // Helm 3 configures Kubernetes through an object attribute.
+                attr("exec", provider_config_object(exec))
+            } else {
+                // The Kubernetes provider requires a nested exec block.
+                nested(block("exec", exec))
+            };
+            vec![
+                attr("host", expr::raw("data.aws_eks_cluster.target.endpoint")),
+                attr(
+                    "cluster_ca_certificate",
+                    expr::raw(
+                        "base64decode(data.aws_eks_cluster.target.certificate_authority[0].data)",
                     ),
-                ]),
-            ),
-        ],
+                ),
+                exec,
+            ]
+        }
         TerraformTarget::Gke => vec![
             attr(
                 "host",
@@ -4042,6 +4042,49 @@ fn readme_kubernetes_destroy_order() -> &'static str {
 mod tests {
     use super::*;
     use alien_core::{Queue, RemoteStackManagement, ResourceLifecycle, ResourceRef};
+
+    #[test]
+    fn eks_kubernetes_and_helm_provider_auth_validate() {
+        // Exercise the actual provider schemas. The Kubernetes provider requires
+        // `exec { ... }`, while Helm 3 requires `kubernetes = { exec = { ... } }`.
+        let files = IndexMap::from([
+            (
+                "versions.tf".to_string(),
+                render_body(versions_body(
+                    TerraformTarget::Eks,
+                    None,
+                    false,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                ))
+                .expect("versions should render"),
+            ),
+            (
+                "providers.tf".to_string(),
+                render_body(providers_body(
+                    TerraformTarget::Eks,
+                    true,
+                    true,
+                    false,
+                    false,
+                    false,
+                ))
+                .expect("providers should render"),
+            ),
+            (
+                "inputs.tf".to_string(),
+                r#"variable "aws_region" { type = string }
+data "aws_eks_cluster" "target" { name = "validation-only" }
+"#
+                .to_string(),
+            ),
+        ]);
+        crate::test_utils::terraform_validate(&files)
+            .assert_ok("EKS Kubernetes and Helm provider authentication");
+    }
 
     fn product_registration() -> TerraformRegistration {
         TerraformRegistration {
