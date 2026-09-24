@@ -4,8 +4,9 @@
 //! the deployment registers: setup installs the build role and egress connector and registers
 //! the bundle, and only at runtime does a customer account exist as a principal Alien's
 //! registry can open to. A release that changes the bundle re-enters that flow against an image
-//! that already exists and rolls a new version onto it. A Frozen sandbox arrives through the
-//! importer with its image already built by stack creation, and this controller only watches it.
+//! that already exists and rolls a new version onto it. A Frozen sandbox a template set up
+//! arrives through the importer with its image already built by stack creation, and this
+//! controller only watches it; one a direct setup registered is built here while setup runs.
 //!
 //! Sessions are MicroVMs started from the image at runtime. `RunMicrovm` has no `tags`, so
 //! image plus version *is* the session identity; `lambda:ListMicrovms` is account-wide and
@@ -25,7 +26,7 @@ use alien_aws_clients::lambda_microvms::{
     MicrovmLifecycleHooks, UpdateMicrovmImageRequest,
 };
 use alien_client_core::ErrorData as CloudClientErrorData;
-use alien_core::sandbox_build_role::sandbox_build_role_arn;
+use alien_core::sandbox_build_role::{sandbox_build_role_arn, sandbox_build_role_name};
 use alien_core::sandbox_image::AWS_MICROVM;
 use alien_core::{
     parse_bundle_uri, standard_resource_tags, BundleUri, ResourceOutputs as CoreResourceOutputs,
@@ -125,6 +126,17 @@ impl AwsSandboxController {
         ctx: &ResourceControllerContext<'_>,
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
+
+        // Direct setup steps a Frozen sandbox before its build role exists; the registration lands
+        // only once the role is ready, so until then the build waits rather than fails.
+        if self.build_role_arn.is_none()
+            && resource_lifecycle(ctx, &config.id) == Some(alien_core::ResourceLifecycle::Frozen)
+        {
+            return Err(AlienError::new(ErrorData::DependencyNotReady {
+                resource_id: config.id.clone(),
+                dependency_id: sandbox_build_role_name(ctx.resource_prefix, &config.id),
+            }));
+        }
 
         let aws_config = ctx.get_aws_config()?;
         // Derived, not read back from what setup registered. Both are functions of the desired
@@ -788,12 +800,7 @@ impl AwsSandboxController {
     /// — and errs toward not deleting, because destroying a setup-owned image is the failure
     /// that cannot be retried.
     fn owns_image_deletion(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        match ctx
-            .state
-            .resources
-            .get(resource_id)
-            .and_then(|resource| resource.lifecycle)
-        {
+        match resource_lifecycle(ctx, resource_id) {
             Some(alien_core::ResourceLifecycle::Live) => true,
             Some(alien_core::ResourceLifecycle::Frozen) => false,
             None => self.build_role_arn.is_some(),
@@ -888,6 +895,16 @@ impl AwsSandboxController {
     fn owns_image_builds(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
         self.owns_image_deletion(ctx, resource_id)
     }
+}
+
+fn resource_lifecycle(
+    ctx: &ResourceControllerContext<'_>,
+    resource_id: &str,
+) -> Option<alien_core::ResourceLifecycle> {
+    ctx.state
+        .resources
+        .get(resource_id)
+        .and_then(|resource| resource.lifecycle)
 }
 
 /// Assembles the build inputs from the declaration, so a create and a roll of the same sandbox

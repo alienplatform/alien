@@ -1,4 +1,4 @@
-//! Cloud objects a direct setup creates for resources a runtime controller owns. The runtime
+//! Cloud objects a direct setup creates for a resource beside the resource itself. The runtime
 //! identity may use them but is never granted what creating them takes, so they are made during
 //! InitialSetup, the only time Alien holds the deployer's administrator credentials.
 
@@ -30,10 +30,11 @@ pub enum ScaffoldingProgress {
     Done,
 }
 
-/// Whether setup must create something for this resource without owning the resource itself.
+/// Whether setup creates something for this resource beside the resource itself, under either
+/// lifecycle. A Frozen one is then built by its controller while setup runs.
 pub fn needs_setup_scaffolding(entry: &ResourceEntry) -> bool {
-    let policy = ownership_policy_for_resource_type(entry.config.resource_type().as_ref());
-    policy.emits_setup_scaffolding(entry.lifecycle) && !policy.should_emit_in_setup(entry.lifecycle)
+    ownership_policy_for_resource_type(entry.config.resource_type().as_ref())
+        .always_emits_setup_scaffolding()
 }
 
 /// At most one mutating call per resource, so a retry after any failure repeats nothing.

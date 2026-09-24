@@ -1067,6 +1067,10 @@ mod tests {
     }
 
     fn stack_of(sandbox: Sandbox, network_id: Option<&str>) -> Stack {
+        stack_as(ResourceLifecycle::Live, sandbox, network_id)
+    }
+
+    fn stack_as(lifecycle: ResourceLifecycle, sandbox: Sandbox, network_id: Option<&str>) -> Stack {
         let mut stack = Stack::new("acme".to_string());
         if let Some(network_id) = network_id {
             stack = stack.add(
@@ -1079,7 +1083,7 @@ mod tests {
                 ResourceLifecycle::Frozen,
             );
         }
-        stack.add(sandbox, ResourceLifecycle::Live).build()
+        stack.add(sandbox, lifecycle).build()
     }
 
     /// Changes from `installed` as setup recorded it.
@@ -1112,6 +1116,36 @@ mod tests {
             },
             ..sandbox()
         }
+    }
+
+    /// A Frozen image is built once, and its role reads only that bundle object, so any new bundle
+    /// is a new grant and a rebuild; both are setup's, as is moving a sandbox between lifecycles.
+    #[test]
+    fn a_frozen_sandbox_needs_setup_for_any_new_bundle() {
+        let frozen = |bundle: &str| {
+            stack_as(
+                ResourceLifecycle::Frozen,
+                with(SandboxEgress::Allow, bundle),
+                None,
+            )
+        };
+        let next_version = "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip";
+        assert_eq!(
+            changes(&frozen(BUNDLE_URI), &frozen(next_version), Platform::Aws),
+            vec!["sandbox 'agents' changes its build role policy"]
+        );
+        assert_eq!(
+            changes(&frozen(BUNDLE_URI), &frozen(BUNDLE_URI), Platform::Aws),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            changes(
+                &stack_of(with(SandboxEgress::Allow, BUNDLE_URI), None),
+                &frozen(BUNDLE_URI),
+                Platform::Aws
+            ),
+            vec!["sandbox 'agents' changes its build role policy"]
+        );
     }
 
     #[test]

@@ -1167,6 +1167,7 @@ mod tests {
     use alien_client_core::ErrorData as CloudError;
     use alien_core::bindings::SandboxBinding;
     use alien_core::import::ImportContext;
+    use alien_core::sandbox_build_role::{SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME};
     use alien_core::{
         ClientConfig, Network, NetworkSettings, Platform, Resource, ResourceLifecycle, ResourceRef,
         SandboxCode, SandboxEgress, SandboxLifecyclePolicy, SetupScaffolding, StackResourceState,
@@ -2191,7 +2192,7 @@ mod tests {
                 "agents".to_string(),
                 SetupScaffolding::AwsSandbox {
                     build_role_name: BUILD_ROLE.to_string(),
-                    egress: None
+                    egress: None,
                 }
             )])
         );
@@ -3311,11 +3312,20 @@ mod tests {
         build_role_arn: String,
         bundle_uri: String,
         binding: Value,
+        build_policy: Value,
     }
 
     /// Converges direct setup, seeds the sandbox through the registered importer, then runs its
     /// controller from that seed alone until the image is ACTIVE.
     async fn serve_from_seed(sandbox: Sandbox, network: Option<NetworkSettings>) -> Served {
+        serve_from_seed_as(ResourceLifecycle::Live, sandbox, network).await
+    }
+
+    async fn serve_from_seed_as(
+        lifecycle: ResourceLifecycle,
+        sandbox: Sandbox,
+        network: Option<NetworkSettings>,
+    ) -> Served {
         const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
         let cloud = Shared::default();
         let mut stack = Stack::new("acme".to_string());
@@ -3328,7 +3338,7 @@ mod tests {
                 ResourceLifecycle::Frozen,
             );
         }
-        let stack = stack.add(sandbox.clone(), ResourceLifecycle::Live).build();
+        let stack = stack.add(sandbox.clone(), lifecycle).build();
         let mut state = stack_state(network_status);
         let mut records = BTreeMap::new();
         converge(&cloud, &stack, &state, &mut records).await;
@@ -3412,7 +3422,7 @@ mod tests {
             .resource(sandbox)
             .controller(controller)
             .platform(Platform::Aws)
-            .resource_lifecycle(ResourceLifecycle::Live)
+            .resource_lifecycle(lifecycle)
             .service_provider(Arc::new(controller_provider))
             .build()
             .await
@@ -3427,11 +3437,19 @@ mod tests {
             .unwrap()
             .expect("an ACTIVE image publishes a binding");
         let (build_role_arn, bundle_uri) = requested.lock().unwrap().clone().unwrap();
+        let build_policy = serde_json::from_str(
+            &cloud.lock().unwrap().inline[&(
+                BUILD_ROLE.to_string(),
+                SANDBOX_BUILD_POLICY_NAME.to_string(),
+            )],
+        )
+        .unwrap();
         Served {
             seed,
             build_role_arn,
             bundle_uri,
             binding,
+            build_policy,
         }
     }
 
@@ -3497,6 +3515,56 @@ mod tests {
             &json!(served.build_role_arn)
         );
         assert_eq!(seed_field(&served, "bundleUri"), &json!(served.bundle_uri));
+    }
+
+    /// A Frozen deny sandbox gets what the templates give it: the build role, reading only its one
+    /// bundle object, and sessions confined to the connector setup created on the Frozen network.
+    #[tokio::test]
+    async fn a_frozen_deny_sandbox_is_built_from_its_seed_into_a_binding_the_runtime_loads() {
+        let sandbox = Sandbox {
+            preview_ports: vec![8080],
+            ..sandbox(SandboxEgress::Deny)
+        };
+        let served = serve_from_seed_as(
+            ResourceLifecycle::Frozen,
+            sandbox.clone(),
+            created_network(),
+        )
+        .await;
+
+        load(&served.binding).await.unwrap_or_else(|error| {
+            panic!("the deny binding must load: {error}\n{}", served.binding)
+        });
+        assert_eq!(
+            egress_facts(&served.binding),
+            (
+                false,
+                vec!["arn:aws:lambda:us-east-1:123456789012:network-connector:nc-2".to_string()],
+                vec![8080]
+            ),
+            "the session starts on the connector setup created"
+        );
+        assert_eq!(
+            served.build_role_arn,
+            format!("arn:aws:iam::{ACCOUNT}:role/{BUILD_ROLE}")
+        );
+        let SandboxCode::Image { image } = &sandbox.code else {
+            unreachable!("the fixture is a bundle")
+        };
+        let frozen_policy = serde_json::to_value(
+            SandboxBuildRole::builder()
+                .sandbox_id("agents")
+                .partition("aws")
+                .account_id(ACCOUNT)
+                .region("us-east-1")
+                .bundle_uri(image)
+                .runtime_built(false)
+                .build()
+                .policy()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(served.build_policy, frozen_policy);
     }
 
     #[tokio::test]

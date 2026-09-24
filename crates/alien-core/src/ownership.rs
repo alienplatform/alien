@@ -90,6 +90,12 @@ impl ResourceOwnershipPolicy {
         }
     }
 
+    /// Whether setup renders scaffolding for this type under either lifecycle, whether or not it
+    /// also owns the resource.
+    pub const fn always_emits_setup_scaffolding(self) -> bool {
+        matches!(self.emit_in_setup, SetupEmission::Always)
+    }
+
     pub const fn requires_management_permissions(self) -> bool {
         self.requires_management_permissions
     }

@@ -14,11 +14,11 @@ use crate::sandbox::{AwsSandboxController, AwsSandboxState};
 
 /// AWS Sandbox importer.
 ///
-/// Two registration shapes arrive here, and which fields are present says which. A Frozen
-/// sandbox names the image stack creation built, and imports Ready. A Live one names the
-/// build role and bundle instead — the two values the runtime controller cannot derive — and
-/// imports at the start of the create flow, so the deployment loop builds the image once. A
-/// later release's changed bundle is rolled by the update flow, not by re-importing.
+/// Two registration shapes arrive here, and which fields are present says which. A template's
+/// Frozen sandbox names the image stack creation built, and imports Ready. A Live one, and a
+/// Frozen one a direct setup registers, names the build role and bundle instead and imports at
+/// the start of the create flow, so the deployment loop builds the image once. A later release's
+/// changed bundle is rolled by the update flow, not by re-importing.
 #[derive(Debug, Default)]
 pub struct AwsSandboxImporter;
 
@@ -85,7 +85,7 @@ impl ResourceImporter for AwsSandboxImporter {
                 };
                 make_imported_state_with_status(controller, ctx, ResourceStatus::Running)
             }
-            // Live: setup registered the build inputs; the controller builds the image once
+            // Setup registered the build inputs; the controller builds the image once
             // the deployment loop steps it, which is why this imports Provisioning at the
             // create entry state rather than Running.
             (None, None, None, Some(build_role_arn), Some(bundle_uri)) => {
@@ -107,24 +107,20 @@ impl ResourceImporter for AwsSandboxImporter {
         }
     }
 
-    /// A Live sandbox's image is runtime-owned, so a re-import must not replace the state that
-    /// tracks it: the default would drop the built version — withdrawing the binding of a
-    /// sandbox that is serving — and re-run the create flow against an image that exists.
+    /// A registration naming build inputs leaves the image to the controller, so a re-import must
+    /// not replace the state that tracks it: the default would drop the built version, withdrawing
+    /// the binding of a sandbox that is serving, and re-run the create flow against an image that
+    /// exists. A direct setup registers a Frozen sandbox this way on every pass while it builds.
     ///
     /// Only the setup-owned facts cross over. The bundle deliberately does not: a new release's
     /// bundle is a desired-config change and reaches the image through the update flow. A Frozen
-    /// sandbox is replaced outright.
+    /// registration naming a built image replaces the state outright.
     fn merge_reimport(
         &self,
         existing: StackResourceState,
         imported: StackResourceState,
         ctx: &ImportContext<'_>,
     ) -> Result<StackResourceState> {
-        // Frozen is setup-authoritative: stack creation built the image, so its registration
-        // replaces whatever state the manager held, whatever the payload names.
-        if ctx.resource.lifecycle == ResourceLifecycle::Frozen {
-            return Ok(imported);
-        }
         let (Some(existing_state), Some(imported_state)) = (
             existing.internal_state.clone(),
             imported.internal_state.clone(),
@@ -132,20 +128,25 @@ impl ResourceImporter for AwsSandboxImporter {
             return Ok(imported);
         };
 
-        let existing_controller =
-            AwsSandboxController::from_persisted(existing_state).map_err(|error| {
-                AlienError::new(CoreErrorData::GenericError {
-                    message: format!(
-                        "sandbox '{}' has unreadable controller state: {error}",
-                        ctx.resource_id
-                    ),
-                })
-            })?;
         let imported_controller: AwsSandboxController = serde_json::from_value(imported_state)
             .map_err(|error| {
                 AlienError::new(CoreErrorData::GenericError {
                     message: format!(
                         "sandbox '{}' was re-imported with unreadable state: {error}",
+                        ctx.resource_id
+                    ),
+                })
+            })?;
+        if ctx.resource.lifecycle == ResourceLifecycle::Frozen
+            && imported_controller.build_role_arn.is_none()
+        {
+            return Ok(imported);
+        }
+        let existing_controller =
+            AwsSandboxController::from_persisted(existing_state).map_err(|error| {
+                AlienError::new(CoreErrorData::GenericError {
+                    message: format!(
+                        "sandbox '{}' has unreadable controller state: {error}",
                         ctx.resource_id
                     ),
                 })

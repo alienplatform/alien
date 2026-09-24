@@ -598,6 +598,13 @@ mod tests {
     const BUNDLE_URI: &str = "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip";
 
     fn live_sandbox_setup(authority: InitialSetupAuthority) -> DeploymentState {
+        sandbox_setup(ResourceLifecycle::Live, authority)
+    }
+
+    fn sandbox_setup(
+        lifecycle: ResourceLifecycle,
+        authority: InitialSetupAuthority,
+    ) -> DeploymentState {
         let sandbox = alien_core::Sandbox::new("agents".to_string())
             .code(alien_core::SandboxCode::Image {
                 image: BUNDLE_URI.to_string(),
@@ -610,7 +617,7 @@ mod tests {
             .preview_ports(vec![8080])
             .build();
         let stack = Stack::new("test".to_string())
-            .add(sandbox, ResourceLifecycle::Live)
+            .add(sandbox, lifecycle)
             .build();
         DeploymentState {
             status: DeploymentStatus::InitialSetup,
@@ -1117,6 +1124,74 @@ mod tests {
 
     const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
 
+    /// A template's setup built the Frozen image and registered it; handing off makes no cloud
+    /// call, and a provider with no expectations panics on any.
+    #[tokio::test]
+    async fn imported_setup_neither_scaffolds_nor_builds_a_frozen_sandbox() {
+        let mut deployment = sandbox_setup(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::ImportedHandoff,
+        );
+        let stack = deployment
+            .runtime_metadata
+            .as_ref()
+            .unwrap()
+            .prepared_stack
+            .clone()
+            .unwrap();
+        let mut registered = alien_infra::ImporterRegistry::built_in()
+            .run(
+                &alien_core::Sandbox::RESOURCE_TYPE,
+                Platform::Aws,
+                serde_json::json!({
+                    "imageIdentifier": IMAGE_ARN,
+                    "imageArn": IMAGE_ARN,
+                    "imageVersion": "1.0",
+                    "allowEgress": true,
+                    "previewPorts": [8080],
+                }),
+                &alien_core::import::ImportContext {
+                    resource_id: "agents",
+                    platform: Platform::Aws,
+                    region: "us-east-1",
+                    stack_settings: &StackSettings::default(),
+                    management_config: None,
+                    resource: &stack.resources["agents"],
+                },
+            )
+            .unwrap();
+        registered.controller_platform = Some(Platform::Aws);
+        let before = serde_json::to_value(&registered).unwrap();
+        deployment
+            .stack_state
+            .as_mut()
+            .unwrap()
+            .resources
+            .insert("agents".to_string(), registered);
+
+        let result = handle_initial_setup(
+            deployment,
+            config(),
+            aws_client_config(),
+            Arc::new(MockPlatformServiceProvider::new()),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(result.state.status, DeploymentStatus::Provisioning);
+        assert!(result
+            .state
+            .runtime_metadata
+            .unwrap()
+            .setup_scaffolding
+            .is_empty());
+        assert_eq!(
+            serde_json::to_value(&result.state.stack_state.unwrap().resources["agents"]).unwrap(),
+            before,
+            "the registered image is taken as it is"
+        );
+    }
+
     /// The binding a linked workload is handed, from the controller state as persisted.
     fn published_binding(sandbox: &alien_core::StackResourceState) -> serde_json::Value {
         sandbox
@@ -1382,6 +1457,252 @@ mod tests {
             },
             "the build role this step verified stays recorded"
         );
+    }
+
+    /// The build role and the MicroVM image as AWS holds them, and every mutating call in order.
+    #[derive(Default)]
+    struct FakeAws {
+        role: bool,
+        policy: Option<String>,
+        image: bool,
+        building_polls: u32,
+        log: Vec<String>,
+    }
+
+    fn not_found(name: &str) -> alien_error::AlienError<alien_aws_clients::ErrorData> {
+        alien_error::AlienError::new(alien_aws_clients::ErrorData::RemoteResourceNotFound {
+            resource_type: "test".to_string(),
+            resource_name: name.to_string(),
+        })
+    }
+
+    /// IAM and MicroVMs over one [`FakeAws`]. A MicroVMs client may be fetched only once
+    /// `microvms` is set, so a build that starts early fails the test.
+    fn fake_aws(
+        cloud: &Arc<std::sync::Mutex<FakeAws>>,
+        microvms: bool,
+    ) -> Arc<MockPlatformServiceProvider> {
+        let mut iam = MockIamApi::new();
+        let c = cloud.clone();
+        iam.expect_get_role().returning(move |name| {
+            if !c.lock().unwrap().role {
+                return Err(not_found(name));
+            }
+            Ok(GetRoleResponse {
+                get_role_result: GetRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_create_role().returning(move |request| {
+            let mut cloud = c.lock().unwrap();
+            cloud.role = true;
+            cloud
+                .log
+                .push(format!("iam:CreateRole {}", request.role_name));
+            Ok(CreateRoleResponse {
+                create_role_result: CreateRoleResult {
+                    role: created_role(),
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_list_role_policies().returning(move |_| {
+            Ok(ListRolePoliciesResponse {
+                list_role_policies_result: ListRolePoliciesResult {
+                    policy_names: c.lock().unwrap().policy.as_ref().map(|_| PolicyNames {
+                        member: vec!["sandbox-image-build".to_string()],
+                    }),
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        iam.expect_list_attached_role_policies().returning(|_| {
+            Ok(ListAttachedRolePoliciesResponse {
+                list_attached_role_policies_result: ListAttachedRolePoliciesResult {
+                    attached_policies: None,
+                    is_truncated: Some(false),
+                    marker: None,
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_get_role_policy().returning(move |role, name| {
+            let policy = c
+                .lock()
+                .unwrap()
+                .policy
+                .clone()
+                .ok_or_else(|| not_found(name))?;
+            Ok(alien_aws_clients::iam::GetRolePolicyResponse {
+                get_role_policy_result: alien_aws_clients::iam::GetRolePolicyResult {
+                    role_name: role.to_string(),
+                    policy_name: name.to_string(),
+                    policy_document: policy,
+                },
+            })
+        });
+        let c = cloud.clone();
+        iam.expect_put_role_policy()
+            .returning(move |role, _, document| {
+                let mut cloud = c.lock().unwrap();
+                cloud.policy = Some(document.to_string());
+                cloud.log.push(format!("iam:PutRolePolicy {role}"));
+                Ok(())
+            });
+
+        let mut lambda = MockLambdaMicrovmsApi::new();
+        let c = cloud.clone();
+        lambda.expect_get_microvm_image().returning(move |_| {
+            if !c.lock().unwrap().image {
+                return Err(not_found("test-agents"));
+            }
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        let c = cloud.clone();
+        lambda
+            .expect_create_microvm_image()
+            .returning(move |request| {
+                let mut cloud = c.lock().unwrap();
+                cloud.image = true;
+                cloud.log.push(format!(
+                    "lambda:CreateMicrovmImage {} {}",
+                    request.build_role_arn, request.code_artifact.uri
+                ));
+                Ok(CreateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("CREATING".to_string()),
+                    image_version: Some("1.0".to_string()),
+                })
+            });
+        let c = cloud.clone();
+        lambda
+            .expect_get_microvm_image_version()
+            .returning(move |_, _| {
+                let mut cloud = c.lock().unwrap();
+                let active = cloud.building_polls == 0;
+                cloud.building_polls = cloud.building_polls.saturating_sub(1);
+                Ok(MicrovmImageVersion {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some(if active { "SUCCESSFUL" } else { "CREATING" }.to_string()),
+                    status: active.then(|| "ACTIVE".to_string()),
+                    state_reason: None,
+                })
+            });
+        lambda.expect_update_microvm_image().never();
+
+        let iam = Arc::new(iam);
+        let lambda = Arc::new(lambda);
+        let mut provider = MockPlatformServiceProvider::new();
+        provider
+            .expect_get_aws_iam_client()
+            .returning(move |_| Ok(iam.clone()));
+        if microvms {
+            provider
+                .expect_get_aws_microvms_client()
+                .returning(move |_| Ok(lambda.clone()));
+        }
+        Arc::new(provider)
+    }
+
+    /// A Frozen sandbox is built by setup, as the templates build it: the build role first, then
+    /// the image, under setup's credentials, and setup hands off only once the image serves.
+    #[tokio::test]
+    async fn direct_setup_builds_a_frozen_sandbox_into_a_binding_the_runtime_loads() {
+        let cloud = Arc::new(std::sync::Mutex::new(FakeAws {
+            building_polls: 2,
+            ..Default::default()
+        }));
+        let mut state = sandbox_setup(
+            ResourceLifecycle::Frozen,
+            InitialSetupAuthority::DirectSetup,
+        );
+
+        let first = handle_initial_setup(
+            state,
+            config(),
+            aws_client_config(),
+            fake_aws(&cloud, false),
+        )
+        .await
+        .unwrap();
+        assert_eq!(first.state.status, DeploymentStatus::InitialSetup);
+        assert!(
+            first.state.error.is_none(),
+            "a sandbox waiting on its build role is not a failure: {:?}",
+            first.state.error
+        );
+        state = first.state;
+
+        for _ in 0..12 {
+            if state.status != DeploymentStatus::InitialSetup {
+                break;
+            }
+            state =
+                handle_initial_setup(state, config(), aws_client_config(), fake_aws(&cloud, true))
+                    .await
+                    .unwrap()
+                    .state;
+        }
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+
+        let (log, policy) = {
+            let cloud = cloud.lock().unwrap();
+            (cloud.log.clone(), cloud.policy.clone())
+        };
+        assert_eq!(
+            log,
+            vec![
+                format!("iam:CreateRole {BUILD_ROLE}"),
+                format!("iam:PutRolePolicy {BUILD_ROLE}"),
+                format!(
+                    "lambda:CreateMicrovmImage arn:aws:iam::123456789012:role/{BUILD_ROLE} \
+                     {BUNDLE_URI}"
+                ),
+            ],
+            "the role and its policy land before the one build"
+        );
+        let frozen_policy = serde_json::to_value(
+            alien_core::sandbox_build_role::SandboxBuildRole::builder()
+                .sandbox_id("agents")
+                .partition("aws")
+                .account_id("123456789012")
+                .region("us-east-1")
+                .bundle_uri(BUNDLE_URI)
+                .runtime_built(false)
+                .build()
+                .policy()
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(policy.as_deref().unwrap()).unwrap(),
+            frozen_policy,
+            "a Frozen image is built once, so its role reads only the one bundle object"
+        );
+
+        let sandbox = &state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let binding = &published_binding(sandbox);
+        load_binding(binding)
+            .await
+            .unwrap_or_else(|error| panic!("the binding must load: {error}\n{binding}"));
+        assert_eq!(binding["allowEgress"], true);
+        assert_eq!(binding["previewPorts"], serde_json::json!([8080]));
     }
 
     #[tokio::test]
