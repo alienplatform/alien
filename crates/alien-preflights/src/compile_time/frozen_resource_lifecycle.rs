@@ -1,7 +1,8 @@
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
-    ownership_policy_for_resource_type, Platform, ResourceLifecycle, Sandbox, Stack, Storage,
+    ownership_policy_for_resource_type, Container, Daemon, Platform, ResourceLifecycle, Sandbox,
+    Stack, Storage,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
@@ -90,19 +91,23 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                 }
             }
 
-            // A linked sandbox's binding carries `imageArn` and `imageVersion`, both required
-            // fields of `AwsSandboxBinding`. A Live sandbox has neither until its controller
-            // has built, so the emitted binding would fail to deserialize at startup.
+            // Setup-rendered consumers need the complete binding while the package is applied.
+            // A Live sandbox has no image ARN/version until its runtime controller finishes.
+            // Containers and Daemons are also runtime-provisioned: their controllers wait for
+            // dependencies and resolve the completed sandbox binding from controller state.
             for link in alien_core::links_of(&resource_entry.config) {
                 let Some(target) = stack.resources.get(link.id()) else {
                     continue;
                 };
                 if target.config.downcast_ref::<Sandbox>().is_some()
                     && target.lifecycle == ResourceLifecycle::Live
+                    && resource_entry.config.downcast_ref::<Container>().is_none()
+                    && resource_entry.config.downcast_ref::<Daemon>().is_none()
                 {
                     errors.push(format!(
                         "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
-                         image is built after setup, so setup cannot bind to it",
+                         image is built after setup, but this resource requires its binding \
+                         during setup",
                         resource_id,
                         link.id()
                     ));
@@ -150,8 +155,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
 mod tests {
     use super::*;
     use alien_core::{
-        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode, Key,
-        ResourceEntry, ResourceLifecycle, ResourceRef, ResourceSpec, Storage, Worker, WorkerCode,
+        ArtifactRegistry, Build, CapacityGroup, ComputeCluster, Container, ContainerCode, Daemon,
+        DaemonCode, Key, ResourceEntry, ResourceLifecycle, ResourceRef, ResourceSpec, Storage,
+        Worker, WorkerCode,
     };
     use indexmap::IndexMap;
 
@@ -492,7 +498,7 @@ mod tests {
     /// of `AwsSandboxBinding`. A Live sandbox has neither at setup time, so the binding would fail
     /// to deserialize at Worker startup instead of at plan time — the wrong end to discover it.
     #[tokio::test]
-    async fn linking_a_live_sandbox_is_refused_at_plan_time() {
+    async fn a_setup_rendered_consumer_cannot_link_a_live_sandbox() {
         let mut stack = sandbox_stack(ResourceLifecycle::Live);
         let worker = alien_core::Worker::new("api".to_string())
             .permissions("execution".to_string())
@@ -534,10 +540,78 @@ mod tests {
                 .errors
                 .iter()
                 .any(|error| error.contains("links sandbox 'agents'")
-                    && error.contains("setup cannot bind to it")),
+                    && error.contains("requires its binding during setup")),
             "the refusal must name the link and why: {:?}",
             result.errors
         );
+    }
+
+    #[tokio::test]
+    async fn runtime_provisioned_consumers_may_link_a_live_sandbox() {
+        let linked_sandbox = || {
+            alien_core::Sandbox::new("agents".to_string())
+                .code(alien_core::SandboxCode::Image {
+                    image: "s3://example-artifacts/agents/bundle.zip".to_string(),
+                })
+                .egress(alien_core::SandboxEgress::Allow)
+                .lifecycle(alien_core::SandboxLifecyclePolicy {
+                    max_lifetime_seconds: None,
+                    idle_pause_seconds: None,
+                })
+                .build()
+        };
+
+        let container = Container::new("api".to_string())
+            .code(ContainerCode::Image {
+                image: "example.com/api:latest".to_string(),
+            })
+            .cpu(ResourceSpec {
+                min: "0.5".to_string(),
+                desired: "1".to_string(),
+            })
+            .memory(ResourceSpec {
+                min: "512Mi".to_string(),
+                desired: "1Gi".to_string(),
+            })
+            .port(8080)
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+        let daemon = Daemon::new("scheduler".to_string())
+            .code(DaemonCode::Image {
+                image: "example.com/scheduler:latest".to_string(),
+            })
+            .permissions("execution".to_string())
+            .link(&linked_sandbox())
+            .build();
+
+        for (id, resource) in [
+            ("api", alien_core::Resource::new(container)),
+            ("scheduler", alien_core::Resource::new(daemon)),
+        ] {
+            let mut stack = sandbox_stack(ResourceLifecycle::Live);
+            stack.resources.insert(
+                id.to_string(),
+                ResourceEntry {
+                    config: resource,
+                    lifecycle: ResourceLifecycle::Live,
+                    dependencies: Vec::new(),
+                    remote_access: false,
+                    enabled_when: None,
+                },
+            );
+
+            let result = FrozenResourceLifecycleCheck
+                .check(&stack, Platform::Aws)
+                .await
+                .expect("the check runs");
+
+            assert!(
+                result.success,
+                "runtime-provisioned consumer '{id}' should resolve the Live Sandbox binding after the dependency is ready: {:?}",
+                result.errors
+            );
+        }
     }
 
     /// The same link against a Frozen sandbox is exactly what ships today.
