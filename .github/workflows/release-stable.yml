@@ -2,6 +2,12 @@ name: Publish stable release
 
 on:
   workflow_dispatch:
+    inputs:
+      qualification_run_id:
+        description: Resume from a prior stable run with successful qualification jobs
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: publish-stable-release
@@ -18,6 +24,7 @@ jobs:
     outputs:
       commit: ${{ steps.release.outputs.commit }}
       version: ${{ steps.release.outputs.version }}
+      qualification_run_id: ${{ steps.release.outputs.qualification_run_id }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -25,6 +32,9 @@ jobs:
 
       - name: Resolve unreleased version commit
         id: release
+        env:
+          GH_TOKEN: ${{ secrets.REPO_ACCESS_TOKEN }}
+          RESUME_RUN_ID: ${{ inputs.qualification_run_id }}
         run: |
           VERSION=$(sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p' Cargo.toml)
           if git rev-parse --verify --quiet "refs/tags/v${VERSION}" >/dev/null; then
@@ -32,10 +42,51 @@ jobs:
             exit 1
           fi
 
-          # Publish the reviewed tip, not the commit that first bumped the version.
-          # Release-only fixes may land after preparation and must be included in
-          # the exact commit qualified and published by the reusable workflow.
-          RELEASE_COMMIT=$(git rev-parse HEAD)
+          if [ -n "$RESUME_RUN_ID" ]; then
+            if ! [[ "$RESUME_RUN_ID" =~ ^[0-9]+$ ]]; then
+              echo "::error::Qualification run ID must be numeric"
+              exit 1
+            fi
+            prior_run=$(gh api "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}")
+            if ! jq -e '
+              .path == ".github/workflows/release-stable.yml" and
+              .event == "workflow_dispatch" and
+              .head_branch == "main" and
+              .status == "completed"
+            ' <<< "$prior_run" >/dev/null; then
+              echo "::error::Resume requires a completed stable release run on main"
+              exit 1
+            fi
+            RELEASE_COMMIT=$(jq -r '.head_sha' <<< "$prior_run")
+            if ! git merge-base --is-ancestor "$RELEASE_COMMIT" HEAD; then
+              echo "::error::Qualified commit is not an ancestor of main"
+              exit 1
+            fi
+            qualified_version=$(git show "${RELEASE_COMMIT}:Cargo.toml" |
+              sed -n '/^\[workspace.package\]/,/^\[/s/^version = "\(.*\)"/\1/p')
+            if [ "$qualified_version" != "$VERSION" ]; then
+              echo "::error::Qualified commit has version ${qualified_version}, expected ${VERSION}"
+              exit 1
+            fi
+            qualified_jobs=$(gh api --paginate --slurp \
+              "/repos/${GITHUB_REPOSITORY}/actions/runs/${RESUME_RUN_ID}/jobs?per_page=100" |
+              jq '[.[] | .jobs[] | select(.name | startswith("qualify /"))]')
+            if ! jq -e '
+              (length > 0) and
+              (any(.[]; .name == "qualify / prepare" and .conclusion == "success")) and
+              (any(.[]; .name == "qualify / qualify-github-release" and .conclusion == "success")) and
+              (all(.[]; .conclusion == "success" or .conclusion == "skipped"))
+            ' <<< "$qualified_jobs" >/dev/null; then
+              echo "::error::Prior qualification jobs did not all pass"
+              exit 1
+            fi
+            echo "Resuming v${VERSION} from qualified run ${RESUME_RUN_ID} at ${RELEASE_COMMIT}"
+            echo "qualification_run_id=$RESUME_RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            # Publish the reviewed tip and the artifacts qualified by this run.
+            RELEASE_COMMIT=$(git rev-parse HEAD)
+            echo "qualification_run_id=$GITHUB_RUN_ID" >> "$GITHUB_OUTPUT"
+          fi
 
           echo "Publishing v${VERSION} from ${RELEASE_COMMIT}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
@@ -43,6 +94,7 @@ jobs:
 
   qualify:
     needs: resolve
+    if: ${{ inputs.qualification_run_id == '' }}
     uses: ./.github/workflows/release.yml
     with:
       mode: stable
@@ -53,6 +105,7 @@ jobs:
   # PyPI trusted publishing requires the protected job in this top-level workflow.
   publish-python:
     needs: [resolve, qualify]
+    if: ${{ always() && needs.resolve.result == 'success' && (needs.qualify.result == 'success' || inputs.qualification_run_id != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment:
@@ -65,7 +118,7 @@ jobs:
       - name: Download qualified Python wheels
         uses: actions/download-artifact@v8
         with:
-          run-id: ${{ github.run_id }}
+          run-id: ${{ needs.resolve.outputs.qualification_run_id }}
           github-token: ${{ secrets.REPO_ACCESS_TOKEN }}
           pattern: qualified-python-*
           path: dist
@@ -158,10 +211,11 @@ jobs:
 
   publish:
     needs: [resolve, qualify, publish-python]
+    if: ${{ always() && needs.resolve.result == 'success' && needs.publish-python.result == 'success' && (needs.qualify.result == 'success' || inputs.qualification_run_id != '') }}
     uses: ./.github/workflows/release.yml
     with:
       mode: stable
       stable_action: publish
       source_ref: ${{ needs.resolve.outputs.commit }}
-      qualification_run_id: ${{ github.run_id }}
+      qualification_run_id: ${{ needs.resolve.outputs.qualification_run_id }}
     secrets: inherit
