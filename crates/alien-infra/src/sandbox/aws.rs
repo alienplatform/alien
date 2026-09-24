@@ -2211,6 +2211,7 @@ mod tests {
         assert!(unknown.is_err(), "no other unknown state is guessed at");
     }
 
+    #[test]
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({
             "_controllerStateVersion": 1,
