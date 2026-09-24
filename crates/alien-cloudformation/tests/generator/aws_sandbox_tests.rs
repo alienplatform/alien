@@ -1092,3 +1092,69 @@ fn aws_remote_storage_management_role_keeps_its_heartbeat() {
         "heartbeat must not reach object contents: {management}"
     );
 }
+
+/// A Live sandbox is reachable remotely too: setup renders its build role either way
+/// (`SetupEmission::Always`), so the grant the preflight publishes has somewhere to attach.
+#[test]
+fn aws_remote_sandbox_grants_a_live_sandbox_the_same_execute_set() {
+    let stack = Stack::new("byo-sandbox".to_string())
+        .add_with_remote_access(
+            sandbox_fixture_with(SandboxEgress::Allow, LIVE_BUNDLE),
+            ResourceLifecycle::Live,
+        )
+        .add(
+            RemoteBindings::new("access".to_string()).build(),
+            ResourceLifecycle::Frozen,
+        )
+        .build();
+    let (template, yaml) = render_built_ins_template(
+        &stack,
+        StackSettings::default(),
+        custom_resource_registration(),
+        CloudFormationTarget::Aws,
+        "aws",
+        "live remote sandbox",
+    );
+    // The snapshot is what holds the set closed. A `contains` assertion is monotone, so it
+    // passes just as happily on a widened action list or a wildcarded image ARN.
+    insta::assert_snapshot!("remote_sandbox_grant_live_aws", yaml);
+
+    let policy = template
+        .resources
+        .get("AgentsRemoteExecutePolicy")
+        .expect("a Live remote sandbox must still receive the remote grant");
+    assert_eq!(policy.resource_type, "AWS::IAM::Policy");
+    let roles =
+        serde_json::to_string(policy.properties.get("Roles").expect("Roles")).expect("serializes");
+    assert!(
+        roles.contains("AccessRole"),
+        "the grant belongs to the shared Remote Bindings identity: {roles}"
+    );
+    assert!(
+        template.resources.contains_key("AgentsBuildRole"),
+        "setup renders the build role for a Live sandbox too, which is what the grant attaches beside"
+    );
+
+    let document = serde_json::to_string(
+        policy
+            .properties
+            .get("PolicyDocument")
+            .expect("PolicyDocument"),
+    )
+    .expect("serializes");
+    for action in [
+        "lambda:RunMicrovm",
+        "lambda:TerminateMicrovm",
+        "lambda:SuspendMicrovm",
+        "lambda:ResumeMicrovm",
+        "lambda:GetMicrovm",
+        "lambda:CreateMicrovmAuthToken",
+        "lambda:PassNetworkConnector",
+    ] {
+        assert!(document.contains(action), "{action} is missing: {document}");
+    }
+    assert!(
+        document.contains("microvm-image:${AWS::StackName}-agents"),
+        "the grant must name this sandbox's own image: {document}"
+    );
+}

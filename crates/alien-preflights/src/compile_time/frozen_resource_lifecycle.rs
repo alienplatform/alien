@@ -2,7 +2,7 @@ use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
 use alien_core::{
     ownership_policy_for_resource_type, Container, Daemon, Platform, ResourceLifecycle, Sandbox,
-    Stack, Storage,
+    SandboxCode, Stack, Storage,
 };
 
 /// Ensures each resource uses a lifecycle allowed by the ownership policy.
@@ -79,15 +79,27 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
             // Setup builds a Frozen image before the deployment registers, and only registration
             // tells the registry which customer account to open the base image's repository to.
             if let Some(sandbox) = resource_entry.config.downcast_ref::<Sandbox>() {
-                if sandbox.private_base_image.is_some()
-                    && resource_entry.lifecycle == ResourceLifecycle::Frozen
-                {
-                    errors.push(format!(
-                        "Sandbox '{}' declares a private base image, which requires the Live \
-                         lifecycle; a Frozen image is built before the registry can grant the \
-                         customer's account access to it",
-                        resource_id
-                    ));
+                if resource_entry.lifecycle == ResourceLifecycle::Frozen {
+                    if sandbox.private_base_image.is_some() {
+                        errors.push(format!(
+                            "Sandbox '{}' declares a private base image, which requires the Live \
+                             lifecycle; a Frozen image is built before the registry can grant the \
+                             customer's account access to it",
+                            resource_id
+                        ));
+                    }
+                    // Refused on the declaration rather than on the field it becomes: the release
+                    // pushes a source build to the project's own repository, so it is private by
+                    // the time anything reads it, and by then setup has already tried to pull.
+                    if matches!(&sandbox.code, SandboxCode::Source { .. }) {
+                        errors.push(format!(
+                            "Sandbox '{}' is built from source, which requires the Live \
+                             lifecycle; the release pushes it to a private repository the \
+                             registry cannot open to a customer account setup has not yet \
+                             reported",
+                            resource_id
+                        ));
+                    }
                 }
             }
 
@@ -107,7 +119,9 @@ impl CompileTimeCheck for FrozenResourceLifecycleCheck {
                     errors.push(format!(
                         "Resource '{}' links sandbox '{}', which uses the Live lifecycle; its \
                          image is built after setup, but this resource requires its binding \
-                         during setup",
+                         during setup. Add the sandbox with `remoteAccess` and reach it through a \
+                         remote binding, or give it a base image that needs no build so it can stay \
+                         Frozen and be linked",
                         resource_id,
                         link.id()
                     ));
@@ -456,6 +470,54 @@ mod tests {
                 "the refusal must not carry collapsed indentation: {message}"
             );
         }
+    }
+
+    /// The release makes a source build private, so the declaration is refused rather than the
+    /// field it becomes — by the time that field exists, setup has already tried to pull.
+    #[tokio::test]
+    async fn source_is_refused_on_a_frozen_sandbox() {
+        let with_source = |lifecycle| {
+            let mut stack = sandbox_stack(lifecycle);
+            let entry = stack.resources.get_mut("agents").expect("sandbox entry");
+            let mut sandbox = entry
+                .config
+                .downcast_ref::<alien_core::Sandbox>()
+                .expect("sandbox config")
+                .clone();
+            sandbox.code = SandboxCode::Source {
+                src: "./sandbox".to_string(),
+                toolchain: alien_core::ToolchainConfig::Docker {
+                    dockerfile: None,
+                    target: None,
+                    build_args: None,
+                },
+            };
+            entry.config = alien_core::Resource::new(sandbox);
+            stack
+        };
+
+        let frozen = FrozenResourceLifecycleCheck
+            .check(&with_source(ResourceLifecycle::Frozen), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(!frozen.success);
+        assert!(
+            frozen
+                .errors
+                .iter()
+                .any(|error| error.contains("built from source")),
+            "the refusal must name the declaration: {:?}",
+            frozen.errors
+        );
+
+        let live = FrozenResourceLifecycleCheck
+            .check(&with_source(ResourceLifecycle::Live), Platform::Aws)
+            .await
+            .expect("the check runs");
+        assert!(
+            live.success,
+            "Live is where a source build belongs: {live:?}"
+        );
     }
 
     #[tokio::test]

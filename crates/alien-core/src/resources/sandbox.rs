@@ -31,7 +31,10 @@ pub enum SandboxCode {
         /// bare catalog name such as `ubuntu`. Each refuses the other's shape while planning.
         image: String,
     },
-    /// Source built into a sandbox image at deploy time.
+    /// A Dockerfile `alien build` builds into the sandbox's base image.
+    ///
+    /// AWS only, and docker only: the base image is a root filesystem, not a binary laid on one.
+    /// `alien release` pushes it and the bundle layers the sandbox agent on afterwards.
     #[serde(rename_all = "camelCase")]
     Source {
         /// The source directory to build from
@@ -567,17 +570,18 @@ impl Sandbox {
     pub fn validate_for_platform(&self, platform: Platform) -> Result<()> {
         let capabilities = SandboxCapabilities::for_platform(platform)?;
 
-        // No backend builds a sandbox image from source: an empty image string schedules a pod
-        // that can never run, the silent no-op the capability contract forbids — the failure
-        // has to land here instead.
-        if let SandboxCode::Source { .. } = &self.code {
+        // `alien build` builds an AWS sandbox's base image, so source is a declaration there and
+        // the emitters refuse it only if it reaches them unbuilt. Everywhere else the image is
+        // pulled as declared, and an empty image string would schedule a pod that can never run.
+        if matches!(&self.code, SandboxCode::Source { .. }) && platform != Platform::Aws {
             return Err(AlienError::new(ErrorData::SandboxLimitInvalid {
                 resource_id: self.id.clone(),
                 field: "code".to_string(),
                 value: "source".to_string(),
-                reason: "no sandbox backend builds an image from source yet; give code.image a \
-                         prebuilt reference"
-                    .to_string(),
+                reason: format!(
+                    "no sandbox backend builds an image from source on {platform}; give \
+                     code.image a prebuilt reference"
+                ),
             }));
         }
 
@@ -1904,11 +1908,11 @@ mod tests {
         );
     }
 
-    /// `Source` is a public part of the type that no backend builds: an empty image string
-    /// schedules a pod that can never run, so the refusal has to happen at plan time and on
-    /// every platform, not in one emitter.
+    /// `alien build` builds an AWS sandbox's base image, so source is a declaration there. On
+    /// every other platform the image is pulled as declared, and an unbuilt source would schedule
+    /// a pod that can never run, so the refusal still has to happen at plan time.
     #[test]
-    fn source_code_is_refused_everywhere_rather_than_producing_a_broken_manifest() {
+    fn source_code_is_refused_off_aws_rather_than_producing_a_broken_manifest() {
         let sandbox = Sandbox::new("agent".to_string())
             .code(SandboxCode::Source {
                 src: "./sandbox".to_string(),
@@ -1925,8 +1929,11 @@ mod tests {
             })
             .build();
 
+        sandbox
+            .validate_for_platform(Platform::Aws)
+            .expect("an AWS sandbox base image is built by `alien build`");
+
         for platform in [
-            Platform::Aws,
             Platform::Azure,
             Platform::Gcp,
             Platform::Kubernetes,
@@ -1934,11 +1941,15 @@ mod tests {
         ] {
             let error = sandbox
                 .validate_for_platform(platform)
-                .expect_err("no backend builds a sandbox image from source");
+                .expect_err("no backend builds a sandbox image from source here");
             assert_eq!(error.code, "SANDBOX_LIMIT_INVALID");
             assert!(
                 error.to_string().contains("code.image"),
                 "the refusal must say what to write instead: {error}"
+            );
+            assert!(
+                error.to_string().contains(&platform.to_string()),
+                "the refusal must name the platform that cannot build it: {error}"
             );
         }
     }
