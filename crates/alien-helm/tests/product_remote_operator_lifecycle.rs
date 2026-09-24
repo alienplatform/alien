@@ -1689,6 +1689,129 @@ spec:
         None,
         "rollback must not disable a completed Remote Operator identity",
     );
+
+    // Remove only the Remote Operator from the running product release, then
+    // restore it from the kept identity.
+    let mut removal = rotation.clone();
+    for argument in &mut removal {
+        if argument == "--set=remoteOperator.enabled=true" {
+            *argument = "--set=remoteOperator.enabled=false".to_string();
+        }
+    }
+    let unconfirmed_removal = run_fails(
+        "helm",
+        removal.iter().map(String::as_str),
+        None,
+        "disabling a completed Remote Operator must require explicit confirmation",
+    );
+    assert!(
+        unconfirmed_removal.diagnostic.contains(&format!(
+            "--set remoteOperator.enabled=false --set-string remoteOperator.confirmRemoval={helm_release}"
+        )),
+        "{}",
+        unconfirmed_removal.diagnostic
+    );
+    let mut wrong_removal = removal.clone();
+    wrong_removal.push("--set-string=remoteOperator.confirmRemoval=another-release".to_string());
+    let wrong_removal = run_fails(
+        "helm",
+        wrong_removal.iter().map(String::as_str),
+        None,
+        "a confirmation naming another release must not remove the Remote Operator",
+    );
+    assert!(
+        wrong_removal
+            .diagnostic
+            .contains("Set it to the exact release name to remove the Remote Operator"),
+        "{}",
+        wrong_removal.diagnostic
+    );
+    run_ok(
+        "kubectl",
+        [
+            "get",
+            "deployment",
+            remote_operator_resource_name.as_str(),
+            "--namespace",
+            &helm_namespace,
+        ],
+        None,
+    );
+    removal.push(format!(
+        "--set-string=remoteOperator.confirmRemoval={helm_release}"
+    ));
+    let removed = run_ok("helm", removal.iter().map(String::as_str), None);
+    assert_output_contains(&removed, "STATUS: deployed");
+    assert_output_contains(
+        &removed,
+        &format!("PersistentVolumeClaim {remote_operator_resource_name}-identity"),
+    );
+    assert_output_contains(
+        &removed,
+        &format!("remoteOperator.confirmRemoval={helm_release} on later upgrades"),
+    );
+    for kind in ["deployment", "serviceaccount"] {
+        let remaining = run_ok(
+            "kubectl",
+            [
+                "get",
+                kind,
+                remote_operator_resource_name.as_str(),
+                "--namespace",
+                &helm_namespace,
+                "--ignore-not-found",
+                "--output=name",
+            ],
+            None,
+        );
+        assert!(
+            remaining.stdout.trim().is_empty(),
+            "removal must delete the Remote Operator {kind}: {}",
+            remaining.diagnostic
+        );
+    }
+    let kept_pvc_policy = run_ok(
+        "kubectl",
+        [
+            "get",
+            "persistentvolumeclaim",
+            &format!("{remote_operator_resource_name}-identity"),
+            "--namespace",
+            &helm_namespace,
+            "--output=jsonpath={.metadata.annotations.helm\\.sh/resource-policy}",
+        ],
+        None,
+    );
+    assert_eq!(kept_pvc_policy.stdout.trim(), "keep");
+    for record in [
+        remote_operator_resource_name.clone(),
+        format!("{remote_operator_resource_name}-initialized"),
+        format!("{remote_operator_resource_name}-complete"),
+    ] {
+        run_ok(
+            "kubectl",
+            ["get", "configmap", &record, "--namespace", &helm_namespace],
+            None,
+        );
+    }
+    // Later product upgrades keep the confirmation while the Operator stays removed.
+    run_ok("helm", removal.iter().map(String::as_str), None);
+    // Restoring clears the confirmation and reuses the kept identity without bootstrap.
+    run_ok("helm", rotation.iter().map(String::as_str), None);
+    run_ok(
+        "kubectl",
+        [
+            "rollout",
+            "status",
+            "deployment",
+            remote_operator_resource_name.as_str(),
+            "--namespace",
+            &helm_namespace,
+            "--timeout=2m",
+        ],
+        None,
+    );
+
     run_ok(
         "helm",
         [
