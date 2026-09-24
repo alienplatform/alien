@@ -1411,7 +1411,8 @@ mod live_image_create {
         )
     }
 
-    /// Deletes each `PROBE_IMAGES` image version by version, then the image, through the MicroVM API.
+    /// Probes whether deleting versions can clear an image. AWS refuses to delete its last version
+    /// on its own, so only the whole-image delete removes it, and that is the call teardown makes.
     #[tokio::test]
     #[ignore]
     async fn delete_images_versions_first() {
