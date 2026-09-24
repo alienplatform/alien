@@ -1471,6 +1471,8 @@ mod tests {
         role: bool,
         policy: Option<String>,
         image: bool,
+        /// The newest version a create or roll minted.
+        version: Option<String>,
         building_polls: u32,
         log: Vec<String>,
     }
@@ -1568,7 +1570,7 @@ mod tests {
             Ok(MicrovmImage {
                 image_identifier: None,
                 image_arn: Some(IMAGE_ARN.to_string()),
-                image_version: Some("1.0".to_string()),
+                image_version: c.lock().unwrap().version.clone(),
                 state: Some("CREATED".to_string()),
             })
         });
@@ -1578,6 +1580,7 @@ mod tests {
             .returning(move |request| {
                 let mut cloud = c.lock().unwrap();
                 cloud.image = true;
+                cloud.version = Some("1.0".to_string());
                 cloud.log.push(format!(
                     "lambda:CreateMicrovmImage {} {}",
                     request.build_role_arn, request.code_artifact.uri
@@ -1592,19 +1595,37 @@ mod tests {
         let c = cloud.clone();
         lambda
             .expect_get_microvm_image_version()
-            .returning(move |_, _| {
+            .returning(move |_, version| {
                 let mut cloud = c.lock().unwrap();
                 let active = cloud.building_polls == 0;
                 cloud.building_polls = cloud.building_polls.saturating_sub(1);
                 Ok(MicrovmImageVersion {
                     image_arn: Some(IMAGE_ARN.to_string()),
-                    image_version: Some("1.0".to_string()),
+                    image_version: Some(version.to_string()),
                     state: Some(if active { "SUCCESSFUL" } else { "CREATING" }.to_string()),
                     status: active.then(|| "ACTIVE".to_string()),
                     state_reason: None,
                 })
             });
-        lambda.expect_update_microvm_image().never();
+        let c = cloud.clone();
+        lambda
+            .expect_update_microvm_image()
+            .returning(move |_, request| {
+                let mut cloud = c.lock().unwrap();
+                cloud.version = Some("2.0".to_string());
+                cloud.log.push(format!(
+                    "lambda:UpdateMicrovmImage {} {}",
+                    request.build_role_arn, request.code_artifact.uri
+                ));
+                Ok(
+                    alien_aws_clients::lambda_microvms::UpdateMicrovmImageResponse {
+                        image_arn: Some(IMAGE_ARN.to_string()),
+                        name: Some("test-agents".to_string()),
+                        state: Some("UPDATING".to_string()),
+                        image_version: Some("2.0".to_string()),
+                    },
+                )
+            });
 
         let iam = Arc::new(iam);
         let lambda = Arc::new(lambda);
@@ -1618,6 +1639,85 @@ mod tests {
                 .returning(move |_| Ok(lambda.clone()));
         }
         Arc::new(provider)
+    }
+
+    /// Setup passes until the handoff, which each Frozen sandbox scenario must reach.
+    async fn run_setup(
+        mut state: DeploymentState,
+        cloud: &Arc<std::sync::Mutex<FakeAws>>,
+    ) -> DeploymentState {
+        for _ in 0..12 {
+            if state.status != DeploymentStatus::InitialSetup {
+                break;
+            }
+            state =
+                handle_initial_setup(state, config(), aws_client_config(), fake_aws(cloud, true))
+                    .await
+                    .unwrap()
+                    .state;
+        }
+        assert_eq!(
+            state.status,
+            DeploymentStatus::Provisioning,
+            "{:?}",
+            state.error
+        );
+        state
+    }
+
+    /// Setup run again for a release with a new bundle: the role is regranted to the new object
+    /// before the image is rolled onto it, once, and the binding moves only when the roll serves.
+    #[tokio::test]
+    async fn a_setup_rerun_rolls_a_frozen_sandbox_onto_its_new_bundle_once() {
+        const NEXT_BUNDLE: &str = "s3://acme-artifacts/sandbox-bundle/0ddba11/bundle.zip";
+        let cloud = Arc::new(std::sync::Mutex::new(FakeAws::default()));
+        let mut state = run_setup(
+            sandbox_setup(
+                ResourceLifecycle::Frozen,
+                InitialSetupAuthority::DirectSetup,
+            ),
+            &cloud,
+        )
+        .await;
+        {
+            let mut cloud = cloud.lock().unwrap();
+            cloud.log.clear();
+            cloud.building_polls = 2;
+        }
+
+        let metadata = state.runtime_metadata.as_mut().unwrap();
+        let stack = metadata.prepared_stack.as_mut().unwrap();
+        let entry = stack.resources.get_mut("agents").unwrap();
+        let mut sandbox = entry
+            .config
+            .downcast_ref::<alien_core::Sandbox>()
+            .unwrap()
+            .clone();
+        sandbox.code = alien_core::SandboxCode::Image {
+            image: NEXT_BUNDLE.to_string(),
+        };
+        entry.config = alien_core::Resource::new(sandbox);
+        state.status = DeploymentStatus::InitialSetup;
+
+        let state = run_setup(state, &cloud).await;
+
+        assert_eq!(
+            cloud.lock().unwrap().log,
+            vec![
+                format!("iam:PutRolePolicy {BUILD_ROLE}"),
+                format!(
+                    "lambda:UpdateMicrovmImage arn:aws:iam::123456789012:role/{BUILD_ROLE} \
+                     {NEXT_BUNDLE}"
+                ),
+            ]
+        );
+        let sandbox = &state.stack_state.as_ref().unwrap().resources["agents"];
+        assert_eq!(sandbox.status, ResourceStatus::Running);
+        let binding = &published_binding(sandbox);
+        assert_eq!(binding["imageVersion"], "2.0", "the rolled version serves");
+        load_binding(binding)
+            .await
+            .unwrap_or_else(|error| panic!("the binding must load: {error}\n{binding}"));
     }
 
     /// A Frozen sandbox is built by setup, as the templates build it: the build role first, then
@@ -1647,24 +1747,7 @@ mod tests {
             "a sandbox waiting on its build role is not a failure: {:?}",
             first.state.error
         );
-        state = first.state;
-
-        for _ in 0..12 {
-            if state.status != DeploymentStatus::InitialSetup {
-                break;
-            }
-            state =
-                handle_initial_setup(state, config(), aws_client_config(), fake_aws(&cloud, true))
-                    .await
-                    .unwrap()
-                    .state;
-        }
-        assert_eq!(
-            state.status,
-            DeploymentStatus::Provisioning,
-            "{:?}",
-            state.error
-        );
+        state = run_setup(first.state, &cloud).await;
 
         let (log, policy) = {
             let cloud = cloud.lock().unwrap();

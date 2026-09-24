@@ -415,7 +415,11 @@ impl AwsSandboxController {
             }
             self.region = Some(aws_config.region.clone());
 
-            self.reap_retired_versions(&client, &config.id).await?;
+            // A Frozen image keeps its retired versions: this runs as the runtime identity, which
+            // cannot delete them, and setup teardown's image delete removes them with the image.
+            if self.owns_image_deletion(ctx, &config.id) {
+                self.reap_retired_versions(&client, &config.id).await?;
+            }
 
             // Session counts require `lambda:ListMicrovms`, which AWS authorizes against no
             // resource type — no sandbox permission set grants it, so the count travels as
@@ -480,7 +484,7 @@ impl AwsSandboxController {
         self.idle_pause_seconds = config.lifecycle.idle_pause_seconds;
         self.max_lifetime_seconds = config.lifecycle.max_lifetime_seconds;
 
-        // Ownership decides before the bundle is even read. A Frozen sandbox's image belongs to
+        // Ownership decides before the bundle is even read. A template's Frozen image belongs to
         // the setup stack, which owns its bundle too and hands none over — so there is nothing
         // here to compare against, and rebuilding would use credentials never granted it.
         if !self.owns_image_builds(ctx, &config.id) {
@@ -890,10 +894,11 @@ impl AwsSandboxController {
         Ok(())
     }
 
-    /// Whether this controller built the image and may therefore rebuild it. A Frozen sandbox's
-    /// image belongs to the setup stack, which owns its bundle too.
+    /// Whether this controller built the image and may therefore rebuild it: a Live sandbox, or a
+    /// Frozen one a direct setup registered build inputs for, which only setup steps. A template's
+    /// Frozen image belongs to the setup stack, which owns its bundle too.
     fn owns_image_builds(&self, ctx: &ResourceControllerContext<'_>, resource_id: &str) -> bool {
-        self.owns_image_deletion(ctx, resource_id)
+        self.owns_image_deletion(ctx, resource_id) || self.build_role_arn.is_some()
     }
 }
 
@@ -1904,11 +1909,20 @@ mod tests {
         );
     }
 
-    /// A Frozen sandbox's image belongs to the setup stack. Rebuilding it at runtime would use
-    /// credentials that were never granted it, so no declaration reaches the build API — the
-    /// expectation-free mock panics on any call.
+    /// A template's Frozen image belongs to the setup stack. Rebuilding it at runtime would use
+    /// credentials that were never granted it, so no declaration reaches the build API — the mock
+    /// answers only the Ready tick's read and panics on any other call.
     #[tokio::test]
     async fn a_frozen_sandbox_never_rebuilds_its_image() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("1.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
         let controller = AwsSandboxController {
             state: AwsSandboxState::Ready,
             image_identifier: Some(IMAGE_ARN.to_string()),
@@ -1925,7 +1939,7 @@ mod tests {
             .controller(controller)
             .platform(Platform::Aws)
             .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
-            .service_provider(provider(MockLambdaMicrovmsApi::new()))
+            .service_provider(provider(client))
             .build()
             .await
             .expect("executor should build");
@@ -1935,10 +1949,12 @@ mod tests {
                 "s3://alien-bundles-test/sandbox/bundle-v2.zip",
             ))
             .expect("transition to update");
-        executor
-            .step()
-            .await
-            .expect("a Frozen sandbox settles without touching its image");
+        for _ in 0..3 {
+            executor
+                .step()
+                .await
+                .expect("a Frozen sandbox settles without touching its image");
+        }
 
         let controller = executor
             .internal_state::<AwsSandboxController>()
@@ -2060,6 +2076,48 @@ mod tests {
             .internal_state::<AwsSandboxController>()
             .expect("typed controller");
         assert!(controller.retired_versions.is_empty());
+    }
+
+    /// A Frozen sandbox's Ready tick runs as the runtime identity, which holds no
+    /// DeleteMicrovmImageVersion; its retired versions wait for setup teardown's image delete. Any
+    /// version delete panics the mock.
+    #[tokio::test]
+    async fn a_frozen_sandbox_keeps_its_retired_versions_at_runtime() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client.expect_get_microvm_image().returning(|_| {
+            Ok(MicrovmImage {
+                image_identifier: None,
+                image_arn: Some(IMAGE_ARN.to_string()),
+                image_version: Some("2.0".to_string()),
+                state: Some("CREATED".to_string()),
+            })
+        });
+        let mut controller = ready_controller();
+        controller.bundle_uri = Some(BUNDLE_URI.to_string());
+        controller.max_lifetime_seconds = Some(1800);
+        controller.retired_versions = vec![RetiredVersion {
+            version: "1.0".to_string(),
+            retired_at: chrono::Utc::now() - chrono::Duration::seconds(3600),
+        }];
+        let mut executor = SingleControllerExecutor::builder()
+            .resource(sandbox())
+            .controller(controller)
+            .platform(Platform::Aws)
+            .resource_lifecycle(alien_core::ResourceLifecycle::Frozen)
+            .service_provider(provider(client))
+            .build()
+            .await
+            .expect("executor should build");
+        executor.step().await.expect("ready tick past the window");
+
+        assert_eq!(
+            executor
+                .internal_state::<AwsSandboxController>()
+                .expect("typed controller")
+                .retired_versions
+                .len(),
+            1
+        );
     }
 
     /// The two state names an earlier controller version wrote that this one lacks must still
