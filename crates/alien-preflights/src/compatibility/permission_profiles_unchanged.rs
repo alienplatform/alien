@@ -3,7 +3,7 @@ use crate::mutations::management_permission_profile::GATE_DERIVED_GLOBAL_SUFFIXE
 use crate::{CheckResult, StackCompatibilityCheck};
 use alien_core::permissions::{ManagementPermissions, PermissionProfile, PermissionSetReference};
 use alien_core::Stack;
-use alien_permissions::SANDBOX_SETUP_ROLES_GUARD;
+use alien_permissions::{MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use std::collections::HashSet;
 
 /// Validates that permission profiles in the stack haven't been modified.
@@ -132,61 +132,79 @@ fn management_differs_outside_gates(
     gated: &GatedContributions,
     allow_email_heartbeat_migration: bool,
 ) -> bool {
-    match (old_management, new_management) {
+    match (
+        old_management,
+        &without_added_role_guards(old_management, new_management),
+    ) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
             ManagementPermissions::Extend(old_profile),
             ManagementPermissions::Extend(new_profile),
         ) => {
-            let new_profile = without_added_sandbox_setup_roles_guard(old_profile, new_profile);
-            profiles_differ_outside_gates(old_profile, &new_profile, gated)
+            profiles_differ_outside_gates(old_profile, new_profile, gated)
                 && !(allow_email_heartbeat_migration
                     && is_email_heartbeat_registration_migration(
                         old_stack,
                         new_stack,
                         old_profile,
-                        &new_profile,
+                        new_profile,
                         gated,
                     ))
         }
         (
             ManagementPermissions::Override(old_profile),
             ManagementPermissions::Override(new_profile),
-        ) => profiles_differ_outside_gates(
-            old_profile,
-            &without_added_sandbox_setup_roles_guard(old_profile, new_profile),
-            gated,
-        ),
+        ) => profiles_differ_outside_gates(old_profile, new_profile, gated),
         _ => true,
     }
 }
 
-/// The new profile without the sandbox setup-roles guard if this update is what adds it.
+/// The new management permissions without the role guards this update is what adds.
 ///
-/// The guard is a Deny, so adding it only narrows the management identity, and a deployment
-/// prepared before it existed gains it in its prepared profile on the first update; the installed
-/// role takes it the next time setup runs. Only the canonical reference, only at stack scope:
-/// removing it, or anything added beside it, still reads as drift.
-fn without_added_sandbox_setup_roles_guard(
-    old_profile: &PermissionProfile,
-    new_profile: &PermissionProfile,
-) -> PermissionProfile {
-    let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
-    let mut migrated = new_profile.clone();
-    if old_profile
-        .0
-        .get("*")
-        .is_some_and(|grants| grants.contains(&guard))
-    {
-        return migrated;
-    }
-    if let Some(grants) = migrated.0.get_mut("*") {
-        grants.retain(|grant| grant != &guard);
-        if grants.is_empty() && !old_profile.0.contains_key("*") {
-            migrated.0.shift_remove("*");
+/// The preparing mutation adds the guards, which are Denies and so only narrow the management
+/// identity. A deployment prepared before one existed gains it in its prepared profile on the first
+/// update; the installed role takes it the next time setup runs. A profile the mutation left
+/// `Auto` becomes `Extend` to hold them. Only the canonical references, only at stack scope:
+/// removing one, or anything added beside them, still reads as drift.
+fn without_added_role_guards(
+    old: &ManagementPermissions,
+    new: &ManagementPermissions,
+) -> ManagementPermissions {
+    let old_global = match old {
+        ManagementPermissions::Auto => None,
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            profile.0.get("*")
+        }
+    };
+    let added: Vec<PermissionSetReference> = [MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD]
+        .into_iter()
+        .map(PermissionSetReference::from_name)
+        .filter(|guard| !old_global.is_some_and(|grants| grants.contains(guard)))
+        .collect();
+    let without = |profile: &PermissionProfile| {
+        let mut profile = profile.clone();
+        if let Some(grants) = profile.0.get_mut("*") {
+            grants.retain(|grant| !added.contains(grant));
+            if grants.is_empty() && old_global.is_none() {
+                profile.0.shift_remove("*");
+            }
+        }
+        profile
+    };
+    match new {
+        ManagementPermissions::Auto => ManagementPermissions::Auto,
+        ManagementPermissions::Extend(profile) => {
+            let profile = without(profile);
+            if profile.0.is_empty() && matches!(old, ManagementPermissions::Auto) {
+                ManagementPermissions::Auto
+            } else {
+                ManagementPermissions::Extend(profile)
+            }
+        }
+        ManagementPermissions::Override(profile) => {
+            ManagementPermissions::Override(without(profile))
         }
     }
-    migrated
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
@@ -377,12 +395,43 @@ mod tests {
             .expect("the mutation runs")
     }
 
-    /// A deployment prepared before the guard existed gains it on its first update, and a Deny
-    /// cannot escalate, so that one addition is not drift, whatever the profile's mode and the
-    /// sandbox's lifecycle.
+    /// `prepared` as it read before the preparing mutation added `guards`.
+    fn without_guards(
+        prepared: &Stack,
+        original: &ManagementPermissions,
+        guards: &[&str],
+    ) -> Stack {
+        let guards: Vec<_> = guards
+            .iter()
+            .map(|guard| PermissionSetReference::from_name(*guard))
+            .collect();
+        let mut stack = prepared.clone();
+        if let ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) =
+            &mut stack.permissions.management
+        {
+            if let Some(grants) = profile.0.get_mut("*") {
+                grants.retain(|grant| !guards.contains(grant));
+                if grants.is_empty() {
+                    profile.0.shift_remove("*");
+                }
+            }
+        }
+        let emptied = matches!(
+            &stack.permissions.management,
+            ManagementPermissions::Extend(profile) if profile.0.is_empty()
+        );
+        if emptied && matches!(original, ManagementPermissions::Auto) {
+            stack.permissions.management = ManagementPermissions::Auto;
+        }
+        stack
+    }
+
+    /// A deployment prepared before a guard existed gains it on its first update, and a Deny
+    /// cannot escalate, so that addition is not drift, whatever the profile's mode, the stack's
+    /// resources, and whether the other guard was already there.
     #[tokio::test]
-    async fn an_update_may_add_the_sandbox_setup_roles_guard() {
-        let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
+    async fn an_update_may_add_the_role_guards() {
+        let mut stacks = Vec::new();
         for management in [
             ManagementPermissions::Auto,
             ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
@@ -393,25 +442,36 @@ mod tests {
             for lifecycle in [ResourceLifecycle::Live, ResourceLifecycle::Frozen] {
                 let mut stack = guarded_sandbox_stack(management.clone());
                 stack.resources.get_mut("agents").unwrap().lifecycle = lifecycle;
-                let now = prepared(stack).await;
-                let mut before_the_guard = now.clone();
-                match &mut before_the_guard.permissions.management {
-                    ManagementPermissions::Extend(profile)
-                    | ManagementPermissions::Override(profile) => profile
-                        .0
-                        .get_mut("*")
-                        .expect("the mutation writes a stack scope")
-                        .retain(|grant| grant != &guard),
-                    ManagementPermissions::Auto => panic!("a sandbox always extends management"),
-                }
+                stacks.push((management.clone(), stack));
+            }
+            let kv_only = Stack::new("s".to_string())
+                .management(management.clone())
+                .add(
+                    Kv::new("cache".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build();
+            stacks.push((management.clone(), kv_only));
+            let empty = Stack::new("s".to_string())
+                .management(management.clone())
+                .build();
+            stacks.push((management, empty));
+        }
 
+        for (management, stack) in stacks {
+            let now = prepared(stack).await;
+            for added in [
+                &[MANAGEMENT_ROLE_GUARD][..],
+                &[MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD][..],
+            ] {
                 let result = PermissionProfilesUnchangedCheck
-                    .check(&before_the_guard, &now)
+                    .check(&without_guards(&now, &management, added), &now)
                     .await
                     .expect("check should run");
                 assert!(
                     result.success,
-                    "{management:?} {lifecycle:?}: {:?}",
+                    "{management:?} adding {added:?} to {:?}: {:?}",
+                    now.management(),
                     result.errors
                 );
             }

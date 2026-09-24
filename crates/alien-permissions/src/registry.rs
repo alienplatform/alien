@@ -875,3 +875,6 @@ where
 
 /// The set that refuses the management identity any write to the roles setup creates for sandboxes.
 pub const SANDBOX_SETUP_ROLES_GUARD: &str = "sandbox/protect-setup-roles";
+
+/// The set that refuses the management identity any write to its own role.
+pub const MANAGEMENT_ROLE_GUARD: &str = "remote-stack-management/protect-management-role";

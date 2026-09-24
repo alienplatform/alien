@@ -904,9 +904,10 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     ),
 ];
 
-/// Other sets grant role writes on `role/<prefix>-*`. The guard refuses them on every role carrying
-/// setup's sandbox tags, and both roles the module creates for a deny sandbox carry them, however
-/// their names are built.
+/// Other sets grant role writes on `role/<prefix>-*`, which names the management role and the
+/// sandbox roles alike. One guard refuses them on the management role by its name, which the prefix
+/// cap keeps short of a hash; the other on every role carrying setup's sandbox tags, and both roles
+/// the module creates for a deny sandbox carry them, however their names are built.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
@@ -915,6 +916,7 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             "sandbox/management",
             "artifact-registry/management",
             alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+            alien_permissions::MANAGEMENT_ROLE_GUARD,
         ]));
     stack.resources.insert(
         "management".to_string(),
@@ -954,6 +956,17 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             }
         }
     }
+    let own_role = serde_json::json!([format!(
+        "arn:aws:iam::{PARITY_ACCOUNT}:role/{PARITY_PREFIX}-management"
+    )]);
+    let (own_role_denies, denies): (Vec<_>, Vec<_>) = denies
+        .into_iter()
+        .partition(|deny| deny["Resource"] == own_role);
+    assert_eq!(
+        own_role_denies.len(),
+        1,
+        "the management role may not rewrite itself"
+    );
     assert_eq!(denies.len(), 1, "{denies:#?}");
     assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
     assert_eq!(
@@ -1039,6 +1052,7 @@ fn collect_denies(expression: &hcl::Expression, denies: &mut Vec<serde_json::Val
 fn evaluate_policy_expression(expression: &hcl::Expression) -> serde_json::Value {
     let resolve_template = |text: &str| {
         let resolved = text
+            .replace("${local.resource_prefix}", PARITY_PREFIX)
             .replace("${data.aws_partition.current.partition}", PARITY_PARTITION)
             .replace("${data.aws_region.current.region}", PARITY_REGION)
             .replace(

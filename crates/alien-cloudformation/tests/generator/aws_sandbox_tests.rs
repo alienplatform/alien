@@ -1109,9 +1109,11 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     }
 }
 
-/// Other sets grant role writes on `role/<prefix>-*`. The guard refuses them on every role carrying
-/// setup's sandbox tags, and both roles this template creates for a deny sandbox carry them —
-/// the egress operator role under a name CloudFormation generates, which no name match could hit.
+/// Other sets grant role writes on `role/<prefix>-*`, which names the management role and the
+/// sandbox roles alike. One guard refuses them on the management role by the name this template
+/// gives it; the other on every role carrying setup's sandbox tags, and both roles this template
+/// creates for a deny sandbox carry them — the egress operator role under a name CloudFormation
+/// generates, which no name match could hit.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
@@ -1120,6 +1122,7 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             "sandbox/management",
             "artifact-registry/management",
             alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+            alien_permissions::MANAGEMENT_ROLE_GUARD,
         ]),
     );
     stack.resources.insert(
@@ -1157,10 +1160,25 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
                 .unwrap_or_default()
         })
         .collect();
-    let denies: Vec<&Value> = statements
+    let role_name = serde_json::to_value(&template.resources["ManagementRole"].properties)
+        .expect("serializes")["RoleName"]
+        .clone();
+    assert_eq!(
+        role_name,
+        serde_json::json!({ "Fn::Sub": "${AWS::StackName}-management" })
+    );
+    let own_role = serde_json::json!([{
+        "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${AWS::StackName}-management"
+    }]);
+    let (own_role_denies, denies): (Vec<&Value>, Vec<&Value>) = statements
         .iter()
         .filter(|statement| statement["Effect"] == "Deny")
-        .collect();
+        .partition(|statement| statement["Resource"] == own_role);
+    assert_eq!(
+        own_role_denies.len(),
+        1,
+        "the management role may not rewrite itself: {statements:#?}"
+    );
     assert_eq!(denies.len(), 1, "{statements:#?}");
     assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
     assert_eq!(

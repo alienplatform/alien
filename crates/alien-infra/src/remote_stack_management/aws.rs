@@ -1142,12 +1142,16 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
-    /// them on every role carrying setup's sandbox tags, Live or Frozen, and keep PassRole.
+    /// them on itself, by the name it is created under, and on every role carrying setup's sandbox
+    /// tags, Live or Frozen, and keep PassRole.
     #[tokio::test]
     async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
+        let created_roles = Arc::new(Mutex::new(Vec::<String>::new()));
         let mut iam = MockIamApi::new();
-        iam.expect_create_role().returning(|request| {
+        let created = created_roles.clone();
+        iam.expect_create_role().returning(move |request| {
+            created.lock().unwrap().push(request.role_name.clone());
             Ok(CreateRoleResponse {
                 create_role_result: CreateRoleResult {
                     role: Role {
@@ -1241,10 +1245,22 @@ mod tests {
                     .unwrap_or_default()
             })
             .collect();
-        let denies: Vec<&serde_json::Value> = statements
-            .iter()
-            .filter(|statement| statement["Effect"] == "Deny")
-            .collect();
+        let created_roles = created_roles.lock().unwrap().clone();
+        assert_eq!(created_roles.len(), 1, "{created_roles:?}");
+        let own_role = serde_json::json!([format!(
+            "arn:aws:iam::123456789012:role/{}",
+            created_roles[0]
+        )]);
+        let (own_role_denies, denies): (Vec<&serde_json::Value>, Vec<&serde_json::Value>) =
+            statements
+                .iter()
+                .filter(|statement| statement["Effect"] == "Deny")
+                .partition(|statement| statement["Resource"] == own_role);
+        assert_eq!(
+            own_role_denies.len(),
+            1,
+            "the management role may not rewrite itself: {statements:#?}"
+        );
         assert_eq!(denies.len(), 1, "{statements:#?}");
         assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
         assert_eq!(

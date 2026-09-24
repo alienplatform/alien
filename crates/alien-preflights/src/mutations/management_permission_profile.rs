@@ -8,7 +8,7 @@ use alien_core::{
     Platform, ResourceLifecycle, Sandbox, Stack, StackState, Storage, Worker, WorkerTrigger,
 };
 use alien_error::AlienError;
-use alien_permissions::{get_permission_set, SANDBOX_SETUP_ROLES_GUARD};
+use alien_permissions::{get_permission_set, MANAGEMENT_ROLE_GUARD, SANDBOX_SETUP_ROLES_GUARD};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
@@ -99,35 +99,45 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
-        guard_sandbox_setup_roles(&mut stack, stack_state.platform);
+        add_role_guards(&mut stack, stack_state.platform);
 
         Ok(stack)
     }
 }
 
-/// Whatever else management is granted on `role/<prefix>-*`, the roles setup creates for AWS
-/// sandboxes stay setup's. A Deny can only narrow the identity, so an Override profile gets it too.
-fn guard_sandbox_setup_roles(stack: &mut Stack, platform: Platform) {
+/// Whatever else management is granted on `role/<prefix>-*`, it may not change its own role, nor
+/// the roles setup creates for AWS sandboxes. A Deny can only narrow the identity, so an Override
+/// profile gets them too.
+fn add_role_guards(stack: &mut Stack, platform: Platform) {
+    if platform != Platform::Aws {
+        return;
+    }
     let declares_a_sandbox = stack
         .resources()
         .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some());
-    if platform != Platform::Aws || !declares_a_sandbox {
-        return;
-    }
-    let add_guard = |profile: &mut PermissionProfile| {
-        let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
+    let guards: Vec<PermissionSetReference> = [
+        declares_a_sandbox.then_some(SANDBOX_SETUP_ROLES_GUARD),
+        Some(MANAGEMENT_ROLE_GUARD),
+    ]
+    .into_iter()
+    .flatten()
+    .map(PermissionSetReference::from_name)
+    .collect();
+    let add_guards = |profile: &mut PermissionProfile| {
         let global = profile.0.entry("*".to_string()).or_default();
-        if !global.contains(&guard) {
-            global.push(guard);
+        for guard in &guards {
+            if !global.contains(guard) {
+                global.push(guard.clone());
+            }
         }
     };
     match &mut stack.permissions.management {
         ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
-            add_guard(profile)
+            add_guards(profile)
         }
         ManagementPermissions::Auto => {
             let mut profile = PermissionProfile::new();
-            add_guard(&mut profile);
+            add_guards(&mut profile);
             stack.permissions.management = ManagementPermissions::Extend(profile);
         }
     }
@@ -574,6 +584,45 @@ mod tests {
                         platform == Platform::Aws && with_sandboxes,
                         "{platform:?}, {mode} mode, sandboxes: {with_sandboxes}: {:?}",
                         result_stack.permissions.management
+                    );
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn every_aws_stack_keeps_management_off_its_own_role() {
+        let guard = PermissionSetReference::from_name(MANAGEMENT_ROLE_GUARD);
+        for platform in [Platform::Aws, Platform::Gcp] {
+            for mode in ["auto", "extend", "override"] {
+                for with_a_resource in [true, false] {
+                    let mut builder = Stack::new("test-stack".to_string())
+                        .management(management_permissions_for_test(mode));
+                    if with_a_resource {
+                        builder = builder.add(
+                            alien_core::Kv::new("cache".to_string()).build(),
+                            ResourceLifecycle::Live,
+                        );
+                    }
+                    let result_stack = ManagementPermissionProfileMutation
+                        .mutate(
+                            builder.build(),
+                            &StackState::new(platform),
+                            &deployment_config_for_management_permission_test(),
+                        )
+                        .await
+                        .expect("management permission mutation should succeed");
+
+                    let guarded = result_stack
+                        .management()
+                        .profile()
+                        .and_then(|profile| profile.0.get("*"))
+                        .is_some_and(|grants| grants.contains(&guard));
+                    assert_eq!(
+                        guarded,
+                        platform == Platform::Aws,
+                        "{platform:?}, {mode} mode, resource: {with_a_resource}: {:?}",
+                        result_stack.management()
                     );
                 }
             }
@@ -1223,11 +1272,12 @@ mod tests {
         let mutation = ManagementPermissionProfileMutation;
         let result_stack = mutation.mutate(stack, &stack_state, &config).await.unwrap();
 
-        // Override profiles are authored explicitly and are not mutated.
+        // Override profiles are authored explicitly; only the role guards, which can only narrow the
+        // identity, are added.
         match result_stack.management() {
             ManagementPermissions::Override(profile) => {
                 let global_permissions = profile.0.get("*").unwrap();
-                assert_eq!(global_permissions.len(), 2);
+                assert_eq!(global_permissions.len(), 3);
 
                 let permission_names: Vec<String> = global_permissions
                     .iter()
@@ -1236,6 +1286,7 @@ mod tests {
 
                 assert!(permission_names.contains(&"storage/management".to_string()));
                 assert!(permission_names.contains(&"worker/management".to_string()));
+                assert!(permission_names.contains(&MANAGEMENT_ROLE_GUARD.to_string()));
                 // Should NOT have auto-generated worker/provision
                 assert!(!permission_names.contains(&"worker/provision".to_string()));
             }

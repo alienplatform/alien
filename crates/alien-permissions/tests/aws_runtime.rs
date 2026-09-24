@@ -877,3 +877,84 @@ fn the_sandbox_setup_roles_guard_denies_role_writes_on_setup_tagged_roles() {
         })
     );
 }
+
+/// Whether a `*` wildcard pattern matches `text`.
+fn wildcard_matches(pattern: &str, text: &str) -> bool {
+    match pattern.split_once('*') {
+        None => pattern == text,
+        Some((head, rest)) => {
+            text.starts_with(head)
+                && (0..=text.len() - head.len())
+                    .any(|skip| wildcard_matches(rest, &text[head.len() + skip..]))
+        }
+    }
+}
+
+/// Any role write a set grants the management identity on a pattern its own role matches is one it
+/// could use to rewrite that role, so the guard must deny it there.
+#[test]
+fn the_management_role_guard_covers_every_role_write_that_reaches_the_management_role() {
+    let management_role = "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-management";
+    let guard = get_permission_set(alien_permissions::MANAGEMENT_ROLE_GUARD)
+        .expect("the guard is registered");
+    let guard_statement = &guard.platforms.aws.as_ref().expect("the guard is AWS")[0];
+    assert!(!guard_statement.effect.is_allow());
+    assert_eq!(
+        guard_statement.binding.stack.as_ref().unwrap().resources,
+        [management_role]
+    );
+    let denied = guard_statement.grant.actions.as_ref().unwrap();
+
+    // Reads, a pass, and a create (which fails on a name already taken) leave the role as it is.
+    let is_role_write = |action: &str| {
+        action.starts_with("iam:")
+            && action.contains("Role")
+            && ![
+                "iam:Get",
+                "iam:List",
+                "iam:PassRole",
+                "iam:Create",
+                "iam:Simulate",
+            ]
+            .iter()
+            .any(|read| action.starts_with(read))
+    };
+    let mut reaching = Vec::new();
+    for id in alien_permissions::list_permission_set_ids() {
+        // The set that creates this role; setup holds it, never management, because the
+        // management resource is always setup-owned.
+        if id == "remote-stack-management/provision" {
+            continue;
+        }
+        let set = get_permission_set(id).unwrap();
+        for permission in set.platforms.aws.iter().flatten() {
+            if !permission.effect.is_allow() {
+                continue;
+            }
+            let Some(stack) = &permission.binding.stack else {
+                continue;
+            };
+            if !stack
+                .resources
+                .iter()
+                .any(|pattern| wildcard_matches(pattern, management_role))
+            {
+                continue;
+            }
+            for action in permission.grant.actions.iter().flatten() {
+                if is_role_write(action) {
+                    reaching.push(format!("{id}: {action}"));
+                    assert!(
+                        denied.contains(action),
+                        "{id} grants {action} on a pattern the management role matches, and the \
+                         guard does not deny it"
+                    );
+                }
+            }
+        }
+    }
+    assert!(
+        !reaching.is_empty(),
+        "the sets this guard exists for still grant role writes on role/<prefix>-*"
+    );
+}
