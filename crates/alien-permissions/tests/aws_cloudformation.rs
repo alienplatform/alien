@@ -438,8 +438,8 @@ fn test_aws_cloudformation_managing_account_id_substitution() {
     assert_eq!(ecr_statement.resource[0], expected_resource);
 }
 
-/// The CloudFormation form of the tag-on-create grant: `NotResource` alone, its partition
-/// resolved by the stack like every other ARN.
+/// The CloudFormation form of the tag-on-create grant: `NotResource` alone, its partition left a
+/// wildcard so the exclusion holds in every partition.
 #[test]
 fn the_sandbox_tag_on_create_renders_as_not_resource_only() {
     let permission_set = get_permission_set("sandbox/provision").expect("sandbox/provision");
@@ -457,9 +457,6 @@ fn the_sandbox_tag_on_create_renders_as_not_resource_only() {
     assert_eq!(tag_on_create.len(), 2);
     for statement in tag_on_create {
         assert!(statement.get("Resource").is_none(), "{statement}");
-        assert_eq!(
-            statement["NotResource"],
-            json!([{"Fn::Sub": "arn:${AWS::Partition}:lambda:*:*:*"}])
-        );
+        assert_eq!(statement["NotResource"], json!(["arn:*:lambda:*:*:*"]));
     }
 }

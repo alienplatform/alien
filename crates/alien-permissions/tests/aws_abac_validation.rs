@@ -835,7 +835,7 @@ fn lambda_tag_resource_is_never_granted_on_every_resource() {
                 if binding
                     .not_resources
                     .iter()
-                    .any(|pattern| pattern == "arn:aws:lambda:*:*:*")
+                    .any(|pattern| pattern == "arn:*:lambda:*:*:*")
                 {
                     tag_on_create += 1;
                 }

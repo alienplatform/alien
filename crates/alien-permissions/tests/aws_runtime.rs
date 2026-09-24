@@ -857,7 +857,7 @@ fn the_sandbox_tag_on_create_renders_as_not_resource_only(#[case] binding_target
         );
         assert_eq!(
             statement["NotResource"],
-            serde_json::json!(["arn:aws:lambda:*:*:*"])
+            serde_json::json!(["arn:*:lambda:*:*:*"])
         );
         assert!(statement.get("Resource").is_none(), "{statement}");
     }
