@@ -9,9 +9,9 @@ use crate::{
     emitter::{TfEmitter, TfFragment},
     emitters::aws::helpers::{
         aws_terraform_permission_context, downcast, emit_iam_role_policy_for_target_with_label,
-        iam_policy_name_sanitize, iam_role_block, iam_role_name_template, iam_role_policy_block,
-        jsonencode, nested_block, private_subnet_ids_expr, required_label,
-        resource_prefix_template, service_assume_role_policy, tags, vpc_id_expr,
+        iam_policy_name_sanitize, iam_role_block, iam_role_policy_block, jsonencode, nested_block,
+        private_subnet_ids_expr, required_label, resource_prefix_template,
+        service_assume_role_policy, tags, vpc_id_expr,
     },
     expr,
 };
@@ -201,9 +201,14 @@ impl TfEmitter for AwsSandboxEmitter {
         // Lambda assumes this to manage the connector's ENIs in the customer's VPC. The API
         // documents the permissions it must hold; the field being optional is not a promise
         // that AWS provisions an equivalent role on its own.
+        // Unclamped for the same reason as the build role: the direct path creates it under this
+        // exact name and the length check budgets for it.
         let operator_role = iam_role_block(
             &egress_label,
-            iam_role_name_template(&format!("{}-egress", sandbox.id())),
+            expr::template(sandbox_egress_name(
+                "${local.resource_prefix}",
+                sandbox.id(),
+            )),
             service_assume_role_policy(&["lambda.amazonaws.com"]),
             tags(ctx, "sandbox"),
         );

@@ -441,7 +441,7 @@ resource "aws_cloudcontrolapi_resource" "agents" {
 }
 
 resource "aws_iam_role" "agents_egress" {
-  name               = length(format("%s-%s", local.resource_prefix, "agents-egress")) <= 64 ? format("%s-%s", local.resource_prefix, "agents-egress") : format("%s-%s", substr(format("%s-%s", local.resource_prefix, "agents-egress"), 0, 55), substr(sha1(format("%s-%s", local.resource_prefix, "agents-egress")), 0, 8))
+  name               = "${local.resource_prefix}-agents-egress"
   assume_role_policy = jsonencode({ Version = "2012-10-17", Statement = [{ Effect = "Allow", Principal = { Service = "lambda.amazonaws.com" }, Action = "sts:AssumeRole" }] })
   tags = {
     "managed-by"    = "setup"

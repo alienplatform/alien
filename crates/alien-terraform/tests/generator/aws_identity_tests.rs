@@ -1200,6 +1200,11 @@ fn the_emitted_operator_role_matches_the_shared_builder() {
         sandbox_egress_operator_trust_policy(),
         "trust policy"
     );
+    assert_eq!(
+        evaluate_name(block_attribute(role, "name").expr()),
+        Value::from(sandbox_egress_name(PARITY_PREFIX, "agents")),
+        "the direct path finds the role by this name"
+    );
 }
 
 const PARITY_PREFIX: &str = "acme-parity";
@@ -1227,11 +1232,7 @@ fn evaluate_name(expression: &hcl::Expression) -> serde_json::Value {
 
 /// Evaluates a sandbox's registration `importData`. The build role resolves from its own `name`,
 /// so the direct side's derivation is compared against what the module would create.
-fn evaluate_registration(
-    sandbox_file: &hcl::Body,
-    expression: &hcl::Expression,
-) -> serde_json::Value {
-    use serde_json::Value;
+fn evaluate_registration(sandbox_file: &hcl::Body, expression: &hcl::Expression) -> Value {
     match expression {
         hcl::Expression::Bool(flag) => Value::from(*flag),
         hcl::Expression::Number(number) => {
@@ -1367,6 +1368,8 @@ fn the_emitted_registration_matches_the_direct_seed() {
     }
 }
 
+/// The ARN of the operator role the parity module creates; its name is pinned against
+/// `sandbox_egress_name` by `the_emitted_operator_role_matches_the_shared_builder`.
 const PARITY_OPERATOR_ARN: &str = "arn:aws-us-gov:iam::987654321098:role/acme-parity-agents-egress";
 const PARITY_SECURITY_GROUP: &str = "sg-0parity";
 const CREATED_SUBNETS: [&str; 2] = ["subnet-created-1", "subnet-created-2"];
