@@ -8,8 +8,8 @@ use alien_core::{
     standard_resource_tags, AwsRemoteStackManagementHeartbeatData, HeartbeatBackend,
     KubernetesCluster, ObservedHealth, Platform, ProviderLifecycleState, RemoteStackManagement,
     RemoteStackManagementHeartbeatData, RemoteStackManagementHeartbeatStatus,
-    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceOutputs,
-    ResourceStatus, Sandbox, Worker,
+    RemoteStackManagementOutputs, ResourceHeartbeat, ResourceHeartbeatData, ResourceLifecycle,
+    ResourceOutputs, ResourceStatus, Worker,
 };
 use alien_error::{AlienError, Context, ContextError, IntoAlienError};
 use alien_macros::controller;
@@ -678,6 +678,9 @@ impl AwsRemoteStackManagementController {
             let Some(resource_entry) = ctx.desired_stack.resources.get(resource_id) else {
                 continue;
             };
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
             let permission_context = Self::resource_scoped_management_permission_context(
                 ctx,
                 base_permission_context,
@@ -697,12 +700,7 @@ impl AwsRemoteStackManagementController {
                 else {
                     continue;
                 };
-                if permission_set.platforms.aws.is_none()
-                    || !alien_permissions::management_resource_scope_renders(
-                        resource_entry,
-                        &permission_set,
-                    )
-                {
+                if permission_set.platforms.aws.is_none() {
                     continue;
                 }
 
@@ -745,11 +743,6 @@ impl AwsRemoteStackManagementController {
             return Ok(
                 context.with_resource_name(format!("{}-{}", ctx.resource_prefix, resource_id))
             );
-        }
-
-        // The bare id: sandbox sets name `${stackPrefix}-${resourceName}` themselves.
-        if resource_entry.config.downcast_ref::<Sandbox>().is_some() {
-            return Ok(context.with_resource_name(resource_id.to_string()));
         }
 
         Ok(context)
@@ -1149,7 +1142,7 @@ mod tests {
     use crate::core::MockPlatformServiceProvider;
 
     /// Other sets grant role writes on `role/<prefix>-*`; direct setup's management role must deny
-    /// them on the sandbox's two setup roles and keep the build role passable.
+    /// them on every role carrying setup's sandbox tags, Live or Frozen, and keep PassRole.
     #[tokio::test]
     async fn direct_setup_keeps_a_sandboxs_setup_roles_out_of_managements_reach() {
         let documents = Arc::new(Mutex::new(Vec::<String>::new()));
@@ -1252,26 +1245,19 @@ mod tests {
             .iter()
             .filter(|statement| statement["Effect"] == "Deny")
             .collect();
-        let mut denied: Vec<&str> = denies
-            .iter()
-            .flat_map(|statement| statement["Resource"].as_array().expect("resources"))
-            .map(|resource| resource.as_str().expect("an ARN"))
-            .collect();
-        denied.sort();
+        assert_eq!(denies.len(), 1, "{statements:#?}");
+        assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
         assert_eq!(
-            denied,
-            [
-                "arn:aws:iam::123456789012:role/test-agents-build",
-                "arn:aws:iam::123456789012:role/test-agents-egress",
-                "arn:aws:iam::123456789012:role/test-frozen-box-build",
-                "arn:aws:iam::123456789012:role/test-frozen-box-egress",
-            ],
-            "{statements:#?}"
+            denies[0]["Condition"],
+            serde_json::json!({
+                "StringEquals": {
+                    "aws:ResourceTag/managed-by": "setup",
+                    "aws:ResourceTag/resource-type": "sandbox"
+                }
+            })
         );
         assert!(
-            denies
-                .iter()
-                .all(|statement| !statement.to_string().contains("iam:PassRole")),
+            !denies[0].to_string().contains("iam:PassRole"),
             "the build role must stay passable"
         );
     }

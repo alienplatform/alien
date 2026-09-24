@@ -828,11 +828,10 @@ fn condition_equals(
         .is_some_and(|value| value == expected)
 }
 
-/// The guard only ever refuses, and only on the one sandbox's two setup-created roles. An Allow
-/// slipped in here would reach the management identity for Frozen sandboxes too, because
-/// `management_resource_scope_renders` renders a deny-only set whatever the lifecycle.
+/// The guard only ever refuses, and only roles carrying the tags setup creates sandbox roles
+/// with; PassRole stays allowed so the build role can still reach an image build.
 #[test]
-fn the_sandbox_setup_roles_guard_denies_role_writes_on_exactly_two_roles() {
+fn the_sandbox_setup_roles_guard_denies_role_writes_on_setup_tagged_roles() {
     let guard = get_permission_set(alien_permissions::SANDBOX_SETUP_ROLES_GUARD)
         .expect("the guard is registered");
     assert!(
@@ -842,12 +841,11 @@ fn the_sandbox_setup_roles_guard_denies_role_writes_on_exactly_two_roles() {
     let context = PermissionContext::new()
         .with_stack_prefix("acme")
         .with_aws_account_id("123456789012")
-        .with_aws_region("us-east-1")
-        .with_resource_name("agents");
+        .with_aws_region("us-east-1");
 
     let policy = AwsRuntimePermissionsGenerator::new()
-        .generate_policy(guard, BindingTarget::Resource, &context)
-        .expect("the guard renders at resource scope");
+        .generate_policy(guard, BindingTarget::Stack, &context)
+        .expect("the guard renders at stack scope");
 
     assert_eq!(policy.statement.len(), 1);
     let statement = &policy.statement[0];
@@ -855,7 +853,6 @@ fn the_sandbox_setup_roles_guard_denies_role_writes_on_exactly_two_roles() {
     assert_eq!(
         statement.action,
         [
-            "iam:CreateRole",
             "iam:DeleteRole",
             "iam:PutRolePolicy",
             "iam:DeleteRolePolicy",
@@ -869,12 +866,14 @@ fn the_sandbox_setup_roles_guard_denies_role_writes_on_exactly_two_roles() {
             "iam:UntagRole",
         ]
     );
+    assert_eq!(statement.resource, ["*"]);
     assert_eq!(
-        statement.resource,
-        [
-            "arn:aws:iam::123456789012:role/acme-agents-build",
-            "arn:aws:iam::123456789012:role/acme-agents-egress",
-        ]
+        serde_json::to_value(&statement.condition).unwrap(),
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
+        })
     );
-    assert_eq!(statement.condition, None);
 }

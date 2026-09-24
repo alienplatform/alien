@@ -1108,39 +1108,34 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     }
 }
 
-/// Other sets grant role writes on `role/<prefix>-*`; the Deny keeps each sandbox's two setup roles
-/// out of that reach, for a Frozen sandbox as much as a Live one.
+/// Other sets grant role writes on `role/<prefix>-*`. The guard refuses them on every role carrying
+/// setup's sandbox tags, and both roles this template creates for a deny sandbox carry them —
+/// the egress operator role under a name CloudFormation generates, which no name match could hit.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
-    let stack = Stack::new("acme-guarded".to_string())
-        .management(alien_core::permissions::ManagementPermissions::extend(
-            alien_core::PermissionProfile::new()
-                .global(["sandbox/provision", "artifact-registry/management"])
-                .resource("agents", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD])
-                .resource("frozen-box", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD]),
-        ))
-        .add(
-            sandbox_fixture_with(
-                SandboxEgress::Allow,
-                "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip",
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    stack.permissions.management = alien_core::permissions::ManagementPermissions::extend(
+        alien_core::PermissionProfile::new().global([
+            "sandbox/management",
+            "artifact-registry/management",
+            alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+        ]),
+    );
+    stack.resources.insert(
+        "management".to_string(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                alien_core::RemoteStackManagement::new("management".to_string()).build(),
             ),
-            ResourceLifecycle::Live,
-        )
-        .add(
-            Sandbox {
-                id: "frozen-box".to_string(),
-                ..sandbox_fixture(SandboxEgress::Allow)
-            },
-            ResourceLifecycle::Frozen,
-        )
-        .add(
-            alien_core::RemoteStackManagement::new("management".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            remote_access: false,
+            enabled_when: None,
+        },
+    );
     let (template, _yaml) = render_built_ins_template(
         &stack,
-        StackSettings::default(),
+        settings,
         custom_resource_registration(),
         CloudFormationTarget::Aws,
         "aws",
@@ -1161,42 +1156,53 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
                 .unwrap_or_default()
         })
         .collect();
-    let denied: Vec<String> = statements
+    let denies: Vec<&Value> = statements
         .iter()
         .filter(|statement| statement["Effect"] == "Deny")
-        .flat_map(|statement| {
-            statement["Resource"]
-                .as_array()
-                .cloned()
-                .unwrap_or_else(|| vec![statement["Resource"].clone()])
-        })
-        .map(|resource| {
-            resource["Fn::Sub"]
-                .as_str()
-                .map_or(resource.to_string(), str::to_string)
-        })
         .collect();
-    let mut expected: Vec<String> = ["agents", "frozen-box"]
-        .iter()
-        .flat_map(|id| {
-            ["build", "egress"].map(|role| {
-                format!(
-                    "arn:${{AWS::Partition}}:iam::${{AWS::AccountId}}:role/${{AWS::StackName}}-{id}-{role}"
-                )
-            })
+    assert_eq!(denies.len(), 1, "{statements:#?}");
+    assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
+    assert_eq!(
+        denies[0]["Condition"],
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
         })
-        .collect();
-    let mut denied_sorted = denied.clone();
-    denied_sorted.sort();
-    expected.sort();
-    assert_eq!(denied_sorted, expected, "{statements:#?}");
+    );
     assert!(
-        statements
-            .iter()
-            .filter(|statement| statement["Effect"] == "Deny")
-            .all(|statement| !statement.to_string().contains("iam:PassRole")),
+        !denies[0].to_string().contains("iam:PassRole"),
         "the build role must stay passable"
     );
+
+    let sandbox_roles: Vec<(&String, Value)> = template
+        .resources
+        .iter()
+        .filter(|(name, resource)| {
+            name.starts_with("Agents") && resource.resource_type == "AWS::IAM::Role"
+        })
+        .map(|(name, resource)| {
+            (
+                name,
+                serde_json::to_value(&resource.properties).expect("serializes"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        sandbox_roles.len(),
+        2,
+        "the build and egress operator roles"
+    );
+    for (name, properties) in sandbox_roles {
+        let tags = properties["Tags"].as_array().expect("tags");
+        for (key, value) in [("managed-by", "setup"), ("resource-type", "sandbox")] {
+            assert!(
+                tags.contains(&serde_json::json!({ "Key": key, "Value": value })),
+                "{name} must carry {key}={value} for the guard to reach it: {tags:?}"
+            );
+        }
+    }
 }
 
 /// Storage is a remote-binding type too, so the same prefix match stripped `storage/heartbeat`

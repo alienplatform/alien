@@ -17,7 +17,7 @@ use crate::{
 };
 use alien_core::{
     import::EmitContext, ErrorData, KubernetesCluster, PermissionProfile, PermissionSetReference,
-    RemoteStackManagement, ResourceLifecycle, Result, Sandbox, Worker,
+    RemoteStackManagement, ResourceLifecycle, Result, Worker,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
 use alien_permissions::{
@@ -145,17 +145,15 @@ fn remote_management_policy_documents(ctx: &EmitContext<'_>) -> Result<Vec<CfExp
             let Some(resource_entry) = ctx.stack.resources.get(resource_id) else {
                 continue;
             };
+            if resource_entry.lifecycle != ResourceLifecycle::Live {
+                continue;
+            }
             let Some(permission_set) = permission_set_ref
                 .resolve(|name| alien_permissions::get_permission_set(name).cloned())
             else {
                 continue;
             };
-            if permission_set.platforms.aws.is_none()
-                || !alien_permissions::management_resource_scope_renders(
-                    resource_entry,
-                    &permission_set,
-                )
-            {
+            if permission_set.platforms.aws.is_none() {
                 continue;
             }
             let resource_context =
@@ -265,12 +263,10 @@ fn resource_scoped_aws_permission_context(
         return context.with_resource_name(format!("${{AWS::StackName}}-{resource_id}"));
     }
 
-    // The bare id: sandbox sets name `${stackPrefix}-${resourceName}` themselves.
     if resource_entry
         .config
         .downcast_ref::<KubernetesCluster>()
         .is_some()
-        || resource_entry.config.downcast_ref::<Sandbox>().is_some()
     {
         return context.with_resource_name(resource_id.to_string());
     }

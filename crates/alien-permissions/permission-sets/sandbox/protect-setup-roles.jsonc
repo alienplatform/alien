@@ -1,16 +1,16 @@
 {
   "id": "sandbox/protect-setup-roles",
-  "description": "Refuses changes to the IAM roles setup creates for one sandbox",
+  "description": "Refuses changes to the IAM roles setup creates for sandboxes",
   "platforms": {
     "aws": [
       {
-        // Role writes other sets grant on `role/${stackPrefix}-*` match these names, and provision
-        // may pass the build role, so this Deny stops management rewriting a role it can run code
-        // under. Named per sandbox because `*-build` also matches a Build's role; PassRole stays.
+        // Other sets grant role writes on `role/${stackPrefix}-*`, and provision may pass a
+        // sandbox's build role, so management could rewrite a role it runs code under. Matched by
+        // setup's tags, not names: a template may name these roles itself, and a sibling
+        // deployment's prefix can collide with this one's. PassRole stays.
         "effect": "Deny",
         "grant": {
           "actions": [
-            "iam:CreateRole",
             "iam:DeleteRole",
             "iam:PutRolePolicy",
             "iam:DeleteRolePolicy",
@@ -25,11 +25,14 @@
           ]
         },
         "binding": {
-          "resource": {
-            "resources": [
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-build",
-              "arn:aws:iam::${awsAccountId}:role/${stackPrefix}-${resourceName}-egress"
-            ]
+          "stack": {
+            "resources": ["*"],
+            "condition": {
+              "StringEquals": {
+                "aws:ResourceTag/${managedByTag}": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+              }
+            }
           }
         }
       }

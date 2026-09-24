@@ -904,43 +904,34 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     ),
 ];
 
-/// Other sets grant role writes on `role/<prefix>-*`; the Deny keeps each sandbox's two setup roles
-/// out of that reach, for a Frozen sandbox as much as a Live one.
+/// Other sets grant role writes on `role/<prefix>-*`. The guard refuses them on every role carrying
+/// setup's sandbox tags, and both roles the module creates for a deny sandbox carry them, however
+/// their names are built.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
-    let (network_stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Allow);
-    let live = Sandbox {
-        code: SandboxCode::Image {
-            image: "s3://acme-artifacts/sandbox-bundle/f00dcafe/bundle.zip".to_string(),
+    let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);
+    stack.permissions.management =
+        ManagementPermissions::extend(PermissionProfile::new().global([
+            "sandbox/management",
+            "artifact-registry/management",
+            alien_permissions::SANDBOX_SETUP_ROLES_GUARD,
+        ]));
+    stack.resources.insert(
+        "management".to_string(),
+        alien_core::ResourceEntry {
+            config: alien_core::Resource::new(
+                RemoteStackManagement::new("management".to_string()).build(),
+            ),
+            lifecycle: ResourceLifecycle::Frozen,
+            dependencies: vec![],
+            remote_access: false,
+            enabled_when: None,
         },
-        ..sandbox_fixture(SandboxEgress::Allow)
-    };
-    let frozen = Sandbox {
-        id: "frozen-box".to_string(),
-        ..sandbox_fixture(SandboxEgress::Allow)
-    };
-    let mut stack = Stack::new("acme-guarded".to_string())
-        .management(ManagementPermissions::extend(
-            PermissionProfile::new()
-                .global(["sandbox/provision", "artifact-registry/management"])
-                .resource("agents", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD])
-                .resource("frozen-box", [alien_permissions::SANDBOX_SETUP_ROLES_GUARD]),
-        ))
-        .add(live, ResourceLifecycle::Live)
-        .add(frozen, ResourceLifecycle::Frozen)
-        .add(
-            RemoteStackManagement::new("management".to_string()).build(),
-            ResourceLifecycle::Frozen,
-        )
-        .build();
-    for (id, entry) in network_stack.resources() {
-        if entry.config.downcast_ref::<Network>().is_some() {
-            stack.resources.insert(id.clone(), entry.clone());
-        }
-    }
+    );
     let module = render(&stack, TerraformTarget::Aws, settings);
 
-    let mut denied = Vec::new();
+    let mut denies = Vec::new();
+    let mut sandbox_role_tags = Vec::new();
     for (file, contents) in module.iter() {
         if !file.ends_with(".tf") {
             continue;
@@ -949,49 +940,76 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
             hcl::parse(contents).unwrap_or_else(|error| panic!("{file} parses: {error}"));
         for kind in ["aws_iam_policy", "aws_iam_role_policy"] {
             for block in resource_blocks(&body, kind) {
-                if !block.labels()[1].as_str().starts_with("management") {
-                    continue;
+                if block.labels()[1].as_str().starts_with("management") {
+                    collect_denies(jsonencoded(block_attribute(block, "policy")), &mut denies);
                 }
-                collect_denied_resources(
-                    jsonencoded(block_attribute(block, "policy")),
-                    &mut denied,
-                );
+            }
+        }
+        if file == "agents.tf" {
+            for role in resource_blocks(&body, "aws_iam_role") {
+                sandbox_role_tags.push((
+                    role.labels()[1].as_str().to_string(),
+                    block_attribute(role, "tags").expr().to_string(),
+                ));
             }
         }
     }
-    denied.sort();
-    let mut expected: Vec<String> = ["agents", "frozen-box"]
-        .iter()
-        .flat_map(|id| {
-            ["build", "egress"].map(|role| {
-                format!(
-                    "arn:aws:iam::${{data.aws_caller_identity.current.account_id}}:role/${{local.resource_prefix}}-{id}-{role}"
-                )
-            })
+    assert_eq!(denies.len(), 1, "{denies:#?}");
+    assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
+    assert_eq!(
+        denies[0]["Condition"],
+        serde_json::json!({
+            "StringEquals": {
+                "aws:ResourceTag/managed-by": "setup",
+                "aws:ResourceTag/resource-type": "sandbox"
+            }
         })
-        .collect();
-    expected.sort();
-    assert_eq!(denied, expected);
+    );
+    assert!(
+        !denies[0].to_string().contains("iam:PassRole"),
+        "the build role must stay passable"
+    );
+
+    assert_eq!(
+        sandbox_role_tags.len(),
+        2,
+        "the build and egress operator roles: {sandbox_role_tags:?}"
+    );
+    for (role, tags) in sandbox_role_tags {
+        let tags: hcl::Expression = hcl::from_str(&format!("x = {tags}"))
+            .map(|body: hcl::Body| body.attributes().next().unwrap().expr().clone())
+            .unwrap_or_else(|error| panic!("{role} tags parse: {error}"));
+        let hcl::Expression::Object(object) = tags else {
+            panic!("{role} tags must be an object");
+        };
+        for (key, value) in [("managed-by", "setup"), ("resource-type", "sandbox")] {
+            assert!(
+                object.iter().any(|(k, v)| {
+                    let k = match k {
+                        hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
+                        hcl::ObjectKey::Expression(expression) => {
+                            expression.to_string().trim_matches('"').to_string()
+                        }
+                        other => format!("{other:?}"),
+                    };
+                    k == key && v == &hcl::Expression::String(value.to_string())
+                }),
+                "{role} must carry {key}={value} for the guard to reach it: {object:?}"
+            );
+        }
+    }
     assert_terraform_valid(
         &module,
         "management_role_may_not_rewrite_sandbox_setup_roles",
     );
 }
 
-/// The `Resource` of every `Effect = "Deny"` statement under `expression`, as written.
-fn collect_denied_resources(expression: &hcl::Expression, denied: &mut Vec<String>) {
-    let text = |expression: &hcl::Expression| match expression {
-        hcl::Expression::String(text) => text.clone(),
-        hcl::Expression::TemplateExpr(template) => match template.as_ref() {
-            hcl::TemplateExpr::QuotedString(text) => text.clone(),
-            heredoc => panic!("a heredoc resource: {heredoc:?}"),
-        },
-        other => panic!("a resource the test cannot read: {other}"),
-    };
+/// Every `Effect = "Deny"` statement under `expression`, evaluated.
+fn collect_denies(expression: &hcl::Expression, denies: &mut Vec<serde_json::Value>) {
     match expression {
         hcl::Expression::Array(items) => {
             for item in items {
-                collect_denied_resources(item, denied);
+                collect_denies(item, denies);
             }
         }
         hcl::Expression::Object(object) => {
@@ -999,19 +1017,16 @@ fn collect_denied_resources(expression: &hcl::Expression, denied: &mut Vec<Strin
                 object.iter().find_map(|(key, value)| {
                     let key = match key {
                         hcl::ObjectKey::Identifier(identifier) => identifier.to_string(),
-                        hcl::ObjectKey::Expression(expression) => text(expression),
-                        other => panic!("a key the test cannot read: {other:?}"),
+                        hcl::ObjectKey::Expression(hcl::Expression::String(text)) => text.clone(),
+                        _ => return None,
                     };
                     (key == name).then_some(value)
                 })
             };
-            if field("Effect").map(text).as_deref() == Some("Deny") {
-                match field("Resource").expect("a Deny names its resources") {
-                    hcl::Expression::Array(items) => denied.extend(items.iter().map(text)),
-                    single => denied.push(text(single)),
-                }
+            if field("Effect") == Some(&hcl::Expression::String("Deny".to_string())) {
+                denies.push(evaluate_policy_expression(expression));
             } else if let Some(statements) = field("Statement") {
-                collect_denied_resources(statements, denied);
+                collect_denies(statements, denies);
             }
         }
         _ => {}

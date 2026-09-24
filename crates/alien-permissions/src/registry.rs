@@ -873,24 +873,5 @@ where
         .unwrap_or_default()
 }
 
-/// The set that refuses the management identity any write to one sandbox's setup-created roles.
+/// The set that refuses the management identity any write to the roles setup creates for sandboxes.
 pub const SANDBOX_SETUP_ROLES_GUARD: &str = "sandbox/protect-setup-roles";
-
-/// Whether a resource-scoped management ref renders onto the management identity itself.
-///
-/// A Live resource's grants do, because the identity provisions it. A Frozen resource's grants
-/// usually name what setup creates and are bound by that resource's own emitter once it exists;
-/// a set that only denies names nothing that must exist first, so it renders for either lifecycle.
-pub fn management_resource_scope_renders(
-    entry: &alien_core::ResourceEntry,
-    permission_set: &alien_core::permissions::PermissionSet,
-) -> bool {
-    entry.lifecycle == alien_core::ResourceLifecycle::Live
-        || permission_set
-            .platforms
-            .aws
-            .as_ref()
-            .is_some_and(|entries| {
-                !entries.is_empty() && entries.iter().all(|entry| !entry.effect.is_allow())
-            })
-}

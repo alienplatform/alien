@@ -99,8 +99,37 @@ impl StackMutation for ManagementPermissionProfileMutation {
                 stack.permissions.management = ManagementPermissions::Override(override_profile);
             }
         }
+        guard_sandbox_setup_roles(&mut stack, stack_state.platform);
 
         Ok(stack)
+    }
+}
+
+/// Whatever else management is granted on `role/<prefix>-*`, the roles setup creates for AWS
+/// sandboxes stay setup's. A Deny can only narrow the identity, so an Override profile gets it too.
+fn guard_sandbox_setup_roles(stack: &mut Stack, platform: Platform) {
+    let declares_a_sandbox = stack
+        .resources()
+        .any(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some());
+    if platform != Platform::Aws || !declares_a_sandbox {
+        return;
+    }
+    let add_guard = |profile: &mut PermissionProfile| {
+        let guard = PermissionSetReference::from_name(SANDBOX_SETUP_ROLES_GUARD);
+        let global = profile.0.entry("*".to_string()).or_default();
+        if !global.contains(&guard) {
+            global.push(guard);
+        }
+    };
+    match &mut stack.permissions.management {
+        ManagementPermissions::Extend(profile) | ManagementPermissions::Override(profile) => {
+            add_guard(profile)
+        }
+        ManagementPermissions::Auto => {
+            let mut profile = PermissionProfile::new();
+            add_guard(&mut profile);
+            stack.permissions.management = ManagementPermissions::Extend(profile);
+        }
     }
 }
 
@@ -165,15 +194,6 @@ fn generate_auto_management_profile(
                 // telemetry, and explicit policy-granted management are added
                 // independently.
             }
-        }
-
-        // Whatever else the profile grants on `role/<prefix>-*`, a sandbox's build and egress
-        // roles stay setup's. Keyed by the sandbox so the Deny names its two roles only.
-        if platform == Platform::Aws && resource_type == Sandbox::RESOURCE_TYPE.as_ref() {
-            resource_permission_set_ids
-                .entry(resource_id.clone())
-                .or_default()
-                .insert(SANDBOX_SETUP_ROLES_GUARD.to_string());
         }
 
         // Add heartbeat permissions if heartbeat is enabled (Auto or RequiresApproval)
@@ -495,7 +515,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn every_aws_sandbox_keeps_its_setup_roles_out_of_managements_reach() {
+    async fn every_aws_stack_with_a_sandbox_keeps_its_setup_roles_out_of_managements_reach() {
         let sandbox = |id: &str| {
             Sandbox::new(id.to_string())
                 .code(SandboxCode::Image {
@@ -508,44 +528,54 @@ mod tests {
                 })
                 .build()
         };
+        let guarded_globally = |management: &ManagementPermissions| {
+            let profile = match management {
+                ManagementPermissions::Auto => return false,
+                ManagementPermissions::Extend(profile)
+                | ManagementPermissions::Override(profile) => profile,
+            };
+            let at = |scope: &str| {
+                profile.0.get(scope).is_some_and(|refs| {
+                    refs.iter()
+                        .any(|permission| permission.id() == SANDBOX_SETUP_ROLES_GUARD)
+                })
+            };
+            assert!(
+                !at("live-box") && !at("frozen-box"),
+                "one tag-matched Deny covers every sandbox: {profile:?}"
+            );
+            at("*")
+        };
         for platform in [Platform::Aws, Platform::Gcp] {
-            for mode in ["auto", "extend"] {
-                let stack = Stack::new("test-stack".to_string())
-                    .add(sandbox("live-box"), ResourceLifecycle::Live)
-                    .add(sandbox("frozen-box"), ResourceLifecycle::Frozen)
-                    .management(management_permissions_for_test(mode))
-                    .build();
+            for mode in ["auto", "extend", "override"] {
+                for with_sandboxes in [true, false] {
+                    let mut builder = Stack::new("test-stack".to_string())
+                        .add(
+                            alien_core::Kv::new("cache".to_string()).build(),
+                            ResourceLifecycle::Live,
+                        )
+                        .management(management_permissions_for_test(mode));
+                    if with_sandboxes {
+                        builder = builder
+                            .add(sandbox("live-box"), ResourceLifecycle::Live)
+                            .add(sandbox("frozen-box"), ResourceLifecycle::Frozen);
+                    }
+                    let result_stack = ManagementPermissionProfileMutation
+                        .mutate(
+                            builder.build(),
+                            &StackState::new(platform),
+                            &deployment_config_for_management_permission_test(),
+                        )
+                        .await
+                        .expect("management permission mutation should succeed");
 
-                let result_stack = ManagementPermissionProfileMutation
-                    .mutate(
-                        stack,
-                        &StackState::new(platform),
-                        &deployment_config_for_management_permission_test(),
-                    )
-                    .await
-                    .expect("management permission mutation should succeed");
-                let profile = result_stack
-                    .management()
-                    .profile()
-                    .expect("a management profile is generated");
-
-                for sandbox_id in ["live-box", "frozen-box"] {
-                    let guarded = profile.0.get(sandbox_id).is_some_and(|refs| {
-                        refs.iter()
-                            .any(|permission| permission.id() == SANDBOX_SETUP_ROLES_GUARD)
-                    });
                     assert_eq!(
-                        guarded,
-                        platform == Platform::Aws,
-                        "{sandbox_id} on {platform:?} in {mode} mode: {profile:?}"
+                        guarded_globally(&result_stack.permissions.management),
+                        platform == Platform::Aws && with_sandboxes,
+                        "{platform:?}, {mode} mode, sandboxes: {with_sandboxes}: {:?}",
+                        result_stack.permissions.management
                     );
                 }
-                assert!(
-                    !profile.0.get("*").is_some_and(|refs| refs
-                        .iter()
-                        .any(|permission| permission.id() == SANDBOX_SETUP_ROLES_GUARD)),
-                    "the guard names one sandbox's roles, so it is never stack-wide"
-                );
             }
         }
     }
