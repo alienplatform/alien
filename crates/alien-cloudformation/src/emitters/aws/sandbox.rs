@@ -404,9 +404,9 @@ fn provisioned_at_runtime(ctx: &EmitContext<'_>) -> bool {
 
 /// What a runtime-provisioned sandbox registers.
 ///
-/// The image fields are absent because the image doesn't exist yet. In their place go what the
-/// controller cannot derive — the build role it passes and the bundle it builds from — plus the
-/// egress facts the setup stack still owns.
+/// The image fields are absent because the image doesn't exist yet. The build role and bundle
+/// stand in: the controller derives both, but reads these to know the image is its own to delete
+/// and when a bundle change needs a rebuild. The egress facts the setup stack still owns follow.
 fn runtime_import_ref(sandbox: &Sandbox, image_id: &str) -> Result<CfExpression> {
     // Mirrors the logical id `emit_resources` gives the build role. No shared constant ties them,
     // so a rename there leaves this GetAtt pointing at nothing and the template fails at deploy.
