@@ -165,9 +165,9 @@ impl SandboxBuildRole<'_> {
                 &["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"],
                 repository.arn(partition, self.region),
             ));
-            // The registry serves the base cross-account, so a base in this account is outside the
-            // contract and would let the build read this account's own repositories. The templates
-            // cannot know the account when they render, so a Deny refuses it on every path.
+            // A private base comes from another account's registry; one in this account would let the
+            // build read this account's own repositories. The templates cannot know the account when
+            // they render, so a Deny refuses it on every path.
             statement.push(SandboxBuildStatement {
                 sid: Some("DenySameAccountImagePull".to_string()),
                 effect: IamEffect::Deny,

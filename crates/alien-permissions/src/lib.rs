@@ -10,8 +10,8 @@ pub use error::*;
 pub use registry::{
     get_permission_set, has_permission_set, list_permission_set_ids,
     management_identity_global_refs, permission_set_covers_platform,
-    permission_set_reaches_a_sandbox, AZURE_SANDBOX_DATA_PLANE_ROLE,
-    MANAGEMENT_ROLE_GUARD, MICROVM_SESSION_LIFECYCLE_ACTIONS, SANDBOX_SETUP_ROLES_GUARD, SENSITIVE_MICROVM_ACTIONS,
+    permission_set_reaches_a_sandbox, AZURE_SANDBOX_DATA_PLANE_ROLE, MANAGEMENT_ROLE_GUARD,
+    MICROVM_SESSION_LIFECYCLE_ACTIONS, SANDBOX_SETUP_ROLES_GUARD, SENSITIVE_MICROVM_ACTIONS,
 };
 pub use variables::VariableInterpolator;
 

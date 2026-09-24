@@ -136,8 +136,8 @@ impl TfEmitter for AwsSandboxEmitter {
                     reason,
                 })
             })?;
-            // A live build was observed to be denied without these in its own policy: the
-            // registry's repository policy alone does not authorize the pull.
+            // ECR also requires these in the caller's own policy; the repository policy alone does not
+            // authorize the pull.
             build_statements.push(Expression::from_iter([
                 (
                     "Sid",
