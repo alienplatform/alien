@@ -2,7 +2,7 @@ use std::{sync::Arc, time::Duration};
 
 use alien_core::{
     ClientConfig, DeploymentConfig, DeploymentState, DeploymentStatus, InitialSetupAuthority,
-    ResourceLifecycle, RuntimeMetadata, StackState, StackStatus,
+    ResourceLifecycle, RuntimeMetadata, SetupScaffolding, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::setup_scaffolding::{self, ScaffoldingProgress, SetupScaffoldingContext};
@@ -108,12 +108,20 @@ async fn run_setup_teardown_after_handoff_inner(
         if scaffolding_steps >= policy.max_steps {
             let error = AlienError::new(ErrorData::StackExecutionFailed {
                 message: format!(
-                    "Setup scaffolding teardown did not complete within {} steps",
-                    policy.max_steps
+                    "Setup scaffolding teardown did not complete within {} steps; still waiting on {}",
+                    policy.max_steps,
+                    outstanding_scaffolding(state)
                 ),
             });
-            fail_setup_teardown(deployment_id, state, config, transport, error.clone()).await?;
-            return Err(error);
+            fail_setup_teardown(deployment_id, state, config, transport, error).await?;
+            return Ok(Some(RunnerResult {
+                loop_result: LoopResult {
+                    stop_reason: LoopStopReason::BudgetExceeded,
+                    outcome: LoopOutcome::Failure,
+                    final_status: state.status,
+                },
+                steps_executed: scaffolding_steps,
+            }));
         }
         checkpoint_setup_teardown_state(
             deployment_id,
@@ -284,6 +292,43 @@ async fn run_setup_teardown_after_handoff_inner(
         },
         steps_executed: policy.max_steps,
     }))
+}
+
+/// What the scaffolding record still holds, first object to be deleted first: the record drops
+/// each object once it is gone, so what remains is what AWS has not released.
+fn outstanding_scaffolding(state: &DeploymentState) -> String {
+    let outstanding: Vec<String> = state
+        .runtime_metadata
+        .iter()
+        .flat_map(|metadata| &metadata.setup_scaffolding)
+        .map(|(resource_id, scaffolding)| match scaffolding {
+            SetupScaffolding::AwsSandbox { egress: Some(egress), build_role_name } => {
+                match (&egress.connector_request, &egress.connector_arn, &egress.security_group_id) {
+                    (Some(request), _, _) => format!(
+                        "sandbox '{resource_id}': Cloud Control request '{request}' for its network connector"
+                    ),
+                    (None, Some(connector), _) => {
+                        format!("sandbox '{resource_id}': network connector '{connector}'")
+                    }
+                    (None, None, Some(group)) => format!(
+                        "sandbox '{resource_id}': security group '{group}', which network interfaces still hold"
+                    ),
+                    (None, None, None) => format!(
+                        "sandbox '{resource_id}': roles '{}' and '{build_role_name}'",
+                        egress.operator_role_name
+                    ),
+                }
+            }
+            SetupScaffolding::AwsSandbox { egress: None, build_role_name } => {
+                format!("sandbox '{resource_id}': role '{build_role_name}'")
+            }
+        })
+        .collect();
+    if outstanding.is_empty() {
+        "nothing recorded".to_string()
+    } else {
+        outstanding.join("; ")
+    }
 }
 
 /// How long to wait before asking again whether AWS has released what holds a scaffolding object.
@@ -819,7 +864,7 @@ mod tests {
             .allow_frozen_changes(false)
             .build();
 
-        let error = run_setup_teardown_after_handoff(
+        let result = run_setup_teardown_after_handoff(
             &mut state,
             &mut config,
             &ClientConfig::Aws(Box::new(AwsClientConfig::mock())),
@@ -833,11 +878,19 @@ mod tests {
             Some(Arc::new(provider)),
         )
         .await
-        .expect_err("a group that is never released fails teardown");
+        .expect("running out of steps is a failed run, not an error")
+        .expect("teardown ran");
 
+        assert_eq!(
+            result.loop_result.stop_reason,
+            LoopStopReason::BudgetExceeded
+        );
+        assert_eq!(result.loop_result.outcome, LoopOutcome::Failure);
+        let error = state.error.clone().expect("the failure is recorded");
         assert!(
-            error.message.contains("within 3 steps"),
-            "{}",
+            error.message.contains("within 3 steps")
+                && error.message.contains("security group 'sg-held'"),
+            "the failure names what AWS has not released: {}",
             error.message
         );
         assert_eq!(state.status, DeploymentStatus::TeardownFailed);
