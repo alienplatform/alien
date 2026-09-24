@@ -35,7 +35,7 @@ fn client(server: &MockServer) -> CloudControlClient {
     )
 }
 
-/// The wire shape of a JSON 1.0 call: one POST to `/`, the operation in `X-Amz-Target`.
+/// The wire format of a JSON 1.0 call: one POST to `/`, the operation in `X-Amz-Target`.
 fn operation(when: httpmock::When, name: &str) -> httpmock::When {
     when.method(POST)
         .path("/")

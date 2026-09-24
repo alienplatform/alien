@@ -159,7 +159,7 @@ fn management_differs_outside_gates(
     }
 }
 
-/// The new management permissions without the role guards this update is what adds.
+/// The new management permissions without the role guards this update adds.
 ///
 /// The preparing mutation adds the guards, which are Denies and so only narrow the management
 /// identity. A deployment prepared before one existed gains it in its prepared profile on the first
