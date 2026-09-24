@@ -131,10 +131,9 @@ fn management_differs_outside_gates(
     gated: &GatedContributions,
     allow_email_heartbeat_migration: bool,
 ) -> bool {
-    match (
-        &without_role_guards(old_management),
-        &without_role_guards(new_management),
-    ) {
+    let (old_management, new_management) =
+        comparable_without_role_guards(old_management, new_management);
+    match (&old_management, &new_management) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
             ManagementPermissions::Extend(old_profile),
@@ -159,19 +158,19 @@ fn management_differs_outside_gates(
 }
 
 /// Deny grants a later version adds at stack scope to every AWS stack's management profile. They
-/// only narrow the identity, and a version that does not know them must still accept a stack one
-/// that does prepared: a manager behind that version, or a rollback past it, re-prepares without them.
+/// only narrow the identity, and a version that does not know them must still accept a stack
+/// prepared by one that does: a manager behind it, or a rollback past it, re-prepares without them.
 const ROLE_GUARDS: [&str; 2] = [
     "remote-stack-management/protect-management-role",
     "sandbox/protect-setup-roles",
 ];
 
-/// `management` without [`ROLE_GUARDS`] at stack scope, folded back to `Auto` when a profile held
-/// nothing else.
-fn without_role_guards(management: &ManagementPermissions) -> ManagementPermissions {
+/// `management` without [`ROLE_GUARDS`] at stack scope, and whether it held nothing else: a
+/// guard-only `Extend` is what `Auto` becomes once the guards are derived.
+fn without_role_guards(management: &ManagementPermissions) -> (ManagementPermissions, bool) {
     let strip = |profile: &PermissionProfile| {
         let mut profile = profile.clone();
-        let mut stripped = false;
+        let mut guard_only = false;
         if let Some(grants) = profile.0.get_mut("*") {
             let before = grants.len();
             grants.retain(|grant| {
@@ -179,23 +178,49 @@ fn without_role_guards(management: &ManagementPermissions) -> ManagementPermissi
                     .iter()
                     .any(|guard| *grant == PermissionSetReference::from_name(*guard))
             });
-            stripped = grants.len() != before;
-            if stripped && grants.is_empty() {
+            if grants.len() != before && grants.is_empty() {
                 profile.0.shift_remove("*");
+                guard_only = profile.0.is_empty();
             }
         }
-        (profile, stripped)
+        (profile, guard_only)
     };
     match management {
-        ManagementPermissions::Auto => ManagementPermissions::Auto,
-        ManagementPermissions::Extend(profile) => match strip(profile) {
-            (profile, true) if profile.0.is_empty() => ManagementPermissions::Auto,
-            (profile, _) => ManagementPermissions::Extend(profile),
-        },
+        ManagementPermissions::Auto => (ManagementPermissions::Auto, false),
+        ManagementPermissions::Extend(profile) => {
+            let (profile, guard_only) = strip(profile);
+            (ManagementPermissions::Extend(profile), guard_only)
+        }
         ManagementPermissions::Override(profile) => {
-            ManagementPermissions::Override(strip(profile).0)
+            (ManagementPermissions::Override(strip(profile).0), false)
         }
     }
+}
+
+/// Each side without the role guards. A guard-only `Extend` reads as `Auto` against an `Auto`
+/// side, and as the empty `Extend` it is against anything else.
+fn comparable_without_role_guards(
+    old: &ManagementPermissions,
+    new: &ManagementPermissions,
+) -> (ManagementPermissions, ManagementPermissions) {
+    let (old_stripped, old_guard_only) = without_role_guards(old);
+    let (new_stripped, new_guard_only) = without_role_guards(new);
+    let fold =
+        |stripped: ManagementPermissions, guard_only: bool, other: &ManagementPermissions| {
+            if guard_only && matches!(other, ManagementPermissions::Auto) {
+                ManagementPermissions::Auto
+            } else {
+                stripped
+            }
+        };
+    (
+        fold(old_stripped, old_guard_only, &new_stripped),
+        fold(
+            new_stripped.clone(),
+            new_guard_only,
+            &without_role_guards(old).0,
+        ),
+    )
 }
 
 /// Accepts the one-way profile migration caused by registering the formerly
@@ -369,6 +394,10 @@ mod tests {
                 ManagementPermissions::Extend(
                     PermissionProfile::new().global([ROLE_GUARDS[0], "kv/management"]),
                 ),
+            ),
+            (
+                ManagementPermissions::Extend(PermissionProfile::new()),
+                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
             ),
             (
                 ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
