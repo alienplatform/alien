@@ -1109,11 +1109,9 @@ fn aws_remote_sandbox_management_role_heartbeats_without_reaching_a_session() {
     }
 }
 
-/// Other sets grant role writes on `role/<prefix>-*`, which names the management role and the
-/// sandbox roles alike. One guard refuses them on the management role by the name this template
-/// gives it; the other on every role carrying setup's sandbox tags, and both roles this template
-/// creates for a deny sandbox carry them — the egress operator role under a name CloudFormation
-/// generates, which no name match could hit.
+/// Other sets grant role writes on `role/<prefix>-*`. One guard refuses them on the management role
+/// by the name this template gives it; the other on every role carrying setup's sandbox tags, which
+/// both sandbox roles carry, including the egress operator role CloudFormation names itself.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);

@@ -294,8 +294,8 @@ async fn run_setup_teardown_after_handoff_inner(
     }))
 }
 
-/// What the scaffolding record still holds, first object to be deleted first: the record drops
-/// each object once it is gone, so what remains is what AWS has not released.
+/// The next object each sandbox's scaffolding teardown waits on. The record drops each object once
+/// it is gone, so this is what AWS has not released.
 fn outstanding_scaffolding(state: &DeploymentState) -> String {
     let outstanding: Vec<String> = state
         .runtime_metadata

@@ -904,10 +904,9 @@ const PARITY_CASES: [(ResourceLifecycle, &str, Option<&str>); 6] = [
     ),
 ];
 
-/// Other sets grant role writes on `role/<prefix>-*`, which names the management role and the
-/// sandbox roles alike. One guard refuses them on the management role by its name, which the prefix
-/// cap keeps short of a hash; the other on every role carrying setup's sandbox tags, and both roles
-/// the module creates for a deny sandbox carry them, however their names are built.
+/// Other sets grant role writes on `role/<prefix>-*`. One guard refuses them on the management role
+/// by its name, which the prefix cap keeps short of a hash; the other on every role carrying
+/// setup's sandbox tags, which both roles the module creates for a deny sandbox carry.
 #[test]
 fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
     let (mut stack, settings) = sandbox_stack("acme-guarded", SandboxEgress::Deny);

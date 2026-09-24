@@ -11,7 +11,7 @@
 //!
 //! It also refuses an id long enough that IAM's 64-character ceiling costs a suffix to a hash,
 //! which would leave the image build refused the role it needs at apply, and an id that takes the
-//! name of a sandbox's egress operator role.
+//! name of a deny sandbox's egress operator role.
 
 use crate::error::Result;
 use crate::{CheckResult, CompileTimeCheck};
@@ -260,10 +260,9 @@ mod tests {
         .success
     }
 
-    /// Pinned at the boundary, not near it: with a widest-prefix budget of 40, a deny sandbox's
-    /// 7-character `-egress` leaves 16 for the id and an open one's `-build` leaves 17, and every
-    /// constant in the arithmetic could drift several characters before a test using 6 and one
-    /// using 40 noticed.
+    /// Pinned at the boundary: with a widest prefix of 40, a deny sandbox's `-egress` leaves 16 for
+    /// the id and an open one's `-build` leaves 17. A test far from the edge would miss a constant
+    /// drifting by several characters.
     #[tokio::test]
     async fn the_length_boundary_is_where_the_arithmetic_says_it_is() {
         assert!(fits(deny_sandbox(&"r".repeat(16))).await);

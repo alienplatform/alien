@@ -159,13 +159,9 @@ fn management_differs_outside_gates(
     }
 }
 
-/// The new management permissions without the role guards this update adds.
-///
-/// The preparing mutation adds the guards, which are Denies and so only narrow the management
-/// identity. A deployment prepared before one existed gains it in its prepared profile on the first
-/// update; the installed role takes it the next time setup runs. A profile the mutation left
-/// `Auto` becomes `Extend` to hold them. Only the canonical references, only at stack scope:
-/// removing one, or anything added beside them, still reads as drift.
+/// The new management permissions without the role guards this update adds. They are Denies, so
+/// they only narrow the identity. Only the canonical references at stack scope are exempt: removing
+/// one, or anything added beside them, still reads as drift.
 fn without_added_role_guards(
     old: &ManagementPermissions,
     new: &ManagementPermissions,
