@@ -1082,9 +1082,26 @@ mod tests {
         stack.add(sandbox, ResourceLifecycle::Live).build()
     }
 
+    /// Changes from `installed` as setup recorded it.
     fn changes(installed: &Stack, target: &Stack, platform: Platform) -> Vec<String> {
-        super::super::changes_requiring_setup(&client_config(), installed, target, platform)
-            .unwrap()
+        let records = installed
+            .resources()
+            .map(|(id, _)| {
+                let record = SetupScaffolding::AwsSandbox {
+                    build_role_name: sandbox_build_role_name(PREFIX, id),
+                    egress: None,
+                };
+                (id.clone(), record)
+            })
+            .collect();
+        super::super::changes_requiring_setup(
+            &client_config(),
+            installed,
+            &records,
+            target,
+            platform,
+        )
+        .unwrap()
     }
 
     fn with(egress: SandboxEgress, bundle: &str) -> Sandbox {
@@ -1177,6 +1194,18 @@ mod tests {
                 Platform::Aws
             ),
             vec!["sandbox 'agents' is new, and setup creates its build role"]
+        );
+        assert_eq!(
+            super::super::changes_requiring_setup(
+                &client_config(),
+                &allow,
+                &BTreeMap::new(),
+                &allow,
+                Platform::Aws
+            )
+            .unwrap(),
+            vec!["sandbox 'agents' is new, and setup creates its build role"],
+            "declared but never recorded, setup has made nothing for it"
         );
     }
 

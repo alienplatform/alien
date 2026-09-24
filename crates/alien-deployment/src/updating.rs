@@ -3,11 +3,11 @@ use crate::{
 };
 use alien_core::{
     ComputeClusterOutputs, InitialSetupAuthority, Platform, ResourceLifecycle, ResourceStatus,
-    Stack, StackState, StackStatus,
+    SetupScaffolding, Stack, StackState, StackStatus,
 };
 use alien_error::{AlienError, Context};
 use alien_infra::{RunningResourcePolicy, StackExecutor};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use tracing::{debug, info};
 
 fn machines_deployment_has_zero_machines(platform: Platform, stack_state: &StackState) -> bool {
@@ -206,9 +206,14 @@ pub async fn handle_update_pending(
     }) {
         // With nothing installed to compare against, every scaffolded resource counts as new.
         let nothing_installed = Stack::new(mutated_stack.id.clone()).build();
+        let nothing_recorded = BTreeMap::new();
         refuse_changes_requiring_setup(
             &client_config,
             old_stack_for_comparison.unwrap_or(&nothing_installed),
+            current
+                .runtime_metadata
+                .as_ref()
+                .map_or(&nothing_recorded, |metadata| &metadata.setup_scaffolding),
             &mutated_stack,
             current.platform,
         )?;
@@ -240,12 +245,14 @@ pub async fn handle_update_pending(
 fn refuse_changes_requiring_setup(
     client_config: &alien_core::ClientConfig,
     installed_stack: &Stack,
+    records: &BTreeMap<String, SetupScaffolding>,
     target_stack: &Stack,
     platform: Platform,
 ) -> Result<()> {
     let changes = alien_infra::setup_scaffolding::changes_requiring_setup(
         client_config,
         installed_stack,
+        records,
         target_stack,
         platform,
     )
@@ -668,6 +675,22 @@ mod tests {
                 .0
         }
 
+        /// What setup recorded for `stack`'s sandboxes; the update check reads only that a
+        /// record exists.
+        fn recorded_for(stack: &Stack) -> BTreeMap<String, SetupScaffolding> {
+            stack
+                .resources()
+                .filter(|(_, entry)| entry.config.downcast_ref::<Sandbox>().is_some())
+                .map(|(id, _)| {
+                    let record = SetupScaffolding::AwsSandbox {
+                        build_role_name: format!("test-{id}-build"),
+                        egress: None,
+                    };
+                    (id.clone(), record)
+                })
+                .collect()
+        }
+
         fn release(stack: Stack, id: &str) -> ReleaseInfo {
             ReleaseInfo {
                 release_id: Some(id.to_string()),
@@ -692,6 +715,7 @@ mod tests {
                 environment_info: None,
                 runtime_metadata: Some(RuntimeMetadata {
                     initial_setup_authority: authority,
+                    setup_scaffolding: recorded_for(&installed),
                     prepared_stack: Some(prepared(installed).await),
                     ..Default::default()
                 }),

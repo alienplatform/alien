@@ -65,9 +65,13 @@ pub async fn reconcile(
 /// Why an update from `installed` to `target` needs setup to run first: a scaffolded resource that
 /// is new, or whose scaffolding would change. An update acts with the runtime identity, which is
 /// never granted what creating or changing scaffolding takes.
+///
+/// A resource `records` holds nothing for counts as new whatever `installed` says: the stack is
+/// what was declared, the record what setup made.
 pub fn changes_requiring_setup(
     client_config: &ClientConfig,
     installed: &Stack,
+    records: &BTreeMap<String, SetupScaffolding>,
     target: &Stack,
     platform: Platform,
 ) -> Result<Vec<String>> {
@@ -76,7 +80,8 @@ pub fn changes_requiring_setup(
         let installed_entry = installed
             .resources
             .get(resource_id)
-            .filter(|installed_entry| needs_setup_scaffolding(installed_entry));
+            .filter(|installed_entry| needs_setup_scaffolding(installed_entry))
+            .filter(|_| records.contains_key(resource_id));
         match scaffolded {
             #[cfg(feature = "aws")]
             Scaffolded::AwsSandbox(sandbox) => {
