@@ -131,7 +131,10 @@ fn management_differs_outside_gates(
     gated: &GatedContributions,
     allow_email_heartbeat_migration: bool,
 ) -> bool {
-    match (old_management, new_management) {
+    match (
+        &without_role_guards(old_management),
+        &without_role_guards(new_management),
+    ) {
         (ManagementPermissions::Auto, ManagementPermissions::Auto) => false,
         (
             ManagementPermissions::Extend(old_profile),
@@ -152,6 +155,46 @@ fn management_differs_outside_gates(
             ManagementPermissions::Override(new_profile),
         ) => profiles_differ_outside_gates(old_profile, new_profile, gated),
         _ => true,
+    }
+}
+
+/// Deny grants a later version adds at stack scope to every AWS stack's management profile. They
+/// only narrow the identity, and a version that does not know them must still accept a stack one
+/// that does prepared: a manager behind that version, or a rollback past it, re-prepares without them.
+const ROLE_GUARDS: [&str; 2] = [
+    "remote-stack-management/protect-management-role",
+    "sandbox/protect-setup-roles",
+];
+
+/// `management` without [`ROLE_GUARDS`] at stack scope, folded back to `Auto` when a profile held
+/// nothing else.
+fn without_role_guards(management: &ManagementPermissions) -> ManagementPermissions {
+    let strip = |profile: &PermissionProfile| {
+        let mut profile = profile.clone();
+        let mut stripped = false;
+        if let Some(grants) = profile.0.get_mut("*") {
+            let before = grants.len();
+            grants.retain(|grant| {
+                !ROLE_GUARDS
+                    .iter()
+                    .any(|guard| *grant == PermissionSetReference::from_name(*guard))
+            });
+            stripped = grants.len() != before;
+            if stripped && grants.is_empty() {
+                profile.0.shift_remove("*");
+            }
+        }
+        (profile, stripped)
+    };
+    match management {
+        ManagementPermissions::Auto => ManagementPermissions::Auto,
+        ManagementPermissions::Extend(profile) => match strip(profile) {
+            (profile, true) if profile.0.is_empty() => ManagementPermissions::Auto,
+            (profile, _) => ManagementPermissions::Extend(profile),
+        },
+        ManagementPermissions::Override(profile) => {
+            ManagementPermissions::Override(strip(profile).0)
+        }
     }
 }
 
@@ -294,6 +337,83 @@ mod tests {
     use alien_core::permissions::PermissionsConfig;
     use alien_core::{Email, Kv, ResourceLifecycle};
     use indexmap::IndexMap;
+
+    async fn passes(old: ManagementPermissions, new: ManagementPermissions) -> bool {
+        let stack = |management| {
+            Stack::new("s".to_string())
+                .management(management)
+                .add(
+                    Kv::new("cache".to_string()).build(),
+                    ResourceLifecycle::Frozen,
+                )
+                .build()
+        };
+        PermissionProfilesUnchangedCheck
+            .check(&stack(old), &stack(new))
+            .await
+            .expect("check should run")
+            .success
+    }
+
+    /// A deployment prepared by a version that adds the role guards is updated by one that does
+    /// not, and the reverse.
+    #[tokio::test]
+    async fn the_role_guards_are_not_read_as_drift_in_either_direction() {
+        for (without, with) in [
+            (
+                ManagementPermissions::Auto,
+                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
+            ),
+            (
+                ManagementPermissions::Extend(PermissionProfile::new().global(["kv/management"])),
+                ManagementPermissions::Extend(
+                    PermissionProfile::new().global([ROLE_GUARDS[0], "kv/management"]),
+                ),
+            ),
+            (
+                ManagementPermissions::Override(PermissionProfile::new().global(["kv/management"])),
+                ManagementPermissions::Override(
+                    PermissionProfile::new().global(["kv/management", ROLE_GUARDS[1]]),
+                ),
+            ),
+        ] {
+            assert!(
+                passes(with.clone(), without.clone()).await,
+                "{with:?} -> {without:?}"
+            );
+            assert!(
+                passes(without.clone(), with.clone()).await,
+                "{without:?} -> {with:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_role_guards_hide_no_other_change() {
+        for (old, new) in [
+            (
+                ManagementPermissions::Extend(PermissionProfile::new().global(ROLE_GUARDS)),
+                ManagementPermissions::Extend(PermissionProfile::new().global(["kv/data-write"])),
+            ),
+            (
+                ManagementPermissions::Auto,
+                ManagementPermissions::Extend(
+                    PermissionProfile::new().global([ROLE_GUARDS[0], "kv/data-write"]),
+                ),
+            ),
+            (
+                ManagementPermissions::Auto,
+                ManagementPermissions::Extend(
+                    PermissionProfile::new().resource("cache", [ROLE_GUARDS[0]]),
+                ),
+            ),
+        ] {
+            assert!(
+                !passes(old.clone(), new.clone()).await,
+                "{old:?} -> {new:?}"
+            );
+        }
+    }
 
     /// The deployer said no to a gated live resource: its scoped management
     /// grant leaves with it, and the update must not read that as drift.
