@@ -176,12 +176,8 @@ pub async fn handle_deleting(
 }
 
 /// Where a destroy goes when the runtime never started, or `None` when runtime cleanup has work.
-///
-/// Runtime cleanup acts on Live resources, on the Frozen types with a runtime share of their
-/// delete, and on the secrets it synced; it reaches the target through the management identity.
-/// While that identity has no outputs and none of those came up, it has nothing to do, and setup
-/// teardown removes what setup created under setup's own credentials. Fails closed on a resource
-/// with no recorded lifecycle.
+/// It has none while the management identity has no outputs and no Live resource, synced secrets
+/// vault or Frozen runtime-cleanup type came up. Fails closed on a missing lifecycle.
 pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentStatus> {
     let destroying = match current.status {
         DeploymentStatus::DeletePending | DeploymentStatus::Deleting => true,
@@ -216,7 +212,7 @@ pub fn destroy_without_runtime(current: &DeploymentState) -> Option<DeploymentSt
         ) {
             continue;
         }
-        // A Frozen sandbox's delete makes no cloud call; its image goes with setup's scaffolding.
+        // A sandbox's delete ends in Deleted, never TeardownRequired, so setup teardown runs all of it.
         let runtime_cleans_up = match lifecycle {
             ResourceLifecycle::Live => true,
             ResourceLifecycle::Frozen => {
