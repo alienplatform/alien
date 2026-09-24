@@ -1,9 +1,11 @@
 ---
 source: crates/alien-terraform/tests/generator/aws_identity_tests.rs
-expression: "serde_json::to_string_pretty(&[&own_role_denies[0],\n&denies[0]]).expect(\"serializes\")"
+expression: "serde_json::to_string_pretty(&guards).expect(\"serializes\")"
 ---
 [
   {
+    "Sid": "DenyManagementRoleChanges",
+    "Effect": "Deny",
     "Action": [
       "iam:DeleteRole",
       "iam:PutRolePolicy",
@@ -17,13 +19,13 @@ expression: "serde_json::to_string_pretty(&[&own_role_denies[0],\n&denies[0]]).e
       "iam:TagRole",
       "iam:UntagRole"
     ],
-    "Effect": "Deny",
     "Resource": [
       "arn:aws:iam::987654321098:role/acme-parity-management"
-    ],
-    "Sid": "DenyManagementRoleChanges"
+    ]
   },
   {
+    "Sid": "DenySandboxSetupRoleChanges",
+    "Effect": "Deny",
     "Action": [
       "iam:DeleteRole",
       "iam:PutRolePolicy",
@@ -36,17 +38,15 @@ expression: "serde_json::to_string_pretty(&[&own_role_denies[0],\n&denies[0]]).e
       "iam:UpdateRole",
       "iam:TagRole",
       "iam:UntagRole"
+    ],
+    "Resource": [
+      "*"
     ],
     "Condition": {
       "StringEquals": {
         "aws:ResourceTag/managed-by": "setup",
         "aws:ResourceTag/resource-type": "sandbox"
       }
-    },
-    "Effect": "Deny",
-    "Resource": [
-      "*"
-    ],
-    "Sid": "DenySandboxSetupRoleChanges"
+    }
   }
 ]

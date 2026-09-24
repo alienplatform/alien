@@ -967,9 +967,16 @@ fn the_management_role_may_not_rewrite_a_sandboxs_setup_roles() {
         "the management role may not rewrite itself"
     );
     assert_eq!(denies.len(), 1, "{denies:#?}");
+    // Typed, so the snapshot keeps field order whether or not a workspace build turns on
+    // serde_json's `preserve_order`, which reorders the raw `Value`'s keys.
+    let guards: Vec<alien_permissions::generators::AwsIamStatement> =
+        [&own_role_denies[0], &denies[0]]
+            .into_iter()
+            .map(|deny| serde_json::from_value(deny.clone()).expect("a deny is an IAM statement"))
+            .collect();
     insta::assert_snapshot!(
         "aws_management_role_guards",
-        serde_json::to_string_pretty(&[&own_role_denies[0], &denies[0]]).expect("serializes")
+        serde_json::to_string_pretty(&guards).expect("serializes")
     );
     assert_eq!(denies[0]["Resource"], serde_json::json!(["*"]));
     assert_eq!(
