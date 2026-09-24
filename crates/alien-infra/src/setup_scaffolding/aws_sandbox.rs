@@ -1,24 +1,29 @@
-//! An AWS sandbox's image-build role. `sandbox/provision` grants `iam:PassRole` and never
-//! `iam:CreateRole`: with it, the management identity could mint a Lambda-trusted role with any
-//! policy and pass it to a build running a customer-authored Dockerfile.
+//! `sandbox/provision` grants `iam:PassRole` and never `iam:CreateRole`: with it, the management
+//! identity could mint a Lambda-trusted role with any policy and pass it to a build running a
+//! customer-authored Dockerfile.
 
 use std::collections::BTreeMap;
 
 use alien_aws_clients::iam::{CreateRoleRequest, CreateRoleTag, IamApi, Role};
 use alien_client_core::ErrorData as CloudClientErrorData;
 use alien_core::import::data::AwsSandboxImportData;
+use alien_core::remote_bindings::{remote_binding_for_entry, remote_binding_is_deliverable};
 use alien_core::sandbox_build_role::{
     sandbox_build_role_arn, sandbox_build_role_name, SandboxBuildRole, SANDBOX_BUILD_POLICY_NAME,
 };
 use alien_core::{
-    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, ResourceLifecycle,
-    Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
+    setup_resource_tags, AwsSandboxEgressScaffolding, ClientConfig, Platform, RemoteBindings,
+    ResourceLifecycle, ResourceStatus, Sandbox, SandboxCode, SetupScaffolding, Stack, StackState,
 };
 use alien_error::{AlienError, Context, IntoAlienError};
+use alien_permissions::{generators::AwsRuntimePermissionsGenerator, PermissionContext};
 use tracing::info;
 
 use super::aws_sandbox_egress;
 use super::{ScaffoldingProgress, ScaffoldingSeed, SetupScaffoldingContext};
+use crate::core::state_utils::StackResourceStateExt as _;
+use crate::core::{aws_remote_access_policy, aws_remote_access_policy_name};
+use crate::remote_bindings::AwsRemoteBindingsController;
 use crate::sandbox::{aws_partition, sandbox_image_arn};
 use crate::{ErrorData, Result};
 
@@ -140,17 +145,147 @@ pub(super) async fn reconcile(
         let SetupScaffolding::AwsSandbox { egress, .. } = records
             .get_mut(&sandbox.id)
             .unwrap_or_else(|| unreachable!("recorded above"));
-        return aws_sandbox_egress::reconcile(
-            ctx,
-            aws,
-            &sandbox.id,
-            network_id,
-            stack_state,
-            egress,
-        )
-        .await;
+        if aws_sandbox_egress::reconcile(ctx, aws, &sandbox.id, network_id, stack_state, egress)
+            .await?
+            == ScaffoldingProgress::InProgress
+        {
+            return Ok(ScaffoldingProgress::InProgress);
+        }
     }
-    Ok(ScaffoldingProgress::Done)
+    remote_access(ctx, aws, iam.as_ref(), stack, stack_state, sandbox).await
+}
+
+/// Setup writes a Live sandbox's grant too: its image ARN needs no image to exist, and the runtime
+/// identity never writes IAM. No record holds it: the role's own delete removes every inline
+/// policy first.
+async fn remote_access(
+    ctx: &SetupScaffoldingContext<'_>,
+    aws: &alien_aws_clients::AwsClientConfig,
+    iam: &dyn IamApi,
+    stack: &Stack,
+    stack_state: &StackState,
+    sandbox: &Sandbox,
+) -> Result<ScaffoldingProgress> {
+    let wanted = remote_grant(stack, sandbox);
+    let declared = stack
+        .resources()
+        .find(|(_, entry)| entry.config.resource_type() == RemoteBindings::RESOURCE_TYPE)
+        .map(|(id, _)| id.as_str());
+    // Unpublishing the only published resource drops the Remote Bindings entry from the stack,
+    // but its role stays until a later step deletes it, so a revoke finds it in state.
+    let installed = || {
+        stack_state
+            .resources
+            .iter()
+            .find(|(_, state)| state.resource_type == RemoteBindings::RESOURCE_TYPE.as_ref())
+            .map(|(id, _)| id.as_str())
+    };
+    let Some(bindings_id) = declared.or_else(|| wanted.is_none().then(installed).flatten()) else {
+        return match wanted {
+            None => Ok(ScaffoldingProgress::Done),
+            Some(_) => Err(AlienError::new(ErrorData::ResourceConfigInvalid {
+                message: "the sandbox is published remotely, but the stack has no Remote \
+                          Bindings identity to grant it to"
+                    .to_string(),
+                resource_id: Some(sandbox.id.clone()),
+            })),
+        };
+    };
+    let Some(role_name) = remote_bindings_role(stack_state, bindings_id)? else {
+        return Ok(match wanted {
+            Some(_) => ScaffoldingProgress::InProgress,
+            None => ScaffoldingProgress::Done,
+        });
+    };
+    let policy_name = aws_remote_access_policy_name(&sandbox.id);
+    let applied = applied_policy(iam, &role_name, &policy_name, &sandbox.id).await?;
+
+    let Some(definition) = wanted else {
+        if applied.is_none() {
+            return Ok(ScaffoldingProgress::Done);
+        }
+        match iam.delete_role_policy(&role_name, &policy_name).await {
+            Ok(()) => {}
+            Err(error) if is_not_found(&error) => {}
+            Err(error) => {
+                return Err(error).context(ErrorData::CloudPlatformError {
+                    message: format!(
+                        "Failed to revoke remote access policy '{policy_name}' from role \
+                         '{role_name}'"
+                    ),
+                    resource_id: Some(sandbox.id.clone()),
+                });
+            }
+        }
+        info!(sandbox_id = %sandbox.id, role = %role_name, "Revoked the sandbox's remote access");
+        return Ok(ScaffoldingProgress::InProgress);
+    };
+
+    let permission_context = PermissionContext::new()
+        .with_aws_account_id(aws.account_id.clone())
+        .with_aws_region(aws.region.clone())
+        .with_stack_prefix(ctx.resource_prefix.to_string())
+        .with_resource_id(sandbox.id.clone())
+        .with_resource_name(sandbox.id.clone());
+    let policy = serde_json::to_value(aws_remote_access_policy(
+        &AwsRuntimePermissionsGenerator::new(),
+        definition,
+        &permission_context,
+        &sandbox.id,
+    )?)
+    .into_alien_error()
+    .context(serialize_failed(&sandbox.id))?;
+    if applied.as_ref() == Some(&policy) {
+        return Ok(ScaffoldingProgress::Done);
+    }
+    iam.put_role_policy(&role_name, &policy_name, &policy.to_string())
+        .await
+        .context(ErrorData::CloudPlatformError {
+            message: format!(
+                "Failed to apply remote access policy '{policy_name}' to role '{role_name}'"
+            ),
+            resource_id: Some(sandbox.id.clone()),
+        })?;
+    info!(sandbox_id = %sandbox.id, role = %role_name, "Granted the sandbox's remote access");
+    Ok(ScaffoldingProgress::InProgress)
+}
+
+/// The remote grant setup owes this sandbox: the one the template setups render for it.
+fn remote_grant(
+    stack: &Stack,
+    sandbox: &Sandbox,
+) -> Option<&'static alien_core::remote_bindings::RemoteBindingDefinition> {
+    stack
+        .resources
+        .get(&sandbox.id)
+        .filter(|entry| remote_binding_is_deliverable(entry))
+        .and_then(remote_binding_for_entry)
+}
+
+/// The role a Remote Bindings controller has created, or `None` while it is still being created.
+fn remote_bindings_role(stack_state: &StackState, bindings_id: &str) -> Result<Option<String>> {
+    let Some(state) = stack_state.resources.get(bindings_id) else {
+        return Ok(None);
+    };
+    let role_name = match state.internal_state {
+        Some(_) => {
+            state
+                .get_internal_controller_typed::<AwsRemoteBindingsController>()?
+                .role_name
+        }
+        None => None,
+    };
+    match role_name {
+        Some(role_name) => Ok(Some(role_name)),
+        None if state.status != ResourceStatus::Running => Ok(None),
+        None => Err(AlienError::new(ErrorData::InfrastructureError {
+            message: format!(
+                "Remote Bindings resource '{bindings_id}' is running but records no role"
+            ),
+            operation: Some("read_remote_bindings_role".to_string()),
+            resource_id: Some(bindings_id.to_string()),
+        })),
+    }
 }
 
 pub(super) async fn applied_policy(
@@ -233,10 +368,14 @@ pub(super) fn setup_inputs(
         .into_alien_error()
         .context(serialize_failed(&sandbox.id))?;
     let network = aws_sandbox_egress::egress_network(stack, sandbox)?;
+    // An update that stops publishing keeps the setup-owned Remote Bindings role, so without
+    // this the grant would outlive the declaration.
+    let grant = remote_grant(stack, sandbox).map(|definition| definition.permission_set);
     Ok(vec![
         ("egress", egress),
         ("egress network", serde_json::json!(network)),
         ("build role policy", policy),
+        ("remote grant", serde_json::json!(grant)),
     ])
 }
 
@@ -1315,6 +1454,29 @@ mod tests {
         );
     }
 
+    /// Publishing adds the setup-owned Remote Bindings role and so is refused on its own; an
+    /// update that only stops publishing keeps that role, and only this input refuses it.
+    #[test]
+    fn publishing_or_unpublishing_a_sandbox_needs_setup() {
+        let published = |remote_access: bool| {
+            let mut stack = stack_of(sandbox(), None);
+            stack.resources.get_mut("agents").unwrap().remote_access = remote_access;
+            stack
+        };
+        assert_eq!(
+            changes(&published(true), &published(false), Platform::Aws),
+            vec!["sandbox 'agents' changes its remote grant"]
+        );
+        assert_eq!(
+            changes(&published(false), &published(true), Platform::Aws),
+            vec!["sandbox 'agents' changes its remote grant"]
+        );
+        assert_eq!(
+            changes(&published(true), &published(true), Platform::Aws),
+            Vec::<String>::new()
+        );
+    }
+
     #[test]
     fn a_new_bundle_version_or_session_policy_needs_no_setup() {
         let installed = stack_of(with(SandboxEgress::Deny, BUNDLE_URI), Some("net"));
@@ -1418,5 +1580,275 @@ mod tests {
             passed_arn,
             format!("arn:aws:iam::123456789012:role/{created_name}")
         );
+    }
+
+    const ACCESS_ROLE: &str = "test-access";
+    const GRANT_POLICY: &str = "alien-agents-remote-access";
+    const IMAGE_ARN: &str = "arn:aws:lambda:us-east-1:123456789012:microvm-image:test-agents";
+
+    fn published_stack(remote_access: bool) -> Stack {
+        let mut stack = Stack::new("acme".to_string())
+            .add(sandbox(), ResourceLifecycle::Live)
+            .add(
+                RemoteBindings::new("access".to_string()).build(),
+                ResourceLifecycle::Frozen,
+            )
+            .build();
+        stack.resources.get_mut("agents").unwrap().remote_access = remote_access;
+        stack
+    }
+
+    /// The Remote Bindings resource as its controller persists it: in `status`, holding `role`.
+    fn access_state(status: alien_core::ResourceStatus, role: Option<&str>) -> StackState {
+        let mut state = StackState::new(Platform::Aws);
+        state.resource_prefix = PREFIX.to_string();
+        let mut access = alien_core::StackResourceState::builder()
+            .resource_type(RemoteBindings::RESOURCE_TYPE.to_string())
+            .status(status)
+            .config(alien_core::Resource::new(
+                RemoteBindings::new("access".to_string()).build(),
+            ))
+            .lifecycle(ResourceLifecycle::Frozen)
+            .build();
+        access
+            .set_internal_controller(Some(Box::new(AwsRemoteBindingsController {
+                role_arn: role.map(|role| format!("arn:aws:iam::123456789012:role/{role}")),
+                role_name: role.map(str::to_string),
+                ..Default::default()
+            })))
+            .unwrap();
+        state.resources.insert("access".to_string(), access);
+        state
+    }
+
+    fn created_access() -> StackState {
+        access_state(alien_core::ResourceStatus::Running, Some(ACCESS_ROLE))
+    }
+
+    /// A verified build role, plus the access role holding `applied` under the grant's name. Puts
+    /// and deletes on the access role are expected exactly `puts` and `deletes` times.
+    fn with_access_role(applied: Option<Value>, puts: usize, deletes: usize) -> MockIamApi {
+        with_access_role_answering(applied, puts, deletes, || Ok(()))
+    }
+
+    fn with_access_role_answering(
+        applied: Option<Value>,
+        puts: usize,
+        deletes: usize,
+        put_answer: fn() -> alien_client_core::Result<()>,
+    ) -> MockIamApi {
+        let mut iam = existing(
+            ROLE_ARN,
+            expected_trust(),
+            &[SANDBOX_BUILD_POLICY_NAME],
+            &[],
+            0,
+        );
+        iam.expect_get_role_policy()
+            .withf(|role_name, policy_name| role_name == ACCESS_ROLE && policy_name == GRANT_POLICY)
+            .returning(move |role_name, policy_name| {
+                let document = applied.clone().ok_or_else(not_found)?;
+                Ok(GetRolePolicyResponse {
+                    get_role_policy_result: GetRolePolicyResult {
+                        role_name: role_name.to_string(),
+                        policy_name: policy_name.to_string(),
+                        policy_document: urlencoding::encode(&document.to_string()).into(),
+                    },
+                })
+            });
+        iam.expect_put_role_policy()
+            .withf(|role_name, policy_name, document| {
+                role_name == ACCESS_ROLE
+                    && policy_name == GRANT_POLICY
+                    && grants_the_image(&serde_json::from_str(document).unwrap())
+            })
+            .times(puts)
+            .returning(move |_, _, _| put_answer());
+        iam.expect_delete_role_policy()
+            .withf(|role_name, policy_name| role_name == ACCESS_ROLE && policy_name == GRANT_POLICY)
+            .times(deletes)
+            .returning(|_, _| Ok(()));
+        iam
+    }
+
+    /// The grant starts sessions of this sandbox's image and names no other.
+    fn grants_the_image(policy: &Value) -> bool {
+        let statements = policy["Statement"].as_array().unwrap();
+        let starts = statements.iter().any(|statement| {
+            statement["Action"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("lambda:RunMicrovm"))
+                && statement["Resource"] == json!([IMAGE_ARN])
+        });
+        let images: Vec<&Value> = statements
+            .iter()
+            .flat_map(|statement| statement["Resource"].as_array().unwrap())
+            .filter(|resource| resource.as_str().unwrap().contains(":microvm-image:"))
+            .collect();
+        starts && images.iter().all(|resource| *resource == IMAGE_ARN)
+    }
+
+    async fn published_step(
+        iam: MockIamApi,
+        stack: &Stack,
+        stack_state: &StackState,
+    ) -> ScaffoldingProgress {
+        try_published_step(iam, stack, stack_state).await.unwrap()
+    }
+
+    async fn try_published_step(
+        iam: MockIamApi,
+        stack: &Stack,
+        stack_state: &StackState,
+    ) -> Result<ScaffoldingProgress> {
+        let provider = provider(iam);
+        let client_config = client_config();
+        let ctx = SetupScaffoldingContext {
+            client_config: &client_config,
+            service_provider: &provider,
+            resource_prefix: PREFIX,
+        };
+        reconcile(
+            &ctx,
+            stack,
+            stack_state,
+            &sandbox(),
+            ResourceLifecycle::Live,
+            &mut BTreeMap::new(),
+        )
+        .await
+    }
+
+    /// The grant as the helper every other remote resource uses renders it.
+    fn granted() -> Value {
+        let client_config = client_config();
+        let ClientConfig::Aws(aws) = &client_config else {
+            unreachable!()
+        };
+        let context = PermissionContext::new()
+            .with_aws_account_id(aws.account_id.clone())
+            .with_aws_region(aws.region.clone())
+            .with_stack_prefix(PREFIX.to_string())
+            .with_resource_id("agents".to_string())
+            .with_resource_name("agents".to_string());
+        serde_json::to_value(
+            aws_remote_access_policy(
+                &AwsRuntimePermissionsGenerator::new(),
+                remote_binding_for_entry(&published_stack(true).resources["agents"]).unwrap(),
+                &context,
+                "agents",
+            )
+            .unwrap(),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn a_published_live_sandbox_is_granted_on_the_access_role() {
+        let progress = published_step(
+            with_access_role(None, 1, 0),
+            &published_stack(true),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+    }
+
+    #[tokio::test]
+    async fn a_grant_already_in_place_is_not_written_again() {
+        let progress = published_step(
+            with_access_role(Some(granted()), 0, 0),
+            &published_stack(true),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::Done);
+    }
+
+    #[tokio::test]
+    async fn the_grant_waits_for_the_access_role_this_setup_creates() {
+        let progress = published_step(
+            with_access_role(None, 0, 0),
+            &published_stack(true),
+            &access_state(alien_core::ResourceStatus::Provisioning, None),
+        )
+        .await;
+        assert_eq!(
+            progress,
+            ScaffoldingProgress::InProgress,
+            "setup must not finish while the grant is owed"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_sandbox_no_longer_published_has_its_grant_revoked() {
+        let progress = published_step(
+            with_access_role(Some(granted()), 0, 1),
+            &published_stack(false),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
+
+        let progress = published_step(
+            with_access_role(None, 0, 0),
+            &published_stack(false),
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::Done);
+    }
+
+    /// A role recorded as created that IAM no longer has is an error, not a wait: nothing else
+    /// would ever end the wait.
+    #[tokio::test]
+    async fn a_grant_iam_refuses_fails_setup() {
+        let error = try_published_step(
+            with_access_role_answering(None, 1, 0, || Err(not_found())),
+            &published_stack(true),
+            &created_access(),
+        )
+        .await
+        .expect_err("a vanished access role must fail setup");
+        assert!(error.to_string().contains(GRANT_POLICY));
+    }
+
+    #[tokio::test]
+    async fn a_running_access_resource_with_no_role_fails_setup() {
+        let error = try_published_step(
+            with_access_role(None, 0, 0),
+            &published_stack(true),
+            &access_state(alien_core::ResourceStatus::Running, None),
+        )
+        .await
+        .expect_err("a running access resource that records no role must not be waited on");
+        assert!(error.to_string().contains("records no role"));
+    }
+
+    #[tokio::test]
+    async fn a_published_sandbox_in_a_stack_with_no_access_resource_fails_setup() {
+        let mut stack = Stack::new("acme".to_string())
+            .add(sandbox(), ResourceLifecycle::Live)
+            .build();
+        stack.resources.get_mut("agents").unwrap().remote_access = true;
+        let error = try_published_step(with_access_role(None, 0, 0), &stack, &created_access())
+            .await
+            .expect_err("a grant with nowhere to go must fail setup");
+        assert!(error.to_string().contains("no Remote Bindings identity"));
+    }
+
+    /// Preflight drops the Remote Bindings entry once nothing is published, so the revoke must
+    /// find the role through state.
+    #[tokio::test]
+    async fn unpublishing_the_only_published_sandbox_revokes_through_state() {
+        let stack = stack_of(sandbox(), None);
+        let progress = published_step(
+            with_access_role(Some(granted()), 0, 1),
+            &stack,
+            &created_access(),
+        )
+        .await;
+        assert_eq!(progress, ScaffoldingProgress::InProgress);
     }
 }
