@@ -492,6 +492,11 @@ impl Ec2Client {
                 resource_type: "RouteTableAssociation".into(),
                 resource_name: resource.into(),
             },
+            // A revoke naming a rule the group no longer holds.
+            "InvalidPermission.NotFound" => ErrorData::RemoteResourceNotFound {
+                resource_type: "SecurityGroupRule".into(),
+                resource_name: resource.into(),
+            },
             "InvalidVolume.NotFound" | "InvalidVolumeID.NotFound" => {
                 ErrorData::RemoteResourceNotFound {
                     resource_type: "Volume".into(),
@@ -3743,6 +3748,31 @@ pub struct GetConsoleOutputResponse {
     pub output: Option<String>,
     /// The time at which the output was last updated.
     pub timestamp: Option<String>,
+}
+
+#[cfg(test)]
+mod error_mapping_tests {
+    use super::*;
+
+    fn mapped(code: &str) -> Option<ErrorData> {
+        let body = format!(
+            "<Response><Errors><Error><Code>{code}</Code><Message>m</Message></Error></Errors>\
+             <RequestID>r</RequestID></Response>"
+        );
+        Ec2Client::map_ec2_error(StatusCode::BAD_REQUEST, &body, "op", "sg-1", None)
+    }
+
+    #[test]
+    fn security_group_rule_codes_map_to_their_kind() {
+        assert!(matches!(
+            mapped("InvalidPermission.NotFound"),
+            Some(ErrorData::RemoteResourceNotFound { .. })
+        ));
+        assert!(matches!(
+            mapped("InvalidPermission.Duplicate"),
+            Some(ErrorData::RemoteResourceConflict { .. })
+        ));
+    }
 }
 
 #[cfg(test)]
