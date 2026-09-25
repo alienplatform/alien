@@ -5514,6 +5514,7 @@ spec:
     metadata:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
+        alien.dev/log-collector-exclude: "true"
         {{- with .Values.runtime.podLabels }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -5838,7 +5839,6 @@ data:
     [INPUT]
         Name              tail
         Path              /var/log/pods/{{ .Release.Namespace }}_*/*/*.log
-        Exclude_Path      /var/log/pods/{{ .Release.Namespace }}_{{ include "deployment.fullname" . }}-*/*/*.log
         Path_Key          filename
         multiline.parser  docker, cri
         Tag               kube.*
@@ -5856,6 +5856,11 @@ data:
         Keep_Log            On
         Labels              On
         Annotations         Off
+
+    [FILTER]
+        Name                grep
+        Match               kube.*
+        Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$
 
     {{- $podLabelKey := .Values.logCollector.scope.podLabelKey -}}
     {{- $podLabelValue := .Values.logCollector.scope.podLabelValue -}}
@@ -5911,6 +5916,7 @@ spec:
       labels:
         {{- include "deployment.labels" . | nindent 8 }}
         app.kubernetes.io/component: whitelabeled-log-collector
+        alien.dev/log-collector-exclude: "true"
     spec:
       serviceAccountName: {{ include "deployment.fullname" . }}-whitelabeled-log-collector
       tolerations:

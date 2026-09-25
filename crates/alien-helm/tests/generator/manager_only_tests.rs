@@ -56,6 +56,13 @@ fn log_collector_requires_a_scope_and_can_select_an_existing_pod_label() {
     assert!(default_render.stdout.contains(
         "Regex               $kubernetes['labels']['alien.dev/deployment'] ^test-release$"
     ));
+    assert!(default_render.stdout.contains(
+        "Exclude             $kubernetes['labels']['alien.dev/log-collector-exclude'] ^true$"
+    ));
+    assert!(!default_render.stdout.contains("Exclude_Path"));
+    assert!(default_render
+        .stdout
+        .contains("alien.dev/log-collector-exclude: \"true\""));
 
     let selected_values = default_values
         .replacen("    podLabelKey: \"\"", "    podLabelKey: app", 1)
