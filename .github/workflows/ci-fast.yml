@@ -162,7 +162,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -360,7 +360,7 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
         with:
-          bun-version: "1.4.0"
+          bun-version: "1.4.2"
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
