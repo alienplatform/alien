@@ -262,6 +262,7 @@ export type { KubernetesPodRuntimeUnitStatus } from "./kubernetes-pod-runtime-un
 export type { KubernetesRouteProfile } from "./kubernetes-route-profile-schema.js";
 export type { KubernetesRouteProviderOptions } from "./kubernetes-route-provider-options-schema.js";
 export type { KubernetesSandboxHeartbeatData } from "./kubernetes-sandbox-heartbeat-data-schema.js";
+export type { KubernetesSecretMount } from "./kubernetes-secret-mount-schema.js";
 export type { KubernetesSecretVaultHeartbeatData } from "./kubernetes-secret-vault-heartbeat-data-schema.js";
 export type { KubernetesSettings } from "./kubernetes-settings-schema.js";
 export type { KubernetesTlsSecretRef } from "./kubernetes-tls-secret-ref-schema.js";
@@ -697,6 +698,7 @@ export { KubernetesPodRuntimeUnitStatusSchema } from "./kubernetes-pod-runtime-u
 export { KubernetesRouteProfileSchema } from "./kubernetes-route-profile-schema.js";
 export { KubernetesRouteProviderOptionsSchema } from "./kubernetes-route-provider-options-schema.js";
 export { KubernetesSandboxHeartbeatDataSchema } from "./kubernetes-sandbox-heartbeat-data-schema.js";
+export { KubernetesSecretMountSchema } from "./kubernetes-secret-mount-schema.js";
 export { KubernetesSecretVaultHeartbeatDataSchema } from "./kubernetes-secret-vault-heartbeat-data-schema.js";
 export { KubernetesSettingsSchema } from "./kubernetes-settings-schema.js";
 export { KubernetesTlsSecretRefSchema } from "./kubernetes-tls-secret-ref-schema.js";

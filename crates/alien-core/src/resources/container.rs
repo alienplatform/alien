@@ -78,6 +78,18 @@ pub struct PersistentStorage {
     pub mount_path: String,
 }
 
+/// Mounts an existing, setup-owned Kubernetes Secret into a Container pod.
+/// The Secret must exist in the deployment namespace before the workload starts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
+#[serde(rename_all = "camelCase")]
+pub struct KubernetesSecretMount {
+    /// Name of the existing Secret in the deployment namespace.
+    pub secret_name: String,
+    /// Directory where Kubernetes mounts the Secret's keys as read-only files.
+    pub mount_path: String,
+}
+
 /// Autoscaling configuration for stateless containers.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "openapi", derive(utoipa::ToSchema))]
@@ -205,6 +217,11 @@ pub struct Container {
     /// Internal container ports (at least one required).
     #[builder(field)]
     pub ports: Vec<ContainerPort>,
+
+    /// Existing Kubernetes Secrets mounted as read-only directories.
+    #[builder(field)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kubernetes_secret_mounts: Vec<KubernetesSecretMount>,
 
     /// Public endpoints exposed by the container.
     #[builder(field)]
@@ -380,6 +397,12 @@ impl<S: container_builder::State> ContainerBuilder<S> {
     /// Adds an internal-only port to the container.
     pub fn port(mut self, port: u16) -> Self {
         self.ports.push(ContainerPort { port });
+        self
+    }
+
+    /// Mounts an existing Kubernetes Secret without copying its value into the stack.
+    pub fn kubernetes_secret_mount(mut self, mount: KubernetesSecretMount) -> Self {
+        self.kubernetes_secret_mounts.push(mount);
         self
     }
 

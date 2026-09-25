@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::Duration;
 use tracing::{debug, info};
 
@@ -31,8 +31,8 @@ use alien_macros::controller;
 use k8s_openapi::api::apps::v1::{Deployment, DeploymentSpec, StatefulSet, StatefulSetSpec};
 use k8s_openapi::api::core::v1::{
     Container as K8sContainer, ContainerPort, LocalObjectReference, PersistentVolumeClaim,
-    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, Service,
-    ServicePort, ServiceSpec, Volume, VolumeMount,
+    PersistentVolumeClaimSpec, PodSpec, PodTemplateSpec, ResourceRequirements, SecretVolumeSource,
+    Service, ServicePort, ServiceSpec, Volume, VolumeMount,
 };
 use k8s_openapi::apimachinery::pkg::api::resource::Quantity;
 use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
@@ -2146,6 +2146,31 @@ impl KubernetesContainerController {
             });
         }
 
+        let mut mount_paths = volume_mounts
+            .iter()
+            .map(|mount| mount.mount_path.clone())
+            .collect::<BTreeSet<_>>();
+        for (index, mount) in config.kubernetes_secret_mounts.iter().enumerate() {
+            if mount.secret_name.trim().is_empty()
+                || !mount.mount_path.starts_with('/')
+                || mount.mount_path == "/"
+                || !mount_paths.insert(mount.mount_path.clone())
+            {
+                return Err(AlienError::new(ErrorData::ResourceControllerConfigError {
+                    resource_id: config.id.clone(),
+                    message: format!(
+                        "Kubernetes Secret mount #{index} needs a nonempty Secret name and a unique absolute directory mount path"
+                    ),
+                }));
+            }
+            volume_mounts.push(VolumeMount {
+                name: format!("existing-secret-{index}"),
+                mount_path: mount.mount_path.clone(),
+                read_only: Some(true),
+                ..Default::default()
+            });
+        }
+
         // Parse CPU and memory from ResourceSpec
         let cpu_request = config.cpu.min.clone();
         let cpu_limit = config.cpu.desired.clone();
@@ -2204,6 +2229,17 @@ impl KubernetesContainerController {
             volumes.push(Volume {
                 name: "ephemeral".to_string(),
                 empty_dir: Some(k8s_openapi::api::core::v1::EmptyDirVolumeSource {
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        for (index, mount) in config.kubernetes_secret_mounts.iter().enumerate() {
+            volumes.push(Volume {
+                name: format!("existing-secret-{index}"),
+                secret: Some(SecretVolumeSource {
+                    secret_name: Some(mount.secret_name.clone()),
+                    optional: Some(false),
                     ..Default::default()
                 }),
                 ..Default::default()
@@ -2496,9 +2532,9 @@ mod tests {
         OTEL_EXPORTER_OTLP_METRICS_HEADERS,
     };
     use alien_core::{
-        OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN, ENV_ALIEN_LAMBDA_MODE,
-        ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP, ENV_ALIEN_SECRETS,
-        ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
+        KubernetesSecretMount, OtlpConfig, Resource, ENV_ALIEN_COMMANDS_TOKEN,
+        ENV_ALIEN_LAMBDA_MODE, ENV_ALIEN_RUNTIME_SECRETS, ENV_ALIEN_RUNTIME_SEND_OTLP,
+        ENV_ALIEN_SECRETS, ENV_ALIEN_TRANSPORT, ENV_ALIEN_WORKER_GRPC_ADDRESS,
     };
     fn manifest_test_container(environment: &[(&str, &str)], stateful: bool) -> Container {
         let mut config = Container::new("web".to_string())
@@ -2532,6 +2568,53 @@ mod tests {
             container_id: Some("web".to_string()),
             ..Default::default()
         }
+    }
+
+    #[tokio::test]
+    async fn deployment_mounts_existing_secret_as_read_only_files() {
+        let mut config = manifest_test_container(&[], false);
+        config.kubernetes_secret_mounts.push(KubernetesSecretMount {
+            secret_name: "enrollment-token".to_string(),
+            mount_path: "/var/run/enrollment".to_string(),
+        });
+        let harness = KubernetesManifestTestHarness::new(Resource::new(config.clone()), vec![]);
+        let deployment = manifest_test_controller()
+            .build_deployment(
+                &config,
+                "web",
+                "test-ns",
+                "web-sa",
+                None,
+                None,
+                &harness.ctx(),
+            )
+            .await
+            .expect("deployment manifest");
+        let pod = deployment
+            .spec
+            .expect("deployment spec")
+            .template
+            .spec
+            .expect("pod spec");
+        let volume = pod
+            .volumes
+            .expect("volumes")
+            .into_iter()
+            .next()
+            .expect("Secret volume");
+        assert_eq!(volume.name, "existing-secret-0");
+        let source = volume.secret.expect("Secret source");
+        assert_eq!(source.secret_name.as_deref(), Some("enrollment-token"));
+        assert_eq!(source.optional, Some(false));
+        let mount = pod.containers[0]
+            .volume_mounts
+            .as_ref()
+            .expect("volume mounts")
+            .first()
+            .expect("Secret mount");
+        assert_eq!(mount.name, "existing-secret-0");
+        assert_eq!(mount.mount_path, "/var/run/enrollment");
+        assert_eq!(mount.read_only, Some(true));
     }
 
     #[tokio::test]
