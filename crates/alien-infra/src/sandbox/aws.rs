@@ -125,24 +125,17 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let build_role_arn = self.build_role_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no build role was registered for this sandbox; setup must install \
-                          one before the image can be built"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-        let bundle_uri = self.bundle_uri.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no bundle was registered for this sandbox; setup must publish one \
-                          before the image can be built"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
-
         let aws_config = ctx.get_aws_config()?;
+        // Derived, not read back from what setup registered. Both are functions of the desired
+        // config and the deployment's own names, so a create that restarts after a failure still
+        // has them — and the adopt below, which is what makes that restart safe, is reachable.
+        let build_role_arn = sandbox_build_role_arn(
+            &aws_config.region,
+            &aws_config.account_id,
+            ctx.resource_prefix,
+            &config.id,
+        );
+        let bundle_uri = desired_bundle_uri(config, &aws_config.region)?;
         let client = ctx
             .service_provider
             .get_aws_microvms_client(aws_config)
@@ -515,14 +508,6 @@ impl AwsSandboxController {
     ) -> Result<HandlerAction> {
         let config = ctx.desired_resource_config::<Sandbox>()?;
 
-        let build_role_arn = self.build_role_arn.clone().ok_or_else(|| {
-            AlienError::new(ErrorData::ResourceConfigInvalid {
-                message: "no build role was registered for this sandbox; setup must install \
-                          one before the image can be rebuilt"
-                    .to_string(),
-                resource_id: Some(config.id.clone()),
-            })
-        })?;
         let image_identifier = self.image_identifier.clone().ok_or_else(|| {
             AlienError::new(ErrorData::ResourceConfigInvalid {
                 message: "no MicroVM image is recorded for this sandbox; there is nothing to \
@@ -534,6 +519,12 @@ impl AwsSandboxController {
 
         let aws_config = ctx.get_aws_config()?;
         let desired_bundle = desired_bundle_uri(&config, &aws_config.region)?;
+        let build_role_arn = sandbox_build_role_arn(
+            &aws_config.region,
+            &aws_config.account_id,
+            ctx.resource_prefix,
+            &config.id,
+        );
         let tier = config
             .microvm_tier()
             .context(ErrorData::ResourceConfigInvalid {
@@ -1084,6 +1075,23 @@ fn build_client_token(image_name: &str, bundle_uri: &str) -> String {
         .collect()
 }
 
+/// The build role setup installs for this sandbox, named the way both generators name it.
+///
+/// Derived rather than read back from the registration: `SandboxBuildRoleNameCheck` refuses at
+/// plan time any id that could reach IAM's 64-character ceiling, so neither generator clamps the
+/// name, and `sandbox/provision` already scopes its `iam:PassRole` to this same shape.
+fn sandbox_build_role_arn(
+    region: &str,
+    account_id: &str,
+    resource_prefix: &str,
+    resource_id: &str,
+) -> String {
+    format!(
+        "arn:{}:iam::{account_id}:role/{resource_prefix}-{resource_id}-build",
+        aws_partition(region)
+    )
+}
+
 /// The pre-create probe has no ARN to adopt yet, and the API answers a bare name with a 400
 /// that no absent-resource check can read as absence. The name is account-unique, so the ARN
 /// it will carry is derivable before the image exists.
@@ -1570,6 +1578,97 @@ mod tests {
             vec!["1.0"],
             "the version the roll replaced must be reaped, not left attached forever"
         );
+    }
+
+    /// A create that restarts after a failure comes back with a `Default` controller: the
+    /// executor rebuilds the resource through `new_pending`, which keeps no controller state.
+    /// The build inputs must therefore be recomputed, not read back from what setup registered,
+    /// or the restarted create dies on its own guard and the sandbox can never be recovered.
+    #[tokio::test]
+    async fn a_restarted_create_builds_without_anything_registered() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| Err(not_found()));
+        client
+            .expect_create_microvm_image()
+            .withf(|request| {
+                request.name == "test-agents"
+                    && request.build_role_arn == BUILD_ROLE_ARN
+                    && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(|_| Ok(created_response()));
+        client
+            .expect_get_microvm_image_version()
+            .returning(|_, _| Ok(active_version()));
+
+        // Nothing registered, nothing remembered: the state a restarted create starts from.
+        let controller = AwsSandboxController::default();
+        assert!(controller.build_role_arn.is_none());
+        assert!(controller.bundle_uri.is_none());
+
+        let mut executor = executor(controller, client).await;
+        executor
+            .step()
+            .await
+            .expect("the restarted create derives its build inputs");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(
+            controller.pending_version.as_deref(),
+            Some("1.0"),
+            "the build the restart submitted is the one being tracked"
+        );
+    }
+
+    /// The restart that finds its image already built: a create whose response was lost and
+    /// whose state went with it. The adopt-and-roll must still carry the derived role and bundle.
+    #[tokio::test]
+    async fn a_restarted_create_adopts_its_existing_image_without_anything_registered() {
+        let mut client = MockLambdaMicrovmsApi::new();
+        client
+            .expect_get_microvm_image()
+            .withf(|identifier| identifier == IMAGE_ARN)
+            .times(1)
+            .returning(|_| {
+                Ok(MicrovmImage {
+                    image_identifier: Some("test-agents".to_string()),
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    image_version: Some("1.0".to_string()),
+                    state: Some("CREATED".to_string()),
+                })
+            });
+        client
+            .expect_update_microvm_image()
+            .withf(|identifier, request| {
+                identifier == IMAGE_ARN
+                    && request.build_role_arn == BUILD_ROLE_ARN
+                    && request.code_artifact.uri == BUNDLE_URI
+            })
+            .times(1)
+            .returning(|_, _| {
+                Ok(UpdateMicrovmImageResponse {
+                    image_arn: Some(IMAGE_ARN.to_string()),
+                    name: Some("test-agents".to_string()),
+                    state: Some("UPDATING".to_string()),
+                    image_version: Some("2.0".to_string()),
+                })
+            });
+
+        let mut executor = executor(AwsSandboxController::default(), client).await;
+        executor
+            .step()
+            .await
+            .expect("the restarted create adopts the image with derived build inputs");
+        let controller = executor
+            .internal_state::<AwsSandboxController>()
+            .expect("typed controller");
+        assert_eq!(controller.pending_version.as_deref(), Some("2.0"));
+        assert_eq!(controller.pending_bundle_uri.as_deref(), Some(BUNDLE_URI));
     }
 
     /// The full runtime build: the create call must satisfy the already-deployed
@@ -2112,6 +2211,7 @@ mod tests {
         assert!(unknown.is_err(), "no other unknown state is guessed at");
     }
 
+    #[test]
     fn state_written_before_versions_were_tracked_keeps_its_binding() {
         let controller: AwsSandboxController = serde_json::from_value(serde_json::json!({
             "_controllerStateVersion": 1,
