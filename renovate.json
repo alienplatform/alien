@@ -21,6 +21,11 @@
       "description": "Require explicit dashboard approval for major updates",
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
+    },
+    {
+      "description": "ts-proto updates require regenerated Worker runtime clients",
+      "matchPackageNames": ["ts-proto"],
+      "automerge": false
     }
   ]
 }
